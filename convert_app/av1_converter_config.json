@@ -1,0 +1,14 @@
+{
+    "input_folder": "B:/Alexa Flexy",
+    "output_folder": "B:/Alexa Flexy",
+    "overwrite": false,
+    "ext_mp4": true,
+    "ext_mkv": true,
+    "ext_avi": true,
+    "ext_wmv": true,
+    "convert_audio": true,
+    "audio_codec": "opus",
+    "log_folder": "logs",
+    "anonymize_logs": true,
+    "anonymize_history": true
+}
