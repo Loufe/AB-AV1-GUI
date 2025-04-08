@@ -34,6 +34,7 @@ Thumbs.db
 # Miscellaneous
 *.bak
 *.tmp
+*.json
 
 # Environment-specific ffmpeg paths
 ffmpeg_path.txt

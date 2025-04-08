@@ -172,9 +172,24 @@ def check_ffmpeg_availability():
     except Exception as e: return True, False, None, str(e)
 
 def update_ui_safely(root, update_function, *args, **kwargs):
+    """Thread-safe UI update with extra safety checks and logging"""
     if root and root.winfo_exists():
-        try: root.after(0, lambda: update_function(*args, **kwargs))
-        except Exception as e: logging.debug(f"Error scheduling UI update: {e}")
+        try:
+            # Create a wrapper to capture what we're updating
+            def _safe_update_wrapper():
+                try:
+                    result = update_function(*args, **kwargs)
+                    logging.debug(f"UI update successful: {update_function.__name__ if hasattr(update_function, '__name__') else 'lambda'}")
+                    return result
+                except Exception as inner_e:
+                    logging.error(f"Error in UI update function {update_function.__name__ if hasattr(update_function, '__name__') else 'lambda'}: {inner_e}")
+            
+            # Schedule on the main thread
+            root.after(0, _safe_update_wrapper)
+        except Exception as e:
+            logging.error(f"Error scheduling UI update for {update_function.__name__ if hasattr(update_function, '__name__') else 'lambda'}: {e}")
+    else:
+        logging.debug(f"Skipped UI update: root widget invalid or destroyed")
 
 def log_conversion_result(input_path, output_path, elapsed_time):
     if not os.path.exists(output_path): logging.error(f"Result log failed - Output missing: {anonymize_filename(output_path)}"); return

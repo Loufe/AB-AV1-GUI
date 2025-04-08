@@ -188,31 +188,108 @@ def scan_video_needs_conversion(gui, video_path, output_folder_path, overwrite=F
 
 def update_conversion_statistics(gui, info=None):
     """Update the conversion statistics like ETA, VMAF, CRF"""
-    # (Unchanged from previous correction)
-    if not info or not gui.conversion_running: return
+    if not info or not gui.conversion_running: 
+        logging.debug("Skipping update_conversion_statistics: no info or not running")
+        return
+    
+    # Log received info for debugging
+    logging.debug(f"Processing statistics update: {info}")
+    
+    # VMAF Updates
     if "vmaf" in info and info["vmaf"] is not None:
         vmaf_status = f"{info['vmaf']:.1f}"
         if info.get("phase") == "crf-search": vmaf_status += " (Current)"
         if info.get("used_fallback"): vmaf_status += " (Fallback Used)" # Check if fallback was used
         update_ui_safely(gui.root, lambda v=vmaf_status: gui.vmaf_label.config(text=v))
-    elif info.get("phase") == "crf-search": update_ui_safely(gui.root, lambda: gui.vmaf_label.config(text=f"{DEFAULT_VMAF_TARGET} (Target)"))
+        logging.info(f"VMAF update: {vmaf_status}")
+    elif info.get("phase") == "crf-search": 
+        update_ui_safely(gui.root, lambda: gui.vmaf_label.config(text=f"{DEFAULT_VMAF_TARGET} (Target)"))
+    
+    # CRF Updates
     if "crf" in info and info["crf"] is not None:
-        settings_text = f"CRF: {info['crf']}, Preset: {DEFAULT_ENCODING_PRESET}"; update_ui_safely(gui.root, lambda: gui.encoding_settings_label.config(text=settings_text))
+        settings_text = f"CRF: {info['crf']}, Preset: {DEFAULT_ENCODING_PRESET}"
+        update_ui_safely(gui.root, lambda s=settings_text: gui.encoding_settings_label.config(text=s))
+        logging.info(f"Encoding settings update: {settings_text}")
+    
+    # ETA Calculation
     encoding_prog = info.get("progress_encoding", 0)
     if encoding_prog > 0:
         if hasattr(gui, 'current_file_start_time') and gui.current_file_start_time:
-             if not hasattr(gui, 'current_file_encoding_start_time') or not gui.current_file_encoding_start_time: gui.current_file_encoding_start_time = time.time()
-             elapsed_encoding_time = time.time() - gui.current_file_encoding_start_time
-             if encoding_prog > 1 and elapsed_encoding_time > 1:
-                 try: total_encoding_time_est = (elapsed_encoding_time / encoding_prog) * 100; eta_seconds = total_encoding_time_est - elapsed_encoding_time; eta_str = format_time(eta_seconds); update_ui_safely(gui.root, lambda: gui.eta_label.config(text=eta_str))
-                 except ZeroDivisionError: update_ui_safely(gui.root, lambda: gui.eta_label.config(text="Calculating..."))
-             else: update_ui_safely(gui.root, lambda: gui.eta_label.config(text="Calculating..."))
-    elif info.get("phase") == "crf-search": update_ui_safely(gui.root, lambda: gui.eta_label.config(text="Detecting..."))
-    else: update_ui_safely(gui.root, lambda: gui.eta_label.config(text="-"))
-    if "output_size" in info and "original_size" in info:
-        current_size = info["output_size"]; original_size = info["original_size"]
+            if not hasattr(gui, 'current_file_encoding_start_time') or not gui.current_file_encoding_start_time: 
+                gui.current_file_encoding_start_time = time.time()
+                logging.info("Encoding phase started - initializing timer")
+            
+            elapsed_encoding_time = time.time() - gui.current_file_encoding_start_time
+            if encoding_prog > 1 and elapsed_encoding_time > 1:
+                try: 
+                    # Calculate estimated total time and remaining time
+                    total_encoding_time_est = (elapsed_encoding_time / encoding_prog) * 100
+                    eta_seconds = total_encoding_time_est - elapsed_encoding_time
+                    eta_str = format_time(eta_seconds)
+                    
+                    # CRITICAL: Use explicit lambda to capture the current value of eta_str
+                    # Without this, lambda captures by reference and value may change before GUI update
+                    update_ui_safely(gui.root, lambda eta=eta_str: gui.eta_label.config(text=eta))
+                    
+                    logging.info(f"ETA update: {eta_str} (progress: {encoding_prog:.1f}%, elapsed: {format_time(elapsed_encoding_time)})")
+                except ZeroDivisionError: 
+                    update_ui_safely(gui.root, lambda: gui.eta_label.config(text="Calculating..."))
+                except Exception as e:
+                    logging.error(f"Error calculating ETA: {e}")
+                    update_ui_safely(gui.root, lambda: gui.eta_label.config(text="Error"))
+            else: 
+                update_ui_safely(gui.root, lambda: gui.eta_label.config(text="Calculating..."))
+    elif info.get("phase") == "crf-search": 
+        update_ui_safely(gui.root, lambda: gui.eta_label.config(text="Detecting..."))
+    else: 
+        update_ui_safely(gui.root, lambda: gui.eta_label.config(text="-"))
+    
+    # Size Prediction - prioritize actual file size estimates
+    # Check if we have an estimated_output_size from the partial file
+    if "output_size" in info and "original_size" in info and info.get("is_estimate", False):
+        # This is from a real-time measurement of the partial output file
+        current_size = info["output_size"]
+        original_size = info["original_size"]
         if original_size is not None and original_size > 0 and current_size is not None:
-            ratio = (current_size / original_size) * 100; size_str = f"{format_file_size(current_size)} ({ratio:.1f}%)"; update_ui_safely(gui.root, lambda: gui.output_size_label.config(text=size_str))
+            ratio = (current_size / original_size) * 100
+            size_str = f"{format_file_size(current_size)} ({ratio:.1f}%) [Est]"
+            # CRITICAL: Use explicit lambda to capture the current value
+            update_ui_safely(gui.root, lambda s=size_str: gui.output_size_label.config(text=s))
+            logging.info(f"Output size estimate (from partial file): {size_str}")
+    # Otherwise check if we have a size_reduction percentage
+    elif "size_reduction" in info and info["size_reduction"] is not None:
+        # If we have size_reduction percentage but not actual sizes
+        try:
+            # Get original size from the file if available
+            if hasattr(gui, 'last_input_size') and gui.last_input_size:
+                original_size = gui.last_input_size
+                size_percentage = 100 - info["size_reduction"]
+                output_size_estimate = original_size * (size_percentage / 100.0)
+                ratio = size_percentage
+                size_str = f"{format_file_size(output_size_estimate)} ({ratio:.1f}%)"
+                
+                # Update the last_output_size for future use
+                gui.last_output_size = output_size_estimate
+                
+                # CRITICAL: Use explicit lambda to capture the current value
+                update_ui_safely(gui.root, lambda s=size_str: gui.output_size_label.config(text=s))
+                
+                logging.info(f"Output size prediction: {size_str} (reduction: {info['size_reduction']:.1f}%)")
+        except Exception as e:
+            logging.error(f"Error calculating output size from reduction: {e}")
+    
+    # Direct size information if available
+    elif "output_size" in info and "original_size" in info:
+        current_size = info["output_size"]
+        original_size = info["original_size"]
+        if original_size is not None and original_size > 0 and current_size is not None:
+            ratio = (current_size / original_size) * 100
+            size_str = f"{format_file_size(current_size)} ({ratio:.1f}%)"
+            
+            # CRITICAL: Use explicit lambda to capture the current value
+            update_ui_safely(gui.root, lambda s=size_str: gui.output_size_label.config(text=s))
+            
+            logging.info(f"Output size update: {size_str}")
 
 
 def store_process_id(gui, pid, input_path):
@@ -266,8 +343,9 @@ def stop_conversion(gui):
 
 def force_stop_conversion(gui, confirm=True):
     """Force stop the conversion process immediately by killing the process and cleaning temp file"""
-    # (Unchanged from previous correction)
-    if not gui.conversion_running: logging.info("Force stop requested but not running."); return
+    if not gui.conversion_running: 
+        logging.info("Force stop requested but not running."); return
+    
     if confirm:
         if not messagebox.askyesno("Confirm Force Stop", "Terminate current conversion immediately?\nIncomplete files may be left if cleanup fails."):
             logging.info("User cancelled force stop."); return
@@ -281,41 +359,119 @@ def force_stop_conversion(gui, confirm=True):
         input_path_killed = gui.current_process_info.get("input_path")
         gui.current_process_info = None
 
+    # Try to kill the main process with more aggressive options
     if pid_to_kill:
         logging.info(f"Attempting to terminate process PID {pid_to_kill}...")
+        if sys.platform == "win32":
+            try:
+                # First try to find and kill all child processes
+                startupinfo = subprocess.STARTUPINFO()
+                startupinfo.dwFlags |= subprocess.STARTF_USESHOWWINDOW
+                startupinfo.wShowWindow = subprocess.SW_HIDE
+                
+                # Use taskkill with /T flag to kill process tree
+                result = subprocess.run(["taskkill", "/F", "/T", "/PID", str(pid_to_kill)], 
+                               capture_output=True, text=True, check=False, startupinfo=startupinfo)
+                
+                if result.returncode == 0:
+                    logging.info(f"Terminated PID {pid_to_kill} and its child processes via taskkill.")
+                else:
+                    # Log failure details
+                    logging.warning(f"taskkill failed for PID {pid_to_kill} (rc={result.returncode}): {result.stderr.strip()}")
+                    
+                    # If normal termination failed, try to find FFmpeg processes that might be running
+                    try:
+                        # Find FFmpeg processes that might be related
+                        subprocess.run(["taskkill", "/F", "/IM", "ffmpeg.exe"], 
+                                      capture_output=True, text=True, check=False, startupinfo=startupinfo)
+                        logging.info("Attempted to kill any running ffmpeg.exe processes")
+                    except Exception as ffmpeg_e:
+                        logging.error(f"Failed to kill ffmpeg processes: {ffmpeg_e}")
+            except Exception as e:
+                logging.error(f"Failed to terminate Windows processes: {str(e)}")
+        else: 
+            # On Unix/Linux systems, try more aggressive process termination
+            try:
+                # First try SIGTERM
+                os.kill(pid_to_kill, signal.SIGTERM)
+                time.sleep(0.5) # Give it a moment to terminate gracefully
+                
+                # Check if process still exists and send SIGKILL if needed
+                try:
+                    os.kill(pid_to_kill, 0)  # This will raise an error if process doesn't exist
+                    # Process still exists, use SIGKILL
+                    os.kill(pid_to_kill, signal.SIGKILL)
+                    logging.info(f"Sent SIGKILL to PID {pid_to_kill} after SIGTERM failed.")
+                except ProcessLookupError:
+                    logging.info(f"Process {pid_to_kill} terminated successfully with SIGTERM.")
+            except ProcessLookupError:
+                logging.warning(f"PID {pid_to_kill} not found.")
+            except Exception as e:
+                logging.error(f"Failed to terminate PID {pid_to_kill}: {str(e)}")
+    else:
+        logging.warning("Force stop: No active process PID recorded.")
+        
+        # Still try to kill any ffmpeg processes as a fallback
+        if sys.platform == "win32":
+            try:
+                startupinfo = subprocess.STARTUPINFO()
+                startupinfo.dwFlags |= subprocess.STARTF_USESHOWWINDOW
+                startupinfo.wShowWindow = subprocess.SW_HIDE
+                subprocess.run(["taskkill", "/F", "/IM", "ffmpeg.exe"], 
+                              capture_output=True, text=True, check=False, startupinfo=startupinfo)
+                logging.info("Attempted to kill any running ffmpeg.exe processes as fallback")
+            except Exception as e:
+                logging.error(f"Failed to kill ffmpeg processes: {e}")
+
+    # Clean up temporary files
+    if input_path_killed and gui.output_folder.get():
         try:
-            startupinfo = None; # Hide console window for taskkill
-            if os.name == 'nt': startupinfo = subprocess.STARTUPINFO(); startupinfo.dwFlags |= subprocess.STARTF_USESHOWWINDOW; startupinfo.wShowWindow = subprocess.SW_HIDE
-            if sys.platform == "win32":
-                result = subprocess.run(["taskkill", "/F", "/PID", str(pid_to_kill)], capture_output=True, text=True, check=False, startupinfo=startupinfo)
-                if result.returncode == 0: logging.info(f"Terminated PID {pid_to_kill} via taskkill.")
-                else: logging.warning(f"taskkill failed for PID {pid_to_kill} (rc={result.returncode}, maybe exited?): {result.stderr.strip()}")
-            else: os.kill(pid_to_kill, signal.SIGKILL); logging.info(f"Sent SIGKILL to PID {pid_to_kill}.")
-        except ProcessLookupError: logging.warning(f"PID {pid_to_kill} not found.")
-        except Exception as e: logging.error(f"Failed to terminate PID {pid_to_kill}: {str(e)}")
+            in_path_obj = Path(input_path_killed)
+            out_folder_obj = Path(gui.output_folder.get())
+            relative_dir = Path(".")
+            try:
+                relative_dir = in_path_obj.parent.relative_to(Path(gui.input_folder.get()))
+            except:
+                logging.debug("Killed file not relative to input base.")
+                
+            output_dir = out_folder_obj / relative_dir
+            temp_filename = in_path_obj.stem + ".mkv.temp.mkv"
+            temp_file_path = output_dir / temp_filename
+            
+            if temp_file_path.exists():
+                logging.info(f"Removing temporary file: {temp_file_path}")
+                os.remove(temp_file_path)
+                logging.info("Removed temporary file successfully.")
+            else:
+                logging.debug(f"Temp file not found for cleanup: {temp_file_path}")
+                
+            # Also look for any other temp files with similar names
+            try:
+                pattern = in_path_obj.stem + "*.temp.*"
+                for temp_file in output_dir.glob(pattern):
+                    logging.info(f"Found additional temp file: {temp_file}, removing...")
+                    os.remove(temp_file)
+            except Exception as glob_e:
+                logging.warning(f"Error searching for additional temp files: {glob_e}")
+                
+        except Exception as cleanup_err:
+            logging.error(f"Failed to remove temp files: {cleanup_err}")
+    else:
+        logging.warning("Cannot determine temp file path for cleanup.")
 
-        if input_path_killed and gui.output_folder.get():
-             try:
-                 in_path_obj = Path(input_path_killed); out_folder_obj = Path(gui.output_folder.get()); relative_dir = Path(".")
-                 try: relative_dir = in_path_obj.parent.relative_to(Path(gui.input_folder.get()))
-                 except: logging.debug("Killed file not relative to input base.")
-                 output_dir = out_folder_obj / relative_dir; temp_filename = in_path_obj.stem + ".mkv.temp.mkv"; temp_file_path = output_dir / temp_filename
-                 if temp_file_path.exists():
-                      logging.info(f"Removing temporary file: {temp_file_path}")
-                      os.remove(temp_file_path); logging.info(f"Removed temporary file.")
-                 else: logging.debug(f"Temp file not found for cleanup: {temp_file_path}")
-             except Exception as cleanup_err: logging.error(f"Failed to remove temp file {temp_filename}: {cleanup_err}")
-        else: logging.warning("Cannot determine temp file path for cleanup.")
-    else: logging.warning("Force stop: No active process PID recorded.")
-
+    # Reset UI and state
     gui.conversion_running = False
-    if gui.elapsed_timer_id: gui.root.after_cancel(gui.elapsed_timer_id); gui.elapsed_timer_id = None
+    if gui.elapsed_timer_id:
+        gui.root.after_cancel(gui.elapsed_timer_id)
+        gui.elapsed_timer_id = None
+        
     update_ui_safely(gui.root, lambda: gui.status_label.config(text="Conversion force stopped"))
     update_ui_safely(gui.root, reset_current_file_details, gui)
     update_ui_safely(gui.root, lambda: gui.start_button.config(state="normal"))
     update_ui_safely(gui.root, lambda: gui.stop_button.config(state="disabled"))
     update_ui_safely(gui.root, lambda: gui.force_stop_button.config(state="disabled"))
 
+    # Clean up temp folders
     output_dir_to_clean = gui.output_folder_path if hasattr(gui, 'output_folder_path') and gui.output_folder_path else os.getcwd()
     gui.root.after(500, lambda dir=output_dir_to_clean: schedule_temp_folder_cleanup(dir))
     logging.info("Conversion force stopped.")
@@ -409,13 +565,40 @@ def _handle_starting(gui, filename):
 def _handle_file_info(gui, filename, info): pass
 
 def _handle_progress(gui, filename, info):
-    # (Unchanged from previous correction)
-    quality_prog = info.get("progress_quality", 0); encoding_prog = info.get("progress_encoding", 0)
+    """Handle progress updates from the conversion process"""
+    quality_prog = info.get("progress_quality", 0) 
+    encoding_prog = info.get("progress_encoding", 0) 
+    
+    # Update progress bars
     update_ui_safely(gui.root, update_progress_bars, gui, quality_prog, encoding_prog)
-    message = info.get("message", ""); update_ui_safely(gui.root, lambda: gui.current_file_label.config(text=f"Processing: {filename} - {message}"))
+    
+    # Update message text
+    message = info.get("message", "")
+    update_ui_safely(gui.root, lambda: gui.current_file_label.config(text=f"Processing: {filename} - {message}"))
+    
+    # Add extra logging to debug GUI update issues
+    logging.info(f"Progress update for {filename}: {quality_prog}%/{encoding_prog}%, phase={info.get('phase', '?')}")
+    
+    # Make sure we include the original file size for calculations
+    if not "original_size" in info and hasattr(gui, 'last_input_size'):
+        info["original_size"] = gui.last_input_size
+        logging.debug(f"Added original_size to info: {gui.last_input_size}")
+    
+    # Update statistics display (ETA, size prediction, etc)
     update_conversion_statistics(gui, info)
+    
+    # Log important thresholds
     phase = info.get("phase", "crf-search")
-    if phase == "encoding" and encoding_prog > 98: logger.debug(f"Encoding nearing completion for {anonymize_filename(filename)} ({encoding_prog:.1f}%)")
+    if phase == "encoding":
+        # Force periodic updates to the GUI
+        # This is essential for keeping the UI responsive
+        def force_update():
+            try:
+                gui.root.update_idletasks()  # Update pending UI tasks
+                logging.debug("Forced GUI update")
+            except Exception as e:
+                logging.error(f"Error in forced UI update: {e}")
+        update_ui_safely(gui.root, force_update)
 
 def _handle_error(gui, filename, error_info):
     # (Unchanged from previous correction)
