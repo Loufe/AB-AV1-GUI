@@ -57,9 +57,20 @@ def create_main_tab(gui):
     gui.overall_progress = ttk.Progressbar(main_frame, orient="horizontal", length=100, mode="determinate")
     gui.overall_progress.grid(row=6, column=0, columnspan=2, sticky="ew", padx=5)
 
-    # Status label
-    gui.status_label = ttk.Label(main_frame, text="Ready")
-    gui.status_label.grid(row=7, column=0, columnspan=2, sticky="w", pady=(5, 20))
+    # Status and total elapsed time
+    status_frame = ttk.Frame(main_frame)
+    status_frame.grid(row=7, column=0, columnspan=2, sticky="ew", pady=(5, 20))
+    status_frame.columnconfigure(0, weight=3)
+    status_frame.columnconfigure(1, weight=1)
+    
+    gui.status_label = ttk.Label(status_frame, text="Ready")
+    gui.status_label.grid(row=0, column=0, sticky="w")
+    
+    total_time_frame = ttk.Frame(status_frame)
+    total_time_frame.grid(row=0, column=1, sticky="e")
+    ttk.Label(total_time_frame, text="Total Time:").pack(side="left", padx=(0, 5))
+    gui.total_elapsed_label = ttk.Label(total_time_frame, text="-")
+    gui.total_elapsed_label.pack(side="left")
 
     # Current file progress frame
     file_frame = ttk.LabelFrame(main_frame, text="Current File")
@@ -118,7 +129,7 @@ def create_main_tab(gui):
     ttk.Label(right_col, text="Est. Remaining (Enc):").grid(row=1, column=0, sticky="w", pady=2) # Clarify ETA is for encoding phase
     gui.eta_label = ttk.Label(right_col, text="-")
     gui.eta_label.grid(row=1, column=1, sticky="w", pady=2)
-    ttk.Label(right_col, text="Final Output Size:").grid(row=2, column=0, sticky="w", pady=2) # Changed label
+    ttk.Label(right_col, text="Est. Final Size:").grid(row=2, column=0, sticky="w", pady=2)
     gui.output_size_label = ttk.Label(right_col, text="-")
     gui.output_size_label.grid(row=2, column=1, sticky="w", pady=2)
 

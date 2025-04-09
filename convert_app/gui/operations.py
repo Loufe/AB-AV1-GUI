@@ -137,21 +137,41 @@ def check_ffmpeg(gui):
 
 def update_progress_bars(gui, quality_percent, encoding_percent):
     """Update the dual progress bars in a thread-safe way"""
-    # (Unchanged from previous correction)
     def _update_ui():
+        # Get GUI widgets
         quality_prog_widget = getattr(gui, 'quality_progress', None)
         quality_label_widget = getattr(gui, 'quality_percent_label', None)
         encoding_prog_widget = getattr(gui, 'encoding_progress', None)
         encoding_label_widget = getattr(gui, 'encoding_percent_label', None)
-        if not all([quality_prog_widget, quality_label_widget, encoding_prog_widget, encoding_label_widget]): return
+        
+        # Make sure all widgets exist
+        if not all([quality_prog_widget, quality_label_widget, encoding_prog_widget, encoding_label_widget]): 
+            return
+        
         try:
-            q_mode = 'determinate'; e_mode = 'determinate'
-            if encoding_percent <= 0 and quality_percent < 100: q_mode = 'indeterminate'
-            quality_prog_widget.config(value=quality_percent, mode=q_mode)
-            quality_label_widget.config(text=f"{math.ceil(quality_percent)}%")
+            # Set mode for quality bar
+            q_mode = 'determinate'
+            e_mode = 'determinate'
+            
+            # Set quality progress to 100% when encoding is in progress
+            if encoding_percent > 0:
+                # When encoding has started, quality detection is complete
+                display_quality_percent = 100
+            else:
+                # During quality detection phase
+                display_quality_percent = quality_percent
+                if quality_percent < 100 and encoding_percent <= 0:
+                    q_mode = 'indeterminate'
+            
+            # Update the widgets
+            quality_prog_widget.config(value=display_quality_percent, mode=q_mode)
+            quality_label_widget.config(text=f"{math.ceil(display_quality_percent)}%")
             encoding_prog_widget.config(value=encoding_percent, mode=e_mode)
             encoding_label_widget.config(text=f"{math.ceil(encoding_percent)}%")
-        except tk.TclError as e: logger.debug(f"TclError updating progress bars: {e}")
+            
+        except tk.TclError as e: 
+            logger.debug(f"TclError updating progress bars: {e}")
+            
     update_ui_safely(gui.root, _update_ui)
 
 
@@ -489,20 +509,39 @@ def schedule_temp_folder_cleanup(directory):
 
 
 def update_elapsed_time(gui, start_time):
-    """Update the elapsed time label"""
-    # (Unchanged from previous correction)
-    if not gui.conversion_running or (gui.stop_event and gui.stop_event.is_set()): gui.elapsed_timer_id = None; return
-    elapsed = time.time() - start_time
-    update_ui_safely(gui.root, lambda: gui.elapsed_label.config(text=format_time(elapsed)))
+    """Update the elapsed time label for current file only"""
+    if not gui.conversion_running or (gui.stop_event and gui.stop_event.is_set()): 
+        gui.elapsed_timer_id = None
+        return
+        
+    # Only display current file elapsed time
+    current_file_elapsed = time.time() - start_time
+    update_ui_safely(gui.root, lambda t=current_file_elapsed: gui.elapsed_label.config(text=format_time(t)))
+    
+    # Also update total elapsed time
+    update_total_elapsed_time(gui)
+    
+    # Schedule next update
     gui.elapsed_timer_id = gui.root.after(1000, lambda: update_elapsed_time(gui, start_time))
+
+
+def update_total_elapsed_time(gui):
+    """Update the total elapsed time label"""
+    if hasattr(gui, 'total_conversion_start_time') and gui.conversion_running:
+        total_elapsed = time.time() - gui.total_conversion_start_time
+        update_ui_safely(gui.root, lambda t=total_elapsed: gui.total_elapsed_label.config(text=format_time(t)))
+    else:
+        update_ui_safely(gui.root, lambda: gui.total_elapsed_label.config(text="-"))
 
 
 def update_statistics_summary(gui):
     """Update the overall statistics summary labels"""
-    # (Syntax corrected)
     vmaf_text = "-"
     crf_text = "-"
     reduction_text = "-"
+    
+    # Debug logging to trace updates
+    logging.debug(f"Updating statistics summary - VMAF scores: {len(gui.vmaf_scores)}, CRF values: {len(gui.crf_values)}, Size reductions: {len(gui.size_reductions)}")
 
     if gui.vmaf_scores:
         try:
@@ -510,6 +549,7 @@ def update_statistics_summary(gui):
             min_vmaf = min(gui.vmaf_scores)
             max_vmaf = max(gui.vmaf_scores)
             vmaf_text = f"Avg: {avg_vmaf:.1f} (Range: {min_vmaf:.1f}-{max_vmaf:.1f})"
+            logging.debug(f"VMAF stats: avg={avg_vmaf:.1f}, min={min_vmaf:.1f}, max={max_vmaf:.1f}")
         except Exception as e:
             logging.warning(f"Error calculating VMAF stats: {e}")
             vmaf_text = "Error"
@@ -520,23 +560,31 @@ def update_statistics_summary(gui):
             min_crf = min(gui.crf_values)
             max_crf = max(gui.crf_values)
             crf_text = f"Avg: {avg_crf:.1f} (Range: {min_crf}-{max_crf})"
+            logging.debug(f"CRF stats: avg={avg_crf:.1f}, min={min_crf}, max={max_crf}")
          except Exception as e:
             logging.warning(f"Error calculating CRF stats: {e}")
             crf_text = "Error"
 
     if gui.size_reductions:
         try:
-            avg_reduction = statistics.mean(gui.size_reductions)
-            min_reduction = min(gui.size_reductions)
-            max_reduction = max(gui.size_reductions)
-            reduction_text = f"Avg: {avg_reduction:.1f}% (Range: {min_reduction:.1f}%-{max_reduction:.1f}%)"
+            # Make sure the list isn't empty
+            if not gui.size_reductions:
+                reduction_text = "No data"
+            else:
+                avg_reduction = statistics.mean(gui.size_reductions)
+                min_reduction = min(gui.size_reductions)
+                max_reduction = max(gui.size_reductions)
+                reduction_text = f"Avg: {avg_reduction:.1f}% (Range: {min_reduction:.1f}%-{max_reduction:.1f}%)"
+                logging.info(f"Size reduction stats: avg={avg_reduction:.1f}%, min={min_reduction:.1f}%, max={max_reduction:.1f}%")
         except Exception as e:
             logging.warning(f"Error calculating Size Reduction stats: {e}")
+            logging.warning(f"Size reduction values: {gui.size_reductions}")
             reduction_text = "Error"
 
-    update_ui_safely(gui.root, lambda: gui.vmaf_stats_label.config(text=vmaf_text))
-    update_ui_safely(gui.root, lambda: gui.crf_stats_label.config(text=crf_text))
-    update_ui_safely(gui.root, lambda: gui.size_stats_label.config(text=reduction_text))
+    # Use lambdas with explicit parameter capturing for UI updates
+    update_ui_safely(gui.root, lambda v=vmaf_text: gui.vmaf_stats_label.config(text=v))
+    update_ui_safely(gui.root, lambda c=crf_text: gui.crf_stats_label.config(text=c))
+    update_ui_safely(gui.root, lambda r=reduction_text: gui.size_stats_label.config(text=r))
 
 
 def reset_current_file_details(gui):
@@ -632,25 +680,56 @@ def _handle_retrying(gui, filename, info):
 
 def _handle_completed(gui, filename, info):
     """Handles successful completion, updates stats"""
-    # (Unchanged from previous correction)
     anonymized_name = anonymize_filename(filename)
     log_msg = f"Successfully converted {anonymized_name}"
+    
+    # Extract values from info or from gui attributes
     vmaf_value = info.get("vmaf") if isinstance(info, dict) else None
     crf_value = info.get("crf") if isinstance(info, dict) else None
     original_size = getattr(gui, 'last_input_size', None)
     output_size = getattr(gui, 'last_output_size', None)
     elapsed_time = getattr(gui, 'last_elapsed_time', None)
-    if vmaf_value is not None: gui.vmaf_scores.append(vmaf_value); log_msg += f" - VMAF: {vmaf_value:.1f}"
-    if crf_value is not None: gui.crf_values.append(crf_value); log_msg += f", CRF: {crf_value}"
+    
+    # Update VMAF stats
+    if vmaf_value is not None: 
+        gui.vmaf_scores.append(vmaf_value)
+        log_msg += f" - VMAF: {vmaf_value:.1f}"
+    
+    # Update CRF stats
+    if crf_value is not None: 
+        gui.crf_values.append(crf_value)
+        log_msg += f", CRF: {crf_value}"
+    
+    # Update size reduction stats
     if original_size is not None and output_size is not None:
         if original_size > 0:
-            ratio = (output_size / original_size) * 100; size_reduction = 100.0 - ratio
-            gui.size_reductions.append(size_reduction); log_msg += f", Size: {ratio:.1f}% ({size_reduction:.1f}% reduction)"
-        else: log_msg += f", Size: N/A (Input 0)"
-        if elapsed_time is not None: gui.total_input_bytes_success += original_size; gui.total_output_bytes_success += output_size; gui.total_time_success += elapsed_time
-        final_size_str = format_file_size(output_size); size_str = f"{final_size_str} ({ratio:.1f}%)" if original_size > 0 else final_size_str
+            ratio = (output_size / original_size) * 100
+            size_reduction = 100.0 - ratio
+            
+            # Add to the list and log
+            if not hasattr(gui, 'size_reductions'):
+                gui.size_reductions = []
+            gui.size_reductions.append(size_reduction)
+            logging.info(f"Added size reduction to stats: {size_reduction:.1f}% (total entries: {len(gui.size_reductions)})")
+            
+            log_msg += f", Size: {ratio:.1f}% ({size_reduction:.1f}% reduction)"
+        else: 
+            log_msg += f", Size: N/A (Input 0)"
+            
+        # Update total bytes and time stats
+        if elapsed_time is not None: 
+            gui.total_input_bytes_success += original_size
+            gui.total_output_bytes_success += output_size
+            gui.total_time_success += elapsed_time
+            
+        # Update the final size label
+        final_size_str = format_file_size(output_size)
+        size_str = f"{final_size_str} ({ratio:.1f}%)" if original_size > 0 else final_size_str
         update_ui_safely(gui.root, lambda s=size_str: gui.output_size_label.config(text=s))
-    logging.info(log_msg); update_statistics_summary(gui)
+    
+    # Log completion and update summary statistics
+    logging.info(log_msg)
+    update_statistics_summary(gui)
 
 def _handle_skipped(gui, filename, reason):
     # (Unchanged from previous correction)
@@ -824,6 +903,7 @@ def conversion_complete(gui, final_message="Conversion complete"):
     gui.status_label.config(text=final_message); reset_current_file_details(gui)
     gui.conversion_running = False; gui.stop_event = None; gui.current_process_info = None
     gui.start_button.config(state="normal"); gui.stop_button.config(state="disabled"); gui.force_stop_button.config(state="disabled")
+    update_ui_safely(gui.root, lambda: gui.total_elapsed_label.config(text=format_time(total_duration)))
     if gui.processed_files > 0:
         summary_msg = f"{final_message}.\n\n" \
                       f"Files Processed: {gui.processed_files}\n" \
