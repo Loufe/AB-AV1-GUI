@@ -1,3 +1,14 @@
+# --- File Selection Functions ---
+# --- System/Dependency Check Functions ---
+# --- Progress Tracking Functions ---
+# --- File Scanning and Analysis Functions ---
+# --- Statistics and Display Update Functions ---
+# --- Cleanup and Timer Functions ---
+# --- Main Conversion Control Functions ---
+# --- File and Folder Action Functions ---
+# --- Callback Handler Functions ---
+# --- Worker Thread Implementation ---
+
 """
 GUI operation functions for the AV1 Video Converter application.
 """
@@ -35,8 +46,12 @@ from convert_app.video_conversion import process_video
 logger = logging.getLogger(__name__)
 
 
-def browse_input_folder(gui):
-    """Open file dialog to choose input folder"""
+def browse_input_folder(gui) -> None:
+    """Open file dialog to choose input folder and update GUI state.
+    
+    Args:
+        gui: The main GUI instance containing UI elements
+    """
     folder = filedialog.askdirectory(title="Select Input Folder")
     if folder:
         gui.input_folder.set(folder)
@@ -45,23 +60,35 @@ def browse_input_folder(gui):
             gui.output_folder.set(folder)
             logger.info(f"Output folder automatically set to match input: {folder}")
 
-def browse_output_folder(gui):
-    """Open file dialog to choose output folder"""
+def browse_output_folder(gui) -> None:
+    """Open file dialog to choose output folder and update GUI state.
+    
+    Args:
+        gui: The main GUI instance containing UI elements
+    """
     folder = filedialog.askdirectory(title="Select Output Folder")
     if folder:
         gui.output_folder.set(folder)
         logger.info(f"Output folder selected: {folder}")
 
-def browse_log_folder(gui):
-    """Open file dialog to choose log folder"""
+def browse_log_folder(gui) -> None:
+    """Open file dialog to choose log folder and update GUI state.
+    
+    Args:
+        gui: The main GUI instance containing UI elements
+    """
     folder = filedialog.askdirectory(title="Select Log Folder")
     if folder:
         gui.log_folder.set(folder)
         logger.info(f"Log folder selected by user: {folder}")
         messagebox.showinfo("Log Folder Changed", "Log folder preference updated.\nNew logs will be written to the selected folder on next application start.")
 
-def open_log_folder_action(gui):
-    """Open the currently used log folder in the file explorer"""
+def open_log_folder_action(gui) -> None:
+    """Open the currently used log folder in the file explorer.
+    
+    Args:
+        gui: The main GUI instance containing log_directory attribute
+    """
     try:
         # Use the log_directory attribute stored on the GUI object after setup_logging runs
         log_dir = gui.log_directory
@@ -81,8 +108,12 @@ def open_log_folder_action(gui):
         logger.error(f"Failed to open log folder '{log_dir_str}': {e}")
         messagebox.showerror("Error", f"Could not open log folder:\n{e}")
 
-def open_history_file_action(gui):
-    """Open the conversion history json file"""
+def open_history_file_action(gui) -> None:
+    """Open the conversion history json file in the default text editor.
+    
+    Args:
+        gui: The main GUI instance (not directly used but consistent with other actions)
+    """
     history_path = get_history_file_path()
     try:
         if os.path.exists(history_path):
@@ -117,27 +148,55 @@ def open_history_file_action(gui):
         messagebox.showerror("Error", f"Could not open history file:\n{e}")
 
 
-def check_ffmpeg(gui):
-    """Check if FFmpeg is installed and has SVT-AV1 support, and check for ab-av1"""
-    # (Unchanged from previous correction)
+def check_ffmpeg(gui) -> bool:
+    """Check if FFmpeg is installed and has SVT-AV1 support, and check for ab-av1.
+    
+    Args:
+        gui: The main GUI instance for displaying messages
+        
+    Returns:
+        True if all required components are available, False otherwise
+    """
     logger.info("Checking FFmpeg and ab-av1 installation...")
     ffmpeg_available, svt_av1_available, version_info, error_message = check_ffmpeg_availability()
+    
     if not ffmpeg_available:
-        error_msg = f"Error: ffmpeg not found. {error_message}"; logger.error(error_msg)
-        messagebox.showerror("FFmpeg Not Found", "FFmpeg not found or not in PATH.\nPlease install FFmpeg."); return False
+        error_msg = f"Error: ffmpeg not found. {error_message}"
+        logger.error(error_msg)
+        messagebox.showerror("FFmpeg Not Found", "FFmpeg not found or not in PATH.\nPlease install FFmpeg.")
+        return False
+        
     if not svt_av1_available:
-        warning_msg = "Warning: Your ffmpeg lacks SVT-AV1 support (libsvtav1)." ; logger.warning(warning_msg)
-        if not messagebox.askokcancel("SVT-AV1 Support Missing?", f"{warning_msg}\nab-av1 requires this. Continue anyway?"): return False
-    else: logger.info("FFmpeg with SVT-AV1 support detected.")
-    if version_info: logger.info(f"FFmpeg version: {version_info.splitlines()[0]}")
+        warning_msg = "Warning: Your ffmpeg lacks SVT-AV1 support (libsvtav1)." 
+        logger.warning(warning_msg)
+        if not messagebox.askokcancel("SVT-AV1 Support Missing?", f"{warning_msg}\nab-av1 requires this. Continue anyway?"):
+            return False
+    else:
+        logger.info("FFmpeg with SVT-AV1 support detected.")
+        
+    if version_info:
+        logger.info(f"FFmpeg version: {version_info.splitlines()[0]}")
+        
     available, path, message = check_ab_av1_available()
-    if not available: logger.error(f"ab-av1 check failed: {message}"); messagebox.showerror("ab-av1 Not Found", message); return False
-    else: logger.info(f"ab-av1 check successful: {message}")
-    logger.info("FFmpeg and ab-av1 checks passed."); return True
+    if not available:
+        logger.error(f"ab-av1 check failed: {message}")
+        messagebox.showerror("ab-av1 Not Found", message)
+        return False
+    else:
+        logger.info(f"ab-av1 check successful: {message}")
+        
+    logger.info("FFmpeg and ab-av1 checks passed.")
+    return True
 
 
-def update_progress_bars(gui, quality_percent, encoding_percent):
-    """Update the dual progress bars in a thread-safe way"""
+def update_progress_bars(gui, quality_percent: float, encoding_percent: float) -> None:
+    """Update the dual progress bars in a thread-safe way.
+    
+    Args:
+        gui: The main GUI instance containing the progress bar widgets
+        quality_percent: Percentage of quality detection progress (0-100)
+        encoding_percent: Percentage of encoding progress (0-100)
+    """
     def _update_ui():
         # Get GUI widgets
         quality_prog_widget = getattr(gui, 'quality_progress', None)
@@ -176,39 +235,89 @@ def update_progress_bars(gui, quality_percent, encoding_percent):
     update_ui_safely(gui.root, _update_ui)
 
 
-def scan_video_needs_conversion(gui, video_path, output_folder_path, overwrite=False):
-    """Scan a video file to determine if it needs conversion"""
-    # (Unchanged from previous correction)
+def scan_video_needs_conversion(gui, video_path: str, output_folder_path: str, overwrite: bool = False) -> tuple:
+    """Scan a video file to determine if it needs conversion.
+    
+    Args:
+        gui: The main GUI instance containing input folder info
+        video_path: Path to the video file to scan
+        output_folder_path: Directory where output would be saved
+        overwrite: Whether to overwrite existing output files
+        
+    Returns:
+        Tuple of (needs_conversion, reason) where needs_conversion is a boolean 
+        and reason is a string explaining why conversion is needed or not needed
+    """
     anonymized_input = anonymize_filename(video_path)
+    
     try:
-        input_path_obj = Path(video_path); input_folder_obj = Path(gui.input_folder.get()); output_folder_obj = Path(output_folder_path)
-        relative_dir = input_path_obj.parent.relative_to(input_folder_obj); output_dir = output_folder_obj / relative_dir
-        output_filename = input_path_obj.stem + ".mkv"; output_path = output_dir / output_filename
+        input_path_obj = Path(video_path)
+        input_folder_obj = Path(gui.input_folder.get())
+        output_folder_obj = Path(output_folder_path)
+        
+        relative_dir = input_path_obj.parent.relative_to(input_folder_obj)
+        output_dir = output_folder_obj / relative_dir
+        output_filename = input_path_obj.stem + ".mkv"
+        output_path = output_dir / output_filename
         anonymized_output = anonymize_filename(str(output_path))
+        
     except ValueError:
-        input_path_obj = Path(video_path); output_folder_obj = Path(output_folder_path)
-        output_filename = input_path_obj.stem + ".mkv"; output_path = output_folder_obj / output_filename
+        # Handle case when input is not relative to input folder
+        input_path_obj = Path(video_path)
+        output_folder_obj = Path(output_folder_path)
+        output_filename = input_path_obj.stem + ".mkv"
+        output_path = output_folder_obj / output_filename
         anonymized_output = anonymize_filename(str(output_path))
         logging.debug(f"File {anonymized_input} not relative, using direct output: {output_path}")
-    except Exception as e: logging.error(f"Error determining output path for {anonymized_input}: {e}"); return True, "Error determining output path"
-    if os.path.exists(output_path) and not overwrite: logging.info(f"Skipping {anonymized_input} - output exists: {anonymized_output}"); return False, "Output file exists"
+        
+    except Exception as e:
+        logging.error(f"Error determining output path for {anonymized_input}: {e}")
+        return True, "Error determining output path"
+        
+    # Check if output exists and we're not overwriting
+    if os.path.exists(output_path) and not overwrite:
+        logging.info(f"Skipping {anonymized_input} - output exists: {anonymized_output}")
+        return False, "Output file exists"
+        
     try:
         video_info = get_video_info(video_path)
-        if not video_info: logging.warning(f"Cannot analyze {anonymized_input} - will attempt"); return True, "Analysis failed"
-        is_already_av1 = False; video_stream_found = False
+        if not video_info:
+            logging.warning(f"Cannot analyze {anonymized_input} - will attempt")
+            return True, "Analysis failed"
+            
+        is_already_av1 = False
+        video_stream_found = False
+        
         for stream in video_info.get("streams", []):
             if stream.get("codec_type") == "video":
                 video_stream_found = True
-                if stream.get("codec_name", "").lower() == "av1": is_already_av1 = True; break
-        if not video_stream_found: logging.warning(f"No video stream in {anonymized_input} - skipping."); return False, "No video stream found"
+                if stream.get("codec_name", "").lower() == "av1":
+                    is_already_av1 = True
+                    break
+                    
+        if not video_stream_found:
+            logging.warning(f"No video stream in {anonymized_input} - skipping.")
+            return False, "No video stream found"
+            
         is_mkv_container = video_path.lower().endswith(".mkv")
-        if is_already_av1 and is_mkv_container: logging.info(f"Skipping {anonymized_input} - already AV1/MKV"); return False, "Already AV1/MKV"
+        if is_already_av1 and is_mkv_container:
+            logging.info(f"Skipping {anonymized_input} - already AV1/MKV")
+            return False, "Already AV1/MKV"
+            
         return True, "Needs conversion"
-    except Exception as e: logging.error(f"Error checking file {anonymized_input}: {str(e)}"); return True, f"Error during check: {str(e)}"
+        
+    except Exception as e:
+        logging.error(f"Error checking file {anonymized_input}: {str(e)}")
+        return True, f"Error during check: {str(e)}"
 
 
-def update_conversion_statistics(gui, info=None):
-    """Update the conversion statistics like ETA, VMAF, CRF"""
+def update_conversion_statistics(gui, info: dict = None) -> None:
+    """Update the conversion statistics like ETA, VMAF, CRF in the UI.
+    
+    Args:
+        gui: The main GUI instance containing statistic display widgets
+        info: Dictionary containing conversion progress information
+    """
     if not info or not gui.conversion_running: 
         logging.debug("Skipping update_conversion_statistics: no info or not running")
         return
@@ -313,38 +422,105 @@ def update_conversion_statistics(gui, info=None):
             logging.info(f"Output size update: {size_str}")
 
 
-def store_process_id(gui, pid, input_path):
-    """Store the current process ID and its associated input file"""
+def store_process_id(gui, pid: int, input_path: str) -> None:
+    """Store the current process ID and its associated input file.
+    
+    Args:
+        gui: The main GUI instance to store process information on
+        pid: Process ID of the conversion process
+        input_path: Path to the input file being processed
+    """
     # (Unchanged from previous correction)
     gui.current_process_info = {"pid": pid, "input_path": input_path}
     logger.info(f"ab-av1 process started with PID: {pid} for file {anonymize_filename(input_path)}")
 
 
-def start_conversion(gui):
-    """Start the conversion process"""
-    # (Unchanged from previous correction)
-    if gui.conversion_running: logger.warning("Start clicked while running."); return
-    input_folder = gui.input_folder.get(); output_folder = gui.output_folder.get()
-    if not input_folder or not os.path.isdir(input_folder): messagebox.showerror("Error", "Invalid input folder"); return
-    if not output_folder: output_folder = input_folder; gui.output_folder.set(output_folder); logger.info(f"Output set to input: {output_folder}")
-    try: os.makedirs(output_folder, exist_ok=True)
-    except Exception as e: logger.error(f"Cannot create output folder '{output_folder}': {e}"); messagebox.showerror("Error", f"Cannot create output folder:\n{e}"); return
-    selected_extensions = [ext for ext, var in [("mp4", gui.ext_mp4), ("mkv", gui.ext_mkv), ("avi", gui.ext_avi), ("wmv", gui.ext_wmv)] if var.get()]
-    if not selected_extensions: messagebox.showerror("Error", "Select file extensions in Settings"); return
-    if not check_ffmpeg(gui): return
+def start_conversion(gui) -> None:
+    """Start the video conversion process.
+    
+    Initializes the conversion worker thread, sets up UI state, and prevents
+    the system from sleeping during conversion.
+    
+    Args:
+        gui: The main GUI instance containing conversion settings and UI elements
+    """
+    # Check if already running
+    if gui.conversion_running: 
+        logger.warning("Start clicked while running.")
+        return
+        
+    # Get input and output folders
+    input_folder = gui.input_folder.get()
+    output_folder = gui.output_folder.get()
+    
+    # Validate input folder
+    if not input_folder or not os.path.isdir(input_folder):
+        messagebox.showerror("Error", "Invalid input folder")
+        return
+        
+    # If no output folder, use input folder
+    if not output_folder:
+        output_folder = input_folder
+        gui.output_folder.set(output_folder)
+        logger.info(f"Output set to input: {output_folder}")
+    
+    # Create output folder if it doesn't exist
+    try:
+        os.makedirs(output_folder, exist_ok=True)
+    except Exception as e:
+        logger.error(f"Cannot create output folder '{output_folder}': {e}")
+        messagebox.showerror("Error", f"Cannot create output folder:\n{e}")
+        return
+    
+    # Get file extensions to process
+    selected_extensions = [ext for ext, var in [
+        ("mp4", gui.ext_mp4), 
+        ("mkv", gui.ext_mkv), 
+        ("avi", gui.ext_avi), 
+        ("wmv", gui.ext_wmv)
+    ] if var.get()]
+    
+    # Check if at least one extension is selected
+    if not selected_extensions:
+        messagebox.showerror("Error", "Select file extensions in Settings")
+        return
+        
+    # Check FFmpeg and ab-av1
+    if not check_ffmpeg(gui):
+        return
 
-    overwrite = gui.overwrite.get(); convert_audio = gui.convert_audio.get(); audio_codec = gui.audio_codec.get()
+    # Get conversion settings
+    overwrite = gui.overwrite.get()
+    convert_audio = gui.convert_audio.get()
+    audio_codec = gui.audio_codec.get()
+    
+    # Log settings
     logger.info("--- Starting Conversion ---")
     logger.info(f"Input: {input_folder}, Output: {output_folder}, Extensions: {', '.join(selected_extensions)}")
     logger.info(f"Overwrite: {overwrite}, Convert Audio: {convert_audio} (Codec: {audio_codec if convert_audio else 'N/A'})")
     logger.info(f"Using -> Preset: {DEFAULT_ENCODING_PRESET}, VMAF Target: {DEFAULT_VMAF_TARGET}")
 
-    gui.status_label.config(text="Starting..."); logging.info("Preparing conversion...")
-    gui.start_button.config(state="disabled"); gui.stop_button.config(state="normal"); gui.force_stop_button.config(state="normal")
-    gui.conversion_running = True; gui.stop_event = threading.Event(); gui.total_conversion_start_time = time.time()
-    gui.vmaf_scores = []; gui.crf_values = []; gui.size_reductions = []
-    gui.processed_files = 0; gui.successful_conversions = 0; gui.error_count = 0
-    gui.current_process_info = None; gui.total_input_bytes_success = 0; gui.total_output_bytes_success = 0; gui.total_time_success = 0
+    # Update UI
+    gui.status_label.config(text="Starting...")
+    logging.info("Preparing conversion...")
+    gui.start_button.config(state="disabled")
+    gui.stop_button.config(state="normal")
+    gui.force_stop_button.config(state="normal")
+    
+    # Set conversion state
+    gui.conversion_running = True
+    gui.stop_event = threading.Event()
+    gui.total_conversion_start_time = time.time()
+    gui.vmaf_scores = []
+    gui.crf_values = []
+    gui.size_reductions = []
+    gui.processed_files = 0
+    gui.successful_conversions = 0
+    gui.error_count = 0
+    gui.current_process_info = None
+    gui.total_input_bytes_success = 0
+    gui.total_output_bytes_success = 0
+    gui.total_time_success = 0
 
     # Prevent system from sleeping during conversion
     sleep_prevented = prevent_sleep_mode()
@@ -356,24 +532,48 @@ def start_conversion(gui):
         gui.sleep_prevention_active = False
         
     # Reset UI elements
-    update_statistics_summary(gui); reset_current_file_details(gui)
-    gui.conversion_thread = threading.Thread(target=sequential_conversion_worker, args=(gui, input_folder, output_folder, overwrite, gui.stop_event, convert_audio, audio_codec), daemon=True)
+    update_statistics_summary(gui)
+    reset_current_file_details(gui)
+    
+    # Start conversion thread
+    gui.conversion_thread = threading.Thread(
+        target=sequential_conversion_worker, 
+        args=(gui, input_folder, output_folder, overwrite, gui.stop_event, convert_audio, audio_codec), 
+        daemon=True
+    )
     gui.conversion_thread.start()
 
 
-def stop_conversion(gui):
-    """Stop the conversion process gracefully after the current file finishes"""
-    # (Unchanged from previous correction)
+def stop_conversion(gui) -> None:
+    """Stop the conversion process gracefully after the current file finishes.
+    
+    Sets the stop event flag to signal the worker thread to terminate after
+    the current file completes processing.
+    
+    Args:
+        gui: The main GUI instance containing conversion state
+    """
     if gui.conversion_running and gui.stop_event and not gui.stop_event.is_set():
         gui.status_label.config(text="Stopping... (after current file)")
         logging.info("Graceful stop requested (Stop After Current File). Signalling worker.")
-        gui.stop_event.set(); gui.stop_button.config(state="disabled")
-    elif not gui.conversion_running: logging.info("Stop requested but not running.")
-    elif gui.stop_event and gui.stop_event.is_set(): logging.info("Stop already requested.")
+        gui.stop_event.set()
+        gui.stop_button.config(state="disabled")
+    elif not gui.conversion_running: 
+        logging.info("Stop requested but not running.")
+    elif gui.stop_event and gui.stop_event.is_set(): 
+        logging.info("Stop already requested.")
 
 
-def force_stop_conversion(gui, confirm=True):
-    """Force stop the conversion process immediately by killing the process and cleaning temp file"""
+def force_stop_conversion(gui, confirm: bool = True) -> None:
+    """Force stop the conversion process immediately by killing the process and cleaning temp files.
+    
+    This is more aggressive than stop_conversion() and will terminate the current encoding
+    process immediately rather than waiting for the current file to complete.
+    
+    Args:
+        gui: The main GUI instance containing conversion state
+        confirm: Whether to show a confirmation dialog before stopping
+    """
     if not gui.conversion_running: 
         logging.info("Force stop requested but not running."); return
     
@@ -508,8 +708,12 @@ def force_stop_conversion(gui, confirm=True):
     logging.info("Conversion force stopped.")
 
 
-def schedule_temp_folder_cleanup(directory):
-    """Schedule cleanup of general temp folders"""
+def schedule_temp_folder_cleanup(directory: str) -> None:
+    """Schedule cleanup of general temp folders after conversion.
+    
+    Args:
+        directory: Directory where temporary folders might be located
+    """
     # (Unchanged from previous correction)
     try:
         logging.info(f"Scheduling cleanup of temp folders in: {directory}")
@@ -519,8 +723,13 @@ def schedule_temp_folder_cleanup(directory):
     except Exception as e: logging.warning(f"Could not clean up temp folders in {directory}: {str(e)}")
 
 
-def update_elapsed_time(gui, start_time):
-    """Update the elapsed time label for current file only"""
+def update_elapsed_time(gui, start_time: float) -> None:
+    """Update the elapsed time label for current file only.
+    
+    Args:
+        gui: The main GUI instance containing the elapsed time label
+        start_time: Timestamp when processing of the current file started
+    """
     if not gui.conversion_running or (gui.stop_event and gui.stop_event.is_set()): 
         gui.elapsed_timer_id = None
         return
@@ -536,8 +745,12 @@ def update_elapsed_time(gui, start_time):
     gui.elapsed_timer_id = gui.root.after(1000, lambda: update_elapsed_time(gui, start_time))
 
 
-def update_total_elapsed_time(gui):
-    """Update the total elapsed time label"""
+def update_total_elapsed_time(gui) -> None:
+    """Update the total elapsed time label for the entire conversion batch.
+    
+    Args:
+        gui: The main GUI instance containing the total elapsed time label
+    """
     if hasattr(gui, 'total_conversion_start_time') and gui.conversion_running:
         total_elapsed = time.time() - gui.total_conversion_start_time
         update_ui_safely(gui.root, lambda t=total_elapsed: gui.total_elapsed_label.config(text=format_time(t)))
@@ -545,8 +758,12 @@ def update_total_elapsed_time(gui):
         update_ui_safely(gui.root, lambda: gui.total_elapsed_label.config(text="-"))
 
 
-def update_statistics_summary(gui):
-    """Update the overall statistics summary labels"""
+def update_statistics_summary(gui) -> None:
+    """Update the overall statistics summary labels with averages and ranges.
+    
+    Args:
+        gui: The main GUI instance containing statistic labels and data
+    """
     vmaf_text = "-"
     crf_text = "-"
     reduction_text = "-"
@@ -598,8 +815,12 @@ def update_statistics_summary(gui):
     update_ui_safely(gui.root, lambda r=reduction_text: gui.size_stats_label.config(text=r))
 
 
-def reset_current_file_details(gui):
-    """Reset labels related to the currently processing file"""
+def reset_current_file_details(gui) -> None:
+    """Reset labels related to the currently processing file to default values.
+    
+    Args:
+        gui: The main GUI instance containing file detail UI elements
+    """
     # (Unchanged from previous correction)
     update_ui_safely(gui.root, lambda: gui.current_file_label.config(text="No file processing"))
     update_ui_safely(gui.root, update_progress_bars, gui, 0, 0)
@@ -613,18 +834,41 @@ def reset_current_file_details(gui):
     gui.current_file_encoding_start_time = None
 
 
-# --- File Callback Handlers ---
+# --- Callback Handler Functions ---
 
-def _handle_starting(gui, filename):
-    # (Unchanged from previous correction)
+def handle_starting(gui, filename) -> None:
+    """Handle the start of processing for a file.
+    
+    Args:
+        gui: The main GUI instance for updating UI elements
+        filename: Name of the file being processed
+    """
     update_ui_safely(gui.root, lambda: gui.current_file_label.config(text=f"Processing: {filename}"))
     update_ui_safely(gui.root, update_progress_bars, gui, 0, 0)
     logger.info(f"Starting conversion of {anonymize_filename(filename)}")
 
-def _handle_file_info(gui, filename, info): pass
+def handle_file_info(gui, filename, info) -> None:
+    """Handle initial file information updates.
+    
+    Args:
+        gui: The main GUI instance for updating UI elements
+        filename: Name of the file being processed
+        info: Dictionary containing file information
+    """
+    # Function implementation pending
+    pass
 
-def _handle_progress(gui, filename, info):
-    """Handle progress updates from the conversion process"""
+def handle_progress(gui, filename: str, info: dict) -> None:
+    """Handle progress updates from the conversion process.
+    
+    Updates progress bars, statistics displays, and ensures UI responsiveness
+    during long-running conversions.
+    
+    Args:
+        gui: The main GUI instance containing progress indicators
+        filename: Name of the file being processed
+        info: Dictionary containing progress information
+    """
     quality_prog = info.get("progress_quality", 0) 
     encoding_prog = info.get("progress_encoding", 0) 
     
@@ -659,8 +903,14 @@ def _handle_progress(gui, filename, info):
                 logging.error(f"Error in forced UI update: {e}")
         update_ui_safely(gui.root, force_update)
 
-def _handle_error(gui, filename, error_info):
-    # (Unchanged from previous correction)
+def handle_error(gui, filename, error_info) -> None:
+    """Handle errors that occur during file processing.
+    
+    Args:
+        gui: The main GUI instance for updating UI elements
+        filename: Name of the file being processed
+        error_info: Error information, either as a string or dictionary
+    """
     message="Unknown"; error_type="unknown"; details=""
     if isinstance(error_info, dict): message=error_info.get("message","?"); error_type=error_info.get("type","?"); details=error_info.get("details","")
     elif isinstance(error_info, str): message=error_info
@@ -676,9 +926,14 @@ def _handle_error(gui, filename, error_info):
         gui.status_label.config(text=f"{base_status} - {gui.error_count} errors")
     update_ui_safely(gui.root, update_status)
 
-def _handle_retrying(gui, filename, info):
-    """Handles retry attempts with fallback VMAF"""
-    # (Updated to show current target)
+def handle_retrying(gui, filename, info) -> None:
+    """Handle retry attempts with fallback VMAF targets.
+    
+    Args:
+        gui: The main GUI instance for updating UI elements
+        filename: Name of the file being processed
+        info: Dictionary containing retry information including fallback VMAF target
+    """
     message="Retrying"; log_details=""; current_target_vmaf=None
     if isinstance(info, dict):
         message=info.get("message", message)
@@ -689,8 +944,14 @@ def _handle_retrying(gui, filename, info):
     update_ui_safely(gui.root, lambda: gui.current_file_label.config(text=f"Processing: {filename} - {message}"))
     if current_target_vmaf: update_ui_safely(gui.root, lambda v=current_target_vmaf: gui.vmaf_label.config(text=f"{v} (Target)"))
 
-def _handle_completed(gui, filename, info):
-    """Handles successful completion, updates stats"""
+def handle_completed(gui, filename, info) -> None:
+    """Handle successful completion of a file conversion and update stats.
+    
+    Args:
+        gui: The main GUI instance for updating UI elements
+        filename: Name of the file being processed
+        info: Dictionary containing completion information such as VMAF and CRF values
+    """
     anonymized_name = anonymize_filename(filename)
     log_msg = f"Successfully converted {anonymized_name}"
     
@@ -742,16 +1003,35 @@ def _handle_completed(gui, filename, info):
     logging.info(log_msg)
     update_statistics_summary(gui)
 
-def _handle_skipped(gui, filename, reason):
-    # (Unchanged from previous correction)
+def handle_skipped(gui, filename, reason) -> None:
+    """Handle skipped files.
+    
+    Args:
+        gui: The main GUI instance for updating UI elements
+        filename: Name of the file being skipped
+        reason: Reason why the file was skipped
+    """
     logging.info(f"Skipped {anonymize_filename(filename)}: {reason}")
 
 
-# --- Worker Thread ---
+# --- Worker Thread Implementation ---
 
 def sequential_conversion_worker(gui, input_folder, output_folder, overwrite, stop_event,
                                  convert_audio, audio_codec):
-    # (Updated history logic)
+    """Process files sequentially, scanning and converting each eligible video.
+    
+    This is the main worker function that runs in a separate thread to handle
+    the entire conversion process from scanning to processing.
+    
+    Args:
+        gui: The main GUI instance with UI elements and conversion state
+        input_folder: Root folder to scan for video files
+        output_folder: Destination folder for converted files
+        overwrite: Whether to overwrite existing output files
+        stop_event: Threading event to signal stopping
+        convert_audio: Whether to convert audio to a different codec
+        audio_codec: Target audio codec if conversion is enabled
+    """
     gui.output_folder_path = output_folder
     logger.info(f"Worker started. Input: '{input_folder}', Output: '{output_folder}'")
     gui.error_count = 0; gui.total_input_bytes_success = 0; gui.total_output_bytes_success = 0; gui.total_time_success = 0
@@ -798,22 +1078,32 @@ def sequential_conversion_worker(gui, input_folder, output_folder, overwrite, st
     logger.info(f"Starting conversion of {total_videos_to_process} files..."); update_ui_safely(gui.root, lambda: gui.overall_progress.config(value=0))
     gui.processed_files = 0; gui.successful_conversions = 0
 
-    # --- Callback Dispatcher ---
+    # Create callback dispatcher function
     def file_callback_dispatcher(filename, status, info=None):
-        # (Unchanged from previous correction)
+        """Dispatch file status events to appropriate handler functions.
+        
+        This internal function routes different status events to specific handler
+        functions, providing a clean separation between the core conversion logic
+        and the GUI update operations.
+        
+        Args:
+            filename: Name of the file being processed
+            status: Status code indicating the event type (starting, progress, error, etc.)
+            info: Optional dictionary with additional information about the event
+        """
         logging.debug(f"Callback: File={filename}, Status={status}, Info={info}")
         try:
-            if status == "starting": _handle_starting(gui, filename)
-            elif status == "file_info": _handle_file_info(gui, filename, info)
-            elif status == "progress": _handle_progress(gui, filename, info)
-            elif status == "warning" or status == "error" or status == "failed": _handle_error(gui, filename, info if info else status)
-            elif status == "retrying": _handle_retrying(gui, filename, info)
-            elif status == "completed": _handle_completed(gui, filename, info)
-            elif status == "skipped": _handle_skipped(gui, filename, info if info else "Skipped")
+            if status == "starting": handle_starting(gui, filename)
+            elif status == "file_info": handle_file_info(gui, filename, info)
+            elif status == "progress": handle_progress(gui, filename, info)
+            elif status == "warning" or status == "error" or status == "failed": handle_error(gui, filename, info if info else status)
+            elif status == "retrying": handle_retrying(gui, filename, info)
+            elif status == "completed": handle_completed(gui, filename, info)
+            elif status == "skipped": handle_skipped(gui, filename, info if info else "Skipped")
             else: logging.warning(f"Unknown status '{status}' for {filename}")
         except Exception as e: logging.error(f"Error in callback dispatcher '{status}': {e}", exc_info=True)
 
-    # --- Loop ---
+    # --- File Processing Loop ---
     for video_path in files_to_process:
         if stop_event.is_set(): logger.info("Conversion loop interrupted."); break
         file_number = gui.processed_files + 1; filename = os.path.basename(video_path); anonymized_name = anonymize_filename(video_path)
@@ -841,7 +1131,7 @@ def sequential_conversion_worker(gui, input_folder, output_folder, overwrite, st
         update_ui_safely(gui.root, update_elapsed_time, gui, gui.current_file_start_time)
         gui.current_process_info = None
 
-        # --- Process Video ---
+            # --- Process Video ---
         process_successful = False; output_file_path = None; elapsed_time_file = 0; output_size = 0; final_crf = None; final_vmaf = None; final_vmaf_target = None; output_acodec = input_acodec
         try:
             result_tuple = process_video(video_path, input_folder, output_folder, overwrite, convert_audio, audio_codec, None, file_callback_dispatcher, lambda pid, path=video_path: store_process_id(gui, pid, path))
@@ -852,7 +1142,7 @@ def sequential_conversion_worker(gui, input_folder, output_folder, overwrite, st
                  if convert_audio and input_acodec.lower() not in ['aac', 'opus']: output_acodec = audio_codec
         except Exception as e: logging.error(f"Critical error in process_video for {anonymized_name}: {e}", exc_info=True); file_callback_dispatcher(filename, "failed", {"message": f"Internal error: {e}", "type": "processing_error"}); process_successful = False
 
-        # --- Post-processing & History ---
+            # --- Post-processing & History ---
         gui.processed_files += 1
         if process_successful:
             gui.successful_conversions += 1
@@ -886,7 +1176,7 @@ def sequential_conversion_worker(gui, input_folder, output_folder, overwrite, st
             error_suffix=f" - {gui.error_count} errors" if gui.error_count > 0 else ""; gui.status_label.config(text=f"{base_status}{error_suffix}")
         update_ui_safely(gui.root, update_final_status)
 
-    # --- End of Loop ---
+    # --- End of Processing Loop ---
     final_status_message = "Conversion complete";
     if stop_event.is_set(): final_status_message = "Conversion stopped by user"
     elif gui.error_count > 0: final_status_message = f"Conversion complete with {gui.error_count} errors"
@@ -895,8 +1185,13 @@ def sequential_conversion_worker(gui, input_folder, output_folder, overwrite, st
 
 
 def conversion_complete(gui, final_message="Conversion complete"):
-    """Handle completion/stopping, show combined summary"""
-    # (Unchanged from previous correction)
+    """Handle conversion completion or stopping, and show a combined summary.
+    
+    Args:
+        gui: The main GUI instance for updating UI elements
+        final_message: Message to display in the UI and logs
+    """
+    # Handle completion actions
     logger.info(f"--- {final_message} ---")
     output_dir_to_clean = gui.output_folder_path if hasattr(gui,'output_folder_path') and gui.output_folder_path else os.getcwd()
     gui.root.after(100, lambda dir=output_dir_to_clean: schedule_temp_folder_cleanup(dir))

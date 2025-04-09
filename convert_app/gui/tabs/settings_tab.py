@@ -81,14 +81,14 @@ def create_settings_tab(gui):
     ttk.Label(log_hist_frame, text="Log Folder:").grid(row=0, column=0, sticky="w", padx=(10, 5), pady=(10, 5))
     log_entry = ttk.Entry(log_hist_frame, textvariable=gui.log_folder)
     log_entry.grid(row=0, column=1, sticky="ew", padx=5, pady=(10, 5))
-    log_browse_btn = ttk.Button(log_hist_frame, text="Browse...", command=lambda: browse_log_folder(gui))
+    log_browse_btn = ttk.Button(log_hist_frame, text="Browse...", command=gui.on_browse_log_folder)
     log_browse_btn.grid(row=0, column=2, sticky="e", padx=(0, 10), pady=(10, 5))
 
     # Log actions frame
     log_actions_frame = ttk.Frame(log_hist_frame)
     log_actions_frame.grid(row=1, column=0, columnspan=3, sticky="w", padx=10, pady=(0, 5))
 
-    log_open_btn = ttk.Button(log_actions_frame, text="Open Log Folder", command=lambda: open_log_folder_action(gui))
+    log_open_btn = ttk.Button(log_actions_frame, text="Open Log Folder", command=gui.on_open_log_folder)
     log_open_btn.pack(side="left", padx=(0, 10))
     ToolTip(log_open_btn, "Open the folder containing the application log files.")
 
@@ -100,7 +100,7 @@ def create_settings_tab(gui):
     history_actions_frame = ttk.Frame(log_hist_frame)
     history_actions_frame.grid(row=2, column=0, columnspan=3, sticky="w", padx=10, pady=(5, 10))
 
-    history_open_btn = ttk.Button(history_actions_frame, text="Open History File", command=lambda: open_history_file_action(gui))
+    history_open_btn = ttk.Button(history_actions_frame, text="Open History File", command=gui.on_open_history_file)
     history_open_btn.pack(side="left", padx=(0, 10))
     ToolTip(history_open_btn, "Open the conversion_history.json file (if it exists).")
 

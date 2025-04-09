@@ -37,22 +37,44 @@ class VMAFError(AbAv1Error): pass
 class EncodingError(AbAv1Error): pass
 
 class AbAv1Wrapper:
-    """Wrapper for the ab-av1 tool"""
+    """Wrapper for the ab-av1 tool providing high-level encoding interface.
+    
+    This class handles execution of ab-av1.exe, monitors progress, parses output,
+    and manages VMAF-based encoding with automatic fallback.
+    """
 
     def __init__(self):
+        """Initialize the wrapper and verify the executable exists."""
         app_dir = os.path.dirname(os.path.abspath(__file__))
         self.executable_path = os.path.join(app_dir, "ab-av1.exe")
         logger.debug(f"AbAv1Wrapper init - expecting executable at: {self.executable_path}")
         self._verify_executable()
         self.file_info_callback = None
 
-    def _verify_executable(self):
+    def _verify_executable(self) -> bool:
+        """Verify that the ab-av1 executable exists at the expected location.
+        
+        Returns:
+            True if the executable exists
+            
+        Raises:
+            FileNotFoundError: If the executable is not found
+        """
         if not os.path.exists(self.executable_path):
             error_msg = (f"ab-av1.exe not found. Place in 'convert_app' dir.\nExpected: {self.executable_path}")
             logger.error(error_msg); raise FileNotFoundError(error_msg)
         logger.debug(f"AbAv1Wrapper init - verified: {self.executable_path}"); return True
 
-    def _update_stats_from_line(self, line, stats):
+    def _update_stats_from_line(self, line: str, stats: dict) -> None:
+        """Update statistics based on a line of output from ab-av1.
+        
+        Parses output lines to extract progress updates, VMAF scores, CRF values,
+        and other information, then updates the stats dictionary.
+        
+        Args:
+            line: A line of output from the ab-av1 process
+            stats: Dictionary to update with extracted information
+        """
         """Update statistics based on a line of output for dual progress bars"""
         line = line.strip()
         try:
@@ -169,9 +191,31 @@ class AbAv1Wrapper:
             logger.error(f"Error processing output line: {e} (line: {line[:50]}...)")
 
 
-    def auto_encode(self, input_path, output_path,
-                    progress_callback=None, file_info_callback=None, pid_callback=None):
-        """Run ab-av1 auto-encode with VMAF fallback loop."""
+    def auto_encode(self, input_path: str, output_path: str,
+                    progress_callback: callable = None, file_info_callback: callable = None, 
+                    pid_callback: callable = None) -> dict:
+        """Run ab-av1 auto-encode with VMAF fallback loop.
+        
+        This function performs the actual encoding process with automatic VMAF target
+        fallback if the initial target cannot be achieved.
+        
+        Args:
+            input_path: Path to the input video file
+            output_path: Path where the output file should be saved
+            progress_callback: Optional callback for reporting progress (unused but kept for API compatibility)
+            file_info_callback: Optional callback for reporting file status changes
+            pid_callback: Optional callback to receive the process ID
+            
+        Returns:
+            Dictionary containing encoding statistics and results
+            
+        Raises:
+            InputFileError: If there is a problem with the input file
+            OutputFileError: If there is a problem with the output path
+            VMAFError: If the VMAF calculation fails
+            EncodingError: If the encoding process fails
+            AbAv1Error: For other errors
+        """
         self.file_info_callback = file_info_callback
         preset = DEFAULT_ENCODING_PRESET
         initial_min_vmaf = DEFAULT_VMAF_TARGET
@@ -447,48 +491,121 @@ class AbAv1Wrapper:
         return stats
 
 
-    def _parse_final_output(self, output_text, stats):
-        """Extract final statistics from the complete output if not found earlier"""
-        # (Unchanged)
+    def _parse_final_output(self, output_text: str, stats: dict) -> None:
+        """Extract final statistics from the complete output if not found earlier.
+        
+        Args:
+            output_text: The complete console output text from ab-av1
+            stats: Dictionary to update with extracted information
+        """
+        # Check for VMAF
         if stats.get("vmaf") is None:
             vmaf_matches = re.findall(r'VMAF:\s+(\d+\.\d+)', output_text, re.IGNORECASE)
-            if vmaf_matches: stats["vmaf"] = float(vmaf_matches[-1]); logger.info(f"Final VMAF extracted: {stats['vmaf']:.2f}")
+            if vmaf_matches: 
+                stats["vmaf"] = float(vmaf_matches[-1])
+                logger.info(f"Final VMAF extracted: {stats['vmaf']:.2f}")
+                
+        # Check for CRF
         if stats.get("crf") is None:
             crf_match = re.search(r'Best CRF: (\d+)', output_text)
-            if crf_match: stats["crf"] = int(crf_match.group(1)); logger.info(f"Final CRF extracted: {stats['crf']}")
+            if crf_match: 
+                stats["crf"] = int(crf_match.group(1))
+                logger.info(f"Final CRF extracted: {stats['crf']}")
+                
+        # Get input and output size information
         input_size_match = re.search(r'Input size:\s+(\d+\.\d+)\s+(\w+)', output_text)
         output_size_match = re.search(r'Output size:\s+(\d+\.\d+)\s+(\w+)', output_text)
         size_percent_match = re.search(r'Output size:.*\((\d+\.\d+)%\s+of\s+source\)', output_text)
+        
+        # Parse size reduction percentage
         if size_percent_match:
-             size_percent = float(size_percent_match.group(1)); stats["size_reduction"] = 100.0 - size_percent; logger.info(f"Final size reduction extracted: {stats['size_reduction']:.2f}%")
+            size_percent = float(size_percent_match.group(1))
+            stats["size_reduction"] = 100.0 - size_percent
+            logger.info(f"Final size reduction extracted: {stats['size_reduction']:.2f}%")
+        # Try to calculate it from sizes if available
         elif input_size_match and output_size_match and stats.get("size_reduction") is None:
             try:
-                input_size=float(input_size_match.group(1)); input_unit=input_size_match.group(2).upper()
-                output_size=float(output_size_match.group(1)); output_unit=output_size_match.group(2).upper()
-                unit_multipliers={'B':1,'KB':1024,'MB':1024**2,'GB':1024**3,'TB':1024**4}
-                input_bytes=input_size*unit_multipliers.get(input_unit,1); output_bytes=output_size*unit_multipliers.get(output_unit,1)
-                if input_bytes > 0: stats["size_reduction"]=100.0*(1.0-(output_bytes/input_bytes)); logger.info(f"Final size reduction calculated: {stats['size_reduction']:.2f}%")
-            except Exception as e: logger.warning(f"Could not calculate size reduction from final output: {e}")
+                # Parse size values
+                input_size = float(input_size_match.group(1))
+                input_unit = input_size_match.group(2).upper()
+                output_size = float(output_size_match.group(1))
+                output_unit = output_size_match.group(2).upper()
+                
+                # Convert to bytes
+                unit_multipliers = {'B':1, 'KB':1024, 'MB':1024**2, 'GB':1024**3, 'TB':1024**4}
+                input_bytes = input_size * unit_multipliers.get(input_unit, 1)
+                output_bytes = output_size * unit_multipliers.get(output_unit, 1)
+                
+                # Calculate reduction percentage
+                if input_bytes > 0:
+                    stats["size_reduction"] = 100.0 * (1.0 - (output_bytes/input_bytes))
+                    logger.info(f"Final size reduction calculated: {stats['size_reduction']:.2f}%")
+            except Exception as e:
+                logger.warning(f"Could not calculate size reduction from final output: {e}")
 
 
 # --- Helper functions (unchanged) ---
-def clean_ab_av1_temp_folders(base_dir=None):
-    if base_dir is None: base_dir = os.getcwd(); logger.debug(f"Cleaning temp folders in cwd: {base_dir}")
-    else: logger.debug(f"Cleaning temp folders in: {base_dir}")
+def clean_ab_av1_temp_folders(base_dir: str = None) -> int:
+    """Clean up temporary folders created by ab-av1.
+    
+    Args:
+        base_dir: Directory to search for temp folders. Defaults to current working directory.
+        
+    Returns:
+        Number of temporary folders cleaned up
+    """
+    # Determine base directory
+    if base_dir is None: 
+        base_dir = os.getcwd()
+        logger.debug(f"Cleaning temp folders in cwd: {base_dir}")
+    else: 
+        logger.debug(f"Cleaning temp folders in: {base_dir}")
+    
+    # Find temp folders
     try:
-        base_path = Path(base_dir);
-        if not base_path.is_dir(): logger.warning(f"Base dir invalid: {base_dir}"); return 0
-        pattern = ".ab-av1-*"; temp_folders = list(base_path.glob(pattern)); logger.debug(f"Found {len(temp_folders)} potential temp items in {base_dir}")
-    except Exception as e: logger.error(f"Error finding temp folders in {base_dir}: {e}"); return 0
+        base_path = Path(base_dir)
+        if not base_path.is_dir():
+            logger.warning(f"Base dir invalid: {base_dir}")
+            return 0
+            
+        pattern = ".ab-av1-*"
+        temp_folders = list(base_path.glob(pattern))
+        logger.debug(f"Found {len(temp_folders)} potential temp items in {base_dir}")
+    except Exception as e:
+        logger.error(f"Error finding temp folders in {base_dir}: {e}")
+        return 0
+    
+    # Remove the found folders
     cleaned_count = 0
     for item in temp_folders:
         try:
-            if item.is_dir(): shutil.rmtree(item); logger.info(f"Cleaned temp folder: {item}"); cleaned_count += 1
-            else: logger.debug(f"Skipping non-dir item: {item}")
-        except Exception as e: logger.warning(f"Failed cleanup {item}: {str(e)}")
+            if item.is_dir():
+                shutil.rmtree(item)
+                logger.info(f"Cleaned temp folder: {item}")
+                cleaned_count += 1
+            else:
+                logger.debug(f"Skipping non-dir item: {item}")
+        except Exception as e:
+            logger.warning(f"Failed cleanup {item}: {str(e)}")
+            
     return cleaned_count
 
-def check_ab_av1_available():
-    app_dir = os.path.dirname(os.path.abspath(__file__)); expected_path = os.path.join(app_dir, "ab-av1.exe")
-    if os.path.exists(expected_path): logger.info(f"ab-av1 found: {expected_path}"); return True, expected_path, f"ab-av1 available at {expected_path}"
-    else: error_msg = (f"ab-av1.exe not found. Place in 'convert_app' dir.\nExpected: {expected_path}"); logger.error(error_msg); return False, expected_path, error_msg
+def check_ab_av1_available() -> tuple:
+    """Check if ab-av1 executable is available.
+    
+    Returns:
+        Tuple of (is_available, path, message) where:
+        - is_available: Boolean indicating whether ab-av1 is available
+        - path: Path to the ab-av1 executable
+        - message: Descriptive message about the result
+    """
+    app_dir = os.path.dirname(os.path.abspath(__file__))
+    expected_path = os.path.join(app_dir, "ab-av1.exe")
+    
+    if os.path.exists(expected_path):
+        logger.info(f"ab-av1 found: {expected_path}")
+        return True, expected_path, f"ab-av1 available at {expected_path}"
+    else:
+        error_msg = f"ab-av1.exe not found. Place in 'convert_app' dir.\nExpected: {expected_path}"
+        logger.error(error_msg)
+        return False, expected_path, error_msg

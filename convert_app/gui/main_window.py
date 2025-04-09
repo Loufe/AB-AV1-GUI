@@ -16,7 +16,8 @@ import json # For settings persistence
 from convert_app.gui.tabs.main_tab import create_main_tab
 from convert_app.gui.tabs.settings_tab import create_settings_tab
 from convert_app.gui.operations import (
-    browse_input_folder, browse_output_folder,
+    browse_input_folder, browse_output_folder, browse_log_folder,
+    open_log_folder_action, open_history_file_action,
     check_ffmpeg, start_conversion, stop_conversion,
     force_stop_conversion
 )
@@ -198,9 +199,12 @@ class VideoConverterGUI:
         except Exception as e: print(f"Error destroying root window: {e}")
         print("Forcing process exit."); os._exit(0)
 
-    # Method references
-    def browse_input_folder(self): browse_input_folder(self)
-    def browse_output_folder(self): browse_output_folder(self)
-    def start_conversion(self): start_conversion(self)
-    def stop_conversion(self): stop_conversion(self)
-    def force_stop_conversion(self, confirm=True): force_stop_conversion(self, confirm=confirm)
+    # Method references for GUI callbacks
+    def on_browse_input_folder(self): browse_input_folder(self)
+    def on_browse_output_folder(self): browse_output_folder(self)
+    def on_browse_log_folder(self): browse_log_folder(self)
+    def on_open_log_folder(self): open_log_folder_action(self)
+    def on_open_history_file(self): open_history_file_action(self)
+    def on_start_conversion(self): start_conversion(self)
+    def on_stop_conversion(self): stop_conversion(self)
+    def on_force_stop_conversion(self, confirm=True): force_stop_conversion(self, confirm=confirm)

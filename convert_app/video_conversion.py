@@ -23,12 +23,23 @@ from convert_app.utils import (
 logger = logging.getLogger(__name__)
 
 
-def process_video(video_path, input_folder, output_folder, overwrite=False,
-                 convert_audio=True, audio_codec="opus",
-                 progress_callback=None, file_info_callback=None, pid_callback=None):
+def process_video(video_path: str, input_folder: str, output_folder: str, overwrite: bool = False,
+                 convert_audio: bool = True, audio_codec: str = "opus",
+                 progress_callback: callable = None, file_info_callback: callable = None, pid_callback: callable = None) -> tuple:
     """
     Process a single video file using ab-av1 with hardcoded quality settings.
-
+    
+    Args:
+        video_path: Path to the input video file
+        input_folder: Base input folder path for calculating relative paths
+        output_folder: Destination folder for converted files
+        overwrite: Whether to overwrite existing output files
+        convert_audio: Whether to convert audio to a different codec
+        audio_codec: Target audio codec if conversion is enabled
+        progress_callback: Optional callback for reporting progress
+        file_info_callback: Optional callback for reporting file status changes
+        pid_callback: Optional callback for receiving process ID
+        
     Returns:
         tuple: (output_path, elapsed_time, input_size, output_size, final_crf, final_vmaf, final_vmaf_target) on success, None otherwise.
     """

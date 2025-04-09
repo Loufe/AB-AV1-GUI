@@ -22,14 +22,14 @@ def create_main_tab(gui):
     input_label.grid(row=0, column=0, sticky="w")
     input_entry = ttk.Entry(folder_frame, textvariable=gui.input_folder, width=30)
     input_entry.grid(row=0, column=1, sticky="ew", padx=5)
-    input_btn = ttk.Button(folder_frame, text="Browse...", command=gui.browse_input_folder)
+    input_btn = ttk.Button(folder_frame, text="Browse...", command=gui.on_browse_input_folder)
     input_btn.grid(row=0, column=2, padx=(0, 10))
 
     output_label = ttk.Label(folder_frame, text="Output Folder", style="Header.TLabel")
     output_label.grid(row=0, column=3, sticky="w", padx=(10, 0))
     output_entry = ttk.Entry(folder_frame, textvariable=gui.output_folder, width=30)
     output_entry.grid(row=0, column=4, sticky="ew", padx=5)
-    output_btn = ttk.Button(folder_frame, text="Browse...", command=gui.browse_output_folder)
+    output_btn = ttk.Button(folder_frame, text="Browse...", command=gui.on_browse_output_folder)
     output_btn.grid(row=0, column=5)
 
     folder_frame.columnconfigure(1, weight=1)
@@ -39,16 +39,16 @@ def create_main_tab(gui):
     control_frame = ttk.Frame(main_frame)
     control_frame.grid(row=4, column=0, columnspan=2, sticky="ew", pady=(20, 10))
 
-    gui.start_button = ttk.Button(control_frame, text="Start Conversion", command=gui.start_conversion)
+    gui.start_button = ttk.Button(control_frame, text="Start Conversion", command=gui.on_start_conversion)
     gui.start_button.pack(side="left", padx=5)
     ToolTip(gui.start_button, "Begin converting all selected video types in the input folder.")
 
     # Renamed Stop Button
-    gui.stop_button = ttk.Button(control_frame, text="Stop After Current File", command=gui.stop_conversion, state="disabled")
+    gui.stop_button = ttk.Button(control_frame, text="Stop After Current File", command=gui.on_stop_conversion, state="disabled")
     gui.stop_button.pack(side="left", padx=5)
     ToolTip(gui.stop_button, "Signal the converter to stop gracefully after the currently processing file is finished.")
 
-    gui.force_stop_button = ttk.Button(control_frame, text="Force Stop", command=gui.force_stop_conversion, state="disabled")
+    gui.force_stop_button = ttk.Button(control_frame, text="Force Stop", command=gui.on_force_stop_conversion, state="disabled")
     gui.force_stop_button.pack(side="left", padx=5)
     ToolTip(gui.force_stop_button, "Immediately terminate the current encoding process.\nMay leave temporary files if cleanup fails.")
 
