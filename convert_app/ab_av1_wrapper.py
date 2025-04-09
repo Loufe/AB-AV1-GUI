@@ -237,13 +237,13 @@ class AbAv1Wrapper:
         while current_vmaf_target >= MIN_VMAF_FALLBACK_TARGET:
             logger.info(f"Attempting encode for {anonymized_input_path} with VMAF target: {current_vmaf_target}")
 
-            # --- Command Preparation (NO --no-cache flag) ---
+            # --- Command Preparation ---
             cmd = [
                 self.executable_path, "auto-encode",
                 "-i", input_path, "-o", temp_output,
                 "--preset", str(preset),
                 "--min-vmaf", str(current_vmaf_target)
-                # Removed "--no-cache"
+
             ]
             cmd_str = " ".join(cmd)
             stats["command"] = cmd_str
@@ -253,7 +253,7 @@ class AbAv1Wrapper:
                 "-i", os.path.basename(anonymized_input_path), # Use basename from anonymized
                 "-o", os.path.basename(anonymized_temp_output), # Use basename from anonymized
                 "--preset", str(preset), "--min-vmaf", str(current_vmaf_target)
-                # Removed "--no-cache"
+
             ]
             cmd_str_log = " ".join(cmd_for_log)
             logger.debug(f"Running: {cmd_str_log}"); logger.debug(f"Full cmd: {cmd_str}")

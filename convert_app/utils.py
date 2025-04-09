@@ -232,3 +232,40 @@ def append_to_history(record_dict):
         os.replace(temp_history_path, history_path); logging.debug(f"Appended record to history: {history_path}")
     except OSError as e: logging.error(f"Error saving history {history_path}: {e}")
     except Exception as e: logging.error(f"Unexpected error appending history: {e}", exc_info=True)
+
+# --- Power Management Functions ---
+import ctypes
+
+# Windows constants for SetThreadExecutionState
+ES_CONTINUOUS = 0x80000000
+ES_SYSTEM_REQUIRED = 0x00000001
+ES_DISPLAY_REQUIRED = 0x00000002
+
+def prevent_sleep_mode():
+    """Prevent the system from going to sleep while conversion is running"""
+    if sys.platform != "win32":
+        logging.warning("Sleep prevention only supported on Windows")
+        return False
+        
+    try:
+        logging.info("Preventing system sleep during conversion")
+        ctypes.windll.kernel32.SetThreadExecutionState(
+            ES_CONTINUOUS | ES_SYSTEM_REQUIRED
+        )
+        return True
+    except Exception as e:
+        logging.error(f"Failed to prevent system sleep: {e}")
+        return False
+
+def allow_sleep_mode():
+    """Restore normal power management behavior"""
+    if sys.platform != "win32":
+        return False
+        
+    try:
+        logging.info("Restoring normal power management")
+        ctypes.windll.kernel32.SetThreadExecutionState(ES_CONTINUOUS)
+        return True
+    except Exception as e:
+        logging.error(f"Failed to restore normal power management: {e}")
+        return False

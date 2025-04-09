@@ -27,7 +27,8 @@ from convert_app.ab_av1_wrapper import check_ab_av1_available, clean_ab_av1_temp
 from convert_app.utils import (
     get_video_info, format_time, format_file_size, anonymize_filename,
     check_ffmpeg_availability, update_ui_safely, DEFAULT_VMAF_TARGET,
-    DEFAULT_ENCODING_PRESET, append_to_history, get_history_file_path # Import history func
+    DEFAULT_ENCODING_PRESET, append_to_history, get_history_file_path, # Import history func
+    prevent_sleep_mode, allow_sleep_mode # Import power management functions
 )
 from convert_app.video_conversion import process_video
 
@@ -345,6 +346,16 @@ def start_conversion(gui):
     gui.processed_files = 0; gui.successful_conversions = 0; gui.error_count = 0
     gui.current_process_info = None; gui.total_input_bytes_success = 0; gui.total_output_bytes_success = 0; gui.total_time_success = 0
 
+    # Prevent system from sleeping during conversion
+    sleep_prevented = prevent_sleep_mode()
+    if sleep_prevented:
+        logging.info("Sleep prevention enabled - computer will stay awake during conversion")
+        gui.sleep_prevention_active = True
+    else:
+        logging.warning("Could not enable sleep prevention - computer may go to sleep during conversion")
+        gui.sleep_prevention_active = False
+        
+    # Reset UI elements
     update_statistics_summary(gui); reset_current_file_details(gui)
     gui.conversion_thread = threading.Thread(target=sequential_conversion_worker, args=(gui, input_folder, output_folder, overwrite, gui.stop_event, convert_audio, audio_codec), daemon=True)
     gui.conversion_thread.start()
@@ -901,9 +912,11 @@ def conversion_complete(gui, final_message="Conversion complete"):
     data_saved_str = format_file_size(data_saved_bytes) if data_saved_bytes != 0 else "N/A"
     time_per_gb_str = format_time(time_per_gb) if time_per_gb > 0 else "N/A"
     gui.status_label.config(text=final_message); reset_current_file_details(gui)
-    gui.conversion_running = False; gui.stop_event = None; gui.current_process_info = None
-    gui.start_button.config(state="normal"); gui.stop_button.config(state="disabled"); gui.force_stop_button.config(state="disabled")
-    update_ui_safely(gui.root, lambda: gui.total_elapsed_label.config(text=format_time(total_duration)))
+    # Restore sleep functionality
+    if hasattr(gui, 'sleep_prevention_active') and gui.sleep_prevention_active:
+        allow_sleep_mode()
+        logging.info("Sleep prevention disabled - computer may go to sleep normally")
+        gui.sleep_prevention_active = False
     if gui.processed_files > 0:
         summary_msg = f"{final_message}.\n\n" \
                       f"Files Processed: {gui.processed_files}\n" \
