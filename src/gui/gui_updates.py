@@ -1,0 +1,334 @@
+# src/gui/gui_updates.py
+"""
+GUI update functions (progress bars, statistics, labels, timers)
+for the AV1 Video Converter application.
+"""
+# Standard library imports
+import time
+import logging
+import statistics
+import math # For ceil
+
+# GUI-related imports
+import tkinter as tk # For type hinting if needed
+
+# Project imports
+from src.utils import (
+    format_time, format_file_size, update_ui_safely
+)
+# Import constant from config
+from src.config import DEFAULT_VMAF_TARGET, DEFAULT_ENCODING_PRESET
+
+logger = logging.getLogger(__name__)
+
+
+def update_progress_bars(gui, quality_percent: float, encoding_percent: float) -> None:
+    """Update the dual progress bars in a thread-safe way.
+
+    Args:
+        gui: The main GUI instance containing the progress bar widgets
+        quality_percent: Percentage of quality detection progress (0-100)
+        encoding_percent: Percentage of encoding progress (0-100)
+    """
+    def _update_ui():
+        # Get GUI widgets
+        quality_prog_widget = getattr(gui, 'quality_progress', None)
+        quality_label_widget = getattr(gui, 'quality_percent_label', None)
+        encoding_prog_widget = getattr(gui, 'encoding_progress', None)
+        encoding_label_widget = getattr(gui, 'encoding_percent_label', None)
+
+        # Make sure all widgets exist
+        if not all([quality_prog_widget, quality_label_widget, encoding_prog_widget, encoding_label_widget]):
+            return
+
+        try:
+            # Set mode for quality bar
+            q_mode = 'determinate'
+            e_mode = 'determinate'
+
+            # Set quality progress to 100% when encoding is in progress
+            if encoding_percent > 0:
+                # When encoding has started, quality detection is complete
+                display_quality_percent = 100
+            else:
+                # During quality detection phase
+                display_quality_percent = quality_percent
+                if quality_percent < 100 and encoding_percent <= 0:
+                    # Let's keep it determinate for now, as ab-av1 doesn't give specific phase progress
+                    # q_mode = 'indeterminate' # Consider this if phase detection is more granular
+                    pass
+
+            # Update the widgets
+            quality_prog_widget.config(value=display_quality_percent, mode=q_mode)
+            quality_label_widget.config(text=f"{math.ceil(display_quality_percent)}%")
+            encoding_prog_widget.config(value=encoding_percent, mode=e_mode)
+            encoding_label_widget.config(text=f"{math.ceil(encoding_percent)}%")
+
+        except tk.TclError as e:
+            logger.debug(f"TclError updating progress bars: {e}")
+
+    update_ui_safely(gui.root, _update_ui)
+
+
+def update_conversion_statistics(gui, info: dict = None) -> None:
+    """Update the conversion statistics like ETA, VMAF, CRF in the UI.
+
+    Args:
+        gui: The main GUI instance containing statistic display widgets
+        info: Dictionary containing conversion progress information
+    """
+    if not info or not gui.conversion_running:
+        logging.debug("Skipping update_conversion_statistics: no info or not running")
+        return
+
+    # Log received info for debugging
+    logging.debug(f"Processing statistics update: {info}")
+
+    # VMAF Updates
+    if "vmaf" in info and info["vmaf"] is not None:
+        try: # Ensure vmaf value is valid
+            vmaf_val = float(info["vmaf"])
+            vmaf_status = f"{vmaf_val:.1f}"
+            if info.get("phase") == "crf-search": vmaf_status += " (Current)"
+            if info.get("used_fallback"): vmaf_status += " (Fallback Used)" # Check if fallback was used
+            update_ui_safely(gui.root, lambda v=vmaf_status: gui.vmaf_label.config(text=v))
+            logging.info(f"VMAF update: {vmaf_status}")
+        except (ValueError, TypeError) as e:
+            logging.warning(f"Invalid VMAF value in info for update: {info.get('vmaf')} - {e}")
+    elif info.get("phase") == "crf-search":
+        # Reset to target if in search phase without a specific VMAF value yet
+        vmaf_target = info.get("vmaf_target_used", DEFAULT_VMAF_TARGET)
+        update_ui_safely(gui.root, lambda v=vmaf_target: gui.vmaf_label.config(text=f"{v} (Target)"))
+
+    # CRF Updates
+    if "crf" in info and info["crf"] is not None:
+        try: # Ensure crf value is valid
+            crf_val = int(info['crf'])
+            # Use constant for preset
+            settings_text = f"CRF: {crf_val}, Preset: {DEFAULT_ENCODING_PRESET}"
+            update_ui_safely(gui.root, lambda s=settings_text: gui.encoding_settings_label.config(text=s))
+            logging.info(f"Encoding settings update: {settings_text}")
+        except (ValueError, TypeError) as e:
+            logging.warning(f"Invalid CRF value in info for update: {info.get('crf')} - {e}")
+
+    # ETA Calculation
+    encoding_prog = info.get("progress_encoding", 0)
+    if encoding_prog > 0:
+        if hasattr(gui, 'current_file_start_time') and gui.current_file_start_time:
+            if not hasattr(gui, 'current_file_encoding_start_time') or not gui.current_file_encoding_start_time:
+                # Check if encoding phase *just* started
+                if info.get("phase") == "encoding" and info.get("progress_encoding", 0) < 5: # Small threshold
+                    gui.current_file_encoding_start_time = time.time()
+                    logging.info("Encoding phase started - initializing timer")
+
+            if hasattr(gui, 'current_file_encoding_start_time') and gui.current_file_encoding_start_time:
+                elapsed_encoding_time = time.time() - gui.current_file_encoding_start_time
+                if encoding_prog > 1 and elapsed_encoding_time > 1: # Avoid division by zero or tiny progress values
+                    try:
+                        # Calculate estimated total time and remaining time
+                        total_encoding_time_est = (elapsed_encoding_time / encoding_prog) * 100
+                        eta_seconds = total_encoding_time_est - elapsed_encoding_time
+                        eta_str = format_time(eta_seconds)
+
+                        # CRITICAL: Use explicit lambda to capture the current value of eta_str
+                        update_ui_safely(gui.root, lambda eta=eta_str: gui.eta_label.config(text=eta))
+
+                        logging.info(f"ETA update: {eta_str} (progress: {encoding_prog:.1f}%, elapsed: {format_time(elapsed_encoding_time)})")
+                    except ZeroDivisionError:
+                        update_ui_safely(gui.root, lambda: gui.eta_label.config(text="Calculating..."))
+                    except Exception as e:
+                        logging.error(f"Error calculating ETA: {e}")
+                        update_ui_safely(gui.root, lambda: gui.eta_label.config(text="Error"))
+                else:
+                    update_ui_safely(gui.root, lambda: gui.eta_label.config(text="Calculating..."))
+            else:
+                 # If encoding start time not yet set, show calculating
+                 update_ui_safely(gui.root, lambda: gui.eta_label.config(text="Calculating..."))
+    elif info.get("phase") == "crf-search":
+        update_ui_safely(gui.root, lambda: gui.eta_label.config(text="Detecting..."))
+    else:
+        update_ui_safely(gui.root, lambda: gui.eta_label.config(text="-"))
+
+    # Size Prediction - prioritize actual file size estimates
+    # Check if we have an estimated_output_size from the partial file
+    if "output_size" in info and "original_size" in info and info.get("is_estimate", False):
+        # This is from a real-time measurement of the partial output file
+        current_size = info["output_size"]
+        original_size = info["original_size"]
+        if original_size is not None and original_size > 0 and current_size is not None:
+            try: # Ensure values are valid numbers
+                current_size_f = float(current_size)
+                original_size_f = float(original_size)
+                ratio = (current_size_f / original_size_f) * 100
+                # Use the estimated size directly
+                size_str = f"{format_file_size(current_size_f)} ({ratio:.1f}%) [Est]"
+                # CRITICAL: Use explicit lambda to capture the current value
+                update_ui_safely(gui.root, lambda s=size_str: gui.output_size_label.config(text=s))
+                logging.info(f"Output size estimate (from partial file): {size_str}")
+            except (ValueError, TypeError, ZeroDivisionError) as e:
+                 logging.warning(f"Invalid size data for estimate: {current_size}, {original_size} - {e}")
+
+    # Otherwise check if we have a size_reduction percentage (likely from ab-av1 final output)
+    elif "size_reduction" in info and info["size_reduction"] is not None:
+        # If we have size_reduction percentage but not actual sizes yet
+        try:
+            # Get original size from the file if available
+            if hasattr(gui, 'last_input_size') and gui.last_input_size:
+                original_size = gui.last_input_size
+                size_reduction_f = float(info["size_reduction"]) # Ensure float
+                size_percentage = 100.0 - size_reduction_f
+                output_size_estimate = original_size * (size_percentage / 100.0)
+                ratio = size_percentage
+                size_str = f"{format_file_size(output_size_estimate)} ({ratio:.1f}%)"
+
+                # Update the last_output_size for future use (like final completion summary)
+                gui.last_output_size = output_size_estimate
+
+                # CRITICAL: Use explicit lambda to capture the current value
+                update_ui_safely(gui.root, lambda s=size_str: gui.output_size_label.config(text=s))
+
+                logging.info(f"Output size prediction: {size_str} (reduction: {info['size_reduction']:.1f}%)")
+        except (ValueError, TypeError, ZeroDivisionError) as e:
+            logging.error(f"Error calculating output size from reduction: {e}")
+        except Exception as e: # Catch other potential errors
+             logging.error(f"Unexpected error calculating output size from reduction: {e}")
+
+    # Direct size information if available (typically on completion)
+    elif "output_size" in info and "original_size" in info:
+        current_size = info["output_size"]
+        original_size = info["original_size"]
+        if original_size is not None and original_size > 0 and current_size is not None:
+            try: # Ensure values are valid numbers
+                current_size_f = float(current_size)
+                original_size_f = float(original_size)
+                ratio = (current_size_f / original_size_f) * 100
+                size_str = f"{format_file_size(current_size_f)} ({ratio:.1f}%)"
+
+                # CRITICAL: Use explicit lambda to capture the current value
+                update_ui_safely(gui.root, lambda s=size_str: gui.output_size_label.config(text=s))
+
+                logging.info(f"Output size update: {size_str}")
+            except (ValueError, TypeError, ZeroDivisionError) as e:
+                 logging.warning(f"Invalid size data for final update: {current_size}, {original_size} - {e}")
+
+
+def update_elapsed_time(gui, start_time: float) -> None:
+    """Update the elapsed time label for current file only.
+
+    Args:
+        gui: The main GUI instance containing the elapsed time label
+        start_time: Timestamp when processing of the current file started
+    """
+    if not gui.conversion_running or (gui.stop_event and gui.stop_event.is_set()):
+        gui.elapsed_timer_id = None
+        return
+
+    # Only display current file elapsed time
+    current_file_elapsed = time.time() - start_time
+    update_ui_safely(gui.root, lambda t=current_file_elapsed: gui.elapsed_label.config(text=format_time(t)))
+
+    # Also update total elapsed time
+    update_total_elapsed_time(gui)
+
+    # Schedule next update
+    gui.elapsed_timer_id = gui.root.after(1000, lambda: update_elapsed_time(gui, start_time))
+
+
+def update_total_elapsed_time(gui) -> None:
+    """Update the total elapsed time label for the entire conversion batch.
+
+    Args:
+        gui: The main GUI instance containing the total elapsed time label
+    """
+    if hasattr(gui, 'total_conversion_start_time') and gui.conversion_running:
+        total_elapsed = time.time() - gui.total_conversion_start_time
+        update_ui_safely(gui.root, lambda t=total_elapsed: gui.total_elapsed_label.config(text=format_time(t)))
+    else:
+        update_ui_safely(gui.root, lambda: gui.total_elapsed_label.config(text="-"))
+
+
+def update_statistics_summary(gui) -> None:
+    """Update the overall statistics summary labels with averages and ranges.
+
+    Args:
+        gui: The main GUI instance containing statistic labels and data
+    """
+    vmaf_text = "-"
+    crf_text = "-"
+    reduction_text = "-"
+
+    # Debug logging to trace updates
+    logging.debug(f"Updating statistics summary - VMAF scores: {len(gui.vmaf_scores)}, CRF values: {len(gui.crf_values)}, Size reductions: {len(gui.size_reductions)}")
+
+    if gui.vmaf_scores:
+        try:
+            avg_vmaf = statistics.mean(gui.vmaf_scores)
+            min_vmaf = min(gui.vmaf_scores)
+            max_vmaf = max(gui.vmaf_scores)
+            vmaf_text = f"Avg: {avg_vmaf:.1f} (Range: {min_vmaf:.1f}-{max_vmaf:.1f})"
+            logging.debug(f"VMAF stats: avg={avg_vmaf:.1f}, min={min_vmaf:.1f}, max={max_vmaf:.1f}")
+        except statistics.StatisticsError: # Handle case with insufficient data
+            if len(gui.vmaf_scores) == 1: vmaf_text = f"{gui.vmaf_scores[0]:.1f}"
+            else: vmaf_text = "Error"; logging.warning("StatisticsError calculating VMAF stats")
+        except Exception as e:
+            logging.warning(f"Error calculating VMAF stats: {e}")
+            vmaf_text = "Error"
+
+    if gui.crf_values:
+         try:
+            avg_crf = statistics.mean(gui.crf_values)
+            min_crf = min(gui.crf_values)
+            max_crf = max(gui.crf_values)
+            crf_text = f"Avg: {avg_crf:.1f} (Range: {min_crf}-{max_crf})"
+            logging.debug(f"CRF stats: avg={avg_crf:.1f}, min={min_crf}, max={max_crf}")
+         except statistics.StatisticsError: # Handle case with insufficient data
+             if len(gui.crf_values) == 1: crf_text = f"{gui.crf_values[0]}"
+             else: crf_text = "Error"; logging.warning("StatisticsError calculating CRF stats")
+         except Exception as e:
+            logging.warning(f"Error calculating CRF stats: {e}")
+            crf_text = "Error"
+
+    if gui.size_reductions:
+        try:
+            # Make sure the list isn't empty and contains valid numbers
+            valid_reductions = [r for r in gui.size_reductions if isinstance(r, (int, float))]
+            if not valid_reductions:
+                reduction_text = "No data"
+            else:
+                avg_reduction = statistics.mean(valid_reductions)
+                min_reduction = min(valid_reductions)
+                max_reduction = max(valid_reductions)
+                reduction_text = f"Avg: {avg_reduction:.1f}% (Range: {min_reduction:.1f}%-{max_reduction:.1f}%)"
+                logging.info(f"Size reduction stats: avg={avg_reduction:.1f}%, min={min_reduction:.1f}%, max={max_reduction:.1f}%")
+        except statistics.StatisticsError: # Handle case with insufficient data
+             if len(valid_reductions) == 1: reduction_text = f"{valid_reductions[0]:.1f}%"
+             else: reduction_text = "Error"; logging.warning("StatisticsError calculating Size Reduction stats")
+        except Exception as e:
+            logging.warning(f"Error calculating Size Reduction stats: {e}")
+            logging.warning(f"Size reduction values: {gui.size_reductions}")
+            reduction_text = "Error"
+
+    # Use lambdas with explicit parameter capturing for UI updates
+    update_ui_safely(gui.root, lambda v=vmaf_text: gui.vmaf_stats_label.config(text=v))
+    update_ui_safely(gui.root, lambda c=crf_text: gui.crf_stats_label.config(text=c))
+    update_ui_safely(gui.root, lambda r=reduction_text: gui.size_stats_label.config(text=r))
+
+
+def reset_current_file_details(gui) -> None:
+    """Reset labels related to the currently processing file to default values.
+
+    Args:
+        gui: The main GUI instance containing file detail UI elements
+    """
+    # Use constant imported from src.config
+    default_vmaf_text = f"{DEFAULT_VMAF_TARGET} (Target)"
+    update_ui_safely(gui.root, lambda: gui.current_file_label.config(text="No file processing"))
+    update_ui_safely(gui.root, update_progress_bars, gui, 0, 0) # Use helper
+    update_ui_safely(gui.root, lambda: gui.orig_format_label.config(text="-"))
+    update_ui_safely(gui.root, lambda: gui.orig_size_label.config(text="-"))
+    update_ui_safely(gui.root, lambda v=default_vmaf_text: gui.vmaf_label.config(text=v))
+    update_ui_safely(gui.root, lambda: gui.elapsed_label.config(text="-"))
+    update_ui_safely(gui.root, lambda: gui.eta_label.config(text="-"))
+    update_ui_safely(gui.root, lambda: gui.output_size_label.config(text="-"))
+    update_ui_safely(gui.root, lambda: gui.encoding_settings_label.config(text="-"))
+    gui.current_file_encoding_start_time = None

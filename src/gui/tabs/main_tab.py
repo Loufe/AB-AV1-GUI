@@ -6,9 +6,10 @@ import tkinter as tk
 from tkinter import ttk
 import math # For ceil
 
-from convert_app.gui.base import ToolTip
-# Import the constant directly
-from convert_app.utils import DEFAULT_VMAF_TARGET
+# Project imports - Replace 'convert_app' with 'src'
+from src.gui.base import ToolTip
+# Import the constant directly from config
+from src.config import DEFAULT_VMAF_TARGET
 
 def create_main_tab(gui):
     """Create the main conversion tab"""
@@ -23,6 +24,7 @@ def create_main_tab(gui):
     input_label.grid(row=0, column=0, sticky="w")
     input_entry = ttk.Entry(folder_frame, textvariable=gui.input_folder, width=30)
     input_entry.grid(row=0, column=1, sticky="ew", padx=5)
+    # Use the method reference from the main GUI instance, which points to the imported function
     input_btn = ttk.Button(folder_frame, text="Browse...", command=gui.on_browse_input_folder)
     input_btn.grid(row=0, column=2, padx=(0, 10))
 
@@ -30,6 +32,7 @@ def create_main_tab(gui):
     output_label.grid(row=0, column=3, sticky="w", padx=(10, 0))
     output_entry = ttk.Entry(folder_frame, textvariable=gui.output_folder, width=30)
     output_entry.grid(row=0, column=4, sticky="ew", padx=5)
+    # Use the method reference from the main GUI instance
     output_btn = ttk.Button(folder_frame, text="Browse...", command=gui.on_browse_output_folder)
     output_btn.grid(row=0, column=5)
 
@@ -40,15 +43,17 @@ def create_main_tab(gui):
     control_frame = ttk.Frame(main_frame)
     control_frame.grid(row=4, column=0, columnspan=2, sticky="ew", pady=(20, 10))
 
+    # Use the method reference from the main GUI instance
     gui.start_button = ttk.Button(control_frame, text="Start Conversion", command=gui.on_start_conversion)
     gui.start_button.pack(side="left", padx=5)
     ToolTip(gui.start_button, "Begin converting all selected video types in the input folder.")
 
-    # Renamed Stop Button
+    # Use the method reference from the main GUI instance
     gui.stop_button = ttk.Button(control_frame, text="Stop After Current File", command=gui.on_stop_conversion, state="disabled")
     gui.stop_button.pack(side="left", padx=5)
     ToolTip(gui.stop_button, "Signal the converter to stop gracefully after the currently processing file is finished.")
 
+    # Use the method reference from the main GUI instance
     gui.force_stop_button = ttk.Button(control_frame, text="Force Stop", command=gui.on_force_stop_conversion, state="disabled")
     gui.force_stop_button.pack(side="left", padx=5)
     ToolTip(gui.force_stop_button, "Immediately terminate the current encoding process.\nMay leave temporary files if cleanup fails.")
@@ -63,10 +68,10 @@ def create_main_tab(gui):
     status_frame.grid(row=7, column=0, columnspan=2, sticky="ew", pady=(5, 20))
     status_frame.columnconfigure(0, weight=3)
     status_frame.columnconfigure(1, weight=1)
-    
+
     gui.status_label = ttk.Label(status_frame, text="Ready")
     gui.status_label.grid(row=0, column=0, sticky="w")
-    
+
     total_time_frame = ttk.Frame(status_frame)
     total_time_frame.grid(row=0, column=1, sticky="e")
     ttk.Label(total_time_frame, text="Total Time:").pack(side="left", padx=(0, 5))
@@ -114,7 +119,7 @@ def create_main_tab(gui):
     ttk.Label(left_col, text="Original Size:").grid(row=1, column=0, sticky="w", pady=2)
     gui.orig_size_label = ttk.Label(left_col, text="-")
     gui.orig_size_label.grid(row=1, column=1, sticky="w", pady=2)
-    # Use imported constant directly
+    # Use imported constant directly from config
     ttk.Label(left_col, text="VMAF Target:").grid(row=2, column=0, sticky="w", pady=2)
     gui.vmaf_label = ttk.Label(left_col, text=f"{DEFAULT_VMAF_TARGET}") # Show target initially
     gui.vmaf_label.grid(row=2, column=1, sticky="w", pady=2)

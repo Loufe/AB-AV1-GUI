@@ -11,14 +11,17 @@ import logging
 import traceback
 from pathlib import Path
 
-from convert_app.ab_av1_wrapper import (
+from src.ab_av1_wrapper import (
     AbAv1Wrapper,
     InputFileError, OutputFileError, VMAFError, EncodingError, AbAv1Error
 )
-from convert_app.utils import (
+from src.utils import (
     log_video_properties, log_conversion_result, anonymize_filename,
-    get_video_info, DEFAULT_VMAF_TARGET, DEFAULT_ENCODING_PRESET,
-    format_file_size, format_time
+    get_video_info, format_file_size, format_time
+)
+# Import constants from config
+from src.config import (
+    DEFAULT_VMAF_TARGET, DEFAULT_ENCODING_PRESET
 )
 
 logger = logging.getLogger(__name__)
@@ -77,13 +80,15 @@ def process_video(video_path: str, input_folder: str, output_folder: str, overwr
 
     # --- Pre-flight Checks ---
     if output_path.exists() and not overwrite:
-        logging.info(f"Skipping {anonymized_input_name} - output exists: {anonymized_output_name}")
-        if file_info_callback: file_info_callback(input_path.name, "skipped", f"Output exists")
+        # This check is technically redundant if scan_video_needs_conversion was accurate,
+        # but kept as a final safety measure.
+        logging.info(f"Skipping {anonymized_input_name} - output exists (final check): {anonymized_output_name}")
+        if file_info_callback: file_info_callback(input_path.name, "skipped", f"Output exists (final check)")
         return None
 
     video_info = None; input_size = 0; input_vcodec = "?"; input_acodec = "?"; input_duration = 0
     try: # Get Pre-conversion Info
-        video_info = get_video_info(str(input_path))
+        video_info = get_video_info(str(input_path)) # Already cached by worker if implemented
         if not video_info:
             if file_info_callback: file_info_callback(input_path.name, "failed", {"message":f"Cannot analyze {input_path.name}", "type":"analysis_failed"})
             return None
@@ -98,25 +103,13 @@ def process_video(video_path: str, input_folder: str, output_folder: str, overwr
         if file_info_callback: file_info_callback(input_path.name, "failed", {"message":error_msg, "type":"analysis_error", "details":str(e)})
         return None
 
-    # Re-check if already AV1/MKV
-    is_already_av1 = False; video_stream_found = False
-    for stream in video_info.get("streams", []):
-        if stream.get("codec_type") == "video":
-            video_stream_found = True
-            if stream.get("codec_name", "").lower() == "av1": is_already_av1 = True; break
-    if not video_stream_found:
-         logging.warning(f"No video stream in {anonymized_input_name} - skipping.");
-         if file_info_callback: file_info_callback(input_path.name, "skipped", "No video stream")
-         return None
-    is_mkv_container = input_path.suffix.lower() == ".mkv"
-    if is_already_av1 and is_mkv_container:
-        logging.info(f"Skipping {anonymized_input_name} - already AV1/MKV.");
-        if file_info_callback: file_info_callback(input_path.name, "skipped", "Already AV1/MKV")
-        return None
+    # --- Removed Redundant AV1/MKV Check ---
+    # The scan_video_needs_conversion function in the controller already handles this.
 
     logging.info(f"Processing {anonymized_input_name} - Size: {format_file_size(input_size)}")
     if file_info_callback: file_info_callback(input_path.name, "file_info", {"file_size_mb": input_size / (1024**2) if input_size else 0})
 
+    # Use constants from config
     logging.info(f"Using settings -> Preset: {DEFAULT_ENCODING_PRESET}, VMAF Target: {DEFAULT_VMAF_TARGET}")
     log_video_properties(video_info, prefix="Input")
 
@@ -137,7 +130,7 @@ def process_video(video_path: str, input_folder: str, output_folder: str, overwr
         # --- Post-Conversion Verification & Stat Gathering ---
         if not output_path.exists(): raise OutputFileError(f"Output missing: {anonymized_output_name}", error_type="missing_output")
         output_size = output_path.stat().st_size
-        if output_size < 1024:
+        if output_size < 1024: # Check if output is suspiciously small
              error_msg = f"Output too small ({output_size} bytes): {anonymized_output_name}"
              try: output_path.unlink()
              except OSError as rm_err: logging.warning(f"Cannot remove small file {anonymized_output_name}: {rm_err}")
@@ -150,18 +143,23 @@ def process_video(video_path: str, input_folder: str, output_folder: str, overwr
         final_vmaf_target = result_stats.get('vmaf_target_used') if result_stats else DEFAULT_VMAF_TARGET # Get actual target used
         logging.info(f"Conversion successful - Final VMAF: {final_vmaf if final_vmaf else 'N/A'}, Final CRF: {final_crf if final_crf else 'N/A'} (Target VMAF: {final_vmaf_target})")
 
-        # Check VMAF achieved vs target used
-        if isinstance(final_vmaf, (int, float)) and final_vmaf < final_vmaf_target - 1.0:
+        # Check VMAF achieved vs target used (use a small tolerance)
+        if isinstance(final_vmaf, (int, float)) and isinstance(final_vmaf_target, (int, float)) and final_vmaf < final_vmaf_target - 1.0:
              logging.warning(f"Final VMAF {final_vmaf:.1f} is below target {final_vmaf_target} for {anonymized_input_name}")
 
-        output_acodec = input_acodec
-        if convert_audio and input_acodec.lower() not in ['aac', 'opus']: output_acodec = audio_codec
+        output_acodec = input_acodec # Default to original
+        if convert_audio and input_acodec.lower() not in ['aac', 'opus']: output_acodec = audio_codec.lower() # Store lowercase
 
         # Return success tuple including stats for history
         return (str(output_path), conversion_elapsed_time, input_size, output_size, final_crf, final_vmaf, final_vmaf_target)
 
     except (InputFileError, OutputFileError, VMAFError, EncodingError, AbAv1Error) as e:
-        logging.error(f"ab-av1 wrapper error for {anonymized_input_name}: {e}")
+        # These errors are logged by the wrapper or dispatcher, just return None
+        # Logging the specific error type here might be redundant
+        logging.error(f"Conversion failed for {anonymized_input_name}: {e}")
+        # Ensure error callback is triggered if not already done by wrapper
+        if file_info_callback:
+            file_info_callback(input_path.name, "failed", {"message": str(e), "type": getattr(e, 'error_type', 'conversion_error')})
         return None
     except Exception as e:
         stack_trace = traceback.format_exc()

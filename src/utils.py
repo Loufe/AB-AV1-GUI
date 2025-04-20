@@ -12,8 +12,7 @@ import shutil
 import sys # Needed for sys.argv access
 
 # --- Constants and Formatting Functions ---
-DEFAULT_VMAF_TARGET = 95
-DEFAULT_ENCODING_PRESET = "6" # Corresponds to "Balanced"
+# Moved to src/config.py: DEFAULT_VMAF_TARGET, DEFAULT_ENCODING_PRESET
 
 def format_time(seconds: float) -> str:
     """Format time in seconds to hours:minutes:seconds.
@@ -111,10 +110,13 @@ def get_script_directory() -> str:
     if getattr(sys, 'frozen', False): return os.path.dirname(sys.executable)
     elif '__file__' in globals(): 
         script_path = os.path.abspath(__file__)
+        # Navigate up one level from src/utils.py to the script directory
         return os.path.dirname(os.path.dirname(script_path))
     elif sys.argv and sys.argv[0]: 
+        # Fallback using argv[0], might be less reliable depending on how it's run
         return os.path.dirname(os.path.abspath(sys.argv[0]))
     else: 
+        # Last resort fallback
         return os.getcwd()
 
 

@@ -10,8 +10,8 @@ from tkinter import messagebox
 import logging
 
 # Project imports needed within main() or for GUI class
-from convert_app.gui.main_window import VideoConverterGUI
-from convert_app.utils import setup_logging
+from src.gui.main_window import VideoConverterGUI
+from src.utils import setup_logging
 
 def main():
     """Initializes and runs the AV1 Video Converter application."""

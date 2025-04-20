@@ -13,17 +13,19 @@ import sys
 import time
 import json # For settings persistence
 
-# Project imports
-from convert_app.gui.tabs.main_tab import create_main_tab
-from convert_app.gui.tabs.settings_tab import create_settings_tab
-from convert_app.gui.operations import (
+# Project imports - Replace 'convert_app' with 'src'
+from src.gui.tabs.main_tab import create_main_tab
+from src.gui.tabs.settings_tab import create_settings_tab
+from src.gui.gui_actions import (
     browse_input_folder, browse_output_folder, browse_log_folder,
     open_log_folder_action, open_history_file_action,
-    check_ffmpeg, start_conversion, stop_conversion,
-    force_stop_conversion
+    check_ffmpeg
 )
-# Import setup_logging only needed here now
-from convert_app.utils import setup_logging, get_script_directory
+from src.gui.conversion_controller import (
+    start_conversion, stop_conversion, force_stop_conversion
+)
+# Import setup_logging only needed here now - Replace 'convert_app' with 'src'
+from src.utils import setup_logging, get_script_directory
 
 logger = logging.getLogger(__name__)
 
@@ -53,16 +55,15 @@ class VideoConverterGUI:
             # Store the *actual* directory used by logging setup
             self.log_directory = setup_logging(log_directory=log_dir_pref, anonymize=anonymize_pref)
 
-            # --- *** ADDED THIS BLOCK *** ---
             # Update the log_folder StringVar to reflect the actual directory used
             if self.log_directory:
                 self.log_folder.set(self.log_directory)
-                logger.info(f"Using log directory: {self.log_directory}")
+                logger.info(f"Updated log folder display to actual path: {self.log_directory}")
             else:
                 # If setup_logging failed to return a valid dir, clear the field maybe?
+                # Clearing the field makes it clear that the configured path isn't being used.
                 self.log_folder.set("") # Clear the entry field if logging dir failed
-                logger.warning("Log directory could not be determined or created. File logging disabled.")
-            # --- *** END ADDED BLOCK *** ---
+                logger.warning("Log directory could not be determined or created. GUI display cleared.")
 
             logger.info("=== Starting AV1 Video Converter ===") # Now log start message
 
@@ -106,18 +107,24 @@ class VideoConverterGUI:
     def save_settings(self):
         """Save settings to JSON config file"""
         try:
+            # IMPORTANT: When saving, use the value from the StringVar, which the user might have changed
+            # via the Browse button, even if the initial logging setup used a default/different path.
+            # The preference saved should reflect what the user sees/sets in the GUI.
+            log_folder_to_save = self.log_folder.get()
+
             current_config = {
                 'input_folder': self.input_folder.get(), 'output_folder': self.output_folder.get(),
                 'overwrite': self.overwrite.get(), 'ext_mp4': self.ext_mp4.get(),
                 'ext_mkv': self.ext_mkv.get(), 'ext_avi': self.ext_avi.get(), 'ext_wmv': self.ext_wmv.get(),
                 'convert_audio': self.convert_audio.get(), 'audio_codec': self.audio_codec.get(),
-                'log_folder': self.log_folder.get(), 'anonymize_logs': self.anonymize_logs.get(),
+                'log_folder': log_folder_to_save, # Save the potentially user-modified path
+                'anonymize_logs': self.anonymize_logs.get(),
                 'anonymize_history': self.anonymize_history.get()
             }
             temp_config_file = CONFIG_FILE + ".tmp"
             with open(temp_config_file, 'w', encoding='utf-8') as f: json.dump(current_config, f, indent=4)
             os.replace(temp_config_file, CONFIG_FILE)
-            logger.info(f"Saved settings to {CONFIG_FILE}")
+            logger.info(f"Saved settings to {CONFIG_FILE} (Log folder saved: '{log_folder_to_save}')")
         except Exception as e: logger.error(f"Error saving settings to {CONFIG_FILE}: {e}")
 
     def setup_styles(self):
@@ -135,7 +142,8 @@ class VideoConverterGUI:
         # Initialize StringVars/BooleanVars *first* based on config or defaults
         self.input_folder = tk.StringVar(value=self.config.get('input_folder', ''))
         self.output_folder = tk.StringVar(value=self.config.get('output_folder', ''))
-        # Initialize log_folder based on config, but it will be updated after setup_logging confirms the actual path
+        # Initialize log_folder based on config. It will be overwritten shortly after
+        # logging setup confirms the actual path, or cleared if invalid.
         self.log_folder = tk.StringVar(value=self.config.get('log_folder', ''))
         self.overwrite = tk.BooleanVar(value=self.config.get('overwrite', False))
         self.ext_mp4 = tk.BooleanVar(value=self.config.get('ext_mp4', True))
@@ -157,6 +165,7 @@ class VideoConverterGUI:
         self.video_files = []; self.processed_files = 0; self.successful_conversions = 0
         self.elapsed_timer_id = None; self.output_folder_path = ""; self.current_process_info = None
         self.error_count = 0; self.total_input_bytes_success = 0; self.total_output_bytes_success = 0; self.total_time_success = 0
+        self.sleep_prevention_active = False # Added state for sleep prevention
 
     def initialize_button_states(self):
         """Initialize button states"""
@@ -200,7 +209,7 @@ class VideoConverterGUI:
         except Exception as e: print(f"Error destroying root window: {e}")
         print("Forcing process exit."); os._exit(0)
 
-    # Method references for GUI callbacks
+    # Method references for GUI callbacks - now pointing to imported functions
     def on_browse_input_folder(self): browse_input_folder(self)
     def on_browse_output_folder(self): browse_output_folder(self)
     def on_browse_log_folder(self): browse_log_folder(self)
