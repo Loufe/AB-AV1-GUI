@@ -16,7 +16,7 @@ import subprocess
 import signal
 import statistics
 import traceback
-from pathlib import Path
+from pathlib import Path # Added import
 import math # For ceil
 import datetime # For history timestamp
 
@@ -92,8 +92,13 @@ def scan_video_needs_conversion(gui, video_path: str, output_folder_path: str, o
 
     # Check if output exists and we're not overwriting
     if os.path.exists(output_path) and not overwrite:
-        logging.info(f"Skipping {anonymized_input} - output exists: {anonymized_output}")
-        return False, "Output file exists"
+        # Check if the existing path is the *same* as the input path (in-place conversion attempt)
+        if input_path_obj.resolve() == Path(output_path).resolve():
+             logging.warning(f"Skipping {anonymized_input} - In-place conversion needs 'Overwrite' enabled.")
+             return False, "In-place MKV conversion requires Overwrite"
+        else:
+            logging.info(f"Skipping {anonymized_input} - output exists: {anonymized_output}")
+            return False, "Output file exists"
 
     # --- Video Info Caching ---
     video_info = None
@@ -209,14 +214,14 @@ def start_conversion(gui) -> None:
         output_folder = input_folder
         gui.output_folder.set(output_folder)
         logger.info(f"Output set to input: {output_folder}")
-
-    # Create output folder if it doesn't exist
-    try:
-        os.makedirs(output_folder, exist_ok=True)
-    except Exception as e:
-        logger.error(f"Cannot create output folder '{output_folder}': {e}")
-        messagebox.showerror("Error", f"Cannot create output folder:\n{e}")
-        return
+    # Ensure output folder exists after potentially setting it to input
+    elif not os.path.isdir(output_folder):
+         try:
+            os.makedirs(output_folder, exist_ok=True)
+         except Exception as e:
+             logger.error(f"Cannot create output folder '{output_folder}': {e}")
+             messagebox.showerror("Error", f"Cannot create output folder:\n{e}")
+             return
 
     # Get file extensions to process
     selected_extensions = [ext for ext, var in [
@@ -231,12 +236,40 @@ def start_conversion(gui) -> None:
         messagebox.showerror("Error", "Select file extensions in Settings")
         return
 
+    # Get overwrite setting
+    overwrite = gui.overwrite.get()
+
     # Check FFmpeg and ab-av1 (imported from gui_actions)
     if not check_ffmpeg(gui):
         return
 
-    # Get conversion settings
-    overwrite = gui.overwrite.get()
+    # --- Pre-check for MKV in-place conversion without overwrite ---
+    if input_folder == output_folder and not overwrite and gui.ext_mkv.get():
+        # Check if there are actually MKV files in the input folder
+        try:
+            input_path_obj = Path(input_folder)
+            # Use case-insensitive globbing if possible or check both cases
+            has_mkv_files = any(input_path_obj.rglob("*.mkv")) or any(input_path_obj.rglob("*.MKV"))
+        except Exception as scan_e:
+            # If scan fails, assume there might be MKVs to be safe and show warning
+            logger.warning(f"Could not scan for MKV files during pre-check: {scan_e}")
+            has_mkv_files = True
+
+        if has_mkv_files:
+            logger.warning("Detected potential in-place MKV conversion conflict without overwrite enabled.")
+            messagebox.showwarning(
+                "Configuration Conflict",
+                "Input and Output folders are the same, 'Overwrite' is disabled, and MKV processing is enabled.\n\n"
+                "Existing MKV files in the input folder cannot be converted in-place under these settings and will be skipped.\n\n"
+                "To convert these MKV files:\n"
+                "  - Enable 'Overwrite output file...' in the Settings tab, OR\n"
+                "  - Choose a different Output Folder."
+            )
+            return # Stop the conversion from starting
+
+    # --- End Pre-check ---
+
+    # Get remaining conversion settings
     convert_audio = gui.convert_audio.get()
     audio_codec = gui.audio_codec.get()
 
@@ -436,6 +469,13 @@ def force_stop_conversion(gui, confirm: bool = True) -> None:
     else:
         logging.warning("Cannot determine temp file path for cleanup.")
 
+
+    # Restore sleep functionality if it was active (Phase 2)
+    if hasattr(gui, 'sleep_prevention_active') and gui.sleep_prevention_active:
+        allow_sleep_mode()
+        logging.info("Sleep prevention disabled after force stop.")
+        gui.sleep_prevention_active = False # Ensure state is reset
+
     # Reset UI and state
     gui.conversion_running = False
     if gui.elapsed_timer_id:
@@ -562,8 +602,8 @@ def handle_progress(gui, filename: str, info: dict) -> None:
     message = info.get("message", "")
     update_ui_safely(gui.root, lambda: gui.current_file_label.config(text=f"Processing: {filename} - {message}"))
 
-    # Add extra logging to debug GUI update issues
-    logging.info(f"Progress update for {filename}: {quality_prog}%/{encoding_prog}%, phase={info.get('phase', '?')}")
+    # Logging moved to wrapper for consolidation, keep minimal info log here maybe
+    # logging.info(f"Progress update for {filename}: {quality_prog}%/{encoding_prog}%, phase={info.get('phase', '?')}")
 
     # Make sure we include the original file size for calculations if not present
     if "original_size" not in info and hasattr(gui, 'last_input_size') and gui.last_input_size is not None:
@@ -579,7 +619,8 @@ def handle_progress(gui, filename: str, info: dict) -> None:
         def force_update():
             try:
                 gui.root.update_idletasks()  # Update pending UI tasks
-                logging.debug("Forced GUI update")
+                # Reduce frequency of this debug message if needed
+                # logging.debug("Forced GUI update")
             except Exception as e:
                 logging.error(f"Error in forced UI update: {e}")
         update_ui_safely(gui.root, force_update)
@@ -768,7 +809,9 @@ def sequential_conversion_worker(gui, input_folder, output_folder, overwrite, st
                 files_to_process.append(video_path)
             else:
                 skipped_files_count += 1
-                # No explicit callback here, just log (already done in scan_video_needs_conversion)
+                # Log reason if not skipped due to in-place conversion warning (which is logged separately)
+                if reason != "In-place MKV conversion requires Overwrite":
+                    handle_skipped(gui, os.path.basename(video_path), reason) # Use callback for consistency
         except Exception as e:
             logger.error(f"Unexpected error during detailed scan for {anonymize_filename(video_path)}: {e}", exc_info=True)
             skipped_files_count += 1
@@ -816,7 +859,7 @@ def sequential_conversion_worker(gui, input_folder, output_folder, overwrite, st
         update_ui_safely(gui.root, lambda: gui.status_label.config(text=f"Converting {file_number}/{total_videos_to_process}: {filename}"))
         update_ui_safely(gui.root, reset_current_file_details, gui) # Use imported function
 
-        original_size = 0; input_vcodec = "?"; input_acodec = "?"; input_duration = 0
+        original_size = 0; input_vcodec = "?"; input_acodec = "?"; input_duration = 0.0 # Default to float
         output_acodec = "?" # Initialize output audio codec
 
         # --- Use Cached Video Info ---
@@ -842,7 +885,14 @@ def sequential_conversion_worker(gui, input_folder, output_folder, overwrite, st
                     elif stream.get("codec_type") == "audio": input_acodec = stream.get("codec_name", "?").upper()
                 format_info_text = f"{input_vcodec} / {input_acodec}"
                 original_size = video_info.get('file_size', 0); size_str = format_file_size(original_size)
-                input_duration = float(video_info.get('format', {}).get('duration', '0'))
+                # Ensure duration is extracted correctly as float
+                duration_str = video_info.get('format', {}).get('duration', '0')
+                try:
+                    input_duration = float(duration_str)
+                except (ValueError, TypeError):
+                    logging.warning(f"Could not convert duration '{duration_str}' to float for {anonymized_name}. Using 0.")
+                    input_duration = 0.0
+
                 update_ui_safely(gui.root, lambda fi=format_info_text: gui.orig_format_label.config(text=fi))
                 update_ui_safely(gui.root, lambda ss=size_str: gui.orig_size_label.config(text=ss))
                 # Store for later use in handle_progress/handle_completed
@@ -851,9 +901,11 @@ def sequential_conversion_worker(gui, input_folder, output_folder, overwrite, st
             except (ValueError, TypeError, KeyError) as e:
                 logging.error(f"Error extracting info from cached/retrieved data for {anonymized_name}: {e}")
                 gui.last_input_size = None # Ensure reset on error
+                input_duration = 0.0 # Reset duration on error
         else:
             logging.warning(f"Cannot get pre-conversion info for {anonymized_name}.")
             gui.last_input_size = None # Ensure reset if info failed completely
+            input_duration = 0.0 # Reset duration if info failed
 
         gui.current_file_start_time = time.time(); gui.current_file_encoding_start_time = None
         update_ui_safely(gui.root, update_elapsed_time, gui, gui.current_file_start_time) # Use imported function
@@ -862,7 +914,12 @@ def sequential_conversion_worker(gui, input_folder, output_folder, overwrite, st
         # --- Process Video ---
         process_successful = False; output_file_path = None; elapsed_time_file = 0; output_size = 0; final_crf = None; final_vmaf = None; final_vmaf_target = None
         try:
-            result_tuple = process_video(video_path, input_folder, output_folder, overwrite, convert_audio, audio_codec, None, file_callback_dispatcher, lambda pid, path=video_path: store_process_id(gui, pid, path))
+            result_tuple = process_video(
+                video_path, input_folder, output_folder, overwrite, convert_audio, audio_codec,
+                file_info_callback=file_callback_dispatcher, # Pass the dispatcher here
+                pid_callback=lambda pid, path=video_path: store_process_id(gui, pid, path),
+                total_duration_seconds=input_duration # Pass duration here
+            )
             if result_tuple:
                  output_file_path, elapsed_time_file, _, output_size, final_crf, final_vmaf, final_vmaf_target = result_tuple # Unpack extended tuple
                  process_successful = True

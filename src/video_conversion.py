@@ -29,10 +29,11 @@ logger = logging.getLogger(__name__)
 
 def process_video(video_path: str, input_folder: str, output_folder: str, overwrite: bool = False,
                  convert_audio: bool = True, audio_codec: str = "opus",
-                 progress_callback: callable = None, file_info_callback: callable = None, pid_callback: callable = None) -> tuple:
+                 progress_callback: callable = None, file_info_callback: callable = None, pid_callback: callable = None,
+                 total_duration_seconds: float = 0.0) -> tuple: # Added total_duration_seconds
     """
     Process a single video file using ab-av1 with hardcoded quality settings.
-    
+
     Args:
         video_path: Path to the input video file
         input_folder: Base input folder path for calculating relative paths
@@ -40,10 +41,11 @@ def process_video(video_path: str, input_folder: str, output_folder: str, overwr
         overwrite: Whether to overwrite existing output files
         convert_audio: Whether to convert audio to a different codec
         audio_codec: Target audio codec if conversion is enabled
-        progress_callback: Optional callback for reporting progress
+        progress_callback: Optional callback for reporting progress (legacy, not used directly)
         file_info_callback: Optional callback for reporting file status changes
         pid_callback: Optional callback for receiving process ID
-        
+        total_duration_seconds: Total duration of the input video in seconds (for progress calc)
+
     Returns:
         tuple: (output_path, elapsed_time, input_size, output_size, final_crf, final_vmaf, final_vmaf_target) on success, None otherwise.
     """
@@ -86,8 +88,9 @@ def process_video(video_path: str, input_folder: str, output_folder: str, overwr
         if file_info_callback: file_info_callback(input_path.name, "skipped", f"Output exists (final check)")
         return None
 
-    video_info = None; input_size = 0; input_vcodec = "?"; input_acodec = "?"; input_duration = 0
-    try: # Get Pre-conversion Info
+    # --- Get Pre-conversion Info (Duration logic moved to worker/controller) ---
+    video_info = None; input_size = 0; input_vcodec = "?"; input_acodec = "?"
+    try:
         video_info = get_video_info(str(input_path)) # Already cached by worker if implemented
         if not video_info:
             if file_info_callback: file_info_callback(input_path.name, "failed", {"message":f"Cannot analyze {input_path.name}", "type":"analysis_failed"})
@@ -96,14 +99,13 @@ def process_video(video_path: str, input_folder: str, output_folder: str, overwr
         for stream in video_info.get("streams", []):
             if stream.get("codec_type") == "video": input_vcodec = stream.get("codec_name", "?").upper()
             elif stream.get("codec_type") == "audio": input_acodec = stream.get("codec_name", "?").upper()
-        try: input_duration = float(video_info.get('format', {}).get('duration', '0'))
-        except: input_duration = 0
+
     except Exception as e:
         error_msg = f"Error analyzing {anonymized_input_name}: {e}"; logging.error(error_msg, exc_info=True)
         if file_info_callback: file_info_callback(input_path.name, "failed", {"message":error_msg, "type":"analysis_error", "details":str(e)})
         return None
 
-    # --- Removed Redundant AV1/MKV Check ---
+    # --- Check if conversion needed (redundant but safe) ---
     # The scan_video_needs_conversion function in the controller already handles this.
 
     logging.info(f"Processing {anonymized_input_name} - Size: {format_file_size(input_size)}")
@@ -120,9 +122,11 @@ def process_video(video_path: str, input_folder: str, output_folder: str, overwr
         logging.info(f"Starting ab-av1 for {anonymized_input_name}")
         ab_av1 = AbAv1Wrapper()
         result_stats = ab_av1.auto_encode(
-            input_path=str(input_path), output_path=str(output_path),
-            progress_callback=progress_callback, file_info_callback=file_info_callback,
-            pid_callback=pid_callback
+            input_path=str(input_path),
+            output_path=str(output_path),
+            file_info_callback=file_info_callback,
+            pid_callback=pid_callback,
+            total_duration_seconds=total_duration_seconds # Pass duration
         )
         conversion_elapsed_time = time.time() - conversion_start_time
         logging.info(f"ab-av1 finished for {anonymized_input_name} in {format_time(conversion_elapsed_time)}.")

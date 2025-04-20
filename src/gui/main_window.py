@@ -8,7 +8,7 @@ from tkinter import ttk, messagebox
 import multiprocessing
 import threading
 import logging
-import os
+import os # Added import
 import sys
 import time
 import json # For settings persistence
@@ -25,7 +25,7 @@ from src.gui.conversion_controller import (
     start_conversion, stop_conversion, force_stop_conversion
 )
 # Import setup_logging only needed here now - Replace 'convert_app' with 'src'
-from src.utils import setup_logging, get_script_directory
+from src.utils import setup_logging, get_script_directory # Added get_script_directory
 
 logger = logging.getLogger(__name__)
 
@@ -41,6 +41,21 @@ class VideoConverterGUI:
         self.root.title("AV1 Video Converter")
         self.root.geometry("800x650")
         self.root.minsize(700, 550)
+
+        # Set application icon (Phase 1)
+        try:
+            icon_path = os.path.join(get_script_directory(), "app_icon.ico")
+            if os.path.exists(icon_path):
+                self.root.iconbitmap(icon_path)
+                logger.info(f"Set window icon from: {icon_path}")
+            else:
+                logger.warning(f"Icon file not found: {icon_path}")
+        except tk.TclError as e:
+            # Handle cases where iconbitmap might not be supported (e.g., some Linux WMs)
+            logger.warning(f"Failed to set window icon (TclError, platform compatibility?): {e}")
+        except Exception as e:
+            logger.error(f"Unexpected error setting window icon: {e}")
+
 
         # Load settings first
         self.config = self.load_settings()
@@ -100,9 +115,9 @@ class VideoConverterGUI:
         try:
             if os.path.exists(CONFIG_FILE):
                 with open(CONFIG_FILE, 'r', encoding='utf-8') as f:
-                    config = json.load(f); print(f"Loaded settings from {CONFIG_FILE}"); return config
-            else: print(f"Config file {CONFIG_FILE} not found, using defaults."); return {}
-        except Exception as e: print(f"Error loading settings from {CONFIG_FILE}: {e}. Using defaults."); return {}
+                    config = json.load(f); logger.info(f"Loaded settings from {CONFIG_FILE}"); return config # Changed print to logger
+            else: logger.info(f"Config file {CONFIG_FILE} not found, using defaults."); return {} # Changed print to logger
+        except Exception as e: logger.error(f"Error loading settings from {CONFIG_FILE}: {e}. Using defaults."); return {} # Changed print to logger
 
     def save_settings(self):
         """Save settings to JSON config file"""
@@ -207,7 +222,9 @@ class VideoConverterGUI:
         try: self.root.destroy()
         except tk.TclError: pass
         except Exception as e: print(f"Error destroying root window: {e}")
-        print("Forcing process exit."); os._exit(0)
+        # Use os._exit(0) for a more forceful exit if needed after cleanup attempts
+        logger.info("Forcing process exit.")
+        os._exit(0) # Changed print to logger before exit
 
     # Method references for GUI callbacks - now pointing to imported functions
     def on_browse_input_folder(self): browse_input_folder(self)
