@@ -1,3 +1,4 @@
+#src/gui/tabs/main_tab.py
 """
 Main tab module for the AV1 Video Converter application.
 """

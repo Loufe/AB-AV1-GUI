@@ -1,3 +1,4 @@
+#src/gui/operations.py
 # --- File Selection Functions ---
 # --- System/Dependency Check Functions ---
 # --- Progress Tracking Functions ---

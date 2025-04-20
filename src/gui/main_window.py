@@ -1,3 +1,4 @@
+#src/gui/main_window.py
 """
 Main window module for the AV1 Video Converter application.
 """

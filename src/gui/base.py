@@ -1,3 +1,4 @@
+#src/gui/base.py
 """
 Base GUI components for the AV1 Video Converter application.
 """

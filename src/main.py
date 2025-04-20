@@ -1,3 +1,4 @@
+#src/main.py
 """
 Main application logic module for the AV1 Video Converter application.
 Defines the main() function to be called by the launcher.

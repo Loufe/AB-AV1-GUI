@@ -1,3 +1,4 @@
+#src/ab_av1_wrapper.py
 """
 Wrapper module for the ab-av1 tool in the AV1 Video Converter application.
 
@@ -42,6 +43,55 @@ class AbAv1Wrapper:
     This class handles execution of ab-av1.exe, monitors progress, parses output,
     and manages VMAF-based encoding with automatic fallback.
     """
+    
+    def _log_consolidated_progress(self, stats, current_temp_size=None, estimated_final_size=None):
+        """Log a consolidated progress message to reduce the number of log lines.
+        
+        Args:
+            stats: Dictionary containing encoding statistics
+            current_temp_size: Current size of the output file in bytes
+            estimated_final_size: Estimated final size of the output file in bytes
+        """
+        try:
+            # Create consolidated progress message
+            progress_parts = []
+            
+            # Add basic progress info
+            encoding_progress = stats.get("progress_encoding", 0)
+            progress_parts.append(f"{encoding_progress:.1f}%")
+            
+            # Add phase
+            progress_parts.append(f"phase={stats.get('phase', 'encoding')}")
+            
+            # Add FPS if available
+            if stats.get("last_ffmpeg_fps"):
+                progress_parts.append(f"{stats['last_ffmpeg_fps']} fps")
+                
+            # Add ETA if available
+            if stats.get("eta_text"):
+                progress_parts.append(f"ETA: {stats['eta_text']}")
+            
+            # Add input filename if available (anonymized)
+            if stats.get("input_path"):
+                filename = os.path.basename(stats["input_path"])
+                progress_parts.append(f"file={anonymize_filename(filename)}")
+                
+            # Add size info if available
+            if current_temp_size and estimated_final_size:
+                progress_parts.append(f"Size: {format_file_size(current_temp_size)}/{format_file_size(estimated_final_size)}")
+            
+            # Add size reduction if original size is known
+            if stats.get("size_reduction") is not None:
+                progress_parts.append(f"reduction={stats['size_reduction']:.1f}%")
+            elif stats.get("original_size") and estimated_final_size and estimated_final_size > 0:
+                reduction_percent = 100.0 - ((estimated_final_size / stats["original_size"]) * 100.0)
+                progress_parts.append(f"reduction={reduction_percent:.1f}%")
+            
+            # Log consolidated message
+            logger.info(f"PROGRESS: {' | '.join(progress_parts)}")
+        except Exception as e:
+            logger.error(f"Error in log_consolidated_progress: {e}")
+    
 
     def __init__(self):
         """Initialize the wrapper and verify the executable exists."""
@@ -129,8 +179,8 @@ class AbAv1Wrapper:
                         encoding_percent = float(progress_match.group(1))
                         stats["progress_encoding"] = max(0.0, min(100.0, encoding_percent))
                         stats["progress_quality"] = 100.0
-                        # Log at INFO level for console visibility
-                        logger.info(f"Encoding progress: {stats['progress_encoding']:.1f}%")
+                        # We'll log a consolidated message now instead
+                        # (The actual logging happens in the _update_stats_from_line method)
                         
                         # IMPORTANT: Always include all available stats in callback
                         callback_data = {
@@ -166,7 +216,8 @@ class AbAv1Wrapper:
                         size_percentage = float(size_match.group(1))
                         stats["size_reduction"] = 100.0 - size_percentage
                         # Log at INFO level for better visibility
-                        logger.info(f"Size reduction update: {stats['size_reduction']:.1f}% (output: {size_percentage:.1f}% of original)")
+                        # We'll include size reduction in the consolidated log message
+                        # (The actual logging happens in the main loop)
                         
                         # Send a dedicated update with this new size information
                         if "original_size" in stats and stats["original_size"] and self.file_info_callback:
@@ -363,21 +414,22 @@ class AbAv1Wrapper:
                     # Log all non-empty lines at INFO level during encoding with progress info
                     if stats.get("phase") == "encoding" and stripped_line and "%" in stripped_line:
                         logger.info(f"[FFMPEG] {stripped_line}")
-                    elif stripped_line:  # Log other non-empty lines at DEBUG
-                        logger.debug(f"ab-av1: {stripped_line}")
                         
-                    # Flag errors
-                    if re.search(r'error|failed|invalid', stripped_line.lower()): 
-                        logger.warning(f"Possible error: {stripped_line}")
-                    
-                    # Use broader pattern matching for encoding progress
-                    if stats.get("phase") == "encoding" and re.search(r'\d+(\.\d+)?%', stripped_line):
-                        progress_parts = re.search(r'(\d+(\.\d+)?)%', stripped_line)
-                        if progress_parts:
+                        # Extract fps if present in the line
+                        fps_match = re.search(r'(\d+)\s+fps', stripped_line)
+                        if fps_match:
+                            stats["last_ffmpeg_fps"] = fps_match.group(1)
+                            
+                        # Extract eta if present
+                        eta_match = re.search(r'eta\s+(\d+)\s*(?:minutes|minute|min)', stripped_line, re.IGNORECASE)
+                        if eta_match:
+                            stats["eta_text"] = f"{eta_match.group(1)} min"
+                            
+                        # Extract progress percentage
+                        progress_match = re.search(r'(\d+(\.\d+)?)%', stripped_line)
+                        if progress_match:
                             try:
-                                encoding_progress = float(progress_parts.group(1))
-                                logger.info(f"Detected progress: {encoding_progress}%")
-                                # Update the progress state
+                                encoding_progress = float(progress_match.group(1))
                                 stats["progress_encoding"] = encoding_progress
                                 
                                 # Check if temp output file exists and get its size for estimation
@@ -387,28 +439,35 @@ class AbAv1Wrapper:
                                     if current_temp_size > 0 and encoding_progress > 0:
                                         # Estimate final size based on current progress
                                         estimated_final_size = current_temp_size / (encoding_progress / 100.0)
-                                        logger.info(f"Current partial output: {format_file_size(current_temp_size)}, estimated final: {format_file_size(estimated_final_size)}")
                                         
-                                        # Update callback with this size information
-                                        if self.file_info_callback and "original_size" in stats:
+                                        # Log consolidated progress message instead of multiple individual logs
+                                        self._log_consolidated_progress(stats, current_temp_size, estimated_final_size)
+                                        
+                                        # Send update specifically for size information if callback available
+                                        if self.file_info_callback and stats.get("original_size") and estimated_final_size > 0:
                                             original_size = stats["original_size"]
-                                            # Calculate size reduction based on estimate
-                                            if original_size > 0:
-                                                reduction_percent = 100.0 - ((estimated_final_size / original_size) * 100.0)
-                                                stats["estimated_output_size"] = estimated_final_size
-                                                stats["estimated_size_reduction"] = reduction_percent
-                                                
-                                                # Send update specifically for size information
-                                                self.file_info_callback(os.path.basename(stats.get("input_path", "unknown")), "progress", {
-                                                    "phase": "encoding",
-                                                    "progress_encoding": encoding_progress,
-                                                    "output_size": estimated_final_size,
-                                                    "original_size": original_size,
-                                                    "size_reduction": reduction_percent,
-                                                    "is_estimate": True
-                                                })
+                                            reduction_percent = 100.0 - ((estimated_final_size / original_size) * 100.0)
+                                            stats["estimated_output_size"] = estimated_final_size
+                                            stats["estimated_size_reduction"] = reduction_percent
+                                            
+                                            self.file_info_callback(os.path.basename(stats.get("input_path", "unknown")), "progress", {
+                                                "phase": "encoding",
+                                                "progress_encoding": encoding_progress,
+                                                "output_size": estimated_final_size,
+                                                "original_size": original_size,
+                                                "size_reduction": reduction_percent,
+                                                "is_estimate": True
+                                            })
                             except Exception as e:
                                 logger.debug(f"Error processing progress: {e}")
+                    elif stripped_line:  # Log other non-empty lines at DEBUG
+                        logger.debug(f"ab-av1: {stripped_line}")
+                        
+                    # Flag errors
+                    if re.search(r'error|failed|invalid', stripped_line.lower()): 
+                        logger.warning(f"Possible error: {stripped_line}")
+                    
+                    # Progress extraction is now handled in the code above when we detect FFMPEG output lines
                     
                     # Update statistics based on this line
                     self._update_stats_from_line(line, stats)

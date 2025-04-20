@@ -1,3 +1,4 @@
+#src/gui/tabs/settings_tab.py
 """
 Settings tab module for the AV1 Video Converter application.
 """
