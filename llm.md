@@ -85,6 +85,125 @@ The application has a modular architecture:
 - `parse_line`: Processes each line of output using regex to detect progress updates, phase changes, and metadata like VMAF scores and CRF values.
 - `parse_final_output`: Scans the complete output text after completion to extract final statistics that might have been missed during streaming.
 
+## Stdout/Piping Challenges and Solutions
+
+### Two-Phase Process and Parsing Differences
+
+The application handles two distinct phases in the conversion process, each with different stdout characteristics:
+
+1. **Quality Detection Phase**:
+   - Mostly output from ab-av1's CRF search algorithm
+   - Relatively structured and predictable output format
+   - Example patterns: `Current progress: X%`, `Trying crf=X.X, vmaf=Y.Y`
+   - More reliable progress reporting with clear percentage indicators
+
+2. **Encoding Phase**:
+   - Output comes primarily from FFmpeg
+   - Less structured, varies between FFmpeg versions
+   - Multiple output formats to parse: `frame=X fps=Y time=HH:MM:SS.MS speed=Zx`
+   - Inconsistent output frequency
+   - More prone to buffering issues
+
+### Core Piping Implementation
+
+```python
+process = subprocess.Popen(
+    cmd,
+    stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+    universal_newlines=True, bufsize=1,
+    encoding='utf-8', errors='replace',
+    env=process_env  # Environment with verbosity settings
+)
+
+# Simple blocking readline loop
+for line in iter(process.stdout.readline, ''):
+    line = line.strip()
+    if not line: continue
+    # Process line with parser
+```
+
+### Known Stdout Issues During Encoding
+
+1. **FFmpeg Output Buffering**: FFmpeg may buffer its output when not writing directly to a terminal, causing periods of apparent inactivity in the output stream even though encoding is proceeding.
+
+2. **Pipe Closures**: The readline loop may exit prematurely if the pipe is closed unexpectedly, which can happen during long encoding operations.
+
+3. **Inconsistent Progress Format**: FFmpeg's progress reporting format can vary, requiring multiple regex patterns to catch all variants.
+
+4. **Output Frequency Variability**: During intensive encoding, FFmpeg may not output progress information at regular intervals.
+
+### Environment Variables for Maximum Verbosity
+
+To maximize output, especially during the encoding phase, several environment variables are set:
+
+```python
+process_env["RUST_LOG"] = "trace,ab_av1=trace,ffmpeg=trace"  # Rust logging
+process_env["AV1_PRINT_FFMPEG"] = "1"  # Force FFmpeg output printing
+process_env["AV1_RAW_OUTPUT"] = "1"  # Pass through raw output
+process_env["FFMPEG_PROGRESS"] = "1"  # Enable FFmpeg progress
+process_env["SVT_VERBOSE"] = "1"  # SVT-AV1 encoder verbosity
+process_env["AB_AV1_VERBOSE"] = "1"  # ab-av1 verbosity
+process_env["AB_AV1_LOG_PROGRESS"] = "1"  # Progress logging
+```
+
+### Fallback Mechanisms
+
+The application has several fallback mechanisms to handle stdout issues:
+
+1. **Pipe Closure Detection**:
+   ```python
+   final_poll_code = process.poll()
+   if final_poll_code is None:  # Process running but pipe closed
+       logger.warning("Process still running after pipe reading completed")
+       pipe_closed_prematurely = True
+   ```
+
+2. **Final Output Parsing**:
+   ```python
+   # Fallback if streaming parsing missed data
+   stats = self.parser.parse_final_output(full_output_text, stats)
+   ```
+
+3. **Timeout-Based Process Termination**:
+   ```python
+   try:
+       return_code = process.wait(timeout=30)  # Wait up to 30 seconds
+   except subprocess.TimeoutExpired:
+       logger.error("Process did not complete within timeout period")
+       process.terminate()
+   ```
+
+### Potential Improvements
+
+1. **Advanced Buffering Control**:
+   - Add FFmpeg parameters like `-progress pipe:1` to force unbuffered output
+   - Use additional environment variables: `FFmpeg_FORCE_STDERR=1`, `FFmpeg_FORCE_NOCOLOR=1`
+
+2. **Timeout-Based Reading**:
+   ```python
+   def readline_with_timeout(stream, timeout=10):
+       """Read line with timeout to detect stalled output"""
+       import select
+       ready, _, _ = select.select([stream], [], [], timeout)
+       if ready:
+           return stream.readline()
+       else:
+           return None  # Timeout occurred
+   ```
+
+3. **Dual Progress Monitoring**:
+   - Monitor stdout for explicit progress information
+   - Periodically check output file size growth as an implicit progress indicator
+   - Use a dedicated thread to send signals (SIGINFO) to prompt FFmpeg to report status
+
+4. **Output Format Detection Enhancements**:
+   - Implement adaptive pattern recognition based on initial output analysis
+   - Cache successful patterns for current FFmpeg version
+
+5. **Process Communication Alternatives**:
+   - Investigate using named pipes or alternative IPC methods with FFmpeg
+   - Consider modifications to ab-av1 to improve its FFmpeg output handling
+
 ## Data Flow (Simplified Conversion Start)
 
 1.  **User Clicks Start (main_tab -> main_window -> conversion_controller.start_conversion):**

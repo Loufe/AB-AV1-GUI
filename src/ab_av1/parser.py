@@ -34,9 +34,9 @@ class AbAv1Parser:
         self._re_ffmpeg_size = re.compile(r'size=\s*(\d+)([kKmMgG]?[bB])', re.IGNORECASE)
 
         # Refined regex patterns based on actual formats in logs
-        self._re_phase_encode_start = re.compile(r'ab_av1::command::encode\].*encoding video|encoding\s+\S+\.mkv|Starting encoding', re.IGNORECASE)
+        self._re_phase_encode_start = re.compile(r'ab_av1::command::encode\]\s*encoding(?:\s+video|\s+\S+\.mkv|\s|$)|Starting encoding', re.IGNORECASE)
         self._re_sample_progress = re.compile(r'\[.*?sample_encode\].*?(\d+(\.\d+)?)%,\s*(\d+)\s*fps,\s*eta\s*(.*?)(?=$|\))', re.IGNORECASE)
-        self._re_main_encoding = re.compile(r'\[.*?command::encode\]\s*(\d+)%,\s*(\d+)\s*fps,\s*eta\s*(.*?)(?=$|\))', re.IGNORECASE)
+        self._re_main_encoding = re.compile(r'\[.*?command::encode\]\s*(\d+)%,\s*(\d+)\s*fps,\s*eta\s+([\w\s]+)(?:$|\)|\])', re.IGNORECASE)
         self._re_crf_vmaf = re.compile(r'crf\s+(\d+)\s+VMAF\s+(\d+\.?\d*)', re.IGNORECASE)
         self._re_best_crf = re.compile(r'Best\s+CRF:\s+(\d+)', re.IGNORECASE)
         self._re_size_reduction_percent = re.compile(r'predicted video stream size.*?\((\d+\.?\d*)\s*%\)', re.IGNORECASE)
@@ -202,10 +202,43 @@ class AbAv1Parser:
                     return stats
                 
                 # Look for any main encoding indicators
-                if self._re_main_encoding.search(line):
+                main_encoding_match = self._re_main_encoding.search(line)
+                if main_encoding_match:
                     logger.info(f"Main encoding phase detected: {line}")
-                    # These lines don't have percentage info, but they tell us we're in main encoding
+                    # Parse the progress information from the match
+                    progress_pct = float(main_encoding_match.group(1))
+                    fps = int(main_encoding_match.group(2))
+                    eta_text = main_encoding_match.group(3).strip()
+                    
+                    logger.info(f"Main encoding progress: {progress_pct}%, {fps} fps, ETA: {eta_text}")
+                    
+                    # Update stats
+                    stats["progress_encoding"] = progress_pct
+                    stats["last_ffmpeg_fps"] = fps
+                    stats["eta_text"] = eta_text
+                    
+                    # Send progress update
+                    if self.file_info_callback:
+                        message = f"Encoding: {progress_pct:.1f}% (FPS: {fps}, ETA: {eta_text})"
+                        
+                        callback_data = {
+                            "progress_quality": 100.0,
+                            "progress_encoding": progress_pct,
+                            "message": message,
+                            "phase": current_phase,
+                            "eta_text": eta_text,
+                            "original_size": stats.get("original_size"),
+                            "vmaf": stats.get("vmaf"),
+                            "crf": stats.get("crf"),
+                            "size_reduction": stats.get("size_reduction"),
+                            "output_size": stats.get("estimated_output_size"),
+                            "is_estimate": True if stats.get("estimated_output_size") else False,
+                            "vmaf_target_used": stats.get("vmaf_target_used")
+                        }
+                        self.file_info_callback(anonymized_input_basename, "progress", callback_data)
+                    
                     processed_line = True
+                    return stats
                     
                 # Even simpler: look for anything with a percentage
                 percentage_match = re.search(r'(\d+)\s*%', line)

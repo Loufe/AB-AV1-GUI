@@ -22,7 +22,8 @@ from src.config import (
 from src.utils import get_video_info, anonymize_filename, format_file_size
 # Import exceptions, cleaner, parser from this package
 from .exceptions import (
-    AbAv1Error, InputFileError, OutputFileError, VMAFError, EncodingError
+    AbAv1Error, InputFileError, OutputFileError, VMAFError, EncodingError,
+    ConversionNotWorthwhileError
 )
 from .cleaner import clean_ab_av1_temp_folders
 from .parser import AbAv1Parser
@@ -212,14 +213,14 @@ class AbAv1Wrapper:
             # --- Environment Setup with maximum verbosity and pass-through flags ---
             process_env = os.environ.copy()
             # Critical environment variables for ffmpeg output
-            process_env["RUST_LOG"] = "trace,ab_av1=trace,ffmpeg=trace"  # Maximum verbosity
+            process_env["RUST_LOG"] = "debug,ab_av1=trace,ffmpeg=trace"  # Filter out trace from other components
             process_env["AV1_PRINT_FFMPEG"] = "1"  # Force printing of ffmpeg output
             process_env["AV1_RAW_OUTPUT"] = "1"  # Pass through raw output
             process_env["FFMPEG_PROGRESS"] = "1"  # Try to enable any ffmpeg progress features
             process_env["SVT_VERBOSE"] = "1"     # Try to enable SVT-AV1 verbosity
             process_env["AB_AV1_VERBOSE"] = "1"  # Enable any ab-av1 verbosity
             process_env["AB_AV1_LOG_PROGRESS"] = "1"  # Try to enable any progress logging
-            logger.info("Set maximum environment variable verbosity for all encoding tools")
+            logger.info("Set targeted environment variable verbosity for ab-av1 and ffmpeg tools")
 
             # --- Starting/Retrying Callback ---
             if self.file_info_callback:
@@ -283,6 +284,11 @@ class AbAv1Wrapper:
                     for line in iter(process.stdout.readline, ''):
                         line = line.strip()
                         if not line:
+                            continue
+                        
+                        # Filter out sled::pagecache trace messages
+                        if 'sled::pagecache' in line and 'TRACE' in line:
+                            logger.debug(f"Filtered sled trace: {line}")
                             continue
                             
                         # Special handling for progress information
@@ -422,6 +428,31 @@ class AbAv1Wrapper:
                     logger.info("Detected 'Failed to find a suitable crf' error.")
                     error_type = "crf_search_failed"
                     error_details = f"Could not find suitable CRF for VMAF {current_vmaf_target}"
+                    
+                    # Check if this is the last attempt (minimum VMAF reached)
+                    if current_vmaf_target <= MIN_VMAF_FALLBACK_TARGET:
+                        # This means conversion isn't worthwhile
+                        error_msg = f"No efficient conversion possible - CRF search failed even at VMAF {MIN_VMAF_FALLBACK_TARGET}"
+                        logger.info(f"File not worth converting: {anonymized_input_path}")
+                        
+                        if self.file_info_callback:
+                            self.file_info_callback(
+                                os.path.basename(input_path), 
+                                "skipped_not_worth", 
+                                {
+                                    "message": error_msg,
+                                    "original_size": stats.get("original_size"),
+                                    "min_vmaf_attempted": MIN_VMAF_FALLBACK_TARGET
+                                }
+                            )
+                        
+                        # Raise specific exception for this case
+                        raise ConversionNotWorthwhileError(
+                            error_msg,
+                            command=cmd_str_log,
+                            output=full_output_text,
+                            original_size=stats.get("original_size")
+                        )
                 elif re.search(r'ffmpeg.*?:\s*Invalid\s+data\s+found', full_output_text, re.IGNORECASE):
                     error_type = "invalid_input_data"
                     error_details = "Invalid data in input"

@@ -36,7 +36,7 @@ from src.video_conversion import process_video
 from .scanner import scan_video_needs_conversion
 from .callback_handlers import (
     handle_starting, handle_file_info, handle_progress, handle_error,
-    handle_retrying, handle_completed, handle_skipped
+    handle_retrying, handle_completed, handle_skipped, handle_skipped_not_worth
 )
 # Import GUI update functions (needed by callback dispatcher indirectly via handlers)
 from src.gui.gui_updates import (
@@ -72,6 +72,11 @@ def sequential_conversion_worker(gui, input_folder, output_folder, overwrite, st
     gui.output_folder_path = output_folder # Store for potential cleanup use later
     logger.info(f"Worker started. Input: '{input_folder}', Output: '{output_folder}'")
     gui.error_count = 0; gui.total_input_bytes_success = 0; gui.total_output_bytes_success = 0; gui.total_time_success = 0
+    gui.skipped_not_worth_count = 0  # Track files skipped because conversion isn't beneficial
+    gui.skipped_not_worth_files = []  # Track filenames of skipped files
+    gui.skipped_low_resolution_count = 0  # Track files skipped due to low resolution
+    gui.skipped_low_resolution_files = []  # Track filenames of low resolution files
+    gui.error_details = []  # Track error details for summary
     video_info_cache = {} # Initialize cache for this run
 
     # Determine extensions from GUI state
@@ -136,8 +141,15 @@ def sequential_conversion_worker(gui, input_folder, output_folder, overwrite, st
                 files_to_process.append(video_path)
             else:
                 skipped_files_count += 1
+                filename = os.path.basename(video_path)
+                
+                # Check if skipped due to resolution
+                if "Below minimum resolution" in reason:
+                    gui.skipped_low_resolution_count += 1
+                    gui.skipped_low_resolution_files.append(filename)
+                
                 # Log skip reason using the handler for consistency
-                handle_skipped(gui, os.path.basename(video_path), reason)
+                handle_skipped(gui, filename, reason)
         except Exception as e:
             logger.error(f"Unexpected error during detailed scan for {anonymize_filename(video_path)}: {e}", exc_info=True)
             skipped_files_count += 1
@@ -175,6 +187,7 @@ def sequential_conversion_worker(gui, input_folder, output_folder, overwrite, st
                 "retrying": handle_retrying,
                 "completed": handle_completed,
                 "skipped": handle_skipped,
+                "skipped_not_worth": handle_skipped_not_worth,
             }
             handler = handler_map.get(status)
             if handler:
@@ -328,9 +341,26 @@ def sequential_conversion_worker(gui, input_folder, output_folder, overwrite, st
         overall_progress_percent = (gui.processed_files / total_videos_to_process) * 100
         update_ui_safely(gui.root, lambda p=overall_progress_percent: gui.overall_progress.config(value=p))
         def update_final_status(): # Update overall status label text
-            base_status=f"Progress: {gui.processed_files}/{total_videos_to_process} files ({gui.successful_conversions} successful)"
-            error_suffix=f" - {gui.error_count} errors" if gui.error_count > 0 else ""
-            gui.status_label.config(text=f"{base_status}{error_suffix}")
+            base_status = f"Progress: {gui.processed_files}/{total_videos_to_process} files"
+            converted_msg = f" ({gui.successful_conversions} converted"
+            
+            # Show different skip categories
+            if gui.skipped_not_worth_count > 0:
+                converted_msg += f", {gui.skipped_not_worth_count} inefficient"
+            
+            if gui.skipped_low_resolution_count > 0:
+                converted_msg += f", {gui.skipped_low_resolution_count} low-res"
+            
+            # Calculate other skips (files skipped for reasons other than "not worth" and low resolution)
+            other_skips = skipped_files_count - gui.skipped_not_worth_count - gui.skipped_low_resolution_count
+            if other_skips > 0:
+                converted_msg += f", {other_skips} skipped"
+            
+            converted_msg += ")"
+            
+            # Only show errors if there are actual errors
+            error_suffix = f" - {gui.error_count} errors" if gui.error_count > 0 else ""
+            gui.status_label.config(text=f"{base_status}{converted_msg}{error_suffix}")
         update_ui_safely(gui.root, update_final_status)
 
     # --- End of Processing Loop ---

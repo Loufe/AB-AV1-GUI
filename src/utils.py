@@ -99,6 +99,16 @@ class FilenamePrivacyFilter(logging.Filter):
             record.msg = temp_msg
         return True
 
+
+# Custom filter to suppress excessive sled::pagecache trace messages
+class SledTraceFilter(logging.Filter):
+    def filter(self, record):
+        if hasattr(record, 'msg') and isinstance(record.msg, str):
+            # Filter out sled::pagecache messages marked as TRACE
+            if 'sled::pagecache' in record.msg and 'TRACE' in record.msg:
+                return False
+        return True
+
 # --- Logging Setup and Utilities ---
 
 def get_script_directory() -> str:
@@ -166,7 +176,13 @@ def setup_logging(log_directory: str = None, anonymize: bool = True) -> str:
         try: handler.close(); logger.removeHandler(handler)
         except: pass
     if file_handler: logger.addHandler(file_handler)
-    logger.addHandler(console_handler); logging.info(f"Filename anonymization in logs is {'ENABLED' if anonymize else 'DISABLED'}.")
+    logger.addHandler(console_handler)
+    
+    # Add the SledTraceFilter to reduce noise from sled::pagecache messages
+    sled_filter = SledTraceFilter()
+    logger.addFilter(sled_filter)
+    
+    logging.info(f"Filename anonymization in logs is {'ENABLED' if anonymize else 'DISABLED'}.")
     return actual_log_directory_used
 
 # --- Video and FFmpeg Utilities ---

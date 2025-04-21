@@ -16,3 +16,14 @@ class InputFileError(AbAv1Error): pass
 class OutputFileError(AbAv1Error): pass
 class VMAFError(AbAv1Error): pass
 class EncodingError(AbAv1Error): pass
+
+
+class ConversionNotWorthwhileError(Exception):
+    """Exception raised when CRF search fails, indicating conversion isn't beneficial."""
+    def __init__(self, message, command=None, output=None, original_size=None, estimated_size=None):
+        super().__init__(message)
+        self.error_type = "conversion_not_worthwhile"
+        self.command = command
+        self.output = output
+        self.original_size = original_size
+        self.estimated_size = estimated_size

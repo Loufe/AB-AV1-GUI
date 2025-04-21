@@ -109,51 +109,82 @@ def create_main_tab(gui):
     details_frame.grid(row=9, column=0, columnspan=2, sticky="ew", padx=5, pady=5)
 
     details_grid = ttk.Frame(details_frame)
-    details_grid.pack(fill="x", padx=5, pady=5)
+    details_grid.pack(fill="x", padx=5, pady=10)  # Increased vertical padding from 5 to 10
 
     left_col = ttk.Frame(details_grid)
     left_col.pack(side="left", fill="x", expand=True, padx=(0, 10))
-    ttk.Label(left_col, text="Original Format:").grid(row=0, column=0, sticky="w", pady=2)
+    ttk.Label(left_col, text="Original Format:").grid(row=0, column=0, sticky="w", pady=3)  # Increased pady from 2 to 3
     gui.orig_format_label = ttk.Label(left_col, text="-")
-    gui.orig_format_label.grid(row=0, column=1, sticky="w", pady=2)
-    ttk.Label(left_col, text="Original Size:").grid(row=1, column=0, sticky="w", pady=2)
+    gui.orig_format_label.grid(row=0, column=1, sticky="w", pady=3)  # Increased pady from 2 to 3
+    ttk.Label(left_col, text="Original Size:").grid(row=1, column=0, sticky="w", pady=3)  # Increased pady from 2 to 3
     gui.orig_size_label = ttk.Label(left_col, text="-")
-    gui.orig_size_label.grid(row=1, column=1, sticky="w", pady=2)
+    gui.orig_size_label.grid(row=1, column=1, sticky="w", pady=3)  # Increased pady from 2 to 3
     # Use imported constant directly from config
-    ttk.Label(left_col, text="VMAF Target:").grid(row=2, column=0, sticky="w", pady=2)
+    ttk.Label(left_col, text="VMAF Target:").grid(row=2, column=0, sticky="w", pady=3)  # Increased pady from 2 to 3
     gui.vmaf_label = ttk.Label(left_col, text=f"{DEFAULT_VMAF_TARGET}") # Show target initially
-    gui.vmaf_label.grid(row=2, column=1, sticky="w", pady=2)
-    ttk.Label(left_col, text="Encoding Settings:").grid(row=3, column=0, sticky="w", pady=2)
+    gui.vmaf_label.grid(row=2, column=1, sticky="w", pady=3)  # Increased pady from 2 to 3
+    ttk.Label(left_col, text="Encoding Settings:").grid(row=3, column=0, sticky="w", pady=3)  # Increased pady from 2 to 3
     gui.encoding_settings_label = ttk.Label(left_col, text="-") # Will show CRF/Preset
-    gui.encoding_settings_label.grid(row=3, column=1, sticky="w", pady=2)
+    gui.encoding_settings_label.grid(row=3, column=1, sticky="w", pady=3)  # Increased pady from 2 to 3
 
     right_col = ttk.Frame(details_grid)
     right_col.pack(side="right", fill="x", expand=True, padx=(10, 0))
-    ttk.Label(right_col, text="Elapsed Time:").grid(row=0, column=0, sticky="w", pady=2)
+    ttk.Label(right_col, text="Elapsed Time:").grid(row=0, column=0, sticky="w", pady=3)  # Increased pady from 2 to 3
     gui.elapsed_label = ttk.Label(right_col, text="-")
-    gui.elapsed_label.grid(row=0, column=1, sticky="w", pady=2)
-    ttk.Label(right_col, text="Est. Remaining (Enc):").grid(row=1, column=0, sticky="w", pady=2) # Clarify ETA is for encoding phase
+    gui.elapsed_label.grid(row=0, column=1, sticky="w", pady=3)  # Increased pady from 2 to 3
+    ttk.Label(right_col, text="Est. Remaining (Enc):").grid(row=1, column=0, sticky="w", pady=3)  # Increased pady from 2 to 3
     gui.eta_label = ttk.Label(right_col, text="-")
-    gui.eta_label.grid(row=1, column=1, sticky="w", pady=2)
-    ttk.Label(right_col, text="Est. Final Size:").grid(row=2, column=0, sticky="w", pady=2)
+    gui.eta_label.grid(row=1, column=1, sticky="w", pady=3)  # Increased pady from 2 to 3
+    ttk.Label(right_col, text="Est. Final Size:").grid(row=2, column=0, sticky="w", pady=3)  # Increased pady from 2 to 3
     gui.output_size_label = ttk.Label(right_col, text="-")
-    gui.output_size_label.grid(row=2, column=1, sticky="w", pady=2)
+    gui.output_size_label.grid(row=2, column=1, sticky="w", pady=3)  # Increased pady from 2 to 3
 
     # Conversion Statistics frame
-    stats_frame = ttk.LabelFrame(main_frame, text="Overall Statistics (Successful Files)")
+    stats_frame = ttk.LabelFrame(main_frame, text="Conversion History Statistics")
     stats_frame.grid(row=10, column=0, columnspan=2, sticky="ew", padx=5, pady=5)
 
     stats_grid = ttk.Frame(stats_frame)
-    stats_grid.pack(fill="x", padx=10, pady=10)
-    ttk.Label(stats_grid, text="Avg VMAF Score:").grid(row=0, column=0, sticky="w", padx=5, pady=2)
-    gui.vmaf_stats_label = ttk.Label(stats_grid, text="-")
-    gui.vmaf_stats_label.grid(row=0, column=1, sticky="w", padx=5, pady=2)
-    ttk.Label(stats_grid, text="Avg CRF Value:").grid(row=1, column=0, sticky="w", padx=5, pady=2)
-    gui.crf_stats_label = ttk.Label(stats_grid, text="-")
-    gui.crf_stats_label.grid(row=1, column=1, sticky="w", padx=5, pady=2)
-    ttk.Label(stats_grid, text="Avg Size Reduction:").grid(row=2, column=0, sticky="w", padx=5, pady=2)
-    gui.size_stats_label = ttk.Label(stats_grid, text="-")
-    gui.size_stats_label.grid(row=2, column=1, sticky="w", padx=5, pady=2)
+    stats_grid.pack(fill="x", padx=5, pady=10)
+
+    # Left column for VMAF and CRF
+    left_col = ttk.Frame(stats_grid)
+    left_col.pack(side="left", fill="x", expand=True, padx=(0, 10))
+    
+    # VMAF Score with split average and range
+    vmaf_row = ttk.Frame(left_col)
+    vmaf_row.grid(row=0, column=0, columnspan=2, sticky="w", pady=2)
+    ttk.Label(vmaf_row, text="Avg VMAF Score:").pack(side="left")
+    gui.vmaf_stats_label = ttk.Label(vmaf_row, text="-")
+    gui.vmaf_stats_label.pack(side="left", padx=(5, 5))
+    gui.vmaf_range_label = ttk.Label(vmaf_row, text="", style="Range.TLabel")
+    gui.vmaf_range_label.pack(side="left")
+    
+    # CRF Value with split average and range
+    crf_row = ttk.Frame(left_col)
+    crf_row.grid(row=1, column=0, columnspan=2, sticky="w", pady=2)
+    ttk.Label(crf_row, text="Avg CRF Value:").pack(side="left")
+    gui.crf_stats_label = ttk.Label(crf_row, text="-")
+    gui.crf_stats_label.pack(side="left", padx=(5, 5))
+    gui.crf_range_label = ttk.Label(crf_row, text="", style="Range.TLabel")
+    gui.crf_range_label.pack(side="left")
+
+    # Right column for Size Reduction and Total Saved
+    right_col = ttk.Frame(stats_grid)
+    right_col.pack(side="right", fill="x", expand=True, padx=(10, 0))
+    
+    # Size Reduction with split average and range
+    size_row = ttk.Frame(right_col)
+    size_row.grid(row=0, column=0, columnspan=2, sticky="w", pady=2)
+    ttk.Label(size_row, text="Avg Size Reduction:").pack(side="left")
+    gui.size_stats_label = ttk.Label(size_row, text="-")
+    gui.size_stats_label.pack(side="left", padx=(5, 5))
+    gui.size_range_label = ttk.Label(size_row, text="", style="Range.TLabel")
+    gui.size_range_label.pack(side="left")
+    
+    # Total Space Saved (single row)
+    ttk.Label(right_col, text="Total Space Saved:").grid(row=1, column=0, sticky="w", pady=2)
+    gui.total_saved_label = ttk.Label(right_col, text="-")
+    gui.total_saved_label.grid(row=1, column=1, sticky="w", pady=2)
 
     # Make UI elements respond to window resizing
     main_frame.columnconfigure(0, weight=1)

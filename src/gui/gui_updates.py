@@ -14,7 +14,7 @@ import tkinter as tk # For type hinting if needed
 
 # Project imports
 from src.utils import (
-    format_time, format_file_size, update_ui_safely
+    format_time, format_file_size, update_ui_safely, load_history
 )
 # Import constant from config
 from src.config import DEFAULT_VMAF_TARGET, DEFAULT_ENCODING_PRESET
@@ -248,14 +248,220 @@ def update_total_elapsed_time(gui) -> None:
 
 
 def update_statistics_summary(gui) -> None:
-    """Update the overall statistics summary labels with averages and ranges.
+    """Update the overall statistics summary labels with historical data from conversion_history.json.
+
+    Args:
+        gui: The main GUI instance containing statistic labels
+    """
+    vmaf_avg_text = "-"
+    vmaf_range_text = ""
+    crf_avg_text = "-"
+    crf_range_text = ""
+    reduction_avg_text = "-"
+    reduction_range_text = ""
+    total_saved_text = "-"
+    
+    # Load and process historical data
+    try:
+        history = load_history()
+        
+        if history:
+            # Extract statistics from all historical conversions
+            historical_vmaf = []
+            historical_crf = []
+            historical_reductions = []
+            total_input_size = 0
+            total_output_size = 0
+            total_conversions = 0
+            
+            for record in history:
+                # VMAF
+                if 'final_vmaf' in record and record['final_vmaf'] is not None:
+                    try:
+                        historical_vmaf.append(float(record['final_vmaf']))
+                    except (ValueError, TypeError):
+                        pass
+                        
+                # CRF
+                if 'final_crf' in record and record['final_crf'] is not None:
+                    try:
+                        historical_crf.append(int(record['final_crf']))
+                    except (ValueError, TypeError):
+                        pass
+                        
+                # Size reduction
+                if 'reduction_percent' in record and record['reduction_percent'] is not None:
+                    try:
+                        historical_reductions.append(float(record['reduction_percent']))
+                    except (ValueError, TypeError):
+                        pass
+                        
+                # Accumulate total sizes
+                if 'input_size_mb' in record and record['input_size_mb'] is not None:
+                    try:
+                        total_input_size += float(record['input_size_mb']) * (1024**2)
+                    except (ValueError, TypeError):
+                        pass
+                        
+                if 'output_size_mb' in record and record['output_size_mb'] is not None:
+                    try:
+                        total_output_size += float(record['output_size_mb']) * (1024**2)
+                    except (ValueError, TypeError):
+                        pass
+                        
+                total_conversions += 1
+            
+            # Calculate statistics from historical data
+            if historical_vmaf:
+                try:
+                    avg_vmaf = statistics.mean(historical_vmaf)
+                    min_vmaf = min(historical_vmaf)
+                    max_vmaf = max(historical_vmaf)
+                    vmaf_avg_text = f"Avg: {avg_vmaf:.1f}"
+                    vmaf_range_text = f"(Range: {min_vmaf:.1f}-{max_vmaf:.1f})"
+                    logging.debug(f"Historical VMAF stats: avg={avg_vmaf:.1f}, min={min_vmaf:.1f}, max={max_vmaf:.1f}")
+                except statistics.StatisticsError:
+                    if len(historical_vmaf) == 1:
+                        vmaf_avg_text = f"{historical_vmaf[0]:.1f}"
+                        vmaf_range_text = ""
+                    else:
+                        vmaf_avg_text = "Error"
+                        vmaf_range_text = ""
+                except Exception as e:
+                    logging.warning(f"Error calculating historical VMAF stats: {e}")
+                    vmaf_avg_text = "Error"
+                    vmaf_range_text = ""
+            
+            if historical_crf:
+                try:
+                    avg_crf = statistics.mean(historical_crf)
+                    min_crf = min(historical_crf)
+                    max_crf = max(historical_crf)
+                    crf_avg_text = f"Avg: {avg_crf:.1f}"
+                    crf_range_text = f"(Range: {min_crf}-{max_crf})"
+                    logging.debug(f"Historical CRF stats: avg={avg_crf:.1f}, min={min_crf}, max={max_crf}")
+                except statistics.StatisticsError:
+                    if len(historical_crf) == 1:
+                        crf_avg_text = f"{historical_crf[0]}"
+                        crf_range_text = ""
+                    else:
+                        crf_avg_text = "Error"
+                        crf_range_text = ""
+                except Exception as e:
+                    logging.warning(f"Error calculating historical CRF stats: {e}")
+                    crf_avg_text = "Error"
+                    crf_range_text = ""
+            
+            if historical_reductions:
+                try:
+                    avg_reduction = statistics.mean(historical_reductions)
+                    min_reduction = min(historical_reductions)
+                    max_reduction = max(historical_reductions)
+                    reduction_avg_text = f"Avg: {avg_reduction:.1f}%"
+                    reduction_range_text = f"(Range: {min_reduction:.1f}%-{max_reduction:.1f}%)"
+                    logging.info(f"Historical Size reduction stats: avg={avg_reduction:.1f}%, min={min_reduction:.1f}%, max={max_reduction:.1f}%")
+                except statistics.StatisticsError:
+                    if len(historical_reductions) == 1:
+                        reduction_avg_text = f"{historical_reductions[0]:.1f}%"
+                        reduction_range_text = ""
+                    else:
+                        reduction_avg_text = "Error"
+                        reduction_range_text = ""
+                except Exception as e:
+                    logging.warning(f"Error calculating historical Size Reduction stats: {e}")
+                    reduction_avg_text = "Error"
+                    reduction_range_text = ""
+            
+            # Add total space saved and conversion count
+            if total_input_size > 0 and total_output_size > 0:
+                total_saved = total_input_size - total_output_size
+                total_saved_text = f"{format_file_size(total_saved)} ({total_conversions} files)"
+        
+        else:
+            # No history - show current session stats instead
+            if gui.conversion_running or gui.processed_files > 0:
+                if gui.vmaf_scores:
+                    try:
+                        avg_vmaf = statistics.mean(gui.vmaf_scores)
+                        min_vmaf = min(gui.vmaf_scores)
+                        max_vmaf = max(gui.vmaf_scores)
+                        vmaf_avg_text = f"Avg: {avg_vmaf:.1f}"
+                        vmaf_range_text = f"(Range: {min_vmaf:.1f}-{max_vmaf:.1f})"
+                    except (statistics.StatisticsError, Exception):
+                        if len(gui.vmaf_scores) == 1:
+                            vmaf_avg_text = f"{gui.vmaf_scores[0]:.1f}"
+                            vmaf_range_text = ""
+                        else:
+                            vmaf_avg_text = "Error"
+                            vmaf_range_text = ""
+                
+                if gui.crf_values:
+                    try:
+                        avg_crf = statistics.mean(gui.crf_values)
+                        min_crf = min(gui.crf_values)
+                        max_crf = max(gui.crf_values)
+                        crf_avg_text = f"Avg: {avg_crf:.1f}"
+                        crf_range_text = f"(Range: {min_crf}-{max_crf})"
+                    except (statistics.StatisticsError, Exception):
+                        if len(gui.crf_values) == 1:
+                            crf_avg_text = f"{gui.crf_values[0]}"
+                            crf_range_text = ""
+                        else:
+                            crf_avg_text = "Error"
+                            crf_range_text = ""
+                
+                if gui.size_reductions:
+                    try:
+                        valid_reductions = [r for r in gui.size_reductions if isinstance(r, (int, float))]
+                        if valid_reductions:
+                            avg_reduction = statistics.mean(valid_reductions)
+                            min_reduction = min(valid_reductions)
+                            max_reduction = max(valid_reductions)
+                            reduction_avg_text = f"Avg: {avg_reduction:.1f}%"
+                            reduction_range_text = f"(Range: {min_reduction:.1f}%-{max_reduction:.1f}%)"
+                        else:
+                            reduction_avg_text = "No data"
+                            reduction_range_text = ""
+                    except (statistics.StatisticsError, Exception):
+                        if len(valid_reductions) == 1:
+                            reduction_avg_text = f"{valid_reductions[0]:.1f}%"
+                            reduction_range_text = ""
+                        else:
+                            reduction_avg_text = "Error"
+                            reduction_range_text = ""
+            else:
+                vmaf_text = "No history"
+                crf_text = "No history"
+                reduction_text = "No history"
+    
+    except Exception as e:
+        logging.error(f"Error loading historical statistics: {e}")
+        # Fallback to current session stats
+        return update_statistics_summary_current_session(gui)
+    
+    # Use lambdas with explicit parameter capturing for UI updates
+    update_ui_safely(gui.root, lambda v=vmaf_avg_text: gui.vmaf_stats_label.config(text=v))
+    update_ui_safely(gui.root, lambda v=vmaf_range_text: gui.vmaf_range_label.config(text=v))
+    update_ui_safely(gui.root, lambda c=crf_avg_text: gui.crf_stats_label.config(text=c))
+    update_ui_safely(gui.root, lambda c=crf_range_text: gui.crf_range_label.config(text=c))
+    update_ui_safely(gui.root, lambda r=reduction_avg_text: gui.size_stats_label.config(text=r))
+    update_ui_safely(gui.root, lambda r=reduction_range_text: gui.size_range_label.config(text=r))
+    update_ui_safely(gui.root, lambda t=total_saved_text: gui.total_saved_label.config(text=t))
+
+
+def update_statistics_summary_current_session(gui) -> None:
+    """Update the overall statistics summary labels with current session data.
 
     Args:
         gui: The main GUI instance containing statistic labels and data
     """
-    vmaf_text = "-"
-    crf_text = "-"
-    reduction_text = "-"
+    vmaf_avg_text = "-"
+    vmaf_range_text = ""
+    crf_avg_text = "-"
+    crf_range_text = ""
+    reduction_avg_text = "-"
+    reduction_range_text = ""
+    total_saved_text = "-"
 
     # Debug logging to trace updates
     logging.debug(f"Updating statistics summary - VMAF scores: {len(gui.vmaf_scores)}, CRF values: {len(gui.crf_values)}, Size reductions: {len(gui.size_reductions)}")
@@ -265,53 +471,86 @@ def update_statistics_summary(gui) -> None:
             avg_vmaf = statistics.mean(gui.vmaf_scores)
             min_vmaf = min(gui.vmaf_scores)
             max_vmaf = max(gui.vmaf_scores)
-            vmaf_text = f"Avg: {avg_vmaf:.1f} (Range: {min_vmaf:.1f}-{max_vmaf:.1f})"
+            vmaf_avg_text = f"Avg: {avg_vmaf:.1f}"
+            vmaf_range_text = f"(Range: {min_vmaf:.1f}-{max_vmaf:.1f})"
             logging.debug(f"VMAF stats: avg={avg_vmaf:.1f}, min={min_vmaf:.1f}, max={max_vmaf:.1f}")
         except statistics.StatisticsError: # Handle case with insufficient data
-            if len(gui.vmaf_scores) == 1: vmaf_text = f"{gui.vmaf_scores[0]:.1f}"
-            else: vmaf_text = "Error"; logging.warning("StatisticsError calculating VMAF stats")
+            if len(gui.vmaf_scores) == 1: 
+                vmaf_avg_text = f"{gui.vmaf_scores[0]:.1f}"
+                vmaf_range_text = ""
+            else: 
+                vmaf_avg_text = "Error"
+                vmaf_range_text = ""
+                logging.warning("StatisticsError calculating VMAF stats")
         except Exception as e:
             logging.warning(f"Error calculating VMAF stats: {e}")
-            vmaf_text = "Error"
+            vmaf_avg_text = "Error"
+            vmaf_range_text = ""
 
     if gui.crf_values:
          try:
             avg_crf = statistics.mean(gui.crf_values)
             min_crf = min(gui.crf_values)
             max_crf = max(gui.crf_values)
-            crf_text = f"Avg: {avg_crf:.1f} (Range: {min_crf}-{max_crf})"
+            crf_avg_text = f"Avg: {avg_crf:.1f}"
+            crf_range_text = f"(Range: {min_crf}-{max_crf})"
             logging.debug(f"CRF stats: avg={avg_crf:.1f}, min={min_crf}, max={max_crf}")
          except statistics.StatisticsError: # Handle case with insufficient data
-             if len(gui.crf_values) == 1: crf_text = f"{gui.crf_values[0]}"
-             else: crf_text = "Error"; logging.warning("StatisticsError calculating CRF stats")
+             if len(gui.crf_values) == 1: 
+                 crf_avg_text = f"{gui.crf_values[0]}"
+                 crf_range_text = ""
+             else: 
+                 crf_avg_text = "Error"
+                 crf_range_text = ""
+                 logging.warning("StatisticsError calculating CRF stats")
          except Exception as e:
             logging.warning(f"Error calculating CRF stats: {e}")
-            crf_text = "Error"
+            crf_avg_text = "Error"
+            crf_range_text = ""
 
     if gui.size_reductions:
         try:
             # Make sure the list isn't empty and contains valid numbers
             valid_reductions = [r for r in gui.size_reductions if isinstance(r, (int, float))]
             if not valid_reductions:
-                reduction_text = "No data"
+                reduction_avg_text = "No data"
+                reduction_range_text = ""
             else:
                 avg_reduction = statistics.mean(valid_reductions)
                 min_reduction = min(valid_reductions)
                 max_reduction = max(valid_reductions)
-                reduction_text = f"Avg: {avg_reduction:.1f}% (Range: {min_reduction:.1f}%-{max_reduction:.1f}%)"
+                reduction_avg_text = f"Avg: {avg_reduction:.1f}%"
+                reduction_range_text = f"(Range: {min_reduction:.1f}%-{max_reduction:.1f}%)"
                 logging.info(f"Size reduction stats: avg={avg_reduction:.1f}%, min={min_reduction:.1f}%, max={max_reduction:.1f}%")
         except statistics.StatisticsError: # Handle case with insufficient data
-             if len(valid_reductions) == 1: reduction_text = f"{valid_reductions[0]:.1f}%"
-             else: reduction_text = "Error"; logging.warning("StatisticsError calculating Size Reduction stats")
+             if len(valid_reductions) == 1: 
+                 reduction_avg_text = f"{valid_reductions[0]:.1f}%"
+                 reduction_range_text = ""
+             else: 
+                 reduction_avg_text = "Error"
+                 reduction_range_text = ""
+                 logging.warning("StatisticsError calculating Size Reduction stats")
         except Exception as e:
             logging.warning(f"Error calculating Size Reduction stats: {e}")
             logging.warning(f"Size reduction values: {gui.size_reductions}")
-            reduction_text = "Error"
+            reduction_avg_text = "Error"
+            reduction_range_text = ""
+
+    # Calculate total saved for current session
+    if hasattr(gui, 'total_input_bytes_success') and hasattr(gui, 'total_output_bytes_success'):
+        if gui.total_input_bytes_success > 0 and gui.total_output_bytes_success > 0:
+            total_saved = gui.total_input_bytes_success - gui.total_output_bytes_success
+            if total_saved > 0:
+                total_saved_text = f"{format_file_size(total_saved)} ({gui.successful_conversions} files)"
 
     # Use lambdas with explicit parameter capturing for UI updates
-    update_ui_safely(gui.root, lambda v=vmaf_text: gui.vmaf_stats_label.config(text=v))
-    update_ui_safely(gui.root, lambda c=crf_text: gui.crf_stats_label.config(text=c))
-    update_ui_safely(gui.root, lambda r=reduction_text: gui.size_stats_label.config(text=r))
+    update_ui_safely(gui.root, lambda v=vmaf_avg_text: gui.vmaf_stats_label.config(text=v))
+    update_ui_safely(gui.root, lambda v=vmaf_range_text: gui.vmaf_range_label.config(text=v))
+    update_ui_safely(gui.root, lambda c=crf_avg_text: gui.crf_stats_label.config(text=c))
+    update_ui_safely(gui.root, lambda c=crf_range_text: gui.crf_range_label.config(text=c))
+    update_ui_safely(gui.root, lambda r=reduction_avg_text: gui.size_stats_label.config(text=r))
+    update_ui_safely(gui.root, lambda r=reduction_range_text: gui.size_range_label.config(text=r))
+    update_ui_safely(gui.root, lambda t=total_saved_text: gui.total_saved_label.config(text=t))
 
 
 def reset_current_file_details(gui) -> None:

@@ -24,6 +24,7 @@ from src.gui.gui_actions import (
 from src.gui.conversion_controller import (
     start_conversion, stop_conversion, force_stop_conversion
 )
+from src.gui.gui_updates import update_statistics_summary
 # Import setup_logging only needed here now - Replace 'convert_app' with 'src'
 from src.utils import setup_logging, get_script_directory # Added get_script_directory
 
@@ -39,8 +40,8 @@ class VideoConverterGUI:
         """Initialize the main window and all components."""
         self.root = root
         self.root.title("AV1 Video Converter")
-        self.root.geometry("800x650")
-        self.root.minsize(700, 550)
+        self.root.geometry("800x675")  # Increased from 650 to 675
+        self.root.minsize(700, 575)  # Increased from 550 to 575
 
         # Set application icon (Phase 1)
         try:
@@ -108,6 +109,10 @@ class VideoConverterGUI:
         create_settings_tab(self)
         self.initialize_conversion_state()
         self.initialize_button_states()
+        
+        # Update statistics panel with historical data
+        update_statistics_summary(self)
+        
         check_ffmpeg(self) # Check dependencies after UI is built
 
     def load_settings(self):
@@ -151,6 +156,9 @@ class VideoConverterGUI:
         self.style.configure("TLabel", font=("Arial", 10), background="#f0f0f0"); self.style.configure("Header.TLabel", font=("Arial", 10, "bold"), background="#f0f0f0")
         self.style.configure("ExtButton.TCheckbutton", font=("Arial", 9)); self.style.configure("TLabelframe", background="#f0f0f0", padding=5)
         self.style.configure("TLabelframe.Label", font=("Arial", 10, "bold"), background="#f0f0f0")
+        
+        # Add custom style for range text - dark gray color
+        self.style.configure("Range.TLabel", font=("Arial", 10), background="#f0f0f0", foreground="#606060")
 
     def initialize_variables(self):
         """Initialize the GUI variables, using loaded config"""

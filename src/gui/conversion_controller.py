@@ -36,7 +36,8 @@ from src.utils import (
 )
 # Import constants from config
 from src.config import (
-    DEFAULT_VMAF_TARGET, DEFAULT_ENCODING_PRESET
+    DEFAULT_VMAF_TARGET, DEFAULT_ENCODING_PRESET,
+    MIN_RESOLUTION_WIDTH, MIN_RESOLUTION_HEIGHT
 )
 # Import the single-file processing function
 from src.video_conversion import process_video
@@ -395,23 +396,90 @@ def conversion_complete(gui, final_message="Conversion complete"):
     if gui.elapsed_timer_id: # Ensure timer is stopped if still running
         gui.root.after_cancel(gui.elapsed_timer_id)
         gui.elapsed_timer_id = None
+    
+    # Update statistics to show historical data
+    update_statistics_summary(gui)
 
     # Show summary message box if files were processed
     if gui.processed_files > 0:
         summary_msg = f"{final_message}.\n\n" \
                       f"Files Processed: {gui.processed_files}\n" \
-                      f"Successful: {gui.successful_conversions}\n" \
-                      f"Errors: {gui.error_count}\n" \
-                      f"Total Time: {format_time(total_duration)}\n\n" \
-                      f"--- Avg. Stats (Successful Files) ---\n"
-        summary_msg += f"VMAF Score: {f'{statistics.mean(gui.vmaf_scores):.1f}' if gui.vmaf_scores else 'N/A'}\n"
-        summary_msg += f"CRF Value: {f'{statistics.mean(gui.crf_values):.1f}' if gui.crf_values else 'N/A'}\n"
-        summary_msg += f"Size Reduction: {f'{statistics.mean(gui.size_reductions):.1f}%' if gui.size_reductions else 'N/A'}\n\n" \
-                       f"--- Overall Performance ---\n" \
-                       f"Total Data Saved: {data_saved_str}\n" \
-                       f"Avg. Processing Time: {time_per_gb_str} per GB Input\n"
-        if gui.error_count > 0:
-            summary_msg += f"\nNOTE: {gui.error_count} errors occurred. Please check the logs ({gui.log_directory}) for details."
+                      f"Successfully Converted: {gui.successful_conversions}\n"
+        
+        # Show different skip categories
+        skipped_not_worth = getattr(gui, 'skipped_not_worth_count', 0)
+        skipped_low_resolution = getattr(gui, 'skipped_low_resolution_count', 0)
+        
+        if skipped_not_worth > 0:
+            summary_msg += f"Skipped (Inefficient): {skipped_not_worth}\n"
+        
+        if skipped_low_resolution > 0:
+            summary_msg += f"Skipped (Low Resolution): {skipped_low_resolution}\n"
+        
+        # Count other skips
+        error_count = getattr(gui, 'error_count', 0)
+        other_skips = gui.processed_files - gui.successful_conversions - skipped_not_worth - skipped_low_resolution - error_count
+        if other_skips > 0:
+            summary_msg += f"Skipped (Other): {other_skips}\n"
+        
+        if error_count > 0:
+            summary_msg += f"Errors: {error_count}\n"
+        
+        summary_msg += f"\nTotal Time: {format_time(total_duration)}\n\n"
+        
+        # Show conversion stats if available
+        if gui.successful_conversions > 0:
+            summary_msg += f"--- Avg. Stats (Successful Files) ---\n"
+            summary_msg += f"VMAF Score: {f'{statistics.mean(gui.vmaf_scores):.1f}' if gui.vmaf_scores else 'N/A'}\n"
+            summary_msg += f"CRF Value: {f'{statistics.mean(gui.crf_values):.1f}' if gui.crf_values else 'N/A'}\n"
+            summary_msg += f"Size Reduction: {f'{statistics.mean(gui.size_reductions):.1f}%' if gui.size_reductions else 'N/A'}\n\n" \
+                           f"--- Overall Performance ---\n" \
+                           f"Total Data Saved: {data_saved_str}\n" \
+                           f"Avg. Processing Time: {time_per_gb_str} per GB Input\n"
+        
+        # Show error details if any
+        error_details = getattr(gui, 'error_details', [])
+        if error_details:
+            summary_msg += "\n--- Error Details ---\n"
+            # Group errors by type
+            error_types = {}
+            for error in error_details:
+                error_type = error.get('error_type', 'unknown')
+                if error_type not in error_types:
+                    error_types[error_type] = []
+                error_types[error_type].append(error['filename'])
+            
+            # Display up to 3 files per error type
+            for error_type, filenames in error_types.items():
+                summary_msg += f"\n{error_type}: {len(filenames)} file{'s' if len(filenames) > 1 else ''}\n"
+                for i, filename in enumerate(filenames[:3]):
+                    summary_msg += f"  - {filename}\n"
+                if len(filenames) > 3:
+                    summary_msg += f"  ... and {len(filenames) - 3} more\n"
+            
+            summary_msg += f"\nCheck the logs ({gui.log_directory}) for full details."
+        
+        # Show files skipped due to inefficiency
+        skipped_files = getattr(gui, 'skipped_not_worth_files', [])
+        if skipped_files:
+            summary_msg += "\n--- Files Skipped (Inefficient Conversion) ---\n"
+            summary_msg += f"Files where conversion would not save space:\n"
+            for i, filename in enumerate(skipped_files[:5]):
+                summary_msg += f"  - {filename}\n"
+            if len(skipped_files) > 5:
+                summary_msg += f"  ... and {len(skipped_files) - 5} more\n"
+        
+        # Show files skipped due to low resolution
+        skipped_low_res_files = getattr(gui, 'skipped_low_resolution_files', [])
+        if skipped_low_res_files:
+            summary_msg += "\n--- Files Skipped (Low Resolution) ---\n"
+            summary_msg += f"Files below {MIN_RESOLUTION_WIDTH}x{MIN_RESOLUTION_HEIGHT}:\n"
+            for i, filename in enumerate(skipped_low_res_files[:5]):
+                summary_msg += f"  - {filename}\n"
+            if len(skipped_low_res_files) > 5:
+                summary_msg += f"  ... and {len(skipped_low_res_files) - 5} more\n"
+        
+        if error_count > 0:
             messagebox.showwarning("Conversion Summary", summary_msg)
         else:
             messagebox.showinfo("Conversion Summary", summary_msg)

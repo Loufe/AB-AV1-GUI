@@ -8,6 +8,7 @@ from pathlib import Path
 
 # Project imports
 from src.utils import get_video_info, anonymize_filename # No GUI needed here
+from src.config import MIN_RESOLUTION_WIDTH, MIN_RESOLUTION_HEIGHT  # Import resolution constants
 
 logger = logging.getLogger(__name__)
 
@@ -92,6 +93,8 @@ def scan_video_needs_conversion(input_video_path: str, input_base_folder: str, o
     try:
         is_already_av1 = False
         video_stream_found = False
+        width = 0
+        height = 0
         # Check container from path, not ffprobe (ffprobe 'format_name' can be just 'matroska')
         is_mkv_container = input_video_path.lower().endswith(".mkv")
 
@@ -101,13 +104,22 @@ def scan_video_needs_conversion(input_video_path: str, input_base_folder: str, o
                 codec_name = stream.get("codec_name", "").lower()
                 if codec_name == "av1":
                     is_already_av1 = True
-                    # No need to check other streams if AV1 video found
-                    break
+                # Get resolution from video stream
+                width = stream.get("width", 0)
+                height = stream.get("height", 0)
+                # We get the first video stream and break to avoid multiple streams
+                break
 
         if not video_stream_found:
             reason = "No video stream found"
             logger.warning(f"No video stream in {anonymized_input} - skipping.")
             return False, reason, video_info # Return info even if skipped
+
+        # Check resolution before other checks
+        if width < MIN_RESOLUTION_WIDTH and height < MIN_RESOLUTION_HEIGHT:
+            reason = f"Below minimum resolution ({width}x{height}) - needs at least {MIN_RESOLUTION_WIDTH}x{MIN_RESOLUTION_HEIGHT}"
+            logger.info(f"Skipping {anonymized_input} - {reason}")
+            return False, reason, video_info
 
         # Decision Logic:
         # Skip if: Already AV1 AND already in MKV container (regardless of overwrite or in-place)

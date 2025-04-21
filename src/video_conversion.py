@@ -14,7 +14,8 @@ from pathlib import Path
 # Corrected import path: Use src.ab_av1 instead of src.ab_av1_wrapper
 from src.ab_av1.wrapper import AbAv1Wrapper
 from src.ab_av1.exceptions import (
-    InputFileError, OutputFileError, VMAFError, EncodingError, AbAv1Error
+    InputFileError, OutputFileError, VMAFError, EncodingError, AbAv1Error,
+    ConversionNotWorthwhileError
 )
 from src.utils import (
     log_video_properties, log_conversion_result, anonymize_filename,
@@ -202,6 +203,19 @@ def process_video(video_path: str, input_folder: str, output_folder: str, overwr
         # Return success tuple including stats for history
         return (str(output_path), conversion_elapsed_time, input_size, output_size, final_crf, final_vmaf, final_vmaf_target)
 
+    except ConversionNotWorthwhileError as e:
+        logging.info(f"Conversion not worthwhile for {anonymized_input_name}: {e}")
+        if file_info_callback:
+            file_info_callback(
+                input_path.name, 
+                "skipped_not_worth", 
+                {
+                    "message": str(e),
+                    "type": "conversion_not_worthwhile",
+                    "original_size": input_size
+                }
+            )
+        return None  # Return None like other skipped files, not an error
     except (InputFileError, OutputFileError, VMAFError, EncodingError, AbAv1Error) as e:
         # These errors are logged by the wrapper or dispatcher, just return None
         # Logging the specific error type here might be redundant

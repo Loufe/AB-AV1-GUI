@@ -94,6 +94,16 @@ def handle_error(gui, filename, error_info) -> None:
     # Increment error count on the GUI object
     if hasattr(gui,'error_count'): gui.error_count += 1
     else: gui.error_count = 1
+    
+    # Track error details for summary
+    if not hasattr(gui, 'error_details'):
+        gui.error_details = []
+    gui.error_details.append({
+        'filename': filename,
+        'error_type': error_type,
+        'message': message,
+        'details': details
+    })
 
     # Update overall status label in the UI to reflect the error count
     def update_status():
@@ -188,3 +198,34 @@ def handle_skipped(gui, filename, reason) -> None:
     """Handle skipped files."""
     # This is primarily for logging, UI doesn't show individual skipped files typically
     logger.info(f"Skipped {anonymize_filename(filename)}: {reason}")
+
+
+def handle_skipped_not_worth(gui, filename, info):
+    """Handle files skipped because conversion isn't worthwhile."""
+    message = info.get("message", "Conversion not beneficial")
+    original_size = info.get("original_size")
+    min_vmaf = info.get("min_vmaf_attempted", None)
+    
+    anonymized_name = anonymize_filename(filename)
+    log_msg = f"Skipped {anonymized_name} (not worth converting): {message}"
+    
+    if original_size:
+        log_msg += f" - Original size: {format_file_size(original_size)}"
+    
+    logger.info(log_msg)
+    
+    # Update skipped count instead of error count
+    if hasattr(gui, 'skipped_not_worth_count'):
+        gui.skipped_not_worth_count += 1
+    else:
+        gui.skipped_not_worth_count = 1
+    
+    # Track filename for summary
+    if not hasattr(gui, 'skipped_not_worth_files'):
+        gui.skipped_not_worth_files = []
+    gui.skipped_not_worth_files.append(filename)
+    
+    # Update UI to show this as a skip, not an error
+    update_ui_safely(gui.root, lambda: gui.current_file_label.config(
+        text=f"Skipped (inefficient): {filename}"
+    ))
