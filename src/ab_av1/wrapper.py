@@ -409,6 +409,14 @@ class AbAv1Wrapper:
             cmd_str_log = " ".join(cmd_for_log)
             logger.debug(f"Running: {cmd_str_log}"); logger.debug(f"Full cmd: {cmd_str}")
 
+            # *** ADD Environment Variable ***
+            process_env = os.environ.copy()
+            # Try 'info' first, then 'debug' if info isn't enough
+            log_level = "debug" # Or "debug"
+            process_env["RUST_LOG"] = f"ab_av1={log_level}"
+            logger.info(f"Setting RUST_LOG environment variable to: ab_av1={log_level}")
+            # *****************************
+
 
             if self.file_info_callback:
                  # ... (starting/retrying callback logic remains the same) ...
@@ -430,21 +438,18 @@ class AbAv1Wrapper:
                     # Prevent console window from appearing
                     creationflags = subprocess.CREATE_NO_WINDOW
 
-                # *** Change: Redirect stderr to stdout again ***
+                # Redirect stderr to stdout and pass modified environment
                 process = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
                                           bufsize=0, # Use 0 for unbuffered binary IO
                                           cwd=output_dir,
                                           startupinfo=startupinfo,
-                                          creationflags=creationflags)
+                                          creationflags=creationflags,
+                                          env=process_env) # Pass modified environment
 
                 if pid_callback: pid_callback(process.pid)
 
-                # *** Change: Use the modified non-blocking read function for stdout only ***
+                # Use the non-blocking read function for stdout only
                 full_output_text, stats = self._read_stdout_non_blocking(process, stats)
-
-                # Estimate size and log consolidated progress periodically *during* the read loop
-                # (This logic might need adjustment if stats aren't updated frequently enough by parser)
-                # Maybe move estimation inside _read_pipes_non_blocking? For now, estimate after read loop.
 
                 return_code = process.poll() # Get final return code after read loop finishes
                 logger.info(f"Process finished with return code: {return_code}")
