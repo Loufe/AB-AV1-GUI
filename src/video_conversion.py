@@ -11,8 +11,9 @@ import logging
 import traceback
 from pathlib import Path
 
-from src.ab_av1_wrapper import (
-    AbAv1Wrapper,
+# Corrected import path: Use src.ab_av1 instead of src.ab_av1_wrapper
+from src.ab_av1.wrapper import AbAv1Wrapper
+from src.ab_av1.exceptions import (
     InputFileError, OutputFileError, VMAFError, EncodingError, AbAv1Error
 )
 from src.utils import (
@@ -57,13 +58,14 @@ def process_video(video_path: str, input_folder: str, output_folder: str, overwr
 
     logging.debug(f"Processing video: {anonymized_input_name}")
 
-    # Determine output path
+    # --- Determine Standard Output Path ---
     try:
         relative_dir = input_path.parent.relative_to(input_folder_path)
         output_dir = output_folder_path / relative_dir
     except ValueError:
-        logging.warning(f"Input {anonymized_input_name} not relative. Outputting to base.")
-        output_dir = output_folder_path; relative_dir = Path(".")
+        logging.warning(f"Input {anonymized_input_name} not relative to input base. Outputting to base: {output_folder_path}")
+        output_dir = output_folder_path
+        relative_dir = Path(".")
     except Exception as e:
          error_msg = f"Error calculating output dir: {e}"; logging.error(error_msg)
          if file_info_callback: file_info_callback(input_path.name, "failed", {"message":error_msg,"type":"output_dir_error"})
@@ -75,38 +77,81 @@ def process_video(video_path: str, input_folder: str, output_folder: str, overwr
         if file_info_callback: file_info_callback(input_path.name, "failed", {"message":error_msg,"type":"output_dir_error"})
         return None
 
+    # Calculate the standard output path (without suffix yet)
     output_filename = input_path.stem + ".mkv"
     output_path = output_dir / output_filename
-    anonymized_output_name = anonymize_filename(str(output_path)) # Anonymize expected output
-    logging.debug(f"Output Path: {anonymized_output_name}") # Log anonymized
 
-    # --- Pre-flight Checks ---
-    if output_path.exists() and not overwrite:
-        # This check is technically redundant if scan_video_needs_conversion was accurate,
-        # but kept as a final safety measure.
-        logging.info(f"Skipping {anonymized_input_name} - output exists (final check): {anonymized_output_name}")
-        if file_info_callback: file_info_callback(input_path.name, "skipped", f"Output exists (final check)")
+    # --- Initial Skip Checks (Standard Overwrite/Existence) ---
+    # This check is primarily for non-in-place conversions where output exists
+    if output_path.exists() and not overwrite and input_path != output_path:
+        anonymized_output_name = anonymize_filename(str(output_path))
+        logging.info(f"Skipping {anonymized_input_name} - output exists (standard check): {anonymized_output_name}")
+        if file_info_callback: file_info_callback(input_path.name, "skipped", f"Output exists")
         return None
 
-    # --- Get Pre-conversion Info (Duration logic moved to worker/controller) ---
+    # --- Get Video Info ---
     video_info = None; input_size = 0; input_vcodec = "?"; input_acodec = "?"
+    is_av1 = False # Flag to check if input is AV1
     try:
-        video_info = get_video_info(str(input_path)) # Already cached by worker if implemented
+        video_info = get_video_info(str(input_path))
         if not video_info:
             if file_info_callback: file_info_callback(input_path.name, "failed", {"message":f"Cannot analyze {input_path.name}", "type":"analysis_failed"})
             return None
         input_size = video_info.get('file_size', 0)
         for stream in video_info.get("streams", []):
-            if stream.get("codec_type") == "video": input_vcodec = stream.get("codec_name", "?").upper()
-            elif stream.get("codec_type") == "audio": input_acodec = stream.get("codec_name", "?").upper()
+            if stream.get("codec_type") == "video":
+                input_vcodec = stream.get("codec_name", "?").upper()
+                if input_vcodec == "AV1": is_av1 = True
+            elif stream.get("codec_type") == "audio":
+                input_acodec = stream.get("codec_name", "?").upper()
 
     except Exception as e:
         error_msg = f"Error analyzing {anonymized_input_name}: {e}"; logging.error(error_msg, exc_info=True)
         if file_info_callback: file_info_callback(input_path.name, "failed", {"message":error_msg, "type":"analysis_error", "details":str(e)})
         return None
 
-    # --- Check if conversion needed (redundant but safe) ---
-    # The scan_video_needs_conversion function in the controller already handles this.
+    # --- Handle In-Place, No Overwrite, Non-AV1 MKV Scenario ---
+    if input_path == output_path and not overwrite:
+        # This means input is MKV, output folder = input folder
+        if is_av1:
+            # If it's already AV1, we just skip it as there's nothing to do (in-place, no overwrite)
+            logging.info(f"Skipping {anonymized_input_name} - Already AV1/MKV (in-place, no overwrite)")
+            if file_info_callback: file_info_callback(input_path.name, "skipped", "Already AV1/MKV (in-place, no overwrite)")
+            return None
+        else:
+            # Input is MKV, but NOT AV1. Attempt to add suffix.
+            suffixed_filename = input_path.stem + " (av1).mkv"
+            suffixed_output_path = output_dir / suffixed_filename
+            anonymized_suffixed_output = anonymize_filename(str(suffixed_output_path))
+
+            if suffixed_output_path.exists():
+                # If the suffixed file *also* exists, we must skip
+                logging.warning(f"Skipping {anonymized_input_name} - Output with suffix '{suffixed_filename}' already exists: {anonymized_suffixed_output}")
+                if file_info_callback: file_info_callback(input_path.name, "skipped", f"Output with '(av1)' suffix exists")
+                return None
+            else:
+                # Use the suffixed path for this conversion
+                output_path = suffixed_output_path
+                logging.info(f"Input is non-AV1 MKV; Overwrite disabled. Using suffixed output: {anonymized_suffixed_output}")
+
+    # --- Check again if final output path exists (covers case where suffix was added) ---
+    # Note: This check might seem redundant if the suffix logic already checked,
+    # but it ensures correctness if the suffix logic isn't hit.
+    # We only check existence now, as the overwrite logic for the standard path was handled earlier.
+    # If the path was modified by the suffix logic, its existence was checked there.
+    if output_path.exists() and not overwrite:
+        # This condition should primarily catch the case where the *suffixed* file already exists
+        # (which was checked above) OR if somehow the initial non-in-place check was bypassed.
+        # Log it for clarity.
+        anonymized_output_name = anonymize_filename(str(output_path))
+        logging.warning(f"Skipping {anonymized_input_name} - Final determined output path exists (post-suffix check): {anonymized_output_name}")
+        if file_info_callback: file_info_callback(input_path.name, "skipped", f"Final output path exists")
+        return None
+
+
+    # If we got here, conversion is needed. Proceed.
+    anonymized_final_output_name = anonymize_filename(str(output_path)) # Anonymize final path for logging
+    logging.debug(f"Final Output Path: {anonymized_final_output_name}") # Log final path
 
     logging.info(f"Processing {anonymized_input_name} - Size: {format_file_size(input_size)}")
     if file_info_callback: file_info_callback(input_path.name, "file_info", {"file_size_mb": input_size / (1024**2) if input_size else 0})
@@ -119,11 +164,11 @@ def process_video(video_path: str, input_folder: str, output_folder: str, overwr
     conversion_start_time = time.time(); result_stats = None; output_size = 0
     final_crf = None; final_vmaf = None; final_vmaf_target = None
     try:
-        logging.info(f"Starting ab-av1 for {anonymized_input_name}")
+        logging.info(f"Starting ab-av1 for {anonymized_input_name} -> {anonymized_final_output_name}")
         ab_av1 = AbAv1Wrapper()
         result_stats = ab_av1.auto_encode(
             input_path=str(input_path),
-            output_path=str(output_path),
+            output_path=str(output_path), # Use the potentially modified output_path
             file_info_callback=file_info_callback,
             pid_callback=pid_callback,
             total_duration_seconds=total_duration_seconds # Pass duration
@@ -132,12 +177,12 @@ def process_video(video_path: str, input_folder: str, output_folder: str, overwr
         logging.info(f"ab-av1 finished for {anonymized_input_name} in {format_time(conversion_elapsed_time)}.")
 
         # --- Post-Conversion Verification & Stat Gathering ---
-        if not output_path.exists(): raise OutputFileError(f"Output missing: {anonymized_output_name}", error_type="missing_output")
+        if not output_path.exists(): raise OutputFileError(f"Output missing: {anonymized_final_output_name}", error_type="missing_output")
         output_size = output_path.stat().st_size
         if output_size < 1024: # Check if output is suspiciously small
-             error_msg = f"Output too small ({output_size} bytes): {anonymized_output_name}"
+             error_msg = f"Output too small ({output_size} bytes): {anonymized_final_output_name}"
              try: output_path.unlink()
-             except OSError as rm_err: logging.warning(f"Cannot remove small file {anonymized_output_name}: {rm_err}")
+             except OSError as rm_err: logging.warning(f"Cannot remove small file {anonymized_final_output_name}: {rm_err}")
              raise OutputFileError(error_msg, error_type="invalid_output")
 
         log_conversion_result(str(input_path), str(output_path), conversion_elapsed_time)

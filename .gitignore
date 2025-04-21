@@ -35,6 +35,7 @@ Thumbs.db
 *.bak
 *.tmp
 *.json
+llm.md
 
 # Environment-specific ffmpeg paths
 ffmpeg_path.txt

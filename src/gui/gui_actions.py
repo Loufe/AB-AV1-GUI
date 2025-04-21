@@ -14,7 +14,8 @@ from tkinter import filedialog, messagebox
 import tkinter as tk # For type hinting if needed
 
 # Project imports - Replace 'convert_app' with 'src'
-from src.ab_av1_wrapper import check_ab_av1_available
+# Import the checker function from its new location
+from src.ab_av1.checker import check_ab_av1_available
 from src.utils import check_ffmpeg_availability, get_history_file_path
 
 logger = logging.getLogger(__name__)
@@ -151,6 +152,7 @@ def check_ffmpeg(gui) -> bool:
     if version_info:
         logger.info(f"FFmpeg version: {version_info.splitlines()[0]}")
 
+    # Call the imported function from the new location
     available, path, message = check_ab_av1_available()
     if not available:
         logger.error(f"ab-av1 check failed: {message}")
