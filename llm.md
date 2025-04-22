@@ -85,6 +85,14 @@ The application has a modular architecture:
 - `parse_line`: Processes each line of output using regex to detect progress updates, phase changes, and metadata like VMAF scores and CRF values.
 - `parse_final_output`: Scans the complete output text after completion to extract final statistics that might have been missed during streaming.
 
+### Adaptive Progress Update Intervals
+- **Pattern**: ab-av1 outputs progress updates at adaptive intervals rather than fixed percentages (e.g., 1%, 3%, 5%, 9%, 19%, 36%, 69%).
+- **Design Decision**: Updates appear to follow logarithmic/base-2 timing intervals (approximately 30s, 60s, 120s, etc.).
+- **Benefits**:
+  - More frequent updates early in encoding (1-9%) to quickly establish reliable ETAs
+  - Reduced output frequency as process stabilizes, minimizing I/O overhead
+  - Optimal balance between feedback and performance
+
 ## Stdout/Piping Challenges and Solutions
 
 ### Two-Phase Process and Parsing Differences

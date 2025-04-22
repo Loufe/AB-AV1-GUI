@@ -111,8 +111,9 @@ def update_conversion_statistics(gui, info: dict = None) -> None:
         except (ValueError, TypeError) as e:
             logging.warning(f"Invalid CRF value in info for update: {info.get('crf')} - {e}")
 
-    # ETA Calculation
+    # ETA Calculation - Store for continuous update
     encoding_prog = info.get("progress_encoding", 0)
+    gui.last_encoding_progress = encoding_prog  # Store for continuous ETA updates
     if encoding_prog > 0:
         if hasattr(gui, 'current_file_start_time') and gui.current_file_start_time:
             if not hasattr(gui, 'current_file_encoding_start_time') or not gui.current_file_encoding_start_time:
@@ -223,12 +224,20 @@ def update_elapsed_time(gui, start_time: float) -> None:
         gui.elapsed_timer_id = None
         return
 
-    # Only display current file elapsed time
-    current_file_elapsed = time.time() - start_time
+    # During encoding phase, show time since encoding started
+    if hasattr(gui, 'current_file_encoding_start_time') and gui.current_file_encoding_start_time:
+        current_file_elapsed = time.time() - gui.current_file_encoding_start_time
+    else:
+        # During quality detection phase, show the full time
+        current_file_elapsed = time.time() - start_time
+    
     update_ui_safely(gui.root, lambda t=current_file_elapsed: gui.elapsed_label.config(text=format_time(t)))
 
     # Also update total elapsed time
     update_total_elapsed_time(gui)
+    
+    # Update ETA display if we're in encoding phase
+    update_eta_display(gui)
 
     # Schedule next update
     gui.elapsed_timer_id = gui.root.after(1000, lambda: update_elapsed_time(gui, start_time))
@@ -536,6 +545,32 @@ def update_statistics_summary_current_session(gui) -> None:
             reduction_avg_text = "Error"
             reduction_range_text = ""
 
+
+def update_eta_display(gui) -> None:
+    """Update the ETA display based on stored progress and elapsed time.
+    This function is called every second to provide continuous countdown.
+    """
+    if not gui.conversion_running or not hasattr(gui, 'last_encoding_progress'):
+        return
+        
+    encoding_prog = getattr(gui, 'last_encoding_progress', 0)
+    
+    if encoding_prog > 0 and hasattr(gui, 'current_file_encoding_start_time') and gui.current_file_encoding_start_time:
+        elapsed_encoding_time = time.time() - gui.current_file_encoding_start_time
+        if encoding_prog > 1 and elapsed_encoding_time > 1:
+            try:
+                # Calculate estimated total time and remaining time
+                total_encoding_time_est = (elapsed_encoding_time / encoding_prog) * 100
+                eta_seconds = total_encoding_time_est - elapsed_encoding_time
+                eta_str = format_time(eta_seconds)
+
+                # Update the ETA display
+                update_ui_safely(gui.root, lambda eta=eta_str: gui.eta_label.config(text=eta))
+            except ZeroDivisionError:
+                pass
+            except Exception as e:
+                logging.error(f"Error updating ETA display: {e}")
+
     # Calculate total saved for current session
     if hasattr(gui, 'total_input_bytes_success') and hasattr(gui, 'total_output_bytes_success'):
         if gui.total_input_bytes_success > 0 and gui.total_output_bytes_success > 0:
@@ -571,3 +606,4 @@ def reset_current_file_details(gui) -> None:
     update_ui_safely(gui.root, lambda: gui.output_size_label.config(text="-"))
     update_ui_safely(gui.root, lambda: gui.encoding_settings_label.config(text="-"))
     gui.current_file_encoding_start_time = None
+    gui.last_encoding_progress = 0  # Reset last progress for ETA calculation
