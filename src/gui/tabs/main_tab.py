@@ -72,11 +72,22 @@ def create_main_tab(gui):
     gui.status_label = ttk.Label(status_frame, text="Ready")
     gui.status_label.grid(row=0, column=0, sticky="w")
 
-    total_time_frame = ttk.Frame(status_frame)
-    total_time_frame.grid(row=0, column=1, sticky="e")
-    ttk.Label(total_time_frame, text="Total Time:").pack(side="left", padx=(0, 5))
-    gui.total_elapsed_label = ttk.Label(total_time_frame, text="-")
+    # Time display frame for both elapsed and remaining time
+    time_frame = ttk.Frame(status_frame)
+    time_frame.grid(row=0, column=1, sticky="e")
+    
+    # Total elapsed time
+    ttk.Label(time_frame, text="Total Time:").pack(side="left", padx=(0, 5))
+    gui.total_elapsed_label = ttk.Label(time_frame, text="-")
     gui.total_elapsed_label.pack(side="left")
+    
+    # Separator
+    ttk.Label(time_frame, text="|").pack(side="left", padx=(8, 8))
+    
+    # Estimated remaining time
+    ttk.Label(time_frame, text="Est. Remaining:").pack(side="left", padx=(0, 5))
+    gui.total_remaining_label = ttk.Label(time_frame, text="-")
+    gui.total_remaining_label.pack(side="left")
 
     # Current file progress frame
     file_frame = ttk.LabelFrame(main_frame, text="Current File")

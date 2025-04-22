@@ -44,7 +44,8 @@ from src.video_conversion import process_video
 # Import GUI update functions
 from src.gui.gui_updates import (
     update_statistics_summary, reset_current_file_details, update_progress_bars,
-    update_conversion_statistics, update_elapsed_time, update_total_elapsed_time
+    update_conversion_statistics, update_elapsed_time, update_total_elapsed_time,
+    update_total_remaining_time
 )
 # Import GUI actions needed here (like check_ffmpeg)
 from src.gui.gui_actions import check_ffmpeg
@@ -157,6 +158,26 @@ def start_conversion(gui) -> None:
     gui.processed_files = 0; gui.successful_conversions = 0; gui.error_count = 0
     gui.current_process_info = None
     gui.total_input_bytes_success = 0; gui.total_output_bytes_success = 0; gui.total_time_success = 0
+    gui.elapsed_timer_id = None  # Initialize timer ID
+    gui.pending_files = []  # Initialize pending files as empty - will be populated after scan
+    gui.current_file_path = None  # Initialize current file path
+    
+    logger.info("Initialized conversion state variables")
+    
+    # Start timer for total elapsed time immediately
+    def start_total_timer():
+        update_total_elapsed_time(gui)
+        if gui.conversion_running:
+            gui.root.after(1000, start_total_timer)
+    
+    # Start separate timer for remaining time updates - less frequent
+    def start_remaining_timer():
+        update_total_remaining_time(gui)
+        if gui.conversion_running:
+            gui.root.after(5000, start_remaining_timer)  # Update every 5 seconds instead of 1
+    
+    start_total_timer()
+    start_remaining_timer()
 
     # Prevent system sleep (Windows only)
     sleep_prevented = prevent_sleep_mode()
@@ -393,6 +414,7 @@ def conversion_complete(gui, final_message="Conversion complete"):
     gui.conversion_thread = None
     gui.stop_event = None
     gui.current_process_info = None
+    gui.current_file_path = None  # Clear current file path
     if gui.elapsed_timer_id: # Ensure timer is stopped if still running
         gui.root.after_cancel(gui.elapsed_timer_id)
         gui.elapsed_timer_id = None

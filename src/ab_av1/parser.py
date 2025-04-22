@@ -36,7 +36,7 @@ class AbAv1Parser:
         # Refined regex patterns based on actual formats in logs
         self._re_phase_encode_start = re.compile(r'ab_av1::command::encode\]\s*encoding(?:\s+video|\s+\S+\.mkv|\s|$)|Starting encoding', re.IGNORECASE)
         self._re_sample_progress = re.compile(r'\[.*?sample_encode\].*?(\d+(\.\d+)?)%,\s*(\d+)\s*fps,\s*eta\s*(.*?)(?=$|\))', re.IGNORECASE)
-        self._re_main_encoding = re.compile(r'\[.*?command::encode\]\s*(\d+)%,\s*(\d+)\s*fps,\s*eta\s+([\w\s]+)(?:$|\)|\])', re.IGNORECASE)
+        self._re_main_encoding = re.compile(r'command::encode\]\s*(\d+)%,\s*(\d+)\s*fps,\s*eta\s+([\w\s]+)(?:$|\)|\])', re.IGNORECASE)
         self._re_crf_vmaf = re.compile(r'crf\s+(\d+)\s+VMAF\s+(\d+\.?\d*)', re.IGNORECASE)
         self._re_best_crf = re.compile(r'Best\s+CRF:\s+(\d+)', re.IGNORECASE)
         self._re_size_reduction_percent = re.compile(r'predicted video stream size.*?\((\d+\.?\d*)\s*%\)', re.IGNORECASE)

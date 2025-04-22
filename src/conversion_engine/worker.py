@@ -157,8 +157,10 @@ def sequential_conversion_worker(gui, input_folder, output_folder, overwrite, st
             # Optionally trigger handle_error here if desired for scan errors
 
     gui.video_files = files_to_process # Store the list of files to process on the gui object
+    gui.pending_files = files_to_process.copy()  # Create a copy for tracking remaining files
     total_videos_to_process = len(files_to_process)
     logger.info(f"Scan complete: {total_videos_to_process} files require conversion, {skipped_files_count} files skipped.")
+    logger.info(f"Pending files initialized: {len(gui.pending_files)} files")
 
     # --- Transition to Conversion Phase ---
     if not files_to_process:
@@ -217,6 +219,15 @@ def sequential_conversion_worker(gui, input_folder, output_folder, overwrite, st
         if stop_event.is_set():
             logger.info("Conversion loop interrupted by user stop request.")
             break # Exit the loop
+            
+        # Store current file path for estimation
+        gui.current_file_path = video_path
+        logger.debug(f"Current file path set to: {video_path}")
+        
+        # Move file removal after processing is complete, not at the start
+        # if video_path in gui.pending_files:
+        #     gui.pending_files.remove(video_path)
+        #     logger.debug(f"Removed {video_path} from pending files. Remaining: {len(gui.pending_files)}")
 
         file_number = gui.processed_files + 1
         filename = os.path.basename(video_path)
@@ -262,6 +273,8 @@ def sequential_conversion_worker(gui, input_folder, output_folder, overwrite, st
             gui.last_input_size = None; input_duration = 0.0
 
         gui.current_file_start_time = time.time(); gui.current_file_encoding_start_time = None
+        if not hasattr(gui, 'elapsed_timer_id'):
+            gui.elapsed_timer_id = None
         update_ui_safely(gui.root, update_elapsed_time, gui, gui.current_file_start_time) # Start timer UI updates
         gui.current_process_info = None # Reset PID info for the new file
 
@@ -307,6 +320,12 @@ def sequential_conversion_worker(gui, input_folder, output_folder, overwrite, st
 
         # --- Post-processing & History ---
         gui.processed_files += 1
+        
+        # Remove file from pending list after processing is complete
+        if video_path in gui.pending_files:
+            gui.pending_files.remove(video_path)
+            logger.debug(f"Removed completed file {video_path} from pending files. Remaining: {len(gui.pending_files)}")
+
         if process_successful:
             gui.successful_conversions += 1
             try: # Append to History
@@ -322,6 +341,7 @@ def sequential_conversion_worker(gui, input_folder, output_folder, overwrite, st
                     "duration_sec": round(input_duration, 1) if input_duration is not None else None,
                     "time_sec": round(elapsed_time_file, 1) if elapsed_time_file is not None else None,
                     "input_vcodec": input_vcodec, "input_acodec": input_acodec, "output_acodec": output_acodec,
+                    "input_codec": input_vcodec,  # Duplicate for compatibility with estimation functions
                     "final_crf": final_crf,
                     "final_vmaf": round(final_vmaf, 2) if final_vmaf is not None else None,
                     "final_vmaf_target": final_vmaf_target

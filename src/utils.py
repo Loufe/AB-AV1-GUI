@@ -10,6 +10,67 @@ import subprocess
 import json
 import shutil
 import sys # Needed for sys.argv access
+import time  # Add time import for estimate_remaining_time
+import re  # Need for parse_eta_text
+
+# Logging setup
+logger = logging.getLogger(__name__)
+
+# --- ETA Parsing Function ---
+
+def parse_eta_text(eta_text: str) -> float:
+    """Parse ETA text from AB-AV1 into seconds.
+    
+    Args:
+        eta_text: ETA string like "2 hours", "87 minutes", "3h 20m", etc.
+    Returns:
+        Seconds remaining, or 0 if unparseable
+    """
+    if not eta_text:
+        return 0
+    
+    try:
+        eta_lower = eta_text.lower()
+        
+        # Handle simple formats first
+        if 'hour' in eta_lower and 'min' not in eta_lower:
+            # Format: "2 hours" or "1 hour"
+            hours = float(re.search(r'(\d+(\.\d+)?)', eta_lower).group(1))
+            return hours * 3600
+        elif 'minute' in eta_lower and 'hour' not in eta_lower:
+            # Format: "87 minutes" or "1 minute"
+            minutes = float(re.search(r'(\d+(\.\d+)?)', eta_lower).group(1))
+            return minutes * 60
+        elif 'second' in eta_lower and 'hour' not in eta_lower and 'min' not in eta_lower:
+            # Format: "30 seconds"
+            seconds = float(re.search(r'(\d+(\.\d+)?)', eta_lower).group(1))
+            return seconds
+        elif 'h' in eta_lower and 'm' in eta_lower:
+            # Format: "3h 20m"
+            match = re.match(r'(\d+)h\s*(\d+)m', eta_lower)
+            if match:
+                hours = int(match.group(1))
+                minutes = int(match.group(2))
+                return hours * 3600 + minutes * 60
+        
+        # More complex formats
+        # Extract all numbers and units
+        parts = re.findall(r'(\d+(?:\.\d+)?)\s*(hour|minute|second|h|m|s)', eta_lower)
+        total_seconds = 0
+        
+        for value, unit in parts:
+            value = float(value)
+            if unit.startswith('h'):
+                total_seconds += value * 3600
+            elif unit.startswith('m'):
+                total_seconds += value * 60
+            elif unit.startswith('s'):
+                total_seconds += value
+        
+        return total_seconds if total_seconds > 0 else 0
+    except Exception as e:
+        logging.warning(f"Could not parse ETA text '{eta_text}': {e}")
+        return 0
 
 # --- Constants and Formatting Functions ---
 # Moved to src/config.py: DEFAULT_VMAF_TARGET, DEFAULT_ENCODING_PRESET
@@ -469,3 +530,279 @@ def allow_sleep_mode() -> bool:
     except Exception as e:
         logging.error(f"Failed to restore normal power management: {e}")
         return False
+
+
+# --- Estimation Functions for Remaining Time ---
+
+def find_similar_file_in_history(current_file_info: dict, tolerance: dict = None) -> dict:
+    """Find a similar file in conversion history based on codec, duration, and size.
+    
+    Args:
+        current_file_info: Dict with 'codec', 'duration', 'size' keys
+        tolerance: Dict with tolerance values. Defaults to {'duration': 0.2, 'size': 0.3}
+    Returns:
+        Dict with historical processing data or None if no match found
+    """
+    if tolerance is None:
+        tolerance = {'duration': 0.2, 'size': 0.3}  # 20% duration, 30% size tolerance
+        
+    history = load_history()
+    if not history:
+        return None
+        
+    best_match = None
+    best_score = float('inf')
+    
+    current_codec = current_file_info.get('codec')
+    current_duration = current_file_info.get('duration', 0)
+    current_size = current_file_info.get('size', 0)
+    
+    for record in history:
+        # Check if same codec
+        hist_codec = record.get('input_codec') or record.get('input_vcodec')
+        if hist_codec != current_codec:
+            continue
+            
+        # Get metrics for comparison
+        hist_duration = record.get('duration_sec', 0)
+        hist_size = record.get('input_size_mb', 0) * (1024**2)  # Convert to bytes
+        hist_time = record.get('time_sec', 0)
+        
+        if not (hist_duration and hist_size and hist_time):
+            continue
+            
+        # Check if within tolerance
+        if current_duration > 0 and hist_duration > 0:
+            duration_diff = abs(hist_duration - current_duration) / hist_duration
+        else:
+            duration_diff = 1  # High value if can't compare
+            
+        if current_size > 0 and hist_size > 0:
+            size_diff = abs(hist_size - current_size) / hist_size
+        else:
+            size_diff = 1  # High value if can't compare
+        
+        if duration_diff <= tolerance['duration'] and size_diff <= tolerance['size']:
+            # Score based on similarity (lower is better)
+            score = duration_diff + size_diff
+            if score < best_score:
+                best_score = score
+                best_match = record
+                
+    return best_match
+
+
+def estimate_processing_speed_from_history() -> float:
+    """Calculate average processing speed (bytes/second) from historical data.
+    
+    Returns:
+        Average processing speed in bytes/second or 0 if no history
+    """
+    history = load_history()
+    if not history:
+        return 0
+        
+    speeds = []
+    for record in history:
+        input_size = record.get('input_size_mb', 0) * (1024**2)  # Convert to bytes
+        time_sec = record.get('time_sec', 0)
+        if input_size > 0 and time_sec > 0:
+            speeds.append(input_size / time_sec)
+            
+    return sum(speeds) / len(speeds) if speeds else 0
+
+
+def estimate_remaining_time(gui, current_file_info: dict = None) -> float:
+    """Estimate total remaining time for all queued files.
+    
+    Args:
+        gui: The main GUI instance
+        current_file_info: Dict with current file info if available
+    Returns:
+        Estimated remaining time in seconds
+    """
+    remaining_time = 0
+    current_file_handled = False  # Track if we've already included the current file
+    
+    # If currently encoding, use the stored AB-AV1 ETA for the current file
+    if getattr(gui, 'conversion_running', False):
+        # Check for stored AB-AV1 ETA first
+        if hasattr(gui, 'last_eta_seconds') and hasattr(gui, 'last_eta_timestamp'):
+            elapsed_since_update = time.time() - gui.last_eta_timestamp
+            current_eta = max(0, gui.last_eta_seconds - elapsed_since_update)
+            remaining_time += current_eta
+            current_file_handled = True  # Mark current file as handled
+            logging.debug(f"Using AB-AV1 ETA: {current_eta}s for current file")
+        # Fallback to calculation based on progress
+        elif hasattr(gui, 'last_encoding_progress'):
+            encoding_prog = getattr(gui, 'last_encoding_progress', 0)
+            if encoding_prog > 0 and hasattr(gui, 'current_file_encoding_start_time') and gui.current_file_encoding_start_time:
+                elapsed_encoding_time = time.time() - gui.current_file_encoding_start_time
+                if encoding_prog > 0 and elapsed_encoding_time > 1:
+                    total_encoding_time_est = (elapsed_encoding_time / encoding_prog) * 100
+                    current_eta = total_encoding_time_est - elapsed_encoding_time
+                    remaining_time += current_eta
+                    current_file_handled = True  # Mark current file as handled
+                    logging.debug(f"Using progress-based ETA: {current_eta}s for current file")
+    
+    # Get pending files including current file if in quality detection phase
+    pending_files = getattr(gui, 'pending_files', [])
+    current_path = getattr(gui, 'current_file_path', None)
+    
+    # Normalize current path for comparison
+    if current_path:
+        current_path = os.path.normpath(current_path)
+    
+    # If not in encoding phase, include current file in estimation
+    if current_path and not getattr(gui, 'current_file_encoding_start_time', None):
+        if current_path not in [os.path.normpath(p) for p in pending_files]:
+            pending_files = [current_path] + pending_files
+    
+    # Debug logging to understand the issue
+    logging.debug(f"Total remaining ETA calculation:")
+    logging.debug(f"  Current file: {current_path}")
+    logging.debug(f"  Current file handled: {current_file_handled}")
+    logging.debug(f"  Pending files count: {len(pending_files)}")
+    logging.debug(f"  Current remaining time before loop: {remaining_time}s")
+    
+    for file_path in pending_files:
+        # Normalize path for comparison
+        normalized_file_path = os.path.normpath(file_path)
+        
+        # Check if this is the current file and we've already handled it
+        is_current_file = (normalized_file_path == current_path)
+        
+        if is_current_file and current_file_handled:
+            logging.debug(f"Skipping current file {file_path} - already handled")
+            continue
+            
+        # For current file in quality detection, try using historical data first
+        if is_current_file:
+            # If we've already handled the current file, absolutely skip it
+            if current_file_handled:
+                continue
+            
+            # If in quality detection phase, estimate this file
+            if not getattr(gui, 'current_file_encoding_start_time', None):
+                # Try to get file size from existing attributes
+                file_size = getattr(gui, 'last_input_size', 0)
+                file_codec = None
+                file_duration = 0
+            
+                if file_size == 0:
+                    # Get file info directly if available
+                    try:
+                        file_info = get_video_info(file_path)
+                        if file_info:
+                            file_size = file_info.get('file_size', 0)
+                            # Extract codec and duration
+                            for stream in file_info.get('streams', []):
+                                if stream.get('codec_type') == 'video':
+                                    file_codec = stream.get('codec_name')
+                                    break
+                            if 'format' in file_info and 'duration' in file_info['format']:
+                                try:
+                                    file_duration = float(file_info['format']['duration'])
+                                except:
+                                    file_duration = 0
+                    except:
+                        pass
+                        
+                    if file_size == 0:
+                        try:
+                            file_size = os.path.getsize(file_path)
+                        except:
+                            pass
+                
+                # Try historical data first for quality detection phase
+                if file_size > 0 and file_codec and file_duration > 0:
+                    similar_file = find_similar_file_in_history({
+                        'codec': file_codec,
+                        'duration': file_duration,
+                        'size': file_size
+                    })
+                    
+                    if similar_file:
+                        # Use time from similar file
+                        remaining_time += similar_file.get('time_sec', 0)
+                        logging.debug(f"Found similar file for current quality detection {file_path}, estimated time: {similar_file.get('time_sec', 0)}s")
+                        logging.debug(f"Total remaining time now: {remaining_time}s")
+                        continue
+                
+                # Try average processing speed from history
+                avg_speed = estimate_processing_speed_from_history()
+                if avg_speed > 0 and file_size > 0:
+                    time_est = file_size / avg_speed
+                    remaining_time += time_est
+                    logging.debug(f"Using average speed for current quality detection {file_path}, estimated time: {time_est}s, size: {file_size}, speed: {avg_speed}")
+                    continue
+                
+                # Fallback to rough estimate
+                if file_size > 0:
+                    # Use rough estimate of 1 GB per hour for quality detection and encoding
+                    rough_speed = (1024**3) / 3600  # 1 GB per hour
+                    time_est = file_size / rough_speed
+                    remaining_time += time_est
+                    logging.debug(f"Using rough estimate for current file {file_path}, estimated time: {time_est}s, size: {file_size}")
+                else:
+                    # Default fallback - assume 30 minutes if no size available
+                    remaining_time += 1800
+                    logging.debug(f"No size for current file {file_path}, using default 30 minutes")
+                continue
+            
+        # Get file info
+        file_info = get_video_info(file_path)
+        if not file_info:
+            continue
+            
+        # Extract codec, duration, and size
+        file_codec = None
+        file_duration = 0
+        file_size = file_info.get('file_size', 0)
+        
+        for stream in file_info.get('streams', []):
+            if stream.get('codec_type') == 'video':
+                file_codec = stream.get('codec_name')
+                break
+                
+        if 'format' in file_info and 'duration' in file_info['format']:
+            try:
+                file_duration = float(file_info['format']['duration'])
+            except:
+                file_duration = 0
+                logging.debug(f"Could not extract duration for {file_path}")
+        
+        # First, try to find a similar file in history
+        similar_file = find_similar_file_in_history({
+            'codec': file_codec,
+            'duration': file_duration,
+            'size': file_size
+        })
+        
+        if similar_file:
+            # Use time from similar file
+            remaining_time += similar_file.get('time_sec', 0)
+            logging.debug(f"Found similar file for {file_path}, estimated time: {similar_file.get('time_sec', 0)}s")
+            logging.debug(f"Total remaining time now: {remaining_time}s")
+        else:
+            # Use average processing speed as fallback
+            avg_speed = estimate_processing_speed_from_history()
+            if avg_speed > 0 and file_size > 0:
+                time_est = file_size / avg_speed
+                remaining_time += time_est
+                logging.debug(f"Using average speed for {file_path}, estimated time: {time_est}s, size: {file_size}, speed: {avg_speed}")
+                logging.debug(f"Total remaining time now: {remaining_time}s")
+            else:
+                # If no historical data, use a rough estimate of 1 GB per hour
+                if file_size > 0:
+                    rough_speed = (1024**3) / 3600  # 1 GB per hour
+                    time_est = file_size / rough_speed
+                    remaining_time += time_est
+                    logging.debug(f"No history - using rough estimate for {file_path}, estimated time: {time_est}s, size: {file_size}")
+                    logging.debug(f"Total remaining time now: {remaining_time}s")
+                else:
+                    logging.debug(f"No estimation available for {file_path}, avg_speed: {avg_speed}, file_size: {file_size}")
+    
+    logging.debug(f"Total estimated remaining time: {remaining_time}s")
+    
+    return remaining_time
