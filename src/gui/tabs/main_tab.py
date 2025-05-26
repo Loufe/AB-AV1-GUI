@@ -58,6 +58,19 @@ def create_main_tab(gui):
     gui.force_stop_button.pack(side="left", padx=5)
     ToolTip(gui.force_stop_button, "Immediately terminate the current encoding process.\nMay leave temporary files if cleanup fails.")
 
+    def on_delete_original_toggle():
+        """Saves the checkbox state when it's changed by calling the main GUI's save_settings."""
+        gui.save_settings() # Call the save_settings method of the main GUI instance
+
+    gui.delete_original_checkbox = ttk.Checkbutton(
+        control_frame,
+        text="Delete original after successful conversion",
+        variable=gui.delete_original_var,
+        command=on_delete_original_toggle # Call save when state changes
+    )
+    gui.delete_original_checkbox.pack(side="left", padx=5, pady=(0,0))
+    ToolTip(gui.delete_original_checkbox, "If checked, the original file will be deleted after a successful conversion. This setting is saved.")
+
     # Overall progress bar
     ttk.Label(main_frame, text="Overall Progress").grid(row=5, column=0, sticky="w", pady=(10, 5))
     gui.overall_progress = ttk.Progressbar(main_frame, orient="horizontal", length=100, mode="determinate")

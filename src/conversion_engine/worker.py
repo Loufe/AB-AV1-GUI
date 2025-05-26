@@ -18,6 +18,7 @@ import traceback
 from pathlib import Path
 import math # For ceil
 import datetime # For history timestamp
+from typing import Callable # Import Callable
 
 # GUI-related imports (for type hinting gui object, not direct use of widgets here)
 import tkinter as tk
@@ -51,8 +52,9 @@ logger = logging.getLogger(__name__)
 
 
 def sequential_conversion_worker(gui, input_folder, output_folder, overwrite, stop_event,
-                                 convert_audio, audio_codec, pid_storage_callback: callable,
-                                 completion_callback: callable):
+                                 convert_audio, audio_codec, delete_original: bool, # Added delete_original
+                                 pid_storage_callback: Callable, # Changed to Callable
+                                 completion_callback: Callable): # Changed to Callable
     """Process files sequentially, scanning and converting each eligible video.
 
     This is the main worker function that runs in a separate thread to handle
@@ -66,6 +68,7 @@ def sequential_conversion_worker(gui, input_folder, output_folder, overwrite, st
         stop_event: Threading event to signal stopping.
         convert_audio: Whether to convert audio to a different codec.
         audio_codec: Target audio codec if conversion is enabled.
+        delete_original: Whether to delete the original file after successful conversion.
         pid_storage_callback: Function to call to store the process ID (e.g., store_process_id(gui, pid, path)).
         completion_callback: Function to call when the worker finishes (e.g., conversion_complete(gui, message)).
     """
@@ -331,7 +334,9 @@ def sequential_conversion_worker(gui, input_folder, output_folder, overwrite, st
             try: # Append to History
                 anonymize_hist = gui.anonymize_history.get()
                 input_path_for_hist = anonymize_filename(video_path) if anonymize_hist else video_path
-                output_path_for_hist = anonymize_filename(output_file_path) if anonymize_hist else output_file_path
+                # Ensure output_file_path is a string before anonymizing, provide a placeholder if None
+                output_file_path_str = output_file_path if output_file_path is not None else "N/A"
+                output_path_for_hist = anonymize_filename(output_file_path_str) if anonymize_hist else output_file_path_str
                 hist_record = {
                     "timestamp": datetime.datetime.now().isoformat(sep=' ', timespec='seconds'),
                     "input_file": input_path_for_hist, "output_file": output_path_for_hist,
@@ -356,6 +361,17 @@ def sequential_conversion_worker(gui, input_folder, output_folder, overwrite, st
         else:
             # Error handling is done via the callback dispatcher calling handle_error
             pass
+
+        # --- Delete Original File if Requested ---
+        if process_successful and delete_original and video_path and os.path.exists(video_path):
+            try:
+                logger.info(f"Deleting original file as requested: {anonymize_filename(video_path)}")
+                os.remove(video_path)
+                logger.info(f"Successfully deleted original file: {anonymize_filename(video_path)}")
+            except OSError as e:
+                logger.error(f"Failed to delete original file '{anonymize_filename(video_path)}': {e}")
+                # Optionally, inform the user via a status update or a specific error counter
+                # For now, just logging the error as per instructions.
 
         # --- Update Overall Progress ---
         overall_progress_percent = (gui.processed_files / total_videos_to_process) * 100

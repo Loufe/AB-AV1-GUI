@@ -136,11 +136,12 @@ def start_conversion(gui) -> None:
     # Get remaining conversion settings from GUI state
     convert_audio = gui.convert_audio.get()
     audio_codec = gui.audio_codec.get()
+    delete_original = gui.delete_original_var.get() # Get the state of the checkbox
 
     # Log settings for the run
     logger.info("--- Starting Conversion ---")
     logger.info(f"Input: {input_folder}, Output: {output_folder}, Extensions: {', '.join(selected_extensions)}")
-    logger.info(f"Overwrite: {overwrite}, Convert Audio: {convert_audio} (Codec: {audio_codec if convert_audio else 'N/A'})")
+    logger.info(f"Overwrite: {overwrite}, Convert Audio: {convert_audio} (Codec: {audio_codec if convert_audio else 'N/A'}), Delete Original: {delete_original}")
     logger.info(f"Using -> Preset: {DEFAULT_ENCODING_PRESET}, VMAF Target: {DEFAULT_VMAF_TARGET}")
 
     # Update UI state for running conversion
@@ -201,7 +202,8 @@ def start_conversion(gui) -> None:
     gui.conversion_thread = threading.Thread(
         target=sequential_conversion_worker,
         args=(gui, input_folder, output_folder, overwrite, gui.stop_event,
-              convert_audio, audio_codec, store_process_id, conversion_complete),
+              convert_audio, audio_codec, delete_original, # Pass the delete_original flag
+              store_process_id, conversion_complete),
         daemon=True # Ensure thread exits if main app crashes
     )
     gui.conversion_thread.start()
@@ -312,6 +314,7 @@ def force_stop_conversion(gui, confirm: bool = True) -> None:
     # --- Cleanup Temporary Files ---
     # Attempt to remove the specific '.temp.mkv' file associated with the killed process
     if input_path_killed and gui.output_folder.get():
+        temp_filename = "unknown_temp_file.mkv" # Initialize temp_filename
         try:
             in_path_obj = Path(input_path_killed)
             out_folder_obj = Path(gui.output_folder.get())

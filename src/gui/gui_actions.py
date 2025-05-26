@@ -31,9 +31,8 @@ def browse_input_folder(gui) -> None:
     if folder:
         gui.input_folder.set(folder)
         logger.info(f"Input folder selected: {folder}")
-        if not gui.output_folder.get():
-            gui.output_folder.set(folder)
-            logger.info(f"Output folder automatically set to match input: {folder}")
+        gui.output_folder.set(folder)
+        logger.info(f"Output folder automatically set to match input: {folder}")
 
 def browse_output_folder(gui) -> None:
     """Open file dialog to choose output folder and update GUI state.

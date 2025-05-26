@@ -139,7 +139,8 @@ class VideoConverterGUI:
                 'convert_audio': self.convert_audio.get(), 'audio_codec': self.audio_codec.get(),
                 'log_folder': log_folder_to_save, # Save the potentially user-modified path
                 'anonymize_logs': self.anonymize_logs.get(),
-                'anonymize_history': self.anonymize_history.get()
+                'anonymize_history': self.anonymize_history.get(),
+                'delete_original_after_conversion': self.delete_original_var.get() # Added
             }
             temp_config_file = CONFIG_FILE + ".tmp"
             with open(temp_config_file, 'w', encoding='utf-8') as f: json.dump(current_config, f, indent=4)
@@ -177,6 +178,7 @@ class VideoConverterGUI:
         self.anonymize_logs = tk.BooleanVar(value=self.config.get('anonymize_logs', True))
         self.anonymize_history = tk.BooleanVar(value=self.config.get('anonymize_history', True))
         self.audio_codec = tk.StringVar(value=self.config.get('audio_codec', "opus"))
+        self.delete_original_var = tk.BooleanVar(value=self.config.get('delete_original_after_conversion', False))
         # Non-saved variables
         self.vmaf_scores = []; self.crf_values = []; self.size_reductions = []
         try: self.cpu_count = max(1, multiprocessing.cpu_count())
