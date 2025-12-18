@@ -261,7 +261,6 @@ def force_stop_conversion(gui, confirm: bool = True) -> None:
     if gui.current_process_info:
         pid_to_kill = gui.current_process_info.get("pid")
         input_path_killed = gui.current_process_info.get("input_path")
-        gui.current_process_info = None # Clear the info immediately
 
     # --- Terminate Process ---
     if pid_to_kill:
@@ -310,6 +309,9 @@ def force_stop_conversion(gui, confirm: bool = True) -> None:
                  subprocess.run(["taskkill", "/F", "/IM", "ffmpeg.exe"], capture_output=True, text=True, check=False, startupinfo=startupinfo)
                  logger.info("Attempted fallback kill of any running ffmpeg.exe processes.")
              except Exception as e: logger.error(f"Failed fallback kill of ffmpeg processes: {e}")
+
+    # Clear the process info AFTER termination attempts complete to avoid race condition
+    gui.current_process_info = None
 
     # --- Cleanup Temporary Files ---
     # Attempt to remove the specific '.temp.mkv' file associated with the killed process

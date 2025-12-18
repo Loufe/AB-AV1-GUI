@@ -91,19 +91,23 @@ def handle_error(gui, filename, error_info) -> None:
     if isinstance(error_info, dict) and "stack_trace" in error_info:
         logger.error(f"Stack Trace for {anonymized_name}:\n{error_info['stack_trace']}")
 
-    # Increment error count on the GUI object
-    if hasattr(gui,'error_count'): gui.error_count += 1
-    else: gui.error_count = 1
-    
-    # Track error details for summary
-    if not hasattr(gui, 'error_details'):
-        gui.error_details = []
-    gui.error_details.append({
-        'filename': filename,
-        'error_type': error_type,
-        'message': message,
-        'details': details
-    })
+    # Increment error count on the GUI object (thread-safe)
+    def update_error_count():
+        if hasattr(gui,'error_count'): gui.error_count += 1
+        else: gui.error_count = 1
+    update_ui_safely(gui.root, update_error_count)
+
+    # Track error details for summary (thread-safe)
+    def update_error_details():
+        if not hasattr(gui, 'error_details'):
+            gui.error_details = []
+        gui.error_details.append({
+            'filename': filename,
+            'error_type': error_type,
+            'message': message,
+            'details': details
+        })
+    update_ui_safely(gui.root, update_error_details)
 
     # Update overall status label in the UI to reflect the error count
     def update_status():
@@ -143,20 +147,20 @@ def handle_completed(gui, filename, info) -> None:
     output_size = info.get("output_size")
     elapsed_time = getattr(gui, 'last_elapsed_time', None) # Get from GUI state set by worker
 
-    # Update VMAF stats
+    # Update VMAF stats (thread-safe)
     if vmaf_value is not None:
         try:
             vmaf_float = float(vmaf_value)
-            gui.vmaf_scores.append(vmaf_float)
+            update_ui_safely(gui.root, lambda v=vmaf_float: gui.vmaf_scores.append(v))
             log_msg += f" - VMAF: {vmaf_float:.1f}"
         except (ValueError, TypeError):
              logger.warning(f"Invalid VMAF value '{vmaf_value}' for stats in {anonymized_name}")
 
-    # Update CRF stats
+    # Update CRF stats (thread-safe)
     if crf_value is not None:
         try:
             crf_int = int(crf_value)
-            gui.crf_values.append(crf_int)
+            update_ui_safely(gui.root, lambda c=crf_int: gui.crf_values.append(c))
             log_msg += f", CRF: {crf_int}"
         except (ValueError, TypeError):
             logger.warning(f"Invalid CRF value '{crf_value}' for stats in {anonymized_name}")
@@ -167,7 +171,7 @@ def handle_completed(gui, filename, info) -> None:
         try:
             ratio = (output_size / original_size) * 100
             size_reduction = 100.0 - ratio
-            gui.size_reductions.append(size_reduction) # Add to list for overall stats
+            update_ui_safely(gui.root, lambda sr=size_reduction: gui.size_reductions.append(sr))  # Thread-safe
             log_msg += f", Size: {format_file_size(output_size)} ({ratio:.1f}% / {size_reduction:.1f}% reduction)"
             size_str = f"{format_file_size(output_size)} ({ratio:.1f}%)"
         except (TypeError, ZeroDivisionError) as e:
@@ -181,12 +185,14 @@ def handle_completed(gui, filename, info) -> None:
     # Update the final size label in UI
     update_ui_safely(gui.root, lambda s=size_str: gui.output_size_label.config(text=s))
 
-    # Update total bytes and time stats (used for final summary)
+    # Update total bytes and time stats (used for final summary) - thread-safe
     if elapsed_time is not None and original_size is not None and output_size is not None:
         try:
-            gui.total_input_bytes_success += original_size
-            gui.total_output_bytes_success += output_size
-            gui.total_time_success += elapsed_time
+            def update_totals():
+                gui.total_input_bytes_success += original_size
+                gui.total_output_bytes_success += output_size
+                gui.total_time_success += elapsed_time
+            update_ui_safely(gui.root, update_totals)
         except TypeError as e:
              logger.warning(f"Type error updating totals for {anonymized_name}: {e}")
 
@@ -213,17 +219,21 @@ def handle_skipped_not_worth(gui, filename, info):
         log_msg += f" - Original size: {format_file_size(original_size)}"
     
     logger.info(log_msg)
-    
-    # Update skipped count instead of error count
-    if hasattr(gui, 'skipped_not_worth_count'):
-        gui.skipped_not_worth_count += 1
-    else:
-        gui.skipped_not_worth_count = 1
-    
-    # Track filename for summary
-    if not hasattr(gui, 'skipped_not_worth_files'):
-        gui.skipped_not_worth_files = []
-    gui.skipped_not_worth_files.append(filename)
+
+    # Update skipped count instead of error count (thread-safe)
+    def update_skipped_count():
+        if hasattr(gui, 'skipped_not_worth_count'):
+            gui.skipped_not_worth_count += 1
+        else:
+            gui.skipped_not_worth_count = 1
+    update_ui_safely(gui.root, update_skipped_count)
+
+    # Track filename for summary (thread-safe)
+    def update_skipped_files():
+        if not hasattr(gui, 'skipped_not_worth_files'):
+            gui.skipped_not_worth_files = []
+        gui.skipped_not_worth_files.append(filename)
+    update_ui_safely(gui.root, update_skipped_files)
     
     # Update UI to show this as a skip, not an error
     update_ui_safely(gui.root, lambda: gui.current_file_label.config(

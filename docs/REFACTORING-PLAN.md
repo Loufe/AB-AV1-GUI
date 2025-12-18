@@ -8,35 +8,10 @@ The codebase is **better organized than initially assumed**:
 - Main window delegates to modules (247 lines, not a massive god object)
 
 **Actual problems:**
-1. **Thread-unsafe mutations**: `callback_handlers.py` mutates `gui.*` lists/counters directly (not via `update_ui_safely`)
+1. ~~**Thread-unsafe mutations**: `callback_handlers.py` mutates `gui.*` lists/counters directly (not via `update_ui_safely`)~~ ✓ Fixed
 2. **Backwards dependency**: `conversion_engine/` imports from `gui/` (should be opposite)
 3. **Long complex functions**: `estimate_remaining_time` (193 LOC), `update_conversion_statistics` (159 LOC)
 4. **No typed data structures**: Dicts with inconsistent keys passed everywhere
-
----
-
-## Phase 0: Thread Safety Fixes
-**Risk: Low | App remains functional: Yes**
-
-### Tasks
-- [ ] Audit `callback_handlers.py` for direct `gui.*` mutations outside `update_ui_safely`
-  - Line 95: `gui.error_count += 1`
-  - Line 150: `gui.vmaf_scores.append(vmaf_float)`
-  - Line 159: `gui.crf_values.append(crf_int)`
-  - Line 170: `gui.size_reductions.append(size_reduction)`
-  - Lines 187-189: `gui.total_*` increments
-  - Line 219: `gui.skipped_not_worth_count += 1`
-  - Line 226: `gui.skipped_not_worth_files.append(filename)`
-- [ ] Wrap all mutations in `update_ui_safely` calls
-- [ ] Audit `worker.py` lines 75-82 for same issue
-- [ ] Fix force-stop PID race in `conversion_controller.py:264`
-  - Currently clears `gui.current_process_info = None` BEFORE kill attempt
-  - If worker sets new PID between read (262) and clear (264), new process orphans
-  - Fix: Clear AFTER kill attempt completes (move to ~line 304)
-- [ ] Wrap `gui.pending_files.remove()` in `update_ui_safely()` at `worker.py:329`
-  - Main thread iterates `pending_files` in `utils.py:668` (`estimate_remaining_time`)
-  - Concurrent remove during iteration → RuntimeError or corrupted state
-- [ ] Test: Run conversion, verify no race conditions in stats display
 
 ---
 
@@ -180,8 +155,7 @@ These were considered but rejected as over-engineering for a single-developer pr
 ## Execution Order
 
 ```
-Phase 0 (Thread Safety)     <- Start here
-Phase 1 (Data Models)
+Phase 1 (Data Models)       <- Start here
 Phase 2 (Dependencies)
 Phase 3 (Long Functions)
 Phase 4 (Linting/Types)
@@ -191,6 +165,5 @@ Phase 5 (Linux/macOS)       <- Optional
 ## Minimum Viable Refactoring
 
 If scope is limited, do only:
-1. **Phase 0** - Thread safety (critical)
-2. **Phase 3 Priority 1** - Extract `estimate_remaining_time` + dependencies (highest complexity)
-3. **Phase 4** first two tasks - Auto-fix linting
+1. **Phase 3 Priority 1** - Extract `estimate_remaining_time` + dependencies (highest complexity)
+2. **Phase 4** first two tasks - Auto-fix linting

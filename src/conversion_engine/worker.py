@@ -74,12 +74,20 @@ def sequential_conversion_worker(gui, input_folder, output_folder, overwrite, st
     """
     gui.output_folder_path = output_folder # Store for potential cleanup use later
     logger.info(f"Worker started. Input: '{input_folder}', Output: '{output_folder}'")
-    gui.error_count = 0; gui.total_input_bytes_success = 0; gui.total_output_bytes_success = 0; gui.total_time_success = 0
-    gui.skipped_not_worth_count = 0  # Track files skipped because conversion isn't beneficial
-    gui.skipped_not_worth_files = []  # Track filenames of skipped files
-    gui.skipped_low_resolution_count = 0  # Track files skipped due to low resolution
-    gui.skipped_low_resolution_files = []  # Track filenames of low resolution files
-    gui.error_details = []  # Track error details for summary
+
+    # Initialize conversion state variables (thread-safe)
+    def init_state():
+        gui.error_count = 0
+        gui.total_input_bytes_success = 0
+        gui.total_output_bytes_success = 0
+        gui.total_time_success = 0
+        gui.skipped_not_worth_count = 0  # Track files skipped because conversion isn't beneficial
+        gui.skipped_not_worth_files = []  # Track filenames of skipped files
+        gui.skipped_low_resolution_count = 0  # Track files skipped due to low resolution
+        gui.skipped_low_resolution_files = []  # Track filenames of low resolution files
+        gui.error_details = []  # Track error details for summary
+    update_ui_safely(gui.root, init_state)
+
     video_info_cache = {} # Initialize cache for this run
 
     # Determine extensions from GUI state
@@ -146,10 +154,12 @@ def sequential_conversion_worker(gui, input_folder, output_folder, overwrite, st
                 skipped_files_count += 1
                 filename = os.path.basename(video_path)
                 
-                # Check if skipped due to resolution
+                # Check if skipped due to resolution (thread-safe)
                 if "Below minimum resolution" in reason:
-                    gui.skipped_low_resolution_count += 1
-                    gui.skipped_low_resolution_files.append(filename)
+                    def update_low_res_skip():
+                        gui.skipped_low_resolution_count += 1
+                        gui.skipped_low_resolution_files.append(filename)
+                    update_ui_safely(gui.root, update_low_res_skip)
                 
                 # Log skip reason using the handler for consistency
                 handle_skipped(gui, filename, reason)
@@ -159,11 +169,15 @@ def sequential_conversion_worker(gui, input_folder, output_folder, overwrite, st
             logger.info(f"Skipping {anonymize_filename(video_path)} due to scan error.")
             # Optionally trigger handle_error here if desired for scan errors
 
-    gui.video_files = files_to_process # Store the list of files to process on the gui object
-    gui.pending_files = files_to_process.copy()  # Create a copy for tracking remaining files
+    # Store the list of files to process on the gui object (thread-safe)
     total_videos_to_process = len(files_to_process)
+    def set_file_lists():
+        gui.video_files = files_to_process
+        gui.pending_files = files_to_process.copy()  # Create a copy for tracking remaining files
+    update_ui_safely(gui.root, set_file_lists)
+
     logger.info(f"Scan complete: {total_videos_to_process} files require conversion, {skipped_files_count} files skipped.")
-    logger.info(f"Pending files initialized: {len(gui.pending_files)} files")
+    logger.info(f"Pending files initialized: {total_videos_to_process} files")
 
     # --- Transition to Conversion Phase ---
     if not files_to_process:
@@ -324,10 +338,12 @@ def sequential_conversion_worker(gui, input_folder, output_folder, overwrite, st
         # --- Post-processing & History ---
         gui.processed_files += 1
         
-        # Remove file from pending list after processing is complete
-        if video_path in gui.pending_files:
-            gui.pending_files.remove(video_path)
-            logger.debug(f"Removed completed file {video_path} from pending files. Remaining: {len(gui.pending_files)}")
+        # Remove file from pending list after processing is complete (thread-safe)
+        def remove_from_pending():
+            if video_path in gui.pending_files:
+                gui.pending_files.remove(video_path)
+                logger.debug(f"Removed completed file {video_path} from pending files. Remaining: {len(gui.pending_files)}")
+        update_ui_safely(gui.root, remove_from_pending)
 
         if process_successful:
             gui.successful_conversions += 1
