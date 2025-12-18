@@ -1,0 +1,103 @@
+[project]
+name = "auto-av1-converter"
+version = "1.0.0"
+description = "GUI application for batch converting videos to AV1 codec using VMAF-targeted quality"
+readme = "README.md"
+license = { text = "MIT" }
+requires-python = ">=3.8"
+dependencies = []
+
+[project.scripts]
+av1-converter = "src.convert:main"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[dependency-groups]
+dev = [
+    "ruff",
+    "ty",
+]
+
+[tool.hatch.build.targets.wheel]
+packages = ["src"]
+
+[tool.ruff]
+line-length = 120
+src = ["src"]
+
+[tool.ruff.lint]
+select = [
+    # Core
+    "E",      # pycodestyle errors
+    "W",      # pycodestyle warnings
+    "F",      # Pyflakes
+    "I",      # isort
+    "UP",     # pyupgrade
+    "RUF",    # Ruff-specific rules
+
+    # Style & Quality
+    "B",      # flake8-bugbear
+    "C4",     # flake8-comprehensions
+    "SIM",    # flake8-simplify
+    "PIE",    # flake8-pie
+    "RET",    # flake8-return
+    "FLY",    # flynt (f-string conversion)
+    "PERF",   # Perflint
+    "FURB",   # refurb (modernization)
+
+    # Naming & Structure
+    "N",      # pep8-naming
+    "A",      # flake8-builtins
+    "C90",    # mccabe complexity
+    "ARG",    # flake8-unused-arguments
+    "PTH",    # flake8-use-pathlib
+    "ERA",    # eradicate (commented-out code)
+
+    # Type Checking
+    "ANN",    # flake8-annotations
+    "TC",     # flake8-type-checking
+
+    # Error Handling
+    "EM",     # flake8-errmsg
+    "TRY",    # tryceratops
+    "BLE",    # flake8-blind-except
+    "RSE",    # flake8-raise
+
+    # Security
+    "S",      # flake8-bandit
+
+    # Best Practices
+    "FBT",    # flake8-boolean-trap
+    "SLF",    # flake8-self (private member access)
+    "PL",     # Pylint
+    "DTZ",    # flake8-datetimez
+
+    # Logging & Debugging
+    "T20",    # flake8-print
+    "LOG",    # flake8-logging
+    "G",      # flake8-logging-format
+    "T10",    # flake8-debugger
+
+    # Formatting
+    "COM",    # flake8-commas
+    "Q",      # flake8-quotes
+    "ISC",    # flake8-implicit-str-concat
+]
+ignore = [
+    "COM812",  # Trailing comma missing (conflicts with formatter)
+    "ISC001",  # Single-line implicit string concat (conflicts with formatter)
+]
+
+[tool.ruff.lint.per-file-ignores]
+"__init__.py" = ["F401"]  # Allow unused imports in __init__.py
+
+[tool.ruff.format]
+quote-style = "double"
+indent-style = "space"
+skip-magic-trailing-comma = false
+line-ending = "auto"
+
+[tool.ty.src]
+include = ["src"]
