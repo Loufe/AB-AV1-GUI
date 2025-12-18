@@ -6,7 +6,7 @@ like scheduling the removal of temporary folders.
 import logging
 
 # Project Imports
-from src.ab_av1.cleaner import clean_ab_av1_temp_folders # Use the specific cleaner
+from src.ab_av1.cleaner import clean_ab_av1_temp_folders  # Use the specific cleaner
 
 logger = logging.getLogger(__name__)
 
@@ -36,4 +36,4 @@ def schedule_temp_folder_cleanup(directory: str) -> None:
             logger.info(f"No '.ab-av1-*' temp folders found to clean in {directory}.")
     except Exception as e:
         # Catch potential errors during the cleanup process itself
-        logger.warning(f"Error occurred during scheduled cleanup in {directory}: {str(e)}", exc_info=True)
+        logger.warning(f"Error occurred during scheduled cleanup in {directory}: {e!s}", exc_info=True)

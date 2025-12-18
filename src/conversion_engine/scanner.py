@@ -2,13 +2,13 @@
 """
 Contains the function to scan video files and determine if conversion is needed.
 """
-import os
 import logging
 from pathlib import Path
 
+from src.config import MIN_RESOLUTION_HEIGHT, MIN_RESOLUTION_WIDTH  # Import resolution constants
+
 # Project imports
-from src.utils import get_video_info, anonymize_filename # No GUI needed here
-from src.config import MIN_RESOLUTION_WIDTH, MIN_RESOLUTION_HEIGHT  # Import resolution constants
+from src.utils import anonymize_filename, get_video_info  # No GUI needed here
 
 logger = logging.getLogger(__name__)
 
@@ -37,7 +37,7 @@ def scan_video_needs_conversion(input_video_path: str, input_base_folder: str, o
         output_folder_obj = Path(output_base_folder).resolve()
 
         # Determine output path relative to base folders
-        relative_dir = Path(".") # Default if not relative
+        relative_dir = Path() # Default if not relative
         try:
             # Check if input path is within the input base folder
             relative_dir = input_path_obj.parent.relative_to(input_folder_obj)
@@ -130,16 +130,15 @@ def scan_video_needs_conversion(input_video_path: str, input_base_folder: str, o
             reason = "Already AV1/MKV"
             logger.info(f"Skipping {anonymized_input} - {reason}")
             return False, reason, video_info # Return info even if skipped
-        else:
-            # Determine specific reason for conversion
-            if not is_already_av1: reason = "Needs conversion (codec is not AV1)"
-            elif not is_mkv_container: reason = "Needs conversion (AV1 but not MKV container)"
-            else: reason = "Needs conversion" # Fallback reason
+        # Determine specific reason for conversion
+        if not is_already_av1: reason = "Needs conversion (codec is not AV1)"
+        elif not is_mkv_container: reason = "Needs conversion (AV1 but not MKV container)"
+        else: reason = "Needs conversion" # Fallback reason
 
-            logger.info(f"Conversion needed for {anonymized_input} - Reason: {reason}")
-            return True, reason, video_info
+        logger.info(f"Conversion needed for {anonymized_input} - Reason: {reason}")
+        return True, reason, video_info
 
     except Exception as e:
-        logger.error(f"Error checking video stream info for {anonymized_input}: {str(e)}", exc_info=True)
+        logger.error(f"Error checking video stream info for {anonymized_input}: {e!s}", exc_info=True)
         # If an unexpected error occurs during stream check, assume conversion might be needed
-        return True, f"Error during stream check: {str(e)}", video_info
+        return True, f"Error during stream check: {e!s}", video_info

@@ -3,15 +3,15 @@
 Main application logic module for the AV1 Video Converter application.
 Defines the main() function to be called by the launcher.
 """
+import logging
 import sys
-import os
 import tkinter as tk
 from tkinter import messagebox
-import logging
 
 # Project imports needed within main() or for GUI class
 from src.gui.main_window import VideoConverterGUI
 from src.utils import setup_logging
+
 
 def main():
     """Initializes and runs the AV1 Video Converter application."""
@@ -58,7 +58,7 @@ def main():
     except Exception as e:
         logging.critical(f"An unhandled error occurred during application startup or runtime: {e}", exc_info=True)
         # Attempt cleanup if app object exists
-        if app and hasattr(app, 'on_exit'):
+        if app and hasattr(app, "on_exit"):
             try:
                 logging.info("Attempting application cleanup via on_exit due to error...")
                 app.on_exit()
@@ -69,7 +69,7 @@ def main():
                  logging.info("Attempting to destroy root window due to error...")
                  root.destroy()
              except Exception as destroy_e:
-                 logging.error(f"Error destroying root window during error handling: {destroy_e}")
+                 logging.exception(f"Error destroying root window during error handling: {destroy_e}")
 
         # Try to show a final error message
         try:

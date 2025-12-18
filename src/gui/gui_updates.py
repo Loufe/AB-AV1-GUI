@@ -4,22 +4,27 @@ GUI update functions (progress bars, statistics, labels, timers)
 for the AV1 Video Converter application.
 """
 # Standard library imports
-import time
 import logging
+import math  # For ceil
 import statistics
-import math # For ceil
+import time
 
 # GUI-related imports
-import tkinter as tk # For type hinting if needed
+import tkinter as tk  # For type hinting if needed
+
+from src import utils  # For the new estimation functions
+
+# Import constant from config
+from src.config import DEFAULT_ENCODING_PRESET, DEFAULT_VMAF_TARGET
 
 # Project imports
 from src.utils import (
-    format_time, format_file_size, update_ui_safely, load_history, estimate_remaining_time,
-    parse_eta_text  # Add parse_eta_text import
+    format_file_size,
+    format_time,
+    load_history,
+    parse_eta_text,  # Add parse_eta_text import
+    update_ui_safely,
 )
-import src.utils as utils  # For the new estimation functions
-# Import constant from config
-from src.config import DEFAULT_VMAF_TARGET, DEFAULT_ENCODING_PRESET
 
 logger = logging.getLogger(__name__)
 
@@ -34,10 +39,10 @@ def update_progress_bars(gui, quality_percent: float, encoding_percent: float) -
     """
     def _update_ui():
         # Get GUI widgets
-        quality_prog_widget = getattr(gui, 'quality_progress', None)
-        quality_label_widget = getattr(gui, 'quality_percent_label', None)
-        encoding_prog_widget = getattr(gui, 'encoding_progress', None)
-        encoding_label_widget = getattr(gui, 'encoding_percent_label', None)
+        quality_prog_widget = getattr(gui, "quality_progress", None)
+        quality_label_widget = getattr(gui, "quality_percent_label", None)
+        encoding_prog_widget = getattr(gui, "encoding_progress", None)
+        encoding_label_widget = getattr(gui, "encoding_percent_label", None)
 
         # Make sure all widgets exist
         if not all([quality_prog_widget, quality_label_widget, encoding_prog_widget, encoding_label_widget]):
@@ -45,8 +50,8 @@ def update_progress_bars(gui, quality_percent: float, encoding_percent: float) -
 
         try:
             # Set mode for quality bar
-            q_mode = 'determinate'
-            e_mode = 'determinate'
+            q_mode = "determinate"
+            e_mode = "determinate"
 
             # Set quality progress to 100% when encoding is in progress
             if encoding_percent > 0:
@@ -105,7 +110,7 @@ def update_conversion_statistics(gui, info: dict = None) -> None:
     # CRF Updates
     if "crf" in info and info["crf"] is not None:
         try: # Ensure crf value is valid
-            crf_val = int(info['crf'])
+            crf_val = int(info["crf"])
             # Use constant for preset
             settings_text = f"CRF: {crf_val}, Preset: {DEFAULT_ENCODING_PRESET}"
             update_ui_safely(gui.root, lambda s=settings_text: gui.encoding_settings_label.config(text=s))
@@ -117,36 +122,36 @@ def update_conversion_statistics(gui, info: dict = None) -> None:
     encoding_prog = info.get("progress_encoding", 0)
     gui.last_encoding_progress = encoding_prog  # Store for continuous ETA updates
     logging.debug(f"Encoding progress: {encoding_prog}, Phase: {info.get('phase', 'unknown')}")
-    
+
     # Check if we have AB-AV1's ETA text
-    if "eta_text" in info and info["eta_text"]:
+    if info.get("eta_text"):
         # Parse AB-AV1's ETA and store it with timestamp
         eta_seconds = parse_eta_text(info["eta_text"])
         # Only store non-zero ETAs or if we don't have one already
-        if eta_seconds > 0 or not hasattr(gui, 'last_eta_seconds'):
+        if eta_seconds > 0 or not hasattr(gui, "last_eta_seconds"):
             gui.last_eta_seconds = eta_seconds
             gui.last_eta_timestamp = time.time()
             logging.debug(f"Captured AB-AV1 ETA: {info['eta_text']} -> {eta_seconds} seconds")
-    
+
     if encoding_prog > 0:
-        if hasattr(gui, 'current_file_start_time') and gui.current_file_start_time:
-            if not hasattr(gui, 'current_file_encoding_start_time') or not gui.current_file_encoding_start_time:
+        if hasattr(gui, "current_file_start_time") and gui.current_file_start_time:
+            if not hasattr(gui, "current_file_encoding_start_time") or not gui.current_file_encoding_start_time:
                 # Check if encoding phase *just* started - check phase directly
                 if info.get("phase") == "encoding": # Remove threshold check
                     gui.current_file_encoding_start_time = time.time()
                     logging.info("Encoding phase started - initializing timer")
 
         # Use the stored AB-AV1 ETA and count down
-        if hasattr(gui, 'last_eta_seconds') and hasattr(gui, 'last_eta_timestamp'):
+        if hasattr(gui, "last_eta_seconds") and hasattr(gui, "last_eta_timestamp"):
             elapsed_since_update = time.time() - gui.last_eta_timestamp
             remaining_eta = max(0, gui.last_eta_seconds - elapsed_since_update)
             eta_str = format_time(remaining_eta)
-            
+
             # Update the display
             update_ui_safely(gui.root, lambda eta=eta_str: gui.eta_label.config(text=eta))
             logging.debug(f"ETA countdown: {eta_str} (base: {gui.last_eta_seconds}s, elapsed: {elapsed_since_update:.1f}s)")
-            
-        elif hasattr(gui, 'current_file_encoding_start_time') and gui.current_file_encoding_start_time:
+
+        elif hasattr(gui, "current_file_encoding_start_time") and gui.current_file_encoding_start_time:
             # Fallback: calculate based on progress if no AB-AV1 ETA is stored
             elapsed_encoding_time = time.time() - gui.current_file_encoding_start_time
             if encoding_prog > 0 and elapsed_encoding_time > 1:
@@ -159,7 +164,7 @@ def update_conversion_statistics(gui, info: dict = None) -> None:
                 except ZeroDivisionError:
                     update_ui_safely(gui.root, lambda: gui.eta_label.config(text="Calculating..."))
                 except Exception as e:
-                    logging.error(f"Error calculating ETA: {e}")
+                    logging.exception(f"Error calculating ETA: {e}")
                     update_ui_safely(gui.root, lambda: gui.eta_label.config(text="Error"))
             else:
                 update_ui_safely(gui.root, lambda: gui.eta_label.config(text="Calculating..."))
@@ -194,7 +199,7 @@ def update_conversion_statistics(gui, info: dict = None) -> None:
         # If we have size_reduction percentage but not actual sizes yet
         try:
             # Get original size from the file if available
-            if hasattr(gui, 'last_input_size') and gui.last_input_size:
+            if hasattr(gui, "last_input_size") and gui.last_input_size:
                 original_size = gui.last_input_size
                 size_reduction_f = float(info["size_reduction"]) # Ensure float
                 size_percentage = 100.0 - size_reduction_f
@@ -210,9 +215,9 @@ def update_conversion_statistics(gui, info: dict = None) -> None:
 
                 logging.info(f"Output size prediction: {size_str} (reduction: {info['size_reduction']:.1f}%)")
         except (ValueError, TypeError, ZeroDivisionError) as e:
-            logging.error(f"Error calculating output size from reduction: {e}")
+            logging.exception(f"Error calculating output size from reduction: {e}")
         except Exception as e: # Catch other potential errors
-             logging.error(f"Unexpected error calculating output size from reduction: {e}")
+             logging.exception(f"Unexpected error calculating output size from reduction: {e}")
 
     # Direct size information if available (typically on completion)
     elif "output_size" in info and "original_size" in info:
@@ -245,20 +250,20 @@ def update_elapsed_time(gui, start_time: float) -> None:
         return
 
     # During encoding phase, show time since encoding started
-    if hasattr(gui, 'current_file_encoding_start_time') and gui.current_file_encoding_start_time:
+    if hasattr(gui, "current_file_encoding_start_time") and gui.current_file_encoding_start_time:
         current_file_elapsed = time.time() - gui.current_file_encoding_start_time
     else:
         # During quality detection phase, show the full time
         current_file_elapsed = time.time() - start_time
-    
+
     update_ui_safely(gui.root, lambda t=current_file_elapsed: gui.elapsed_label.config(text=format_time(t)))
 
     # Also update total elapsed time
     update_total_elapsed_time(gui)
-    
+
     # Update ETA display if we're in encoding phase
     update_eta_display(gui)
-    
+
     # Remove direct call to update_total_remaining_time since it's now on its own timer
 
     # Schedule next update
@@ -271,7 +276,7 @@ def update_total_elapsed_time(gui) -> None:
     Args:
         gui: The main GUI instance containing the total elapsed time label
     """
-    if hasattr(gui, 'total_conversion_start_time') and gui.conversion_running:
+    if hasattr(gui, "total_conversion_start_time") and gui.conversion_running:
         total_elapsed = time.time() - gui.total_conversion_start_time
         update_ui_safely(gui.root, lambda t=total_elapsed: gui.total_elapsed_label.config(text=format_time(t)))
     else:
@@ -287,21 +292,21 @@ def update_total_remaining_time(gui) -> None:
     if not gui.conversion_running:
         update_ui_safely(gui.root, lambda: gui.total_remaining_label.config(text="-"))
         return
-    
+
     try:
         # Get current file info if processing
         current_file_info = None
-        if hasattr(gui, 'current_file_path') and gui.current_file_path:
-            current_file_info = {'path': gui.current_file_path}
-        
+        if hasattr(gui, "current_file_path") and gui.current_file_path:
+            current_file_info = {"path": gui.current_file_path}
+
         # Estimate remaining time
         total_remaining = utils.estimate_remaining_time(gui, current_file_info)
         remaining_str = format_time(total_remaining) if total_remaining > 0 else "Calculating..."
-        
+
         logging.debug(f"Total remaining time: {total_remaining}s, display: {remaining_str}")
         update_ui_safely(gui.root, lambda r=remaining_str: gui.total_remaining_label.config(text=r))
     except Exception as e:
-        logging.error(f"Error updating total remaining time: {e}")
+        logging.exception(f"Error updating total remaining time: {e}")
         update_ui_safely(gui.root, lambda: gui.total_remaining_label.config(text="Error"))
 
 
@@ -318,11 +323,11 @@ def update_statistics_summary(gui) -> None:
     reduction_avg_text = "-"
     reduction_range_text = ""
     total_saved_text = "-"
-    
+
     # Load and process historical data
     try:
         history = load_history()
-        
+
         if history:
             # Extract statistics from all historical conversions
             historical_vmaf = []
@@ -331,44 +336,44 @@ def update_statistics_summary(gui) -> None:
             total_input_size = 0
             total_output_size = 0
             total_conversions = 0
-            
+
             for record in history:
                 # VMAF
-                if 'final_vmaf' in record and record['final_vmaf'] is not None:
+                if "final_vmaf" in record and record["final_vmaf"] is not None:
                     try:
-                        historical_vmaf.append(float(record['final_vmaf']))
+                        historical_vmaf.append(float(record["final_vmaf"]))
                     except (ValueError, TypeError):
                         pass
-                        
+
                 # CRF
-                if 'final_crf' in record and record['final_crf'] is not None:
+                if "final_crf" in record and record["final_crf"] is not None:
                     try:
-                        historical_crf.append(int(record['final_crf']))
+                        historical_crf.append(int(record["final_crf"]))
                     except (ValueError, TypeError):
                         pass
-                        
+
                 # Size reduction
-                if 'reduction_percent' in record and record['reduction_percent'] is not None:
+                if "reduction_percent" in record and record["reduction_percent"] is not None:
                     try:
-                        historical_reductions.append(float(record['reduction_percent']))
+                        historical_reductions.append(float(record["reduction_percent"]))
                     except (ValueError, TypeError):
                         pass
-                        
+
                 # Accumulate total sizes
-                if 'input_size_mb' in record and record['input_size_mb'] is not None:
+                if "input_size_mb" in record and record["input_size_mb"] is not None:
                     try:
-                        total_input_size += float(record['input_size_mb']) * (1024**2)
+                        total_input_size += float(record["input_size_mb"]) * (1024**2)
                     except (ValueError, TypeError):
                         pass
-                        
-                if 'output_size_mb' in record and record['output_size_mb'] is not None:
+
+                if "output_size_mb" in record and record["output_size_mb"] is not None:
                     try:
-                        total_output_size += float(record['output_size_mb']) * (1024**2)
+                        total_output_size += float(record["output_size_mb"]) * (1024**2)
                     except (ValueError, TypeError):
                         pass
-                        
+
                 total_conversions += 1
-            
+
             # Calculate statistics from historical data
             if historical_vmaf:
                 try:
@@ -389,7 +394,7 @@ def update_statistics_summary(gui) -> None:
                     logging.warning(f"Error calculating historical VMAF stats: {e}")
                     vmaf_avg_text = "Error"
                     vmaf_range_text = ""
-            
+
             if historical_crf:
                 try:
                     avg_crf = statistics.mean(historical_crf)
@@ -409,7 +414,7 @@ def update_statistics_summary(gui) -> None:
                     logging.warning(f"Error calculating historical CRF stats: {e}")
                     crf_avg_text = "Error"
                     crf_range_text = ""
-            
+
             if historical_reductions:
                 try:
                     avg_reduction = statistics.mean(historical_reductions)
@@ -429,74 +434,73 @@ def update_statistics_summary(gui) -> None:
                     logging.warning(f"Error calculating historical Size Reduction stats: {e}")
                     reduction_avg_text = "Error"
                     reduction_range_text = ""
-            
+
             # Add total space saved and conversion count
             if total_input_size > 0 and total_output_size > 0:
                 total_saved = total_input_size - total_output_size
                 total_saved_text = f"{format_file_size(total_saved)} ({total_conversions} files)"
-        
+
+        # No history - show current session stats instead
+        elif gui.conversion_running or gui.processed_files > 0:
+            if gui.vmaf_scores:
+                try:
+                    avg_vmaf = statistics.mean(gui.vmaf_scores)
+                    min_vmaf = min(gui.vmaf_scores)
+                    max_vmaf = max(gui.vmaf_scores)
+                    vmaf_avg_text = f"Avg: {avg_vmaf:.1f}"
+                    vmaf_range_text = f"(Range: {min_vmaf:.1f}-{max_vmaf:.1f})"
+                except (statistics.StatisticsError, Exception):
+                    if len(gui.vmaf_scores) == 1:
+                        vmaf_avg_text = f"{gui.vmaf_scores[0]:.1f}"
+                        vmaf_range_text = ""
+                    else:
+                        vmaf_avg_text = "Error"
+                        vmaf_range_text = ""
+
+            if gui.crf_values:
+                try:
+                    avg_crf = statistics.mean(gui.crf_values)
+                    min_crf = min(gui.crf_values)
+                    max_crf = max(gui.crf_values)
+                    crf_avg_text = f"Avg: {avg_crf:.1f}"
+                    crf_range_text = f"(Range: {min_crf}-{max_crf})"
+                except (statistics.StatisticsError, Exception):
+                    if len(gui.crf_values) == 1:
+                        crf_avg_text = f"{gui.crf_values[0]}"
+                        crf_range_text = ""
+                    else:
+                        crf_avg_text = "Error"
+                        crf_range_text = ""
+
+            if gui.size_reductions:
+                try:
+                    valid_reductions = [r for r in gui.size_reductions if isinstance(r, (int, float))]
+                    if valid_reductions:
+                        avg_reduction = statistics.mean(valid_reductions)
+                        min_reduction = min(valid_reductions)
+                        max_reduction = max(valid_reductions)
+                        reduction_avg_text = f"Avg: {avg_reduction:.1f}%"
+                        reduction_range_text = f"(Range: {min_reduction:.1f}%-{max_reduction:.1f}%)"
+                    else:
+                        reduction_avg_text = "No data"
+                        reduction_range_text = ""
+                except (statistics.StatisticsError, Exception):
+                    if len(valid_reductions) == 1:
+                        reduction_avg_text = f"{valid_reductions[0]:.1f}%"
+                        reduction_range_text = ""
+                    else:
+                        reduction_avg_text = "Error"
+                        reduction_range_text = ""
         else:
-            # No history - show current session stats instead
-            if gui.conversion_running or gui.processed_files > 0:
-                if gui.vmaf_scores:
-                    try:
-                        avg_vmaf = statistics.mean(gui.vmaf_scores)
-                        min_vmaf = min(gui.vmaf_scores)
-                        max_vmaf = max(gui.vmaf_scores)
-                        vmaf_avg_text = f"Avg: {avg_vmaf:.1f}"
-                        vmaf_range_text = f"(Range: {min_vmaf:.1f}-{max_vmaf:.1f})"
-                    except (statistics.StatisticsError, Exception):
-                        if len(gui.vmaf_scores) == 1:
-                            vmaf_avg_text = f"{gui.vmaf_scores[0]:.1f}"
-                            vmaf_range_text = ""
-                        else:
-                            vmaf_avg_text = "Error"
-                            vmaf_range_text = ""
-                
-                if gui.crf_values:
-                    try:
-                        avg_crf = statistics.mean(gui.crf_values)
-                        min_crf = min(gui.crf_values)
-                        max_crf = max(gui.crf_values)
-                        crf_avg_text = f"Avg: {avg_crf:.1f}"
-                        crf_range_text = f"(Range: {min_crf}-{max_crf})"
-                    except (statistics.StatisticsError, Exception):
-                        if len(gui.crf_values) == 1:
-                            crf_avg_text = f"{gui.crf_values[0]}"
-                            crf_range_text = ""
-                        else:
-                            crf_avg_text = "Error"
-                            crf_range_text = ""
-                
-                if gui.size_reductions:
-                    try:
-                        valid_reductions = [r for r in gui.size_reductions if isinstance(r, (int, float))]
-                        if valid_reductions:
-                            avg_reduction = statistics.mean(valid_reductions)
-                            min_reduction = min(valid_reductions)
-                            max_reduction = max(valid_reductions)
-                            reduction_avg_text = f"Avg: {avg_reduction:.1f}%"
-                            reduction_range_text = f"(Range: {min_reduction:.1f}%-{max_reduction:.1f}%)"
-                        else:
-                            reduction_avg_text = "No data"
-                            reduction_range_text = ""
-                    except (statistics.StatisticsError, Exception):
-                        if len(valid_reductions) == 1:
-                            reduction_avg_text = f"{valid_reductions[0]:.1f}%"
-                            reduction_range_text = ""
-                        else:
-                            reduction_avg_text = "Error"
-                            reduction_range_text = ""
-            else:
-                vmaf_text = "No history"
-                crf_text = "No history"
-                reduction_text = "No history"
-    
+            vmaf_text = "No history"
+            crf_text = "No history"
+            reduction_text = "No history"
+
     except Exception as e:
-        logging.error(f"Error loading historical statistics: {e}")
+        logging.exception(f"Error loading historical statistics: {e}")
         # Fallback to current session stats
         return update_statistics_summary_current_session(gui)
-    
+
     # Use lambdas with explicit parameter capturing for UI updates
     update_ui_safely(gui.root, lambda v=vmaf_avg_text: gui.vmaf_stats_label.config(text=v))
     update_ui_safely(gui.root, lambda v=vmaf_range_text: gui.vmaf_range_label.config(text=v))
@@ -533,10 +537,10 @@ def update_statistics_summary_current_session(gui) -> None:
             vmaf_range_text = f"(Range: {min_vmaf:.1f}-{max_vmaf:.1f})"
             logging.debug(f"VMAF stats: avg={avg_vmaf:.1f}, min={min_vmaf:.1f}, max={max_vmaf:.1f}")
         except statistics.StatisticsError: # Handle case with insufficient data
-            if len(gui.vmaf_scores) == 1: 
+            if len(gui.vmaf_scores) == 1:
                 vmaf_avg_text = f"{gui.vmaf_scores[0]:.1f}"
                 vmaf_range_text = ""
-            else: 
+            else:
                 vmaf_avg_text = "Error"
                 vmaf_range_text = ""
                 logging.warning("StatisticsError calculating VMAF stats")
@@ -554,10 +558,10 @@ def update_statistics_summary_current_session(gui) -> None:
             crf_range_text = f"(Range: {min_crf}-{max_crf})"
             logging.debug(f"CRF stats: avg={avg_crf:.1f}, min={min_crf}, max={max_crf}")
          except statistics.StatisticsError: # Handle case with insufficient data
-             if len(gui.crf_values) == 1: 
+             if len(gui.crf_values) == 1:
                  crf_avg_text = f"{gui.crf_values[0]}"
                  crf_range_text = ""
-             else: 
+             else:
                  crf_avg_text = "Error"
                  crf_range_text = ""
                  logging.warning("StatisticsError calculating CRF stats")
@@ -581,10 +585,10 @@ def update_statistics_summary_current_session(gui) -> None:
                 reduction_range_text = f"(Range: {min_reduction:.1f}%-{max_reduction:.1f}%)"
                 logging.info(f"Size reduction stats: avg={avg_reduction:.1f}%, min={min_reduction:.1f}%, max={max_reduction:.1f}%")
         except statistics.StatisticsError: # Handle case with insufficient data
-             if len(valid_reductions) == 1: 
+             if len(valid_reductions) == 1:
                  reduction_avg_text = f"{valid_reductions[0]:.1f}%"
                  reduction_range_text = ""
-             else: 
+             else:
                  reduction_avg_text = "Error"
                  reduction_range_text = ""
                  logging.warning("StatisticsError calculating Size Reduction stats")
@@ -595,7 +599,7 @@ def update_statistics_summary_current_session(gui) -> None:
             reduction_range_text = ""
 
     # Calculate total saved for current session
-    if hasattr(gui, 'total_input_bytes_success') and hasattr(gui, 'total_output_bytes_success'):
+    if hasattr(gui, "total_input_bytes_success") and hasattr(gui, "total_output_bytes_success"):
         if gui.total_input_bytes_success > 0 and gui.total_output_bytes_success > 0:
             total_saved = gui.total_input_bytes_success - gui.total_output_bytes_success
             if total_saved > 0:
@@ -617,22 +621,22 @@ def update_eta_display(gui) -> None:
     """
     if not gui.conversion_running:
         return
-    
+
     # Use the stored AB-AV1 ETA and count down
-    if hasattr(gui, 'last_eta_seconds') and hasattr(gui, 'last_eta_timestamp'):
+    if hasattr(gui, "last_eta_seconds") and hasattr(gui, "last_eta_timestamp"):
         elapsed_since_update = time.time() - gui.last_eta_timestamp
         remaining_eta = max(0, gui.last_eta_seconds - elapsed_since_update)
         eta_str = format_time(remaining_eta)
         update_ui_safely(gui.root, lambda eta=eta_str: gui.eta_label.config(text=eta))
         return
-    
+
     # Fallback to calculation based on progress
-    if not hasattr(gui, 'last_encoding_progress'):
+    if not hasattr(gui, "last_encoding_progress"):
         return
-        
-    encoding_prog = getattr(gui, 'last_encoding_progress', 0)
-    
-    if encoding_prog > 0 and hasattr(gui, 'current_file_encoding_start_time') and gui.current_file_encoding_start_time:
+
+    encoding_prog = getattr(gui, "last_encoding_progress", 0)
+
+    if encoding_prog > 0 and hasattr(gui, "current_file_encoding_start_time") and gui.current_file_encoding_start_time:
         elapsed_encoding_time = time.time() - gui.current_file_encoding_start_time
         if encoding_prog > 0 and elapsed_encoding_time > 1:
             try:
@@ -643,7 +647,7 @@ def update_eta_display(gui) -> None:
             except ZeroDivisionError:
                 pass
             except Exception as e:
-                logging.error(f"Error updating ETA display: {e}")
+                logging.exception(f"Error updating ETA display: {e}")
 
 
 def reset_current_file_details(gui) -> None:
@@ -666,7 +670,7 @@ def reset_current_file_details(gui) -> None:
     gui.current_file_encoding_start_time = None
     gui.last_encoding_progress = 0  # Reset last progress for ETA calculation
     # Reset stored AB-AV1 ETA values
-    if hasattr(gui, 'last_eta_seconds'):
+    if hasattr(gui, "last_eta_seconds"):
         del gui.last_eta_seconds
-    if hasattr(gui, 'last_eta_timestamp'):
+    if hasattr(gui, "last_eta_timestamp"):
         del gui.last_eta_timestamp

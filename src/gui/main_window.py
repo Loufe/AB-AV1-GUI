@@ -3,30 +3,31 @@
 Main window module for the AV1 Video Converter application.
 """
 # Standard library imports
-import tkinter as tk
-from tkinter import ttk, messagebox
-import multiprocessing
-import threading
+import json  # For settings persistence
 import logging
-import os # Added import
+import multiprocessing
+import os  # Added import
 import sys
-import time
-import json # For settings persistence
+import tkinter as tk
+from tkinter import messagebox, ttk
+
+from src.gui.conversion_controller import force_stop_conversion, start_conversion, stop_conversion
+from src.gui.gui_actions import (
+    browse_input_folder,
+    browse_log_folder,
+    browse_output_folder,
+    check_ffmpeg,
+    open_history_file_action,
+    open_log_folder_action,
+)
+from src.gui.gui_updates import update_statistics_summary
 
 # Project imports - Replace 'convert_app' with 'src'
 from src.gui.tabs.main_tab import create_main_tab
 from src.gui.tabs.settings_tab import create_settings_tab
-from src.gui.gui_actions import (
-    browse_input_folder, browse_output_folder, browse_log_folder,
-    open_log_folder_action, open_history_file_action,
-    check_ffmpeg
-)
-from src.gui.conversion_controller import (
-    start_conversion, stop_conversion, force_stop_conversion
-)
-from src.gui.gui_updates import update_statistics_summary
+
 # Import setup_logging only needed here now - Replace 'convert_app' with 'src'
-from src.utils import setup_logging, get_script_directory # Added get_script_directory
+from src.utils import get_script_directory, setup_logging  # Added get_script_directory
 
 logger = logging.getLogger(__name__)
 
@@ -109,17 +110,17 @@ class VideoConverterGUI:
         create_settings_tab(self)
         self.initialize_conversion_state()
         self.initialize_button_states()
-        
+
         # Update statistics panel with historical data
         update_statistics_summary(self)
-        
+
         check_ffmpeg(self) # Check dependencies after UI is built
 
     def load_settings(self):
         """Load settings from JSON config file"""
         try:
             if os.path.exists(CONFIG_FILE):
-                with open(CONFIG_FILE, 'r', encoding='utf-8') as f:
+                with open(CONFIG_FILE, encoding="utf-8") as f:
                     config = json.load(f); logger.info(f"Loaded settings from {CONFIG_FILE}"); return config # Changed print to logger
             else: logger.info(f"Config file {CONFIG_FILE} not found, using defaults."); return {} # Changed print to logger
         except Exception as e: logger.error(f"Error loading settings from {CONFIG_FILE}: {e}. Using defaults."); return {} # Changed print to logger
@@ -133,52 +134,52 @@ class VideoConverterGUI:
             log_folder_to_save = self.log_folder.get()
 
             current_config = {
-                'input_folder': self.input_folder.get(), 'output_folder': self.output_folder.get(),
-                'overwrite': self.overwrite.get(), 'ext_mp4': self.ext_mp4.get(),
-                'ext_mkv': self.ext_mkv.get(), 'ext_avi': self.ext_avi.get(), 'ext_wmv': self.ext_wmv.get(),
-                'convert_audio': self.convert_audio.get(), 'audio_codec': self.audio_codec.get(),
-                'log_folder': log_folder_to_save, # Save the potentially user-modified path
-                'anonymize_logs': self.anonymize_logs.get(),
-                'anonymize_history': self.anonymize_history.get(),
-                'delete_original_after_conversion': self.delete_original_var.get() # Added
+                "input_folder": self.input_folder.get(), "output_folder": self.output_folder.get(),
+                "overwrite": self.overwrite.get(), "ext_mp4": self.ext_mp4.get(),
+                "ext_mkv": self.ext_mkv.get(), "ext_avi": self.ext_avi.get(), "ext_wmv": self.ext_wmv.get(),
+                "convert_audio": self.convert_audio.get(), "audio_codec": self.audio_codec.get(),
+                "log_folder": log_folder_to_save, # Save the potentially user-modified path
+                "anonymize_logs": self.anonymize_logs.get(),
+                "anonymize_history": self.anonymize_history.get(),
+                "delete_original_after_conversion": self.delete_original_var.get() # Added
             }
             temp_config_file = CONFIG_FILE + ".tmp"
-            with open(temp_config_file, 'w', encoding='utf-8') as f: json.dump(current_config, f, indent=4)
+            with open(temp_config_file, "w", encoding="utf-8") as f: json.dump(current_config, f, indent=4)
             os.replace(temp_config_file, CONFIG_FILE)
             logger.info(f"Saved settings to {CONFIG_FILE} (Log folder saved: '{log_folder_to_save}')")
         except Exception as e: logger.error(f"Error saving settings to {CONFIG_FILE}: {e}")
 
     def setup_styles(self):
         """Set up the GUI styles"""
-        self.style = ttk.Style();
+        self.style = ttk.Style()
         try: logger.debug(f"Using theme: {self.style.theme_use()}")
         except tk.TclError: logging.warning("Could not detect theme, using default.")
         self.style.configure("TFrame", background="#f0f0f0"); self.style.configure("TButton", font=("Arial", 10))
         self.style.configure("TLabel", font=("Arial", 10), background="#f0f0f0"); self.style.configure("Header.TLabel", font=("Arial", 10, "bold"), background="#f0f0f0")
         self.style.configure("ExtButton.TCheckbutton", font=("Arial", 9)); self.style.configure("TLabelframe", background="#f0f0f0", padding=5)
         self.style.configure("TLabelframe.Label", font=("Arial", 10, "bold"), background="#f0f0f0")
-        
+
         # Add custom style for range text - dark gray color
         self.style.configure("Range.TLabel", font=("Arial", 10), background="#f0f0f0", foreground="#606060")
 
     def initialize_variables(self):
         """Initialize the GUI variables, using loaded config"""
         # Initialize StringVars/BooleanVars *first* based on config or defaults
-        self.input_folder = tk.StringVar(value=self.config.get('input_folder', ''))
-        self.output_folder = tk.StringVar(value=self.config.get('output_folder', ''))
+        self.input_folder = tk.StringVar(value=self.config.get("input_folder", ""))
+        self.output_folder = tk.StringVar(value=self.config.get("output_folder", ""))
         # Initialize log_folder based on config. It will be overwritten shortly after
         # logging setup confirms the actual path, or cleared if invalid.
-        self.log_folder = tk.StringVar(value=self.config.get('log_folder', ''))
-        self.overwrite = tk.BooleanVar(value=self.config.get('overwrite', False))
-        self.ext_mp4 = tk.BooleanVar(value=self.config.get('ext_mp4', True))
-        self.ext_mkv = tk.BooleanVar(value=self.config.get('ext_mkv', True))
-        self.ext_avi = tk.BooleanVar(value=self.config.get('ext_avi', True))
-        self.ext_wmv = tk.BooleanVar(value=self.config.get('ext_wmv', True))
-        self.convert_audio = tk.BooleanVar(value=self.config.get('convert_audio', True))
-        self.anonymize_logs = tk.BooleanVar(value=self.config.get('anonymize_logs', True))
-        self.anonymize_history = tk.BooleanVar(value=self.config.get('anonymize_history', True))
-        self.audio_codec = tk.StringVar(value=self.config.get('audio_codec', "opus"))
-        self.delete_original_var = tk.BooleanVar(value=self.config.get('delete_original_after_conversion', False))
+        self.log_folder = tk.StringVar(value=self.config.get("log_folder", ""))
+        self.overwrite = tk.BooleanVar(value=self.config.get("overwrite", False))
+        self.ext_mp4 = tk.BooleanVar(value=self.config.get("ext_mp4", True))
+        self.ext_mkv = tk.BooleanVar(value=self.config.get("ext_mkv", True))
+        self.ext_avi = tk.BooleanVar(value=self.config.get("ext_avi", True))
+        self.ext_wmv = tk.BooleanVar(value=self.config.get("ext_wmv", True))
+        self.convert_audio = tk.BooleanVar(value=self.config.get("convert_audio", True))
+        self.anonymize_logs = tk.BooleanVar(value=self.config.get("anonymize_logs", True))
+        self.anonymize_history = tk.BooleanVar(value=self.config.get("anonymize_history", True))
+        self.audio_codec = tk.StringVar(value=self.config.get("audio_codec", "opus"))
+        self.delete_original_var = tk.BooleanVar(value=self.config.get("delete_original_after_conversion", False))
         # Non-saved variables
         self.vmaf_scores = []; self.crf_values = []; self.size_reductions = []
         try: self.cpu_count = max(1, multiprocessing.cpu_count())
@@ -194,34 +195,34 @@ class VideoConverterGUI:
 
     def initialize_button_states(self):
         """Initialize button states"""
-        if hasattr(self, 'start_button'): self.start_button.config(state="normal")
-        if hasattr(self, 'stop_button'): self.stop_button.config(state="disabled")
-        if hasattr(self, 'force_stop_button'): self.force_stop_button.config(state="disabled")
+        if hasattr(self, "start_button"): self.start_button.config(state="normal")
+        if hasattr(self, "stop_button"): self.stop_button.config(state="disabled")
+        if hasattr(self, "force_stop_button"): self.force_stop_button.config(state="disabled")
 
     def on_exit(self):
         """Handle application exit: confirm, save settings, cleanup"""
         confirm_exit = True
-        if hasattr(self, 'conversion_running') and self.conversion_running:
+        if hasattr(self, "conversion_running") and self.conversion_running:
             confirm_exit = messagebox.askyesno("Confirm Exit", "Conversion running. Exit will stop it.\nAre you sure?")
         if confirm_exit:
             logger.info("=== AV1 Video Converter Exiting ==="); self.save_settings()
-            if hasattr(self, 'conversion_running') and self.conversion_running:
+            if hasattr(self, "conversion_running") and self.conversion_running:
                 logger.info("Signalling conversion thread to stop..."); self.force_stop_conversion(confirm=False)
             self._cleanup_threads(); self.root.after(100, self._complete_exit)
         else: logger.info("User cancelled application exit.")
 
     def _cleanup_threads(self):
         """Ensure all threads are properly cleaned up before exit"""
-        if hasattr(self, 'elapsed_timer_id') and self.elapsed_timer_id:
+        if hasattr(self, "elapsed_timer_id") and self.elapsed_timer_id:
             try: self.root.after_cancel(self.elapsed_timer_id); self.elapsed_timer_id = None; logger.debug("Cancelled timer")
-            except Exception as e: logger.error(f"Error cancelling timer: {str(e)}")
-        if hasattr(self, 'stop_event') and self.stop_event: self.stop_event.set(); logger.debug("Stop event set.")
-        if hasattr(self, 'conversion_thread') and self.conversion_thread and self.conversion_thread.is_alive():
+            except Exception as e: logger.error(f"Error cancelling timer: {e!s}")
+        if hasattr(self, "stop_event") and self.stop_event: self.stop_event.set(); logger.debug("Stop event set.")
+        if hasattr(self, "conversion_thread") and self.conversion_thread and self.conversion_thread.is_alive():
             try:
                 logger.info("Waiting briefly for thread..."); self.conversion_thread.join(timeout=1.0)
                 if self.conversion_thread.is_alive(): logger.warning("Thread did not terminate quickly")
                 else: logger.debug("Thread terminated")
-            except Exception as e: logger.error(f"Error joining thread: {str(e)}")
+            except Exception as e: logger.error(f"Error joining thread: {e!s}")
         self.conversion_thread = None; self.conversion_running = False; self.stop_event = None
 
     def _complete_exit(self):

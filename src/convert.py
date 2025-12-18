@@ -8,20 +8,19 @@ It imports and calls the main function from the main module within this package.
 Run using 'python -m src.convert' from the project root directory.
 """
 import sys
-import os
-import traceback # Import traceback for better error reporting
+import traceback  # Import traceback for better error reporting
 
 # Platform-specific modules for single key press
 try:
-    import msvcrt # For Windows
+    import msvcrt  # For Windows
     def wait_for_key(message="Press any key to exit..."):
         print(message, end="", flush=True)
         msvcrt.getch()
         print() # Print a newline after key press
 except ImportError:
     # For Unix/Linux/macOS
-    import tty
     import termios
+    import tty
     def wait_for_key(message="Press any key to exit..."):
         print(message, end="", flush=True)
         fd = sys.stdin.fileno()
@@ -37,7 +36,7 @@ except ImportError:
 
 # Import the main function using a relative import
 try:
-    from .main import main as run_application # Use relative import '.'
+    from .main import main as run_application  # Use relative import '.'
 except ImportError as e:
     print(f"Error importing '.main' within 'src' package: {e}", file=sys.stderr)
     print(f"Current sys.path: {sys.path}", file=sys.stderr)
@@ -63,9 +62,9 @@ if __name__ == "__main__":
     except Exception as e:
         exit_code = 1 # Set error exit code
         # Catch any exceptions that might escape the main function's error handling
-        print(f"\n--- UNHANDLED APPLICATION ERROR ---", file=sys.stderr)
+        print("\n--- UNHANDLED APPLICATION ERROR ---", file=sys.stderr)
         print(f"An unexpected error occurred: {e}", file=sys.stderr)
-        print(f"Please check the logs for more details.", file=sys.stderr)
+        print("Please check the logs for more details.", file=sys.stderr)
         print("\n--- Traceback ---", file=sys.stderr)
         traceback.print_exc()
         print("--- End Traceback ---\n", file=sys.stderr)
@@ -77,4 +76,3 @@ if __name__ == "__main__":
         wait_for_key()
         sys.exit(exit_code) # Exit with appropriate code after key press
 
-    

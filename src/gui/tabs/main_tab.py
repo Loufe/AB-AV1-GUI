@@ -4,12 +4,13 @@ Main tab module for the AV1 Video Converter application.
 """
 import tkinter as tk
 from tkinter import ttk
-import math # For ceil
+
+# Import the constant directly from config
+from src.config import DEFAULT_VMAF_TARGET
 
 # Project imports - Replace 'convert_app' with 'src'
 from src.gui.base import ToolTip
-# Import the constant directly from config
-from src.config import DEFAULT_VMAF_TARGET
+
 
 def create_main_tab(gui):
     """Create the main conversion tab"""
@@ -88,15 +89,15 @@ def create_main_tab(gui):
     # Time display frame for both elapsed and remaining time
     time_frame = ttk.Frame(status_frame)
     time_frame.grid(row=0, column=1, sticky="e")
-    
+
     # Total elapsed time
     ttk.Label(time_frame, text="Total Time:").pack(side="left", padx=(0, 5))
     gui.total_elapsed_label = ttk.Label(time_frame, text="-")
     gui.total_elapsed_label.pack(side="left")
-    
+
     # Separator
     ttk.Label(time_frame, text="|").pack(side="left", padx=(8, 8))
-    
+
     # Estimated remaining time
     ttk.Label(time_frame, text="Est. Remaining:").pack(side="left", padx=(0, 5))
     gui.total_remaining_label = ttk.Label(time_frame, text="-")
@@ -116,14 +117,14 @@ def create_main_tab(gui):
     ttk.Label(file_frame, text="Quality Detection:").grid(row=1, column=0, sticky="w", padx=5, pady=2)
     gui.quality_progress = ttk.Progressbar(file_frame, orient="horizontal", length=100, mode="determinate")
     gui.quality_progress.grid(row=1, column=1, sticky="ew", padx=5, pady=2)
-    gui.quality_percent_label = ttk.Label(file_frame, text="0%", width=5, anchor='w')
+    gui.quality_percent_label = ttk.Label(file_frame, text="0%", width=5, anchor="w")
     gui.quality_percent_label.grid(row=1, column=2, sticky="w", padx=(0, 5), pady=2)
 
     # Encoding Bar
     ttk.Label(file_frame, text="Encoding:").grid(row=2, column=0, sticky="w", padx=5, pady=2)
     gui.encoding_progress = ttk.Progressbar(file_frame, orient="horizontal", length=100, mode="determinate")
     gui.encoding_progress.grid(row=2, column=1, sticky="ew", padx=5, pady=2)
-    gui.encoding_percent_label = ttk.Label(file_frame, text="0%", width=5, anchor='w')
+    gui.encoding_percent_label = ttk.Label(file_frame, text="0%", width=5, anchor="w")
     gui.encoding_percent_label.grid(row=2, column=2, sticky="w", padx=(0, 5), pady=2)
     # --- End Dual Progress Bars ---
 
@@ -173,7 +174,7 @@ def create_main_tab(gui):
     # Left column for VMAF and CRF
     left_col = ttk.Frame(stats_grid)
     left_col.pack(side="left", fill="x", expand=True, padx=(0, 10))
-    
+
     # VMAF Score with split average and range
     vmaf_row = ttk.Frame(left_col)
     vmaf_row.grid(row=0, column=0, columnspan=2, sticky="w", pady=2)
@@ -182,7 +183,7 @@ def create_main_tab(gui):
     gui.vmaf_stats_label.pack(side="left", padx=(5, 5))
     gui.vmaf_range_label = ttk.Label(vmaf_row, text="", style="Range.TLabel")
     gui.vmaf_range_label.pack(side="left")
-    
+
     # CRF Value with split average and range
     crf_row = ttk.Frame(left_col)
     crf_row.grid(row=1, column=0, columnspan=2, sticky="w", pady=2)
@@ -195,7 +196,7 @@ def create_main_tab(gui):
     # Right column for Size Reduction and Total Saved
     right_col = ttk.Frame(stats_grid)
     right_col.pack(side="right", fill="x", expand=True, padx=(10, 0))
-    
+
     # Size Reduction with split average and range
     size_row = ttk.Frame(right_col)
     size_row.grid(row=0, column=0, columnspan=2, sticky="w", pady=2)
@@ -204,7 +205,7 @@ def create_main_tab(gui):
     gui.size_stats_label.pack(side="left", padx=(5, 5))
     gui.size_range_label = ttk.Label(size_row, text="", style="Range.TLabel")
     gui.size_range_label.pack(side="left")
-    
+
     # Total Space Saved (single row)
     ttk.Label(right_col, text="Total Space Saved:").grid(row=1, column=0, sticky="w", pady=2)
     gui.total_saved_label = ttk.Label(right_col, text="-")

@@ -4,26 +4,32 @@ Video conversion functions for the AV1 Video Converter application.
 
 This module provides functions to convert videos to AV1 format using ab-av1.
 """
-import os
-import sys
-import time
 import logging
+import time
 import traceback
 from pathlib import Path
 
+from src.ab_av1.exceptions import (
+    AbAv1Error,
+    ConversionNotWorthwhileError,
+    EncodingError,
+    InputFileError,
+    OutputFileError,
+    VMAFError,
+)
+
 # Corrected import path: Use src.ab_av1 instead of src.ab_av1_wrapper
 from src.ab_av1.wrapper import AbAv1Wrapper
-from src.ab_av1.exceptions import (
-    InputFileError, OutputFileError, VMAFError, EncodingError, AbAv1Error,
-    ConversionNotWorthwhileError
-)
-from src.utils import (
-    log_video_properties, log_conversion_result, anonymize_filename,
-    get_video_info, format_file_size, format_time
-)
+
 # Import constants from config
-from src.config import (
-    DEFAULT_VMAF_TARGET, DEFAULT_ENCODING_PRESET
+from src.config import DEFAULT_ENCODING_PRESET, DEFAULT_VMAF_TARGET
+from src.utils import (
+    anonymize_filename,
+    format_file_size,
+    format_time,
+    get_video_info,
+    log_conversion_result,
+    log_video_properties,
 )
 
 logger = logging.getLogger(__name__)
@@ -66,15 +72,15 @@ def process_video(video_path: str, input_folder: str, output_folder: str, overwr
     except ValueError:
         logging.warning(f"Input {anonymized_input_name} not relative to input base. Outputting to base: {output_folder_path}")
         output_dir = output_folder_path
-        relative_dir = Path(".")
+        relative_dir = Path()
     except Exception as e:
-         error_msg = f"Error calculating output dir: {e}"; logging.error(error_msg)
+         error_msg = f"Error calculating output dir: {e}"; logging.exception(error_msg)
          if file_info_callback: file_info_callback(input_path.name, "failed", {"message":error_msg,"type":"output_dir_error"})
          return None
 
     try: output_dir.mkdir(parents=True, exist_ok=True)
     except Exception as e:
-        error_msg = f"Failed create output dir '{output_dir}': {e}"; logging.error(error_msg)
+        error_msg = f"Failed create output dir '{output_dir}': {e}"; logging.exception(error_msg)
         if file_info_callback: file_info_callback(input_path.name, "failed", {"message":error_msg,"type":"output_dir_error"})
         return None
 
@@ -87,7 +93,7 @@ def process_video(video_path: str, input_folder: str, output_folder: str, overwr
     if output_path.exists() and not overwrite and input_path != output_path:
         anonymized_output_name = anonymize_filename(str(output_path))
         logging.info(f"Skipping {anonymized_input_name} - output exists (standard check): {anonymized_output_name}")
-        if file_info_callback: file_info_callback(input_path.name, "skipped", f"Output exists")
+        if file_info_callback: file_info_callback(input_path.name, "skipped", "Output exists")
         return None
 
     # --- Get Video Info ---
@@ -98,7 +104,7 @@ def process_video(video_path: str, input_folder: str, output_folder: str, overwr
         if not video_info:
             if file_info_callback: file_info_callback(input_path.name, "failed", {"message":f"Cannot analyze {input_path.name}", "type":"analysis_failed"})
             return None
-        input_size = video_info.get('file_size', 0)
+        input_size = video_info.get("file_size", 0)
         for stream in video_info.get("streams", []):
             if stream.get("codec_type") == "video":
                 input_vcodec = stream.get("codec_name", "?").upper()
@@ -119,21 +125,19 @@ def process_video(video_path: str, input_folder: str, output_folder: str, overwr
             logging.info(f"Skipping {anonymized_input_name} - Already AV1/MKV (in-place, no overwrite)")
             if file_info_callback: file_info_callback(input_path.name, "skipped", "Already AV1/MKV (in-place, no overwrite)")
             return None
-        else:
-            # Input is MKV, but NOT AV1. Attempt to add suffix.
-            suffixed_filename = input_path.stem + " (av1).mkv"
-            suffixed_output_path = output_dir / suffixed_filename
-            anonymized_suffixed_output = anonymize_filename(str(suffixed_output_path))
+        # Input is MKV, but NOT AV1. Attempt to add suffix.
+        suffixed_filename = input_path.stem + " (av1).mkv"
+        suffixed_output_path = output_dir / suffixed_filename
+        anonymized_suffixed_output = anonymize_filename(str(suffixed_output_path))
 
-            if suffixed_output_path.exists():
-                # If the suffixed file *also* exists, we must skip
-                logging.warning(f"Skipping {anonymized_input_name} - Output with suffix '{suffixed_filename}' already exists: {anonymized_suffixed_output}")
-                if file_info_callback: file_info_callback(input_path.name, "skipped", f"Output with '(av1)' suffix exists")
-                return None
-            else:
-                # Use the suffixed path for this conversion
-                output_path = suffixed_output_path
-                logging.info(f"Input is non-AV1 MKV; Overwrite disabled. Using suffixed output: {anonymized_suffixed_output}")
+        if suffixed_output_path.exists():
+            # If the suffixed file *also* exists, we must skip
+            logging.warning(f"Skipping {anonymized_input_name} - Output with suffix '{suffixed_filename}' already exists: {anonymized_suffixed_output}")
+            if file_info_callback: file_info_callback(input_path.name, "skipped", "Output with '(av1)' suffix exists")
+            return None
+        # Use the suffixed path for this conversion
+        output_path = suffixed_output_path
+        logging.info(f"Input is non-AV1 MKV; Overwrite disabled. Using suffixed output: {anonymized_suffixed_output}")
 
     # --- Check again if final output path exists (covers case where suffix was added) ---
     # Note: This check might seem redundant if the suffix logic already checked,
@@ -146,7 +150,7 @@ def process_video(video_path: str, input_folder: str, output_folder: str, overwr
         # Log it for clarity.
         anonymized_output_name = anonymize_filename(str(output_path))
         logging.warning(f"Skipping {anonymized_input_name} - Final determined output path exists (post-suffix check): {anonymized_output_name}")
-        if file_info_callback: file_info_callback(input_path.name, "skipped", f"Final output path exists")
+        if file_info_callback: file_info_callback(input_path.name, "skipped", "Final output path exists")
         return None
 
 
@@ -188,9 +192,9 @@ def process_video(video_path: str, input_folder: str, output_folder: str, overwr
 
         log_conversion_result(str(input_path), str(output_path), conversion_elapsed_time)
 
-        final_vmaf = result_stats.get('vmaf') if result_stats else None
-        final_crf = result_stats.get('crf') if result_stats else None
-        final_vmaf_target = result_stats.get('vmaf_target_used') if result_stats else DEFAULT_VMAF_TARGET # Get actual target used
+        final_vmaf = result_stats.get("vmaf") if result_stats else None
+        final_crf = result_stats.get("crf") if result_stats else None
+        final_vmaf_target = result_stats.get("vmaf_target_used") if result_stats else DEFAULT_VMAF_TARGET # Get actual target used
         logging.info(f"Conversion successful - Final VMAF: {final_vmaf if final_vmaf else 'N/A'}, Final CRF: {final_crf if final_crf else 'N/A'} (Target VMAF: {final_vmaf_target})")
 
         # Check VMAF achieved vs target used (use a small tolerance)
@@ -198,7 +202,7 @@ def process_video(video_path: str, input_folder: str, output_folder: str, overwr
              logging.warning(f"Final VMAF {final_vmaf:.1f} is below target {final_vmaf_target} for {anonymized_input_name}")
 
         output_acodec = input_acodec # Default to original
-        if convert_audio and input_acodec.lower() not in ['aac', 'opus']: output_acodec = audio_codec.lower() # Store lowercase
+        if convert_audio and input_acodec.lower() not in ["aac", "opus"]: output_acodec = audio_codec.lower() # Store lowercase
 
         # Return success tuple including stats for history
         return (str(output_path), conversion_elapsed_time, input_size, output_size, final_crf, final_vmaf, final_vmaf_target)
@@ -207,8 +211,8 @@ def process_video(video_path: str, input_folder: str, output_folder: str, overwr
         logging.info(f"Conversion not worthwhile for {anonymized_input_name}: {e}")
         if file_info_callback:
             file_info_callback(
-                input_path.name, 
-                "skipped_not_worth", 
+                input_path.name,
+                "skipped_not_worth",
                 {
                     "message": str(e),
                     "type": "conversion_not_worthwhile",
@@ -219,14 +223,14 @@ def process_video(video_path: str, input_folder: str, output_folder: str, overwr
     except (InputFileError, OutputFileError, VMAFError, EncodingError, AbAv1Error) as e:
         # These errors are logged by the wrapper or dispatcher, just return None
         # Logging the specific error type here might be redundant
-        logging.error(f"Conversion failed for {anonymized_input_name}: {e}")
+        logging.exception(f"Conversion failed for {anonymized_input_name}: {e}")
         # Ensure error callback is triggered if not already done by wrapper
         if file_info_callback:
-            file_info_callback(input_path.name, "failed", {"message": str(e), "type": getattr(e, 'error_type', 'conversion_error')})
+            file_info_callback(input_path.name, "failed", {"message": str(e), "type": getattr(e, "error_type", "conversion_error")})
         return None
     except Exception as e:
         stack_trace = traceback.format_exc()
-        logging.error(f"Unexpected error processing {anonymized_input_name}: {e}")
+        logging.exception(f"Unexpected error processing {anonymized_input_name}: {e}")
         logging.debug(f"Stack trace:\n{stack_trace}")
         if file_info_callback:
             file_info_callback(input_path.name, "failed", {"message":f"Unexpected error: {e}", "type":"unexpected_error", "details":str(e), "stack_trace":stack_trace})

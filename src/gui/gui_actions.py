@@ -4,14 +4,13 @@ GUI action functions (browsing, opening files/folders, dependency checks)
 for the AV1 Video Converter application.
 """
 # Standard library imports
-import os
-import sys
-import subprocess
 import logging
+import os
+import subprocess
+import sys
 
 # GUI-related imports
 from tkinter import filedialog, messagebox
-import tkinter as tk # For type hinting if needed
 
 # Project imports - Replace 'convert_app' with 'src'
 # Import the checker function from its new location
@@ -78,7 +77,7 @@ def open_log_folder_action(gui) -> None:
             logger.warning("Log directory not set or invalid, cannot open.")
             messagebox.showwarning("Cannot Open Log Folder", "The log folder location is not set or is invalid.")
     except Exception as e:
-        log_dir_str = gui.log_directory if hasattr(gui, 'log_directory') else "N/A"
+        log_dir_str = gui.log_directory if hasattr(gui, "log_directory") else "N/A"
         logger.error(f"Failed to open log folder '{log_dir_str}': {e}")
         messagebox.showerror("Error", f"Could not open log folder:\n{e}")
 
@@ -157,8 +156,7 @@ def check_ffmpeg(gui) -> bool:
         logger.error(f"ab-av1 check failed: {message}")
         messagebox.showerror("ab-av1 Not Found", message)
         return False
-    else:
-        logger.info(f"ab-av1 check successful: {message}")
+    logger.info(f"ab-av1 check successful: {message}")
 
     logger.info("FFmpeg and ab-av1 checks passed.")
     return True

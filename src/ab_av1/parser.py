@@ -4,11 +4,11 @@ Parses the output stream from the ab-av1 executable.
 Focuses on lines expected directly from ab-av1 via stdout/stderr.
 """
 
-import re
-import os
 import logging
+import os
+import re
 
-from src.utils import anonymize_filename, format_file_size
+from src.utils import anonymize_filename
 
 logger = logging.getLogger(__name__)
 
@@ -22,32 +22,32 @@ class AbAv1Parser:
                                 Signature: callback(filename_basename, status, info_dict)
         """
         self.file_info_callback = file_info_callback
-        
+
         # Pre-compile regex patterns for efficiency
         # Detect ffmpeg progress accurately with multiple patterns
-        self._re_ffmpeg_progress = re.compile(r'(?:frame|fps|q|size|time|bitrate|speed)', re.IGNORECASE)
-        self._re_ffmpeg_time = re.compile(r'time=\s*(\d+):(\d+):(\d+\.\d+)', re.IGNORECASE)
-        self._re_ffmpeg_time_seconds = re.compile(r'time=\s*(\d+\.\d+)', re.IGNORECASE)
-        self._re_ffmpeg_frame = re.compile(r'frame=\s*(\d+)', re.IGNORECASE)
-        self._re_ffmpeg_fps = re.compile(r'fps=\s*(\d+\.?\d*)', re.IGNORECASE)
-        self._re_ffmpeg_speed = re.compile(r'speed=\s*(\d+\.?\d*)x', re.IGNORECASE)
-        self._re_ffmpeg_size = re.compile(r'size=\s*(\d+)([kKmMgG]?[bB])', re.IGNORECASE)
+        self._re_ffmpeg_progress = re.compile(r"(?:frame|fps|q|size|time|bitrate|speed)", re.IGNORECASE)
+        self._re_ffmpeg_time = re.compile(r"time=\s*(\d+):(\d+):(\d+\.\d+)", re.IGNORECASE)
+        self._re_ffmpeg_time_seconds = re.compile(r"time=\s*(\d+\.\d+)", re.IGNORECASE)
+        self._re_ffmpeg_frame = re.compile(r"frame=\s*(\d+)", re.IGNORECASE)
+        self._re_ffmpeg_fps = re.compile(r"fps=\s*(\d+\.?\d*)", re.IGNORECASE)
+        self._re_ffmpeg_speed = re.compile(r"speed=\s*(\d+\.?\d*)x", re.IGNORECASE)
+        self._re_ffmpeg_size = re.compile(r"size=\s*(\d+)([kKmMgG]?[bB])", re.IGNORECASE)
 
         # Refined regex patterns based on actual formats in logs
-        self._re_phase_encode_start = re.compile(r'ab_av1::command::encode\]\s*encoding(?:\s+video|\s+\S+\.mkv|\s|$)|Starting encoding', re.IGNORECASE)
-        self._re_sample_progress = re.compile(r'\[.*?sample_encode\].*?(\d+(\.\d+)?)%,\s*(\d+)\s*fps,\s*eta\s*(.*?)(?=$|\))', re.IGNORECASE)
-        self._re_main_encoding = re.compile(r'command::encode\]\s*(\d+)%,\s*(\d+)\s*fps,\s*eta\s+([\w\s]+)(?:$|\)|\])', re.IGNORECASE)
-        self._re_crf_vmaf = re.compile(r'crf\s+(\d+)\s+VMAF\s+(\d+\.?\d*)', re.IGNORECASE)
-        self._re_best_crf = re.compile(r'Best\s+CRF:\s+(\d+)', re.IGNORECASE)
-        self._re_size_reduction_percent = re.compile(r'predicted video stream size.*?\((\d+\.?\d*)\s*%\)', re.IGNORECASE)
+        self._re_phase_encode_start = re.compile(r"ab_av1::command::encode\]\s*encoding(?:\s+video|\s+\S+\.mkv|\s|$)|Starting encoding", re.IGNORECASE)
+        self._re_sample_progress = re.compile(r"\[.*?sample_encode\].*?(\d+(\.\d+)?)%,\s*(\d+)\s*fps,\s*eta\s*(.*?)(?=$|\))", re.IGNORECASE)
+        self._re_main_encoding = re.compile(r"command::encode\]\s*(\d+)%,\s*(\d+)\s*fps,\s*eta\s+([\w\s]+)(?:$|\)|\])", re.IGNORECASE)
+        self._re_crf_vmaf = re.compile(r"crf\s+(\d+)\s+VMAF\s+(\d+\.?\d*)", re.IGNORECASE)
+        self._re_best_crf = re.compile(r"Best\s+CRF:\s+(\d+)", re.IGNORECASE)
+        self._re_size_reduction_percent = re.compile(r"predicted video stream size.*?\((\d+\.?\d*)\s*%\)", re.IGNORECASE)
 
         # Encoding Phase Summary Line (ab-av1 direct output)
         # Example: ⠖ 00:00:37 Encoding -------- (encoding, eta 0s)
-        self._re_ab_av1_encoding_summary = re.compile(r'\b(Encoding)\s*-*\s*\((\w+),\s*eta\s*([\w\s:]+)\)', re.IGNORECASE)
+        self._re_ab_av1_encoding_summary = re.compile(r"\b(Encoding)\s*-*\s*\((\w+),\s*eta\s*([\w\s:]+)\)", re.IGNORECASE)
 
         # Error patterns
-        self._re_error_generic = re.compile(r'error|failed|invalid', re.IGNORECASE)
-        self._re_error_crf_fail = re.compile(r'Failed\s+to\s+find\s+a\s+suitable\s+crf', re.IGNORECASE)
+        self._re_error_generic = re.compile(r"error|failed|invalid", re.IGNORECASE)
+        self._re_error_crf_fail = re.compile(r"Failed\s+to\s+find\s+a\s+suitable\s+crf", re.IGNORECASE)
 
 
     def parse_line(self, line: str, stats: dict) -> dict:
@@ -79,12 +79,12 @@ class AbAv1Parser:
                 stats["progress_encoding"] = 0.0
                 stats["last_reported_encoding_progress"] = 0.0
                 processed_line = True
-                
+
                 # Log extra information about this transition
                 logger.info(f"Starting encoding phase with CRF: {stats.get('crf', '?')}, VMAF Target: {stats.get('vmaf_target_used', '?')}")
                 logger.info(f"Duration in seconds: {stats.get('total_duration_seconds', '?')}")
                 logger.info("Looking for ffmpeg progress output lines in the form 'frame=XXX fps=XXX time=XX:XX:XX'")
-                
+
                 if self.file_info_callback:
                     callback_info = {
                         "progress_quality": 100.0, "progress_encoding": 0.0,
@@ -170,18 +170,18 @@ class AbAv1Parser:
                     progress_pct = float(sample_progress_match.group(1))
                     fps = int(sample_progress_match.group(3))
                     eta_text = sample_progress_match.group(4).strip()
-                    
+
                     logger.info(f"Sample encoding progress detected: {progress_pct}%, {fps} fps, ETA: {eta_text}")
-                    
+
                     # Update stats
                     stats["progress_encoding"] = progress_pct
                     stats["last_ffmpeg_fps"] = fps
                     stats["eta_text"] = eta_text
-                    
+
                     # Send progress update
                     if self.file_info_callback:
                         message = f"Encoding: {progress_pct:.1f}% (FPS: {fps}, ETA: {eta_text})"
-                        
+
                         callback_data = {
                             "progress_quality": 100.0,
                             "progress_encoding": progress_pct,
@@ -197,10 +197,10 @@ class AbAv1Parser:
                             "vmaf_target_used": stats.get("vmaf_target_used")
                         }
                         self.file_info_callback(anonymized_input_basename, "progress", callback_data)
-                    
+
                     processed_line = True
                     return stats
-                
+
                 # Look for any main encoding indicators
                 main_encoding_match = self._re_main_encoding.search(line)
                 if main_encoding_match:
@@ -209,18 +209,18 @@ class AbAv1Parser:
                     progress_pct = float(main_encoding_match.group(1))
                     fps = int(main_encoding_match.group(2))
                     eta_text = main_encoding_match.group(3).strip()
-                    
+
                     logger.info(f"Main encoding progress: {progress_pct}%, {fps} fps, ETA: {eta_text}")
-                    
+
                     # Update stats
                     stats["progress_encoding"] = progress_pct
                     stats["last_ffmpeg_fps"] = fps
                     stats["eta_text"] = eta_text
-                    
+
                     # Send progress update
                     if self.file_info_callback:
                         message = f"Encoding: {progress_pct:.1f}% (FPS: {fps}, ETA: {eta_text})"
-                        
+
                         callback_data = {
                             "progress_quality": 100.0,
                             "progress_encoding": progress_pct,
@@ -236,23 +236,23 @@ class AbAv1Parser:
                             "vmaf_target_used": stats.get("vmaf_target_used")
                         }
                         self.file_info_callback(anonymized_input_basename, "progress", callback_data)
-                    
+
                     processed_line = True
                     return stats
-                    
+
                 # Even simpler: look for anything with a percentage
-                percentage_match = re.search(r'(\d+)\s*%', line)
+                percentage_match = re.search(r"(\d+)\s*%", line)
                 if percentage_match:
                     progress_pct = float(percentage_match.group(1))
                     logger.info(f"Percentage detected in line: {progress_pct}% in '{line}'")
-                    
+
                     # Basic progress update (no FPS or ETA)
                     stats["progress_encoding"] = progress_pct
-                    
+
                     # Send progress update
                     if self.file_info_callback:
                         message = f"Encoding: {progress_pct:.1f}%"
-                        
+
                         callback_data = {
                             "progress_quality": 100.0,
                             "progress_encoding": progress_pct,
@@ -264,9 +264,9 @@ class AbAv1Parser:
                             "size_reduction": stats.get("size_reduction")
                         }
                         self.file_info_callback(anonymized_input_basename, "progress", callback_data)
-                    
+
                     processed_line = True
-                
+
                 # Fall back to ab-av1 summary line if no ffmpeg progress
                 summary_match = self._re_ab_av1_encoding_summary.search(line)
                 if summary_match:
@@ -317,7 +317,7 @@ class AbAv1Parser:
             logger.error(f"General error processing output line: '{line[:80]}...' - {e}", exc_info=True)
 
         return stats # Always return the potentially modified stats dictionary
-        
+
     def _parse_ffmpeg_progress(self, line: str, stats: dict) -> dict:
         """
         Parse FFmpeg progress output lines to extract encoding progress information.
@@ -333,7 +333,7 @@ class AbAv1Parser:
         # Example: frame=  107 fps=0.0 q=0.0 size=       0kB time=00:00:04.28 bitrate=   0.0kbits/s speed=8.56x
         if not ("frame=" in line and "time=" in line):
             return None
-            
+
         try:
             # Extract timestamp
             time_match = self._re_ffmpeg_time.search(line)
@@ -349,36 +349,36 @@ class AbAv1Parser:
                 minutes = int(time_match.group(2))
                 seconds = float(time_match.group(3))
                 current_time_seconds = hours * 3600 + minutes * 60 + seconds
-            
+
             # Get total duration from stats
             total_duration = stats.get("total_duration_seconds", 0)
             if total_duration <= 0:
                 logger.warning("Can't calculate progress: missing duration in stats.")
                 # If duration wasn't provided, we can't calculate progress percentage
                 total_duration = 3600  # Assume 1 hour if unknown
-                
+
             # Calculate progress percentage
             progress = min(99.9, (current_time_seconds / total_duration) * 100)
-            
+
             # Extract other information
             frame_match = self._re_ffmpeg_frame.search(line)
             frame = int(frame_match.group(1)) if frame_match else None
-            
+
             fps_match = self._re_ffmpeg_fps.search(line)
             fps = float(fps_match.group(1)) if fps_match else None
-            
+
             # Calculate ETA based on time processed and fps
             eta_text = "unknown"
             if fps is not None and fps > 0 and progress > 0:
                 # Calculate remaining seconds
                 seconds_processed = current_time_seconds
-                seconds_remaining = max(0, (total_duration - seconds_processed)) 
-                
+                seconds_remaining = max(0, (total_duration - seconds_processed))
+
                 if seconds_remaining > 0 and fps > 0:
                     # Calculate real-world processing time based on fps
                     processing_rate = seconds_processed / (frame / fps) if frame else 1.0
                     est_remaining_real_seconds = seconds_remaining / processing_rate
-                    
+
                     # Format nicely for display
                     if est_remaining_real_seconds < 60:
                         eta_text = "< 1 min"
@@ -390,12 +390,12 @@ class AbAv1Parser:
                             hours = int(minutes_remaining / 60)
                             mins = minutes_remaining % 60
                             eta_text = f"{hours}h {mins}m"
-            
+
             # Extract size information if available
             size_match = self._re_ffmpeg_size.search(line)
             size_value = int(size_match.group(1)) if size_match else None
             size_unit = size_match.group(2) if size_match else None
-            
+
             # Convert to bytes for consistent representation
             size_bytes = None
             if size_value is not None and size_unit is not None:
@@ -405,11 +405,11 @@ class AbAv1Parser:
                     size_bytes = size_value * 1024 * 1024
                 else: # Assume bytes
                     size_bytes = size_value
-            
+
             # Extract speed information
             speed_match = self._re_ffmpeg_speed.search(line)
             speed = float(speed_match.group(1)) if speed_match else None
-            
+
             # Return all extracted information
             result = {
                 "progress": progress,
@@ -420,9 +420,9 @@ class AbAv1Parser:
                 "size_bytes": size_bytes,
                 "speed": speed
             }
-            
+
             return result
-            
+
         except Exception as e:
             logger.warning(f"Error parsing FFmpeg progress line '{line[:50]}...': {e}")
             return None
@@ -443,7 +443,7 @@ class AbAv1Parser:
 
         # --- Final VMAF ---
         try:
-            vmaf_matches = re.findall(r'VMAF\s+(\d+\.\d+)', output_text, re.IGNORECASE)
+            vmaf_matches = re.findall(r"VMAF\s+(\d+\.\d+)", output_text, re.IGNORECASE)
             if vmaf_matches:
                 final_vmaf = float(vmaf_matches[-1])
                 if stats.get("vmaf") is None or abs(stats.get("vmaf", -1.0) - final_vmaf) > 0.01:
@@ -456,7 +456,7 @@ class AbAv1Parser:
 
         # --- Final CRF ---
         try:
-            crf_matches = re.findall(r'Best\s+CRF:\s+(\d+)', output_text, re.IGNORECASE)
+            crf_matches = re.findall(r"Best\s+CRF:\s+(\d+)", output_text, re.IGNORECASE)
             if crf_matches:
                 final_crf = int(crf_matches[-1])
                 if stats.get("crf") != final_crf:

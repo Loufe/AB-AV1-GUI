@@ -7,27 +7,28 @@ and coordinating with the parser for output analysis.
 Uses a simple blocking read loop for stdout/stderr.
 Uses RUST_LOG for detailed ffmpeg progress output.
 """
-import os
-import subprocess
-import re
 import logging
+import os
+import re
+import subprocess
 import time
-from pathlib import Path
 
 # Project imports
-from src.config import (
-    DEFAULT_VMAF_TARGET, DEFAULT_ENCODING_PRESET,
-    MIN_VMAF_FALLBACK_TARGET, VMAF_FALLBACK_STEP
-)
-from src.utils import get_video_info, anonymize_filename, format_file_size
+from src.config import DEFAULT_ENCODING_PRESET, DEFAULT_VMAF_TARGET, MIN_VMAF_FALLBACK_TARGET, VMAF_FALLBACK_STEP
+from src.utils import anonymize_filename, format_file_size, get_video_info
+
+from .cleaner import clean_ab_av1_temp_folders
+
 # Import exceptions, cleaner, parser from this package
 from .exceptions import (
-    AbAv1Error, InputFileError, OutputFileError, VMAFError, EncodingError,
-    ConversionNotWorthwhileError
+    AbAv1Error,
+    ConversionNotWorthwhileError,
+    EncodingError,
+    InputFileError,
+    OutputFileError,
+    VMAFError,
 )
-from .cleaner import clean_ab_av1_temp_folders
 from .parser import AbAv1Parser
-
 
 logger = logging.getLogger(__name__)
 
@@ -83,27 +84,27 @@ class AbAv1Wrapper:
         initial_min_vmaf = DEFAULT_VMAF_TARGET
 
         anonymized_input_path = anonymize_filename(input_path)
-        
+
         # --- Input Validation ---
         if not os.path.exists(input_path):
             error_msg = f"Input not found: {anonymized_input_path}"
             logger.error(error_msg)
             if self.file_info_callback:
                 self.file_info_callback(
-                    os.path.basename(input_path), 
-                    "failed", 
+                    os.path.basename(input_path),
+                    "failed",
                     {"message": error_msg, "type": "missing_input"}
                 )
             raise InputFileError(error_msg, error_type="missing_input")
-            
+
         try:
             video_info = get_video_info(input_path)
             if not video_info or "streams" not in video_info:
                 raise InputFileError("Invalid video file", error_type="invalid_video")
-                
+
             if not any(s.get("codec_type") == "video" for s in video_info.get("streams", [])):
                 raise InputFileError("No video stream", error_type="no_video_stream")
-                
+
             try:
                 original_size = os.path.getsize(input_path)
                 stats = {"original_size": original_size}
@@ -114,34 +115,34 @@ class AbAv1Wrapper:
         except AbAv1Error:
             raise
         except Exception as e:
-            error_msg = f"Error analyzing {anonymized_input_path}: {str(e)}"
+            error_msg = f"Error analyzing {anonymized_input_path}: {e!s}"
             logger.error(error_msg)
             if self.file_info_callback:
                 self.file_info_callback(
-                    os.path.basename(input_path), 
-                    "failed", 
+                    os.path.basename(input_path),
+                    "failed",
                     {"message": error_msg, "type": "analysis_failed"}
                 )
             raise InputFileError(error_msg, error_type="analysis_failed") from e
 
         # --- Output Path Setup ---
-        if not output_path.lower().endswith('.mkv'):
-            output_path = os.path.splitext(output_path)[0] + '.mkv'
-            
+        if not output_path.lower().endswith(".mkv"):
+            output_path = os.path.splitext(output_path)[0] + ".mkv"
+
         output_dir = os.path.dirname(output_path)
         try:
             os.makedirs(output_dir, exist_ok=True)
         except Exception as e:
-            error_msg = f"Cannot create output dir: {str(e)}"
+            error_msg = f"Cannot create output dir: {e!s}"
             logger.error(error_msg)
             if self.file_info_callback:
                 self.file_info_callback(
-                    os.path.basename(input_path), 
-                    "failed", 
+                    os.path.basename(input_path),
+                    "failed",
                     {"message": error_msg, "type": "output_dir_creation_failed"}
                 )
             raise OutputFileError(error_msg, error_type="output_dir_creation_failed") from e
-            
+
         anonymized_output_path = anonymize_filename(output_path)
 
         # --- VMAF Fallback Loop ---
@@ -151,22 +152,22 @@ class AbAv1Wrapper:
 
         if not stats:
             stats = {}
-            
+
         stats.update({
-            "phase": "crf-search", 
-            "progress_quality": 0, 
+            "phase": "crf-search",
+            "progress_quality": 0,
             "progress_encoding": 0,
-            "vmaf": None, 
-            "crf": None, 
+            "vmaf": None,
+            "crf": None,
             "size_reduction": None,
-            "input_path": input_path, 
-            "output_path": output_path, 
+            "input_path": input_path,
+            "output_path": output_path,
             "command": "",
-            "vmaf_target_used": current_vmaf_target, 
+            "vmaf_target_used": current_vmaf_target,
             "last_ffmpeg_fps": None,
-            "eta_text": None, 
+            "eta_text": None,
             "total_duration_seconds": total_duration_seconds,
-            "last_reported_encoding_progress": -1.0, 
+            "last_reported_encoding_progress": -1.0,
             "estimated_output_size": None,
             "estimated_size_reduction": None
         })
@@ -184,7 +185,7 @@ class AbAv1Wrapper:
             stats["estimated_size_reduction"] = None
             stats["eta_text"] = None
             stats["last_ffmpeg_fps"] = None
-            
+
             full_output_lines = []  # Reset collected output lines
 
             logger.info(f"[Attempt VMAF {current_vmaf_target}] Starting for {anonymized_input_path}")
@@ -198,13 +199,13 @@ class AbAv1Wrapper:
             ]
             cmd_str = " ".join(cmd)
             stats["command"] = cmd_str
-            
+
             cmd_for_log = [
-                os.path.basename(self.executable_path), 
-                "auto-encode", 
-                "-i", os.path.basename(anonymized_input_path), 
-                "-o", os.path.basename(anonymized_output_path), 
-                "--preset", str(preset), 
+                os.path.basename(self.executable_path),
+                "auto-encode",
+                "-i", os.path.basename(anonymized_input_path),
+                "-o", os.path.basename(anonymized_output_path),
+                "--preset", str(preset),
                 "--min-vmaf", str(current_vmaf_target)
             ]
             cmd_str_log = " ".join(cmd_for_log)
@@ -225,14 +226,14 @@ class AbAv1Wrapper:
             # --- Starting/Retrying Callback ---
             if self.file_info_callback:
                 callback_info = {
-                    "message": "", 
+                    "message": "",
                     "original_vmaf": initial_min_vmaf,
-                    "fallback_vmaf": current_vmaf_target, 
+                    "fallback_vmaf": current_vmaf_target,
                     "used_fallback": current_vmaf_target != initial_min_vmaf,
-                    "vmaf_target_used": current_vmaf_target, 
+                    "vmaf_target_used": current_vmaf_target,
                     "original_size": stats.get("original_size")
                 }
-                
+
                 if current_vmaf_target != initial_min_vmaf:
                     callback_info["message"] = f"Retrying with VMAF target: {current_vmaf_target}"
                     self.file_info_callback(os.path.basename(input_path), "retrying", callback_info)
@@ -251,7 +252,7 @@ class AbAv1Wrapper:
                 # Setup process startup info to hide window on Windows
                 startupinfo = None
                 creationflags = 0
-                if os.name == 'nt':
+                if os.name == "nt":
                     startupinfo = subprocess.STARTUPINFO()
                     startupinfo.dwFlags |= subprocess.STARTF_USESHOWWINDOW
                     startupinfo.wShowWindow = subprocess.SW_HIDE
@@ -259,49 +260,49 @@ class AbAv1Wrapper:
 
                 # Start the process, redirect stderr to stdout
                 process = subprocess.Popen(
-                    cmd, 
-                    stdout=subprocess.PIPE, 
+                    cmd,
+                    stdout=subprocess.PIPE,
                     stderr=subprocess.STDOUT,
                     universal_newlines=True,
                     bufsize=1,
                     cwd=output_dir,
                     startupinfo=startupinfo,
                     creationflags=creationflags,
-                    encoding='utf-8',
-                    errors='replace',
+                    encoding="utf-8",
+                    errors="replace",
                     env=process_env
                 )
 
                 # Send PID to callback if provided
                 if pid_callback:
                     pid_callback(process.pid)
-                
+
                 # Simple blocking readline loop
                 logger.info(f"ab-av1 process {process.pid} started. Reading output...")
                 current_output_lines = []
-                
+
                 try:
-                    for line in iter(process.stdout.readline, ''):
+                    for line in iter(process.stdout.readline, ""):
                         line = line.strip()
                         if not line:
                             continue
-                        
+
                         # Filter out sled::pagecache trace messages
-                        if 'sled::pagecache' in line and 'TRACE' in line:
+                        if "sled::pagecache" in line and "TRACE" in line:
                             logger.debug(f"Filtered sled trace: {line}")
                             continue
-                            
+
                         # Special handling for progress information
-                        if '%' in line:
+                        if "%" in line:
                             logger.info(f"PROGRESS: {line}")
-                        elif any(term in line.lower() for term in ['frame', 'fps', 'speed', 'time=', 'bitrate', 'progress', 'eta', 'encoding']):
+                        elif any(term in line.lower() for term in ["frame", "fps", "speed", "time=", "bitrate", "progress", "eta", "encoding"]):
                             logger.info(f"POTENTIAL_PROGRESS: {line}")
                         else:
                             logger.debug(f"OUTPUT: {line}")
-                            
-                        current_output_lines.append(line + '\n')
+
+                        current_output_lines.append(line + "\n")
                         stats = self.parser.parse_line(line, stats)  # Process every line
-                        
+
                     # Loop finished normally (EOF reached)
                     logger.info("Pipe reading loop finished (EOF reached normally).")
                 except Exception as loop_err:
@@ -311,14 +312,14 @@ class AbAv1Wrapper:
                 # --- Check process status after pipe reading completes ---
                 final_poll_code = process.poll()
                 logger.info(f"Status check after pipe reading: process.poll() returned {final_poll_code}")
-                
+
                 # Close file handles
                 try:
                     process.stdout.close()
                     process.stderr.close()
                 except Exception as e:
                     logger.warning(f"Error closing process pipes: {e}")
-                    
+
                 # Get the final return code
                 if final_poll_code is None:
                     # Process is still running, we need to wait for it to finish
@@ -337,16 +338,16 @@ class AbAv1Wrapper:
                 else:
                     # Process already finished
                     return_code = final_poll_code
-                    
+
                 logger.info(f"Process final return code: {return_code}")
                 full_output_text = "".join(current_output_lines)
 
                 if read_loop_exception:
                     # Raise errors after the process has exited
                     raise AbAv1Error(
-                        f"Exception during pipe read: {read_loop_exception}", 
-                        command=cmd_str, 
-                        output=full_output_text, 
+                        f"Exception during pipe read: {read_loop_exception}",
+                        command=cmd_str,
+                        output=full_output_text,
                         error_type="pipe_read_error"
                     ) from read_loop_exception
 
@@ -355,24 +356,24 @@ class AbAv1Wrapper:
                 logger.error(error_msg)
                 if self.file_info_callback:
                     self.file_info_callback(
-                        os.path.basename(input_path), 
-                        "failed", 
+                        os.path.basename(input_path),
+                        "failed",
                         {"message": error_msg, "type": "executable_not_found"}
                     )
                 raise FileNotFoundError(error_msg) from e
-                
+
             except Exception as e:
                 # Catch exceptions from Popen or the loop exception re-raised above
-                error_msg = f"Failed to start or manage process during VMAF {current_vmaf_target}: {str(e)}"
+                error_msg = f"Failed to start or manage process during VMAF {current_vmaf_target}: {e!s}"
                 logger.error(error_msg, exc_info=True)
-                
+
                 if self.file_info_callback:
                     self.file_info_callback(
-                        os.path.basename(input_path), 
-                        "failed", 
+                        os.path.basename(input_path),
+                        "failed",
                         {"message": error_msg, "type": "process_management_failed"}
                     )
-                    
+
                 # Try to clean up any runaway process
                 if process and process.poll() is None:
                     try:
@@ -382,22 +383,21 @@ class AbAv1Wrapper:
                         process.kill()
                     except:
                         pass
-                        
+
                 # Prepare output for error reporting
-                full_output_text = "".join(current_output_lines if 'current_output_lines' in locals() else [])
+                full_output_text = "".join(current_output_lines if "current_output_lines" in locals() else [])
                 return_code = process.poll() if process else -1
-                
+
                 # Re-raise appropriate exception
                 if not isinstance(e, (AbAv1Error, FileNotFoundError)):
                     # Avoid re-wrapping known types
                     raise AbAv1Error(
-                        error_msg, 
-                        command=cmd_str, 
-                        output=full_output_text, 
+                        error_msg,
+                        command=cmd_str,
+                        output=full_output_text,
                         error_type="process_management_failed"
                     ) from e
-                else:
-                    raise  # Re-raise the original known exception
+                raise  # Re-raise the original known exception
 
             # --- Check Result ---
             logger.debug(f"Checking result for VMAF {current_vmaf_target}. RC={return_code}")
@@ -424,28 +424,28 @@ class AbAv1Wrapper:
                 logger.debug(f"Output Text for Analysis (last 1000 chars):\n'''\n{full_output_text[-1000:]}\n'''")
 
                 # Analyze error by looking for common patterns in the output
-                if re.search(r'Failed\s+to\s+find\s+a\s+suitable\s+crf', full_output_text, re.IGNORECASE):
+                if re.search(r"Failed\s+to\s+find\s+a\s+suitable\s+crf", full_output_text, re.IGNORECASE):
                     logger.info("Detected 'Failed to find a suitable crf' error.")
                     error_type = "crf_search_failed"
                     error_details = f"Could not find suitable CRF for VMAF {current_vmaf_target}"
-                    
+
                     # Check if this is the last attempt (minimum VMAF reached)
                     if current_vmaf_target <= MIN_VMAF_FALLBACK_TARGET:
                         # This means conversion isn't worthwhile
                         error_msg = f"No efficient conversion possible - CRF search failed even at VMAF {MIN_VMAF_FALLBACK_TARGET}"
                         logger.info(f"File not worth converting: {anonymized_input_path}")
-                        
+
                         if self.file_info_callback:
                             self.file_info_callback(
-                                os.path.basename(input_path), 
-                                "skipped_not_worth", 
+                                os.path.basename(input_path),
+                                "skipped_not_worth",
                                 {
                                     "message": error_msg,
                                     "original_size": stats.get("original_size"),
                                     "min_vmaf_attempted": MIN_VMAF_FALLBACK_TARGET
                                 }
                             )
-                        
+
                         # Raise specific exception for this case
                         raise ConversionNotWorthwhileError(
                             error_msg,
@@ -453,28 +453,28 @@ class AbAv1Wrapper:
                             output=full_output_text,
                             original_size=stats.get("original_size")
                         )
-                elif re.search(r'ffmpeg.*?:\s*Invalid\s+data\s+found', full_output_text, re.IGNORECASE):
+                elif re.search(r"ffmpeg.*?:\s*Invalid\s+data\s+found", full_output_text, re.IGNORECASE):
                     error_type = "invalid_input_data"
                     error_details = "Invalid data in input"
-                elif re.search(r'No\s+such\s+file\s+or\s+directory', full_output_text, re.IGNORECASE):
+                elif re.search(r"No\s+such\s+file\s+or\s+directory", full_output_text, re.IGNORECASE):
                     error_type = "file_not_found"
                     error_details = "Input not found/inaccessible"
-                elif re.search(r'failed\s+to\s+open\s+file', full_output_text, re.IGNORECASE):
+                elif re.search(r"failed\s+to\s+open\s+file", full_output_text, re.IGNORECASE):
                     error_type = "file_open_failed"
                     error_details = "Failed to open input"
-                elif re.search(r'permission\s+denied', full_output_text, re.IGNORECASE):
+                elif re.search(r"permission\s+denied", full_output_text, re.IGNORECASE):
                     error_type = "permission_denied"
                     error_details = "Permission denied"
-                elif re.search(r'vmaf\s+.*?error', full_output_text, re.IGNORECASE):
+                elif re.search(r"vmaf\s+.*?error", full_output_text, re.IGNORECASE):
                     error_type = "vmaf_calculation_failed"
                     error_details = "VMAF calculation failed"
-                elif re.search(r'encode\s+.*?error', full_output_text, re.IGNORECASE):
+                elif re.search(r"encode\s+.*?error", full_output_text, re.IGNORECASE):
                     error_type = "encoding_failed"
                     error_details = "Encoding failed"
-                elif re.search(r'out\s+of\s+memory', full_output_text, re.IGNORECASE):
+                elif re.search(r"out\s+of\s+memory", full_output_text, re.IGNORECASE):
                     error_type = "memory_error"
                     error_details = "Out of memory"
-                elif 'ab-av1.exe' in full_output_text and 'not recognized' in full_output_text:
+                elif "ab-av1.exe" in full_output_text and "not recognized" in full_output_text:
                     error_type = "executable_not_found"
                     error_details = "ab-av1.exe command failed (not found or path issue?)"
                 elif return_code != 0:
@@ -498,14 +498,12 @@ class AbAv1Wrapper:
                         logger.info(f"--> Retrying {anonymized_input_path} with VMAF target: {current_vmaf_target}")
                         clean_ab_av1_temp_folders(output_dir)
                         continue
-                    else:
-                        logger.error(f"CRF search failed down to minimum VMAF {MIN_VMAF_FALLBACK_TARGET}. Stopping.")
-                        last_error_info["error_details"] = f"CRF search failed down to VMAF {MIN_VMAF_FALLBACK_TARGET}"
-                        break
-                else:
-                    logger.error(f"Non-recoverable error type '{error_type}'. Stopping attempts for this file.")
-                    clean_ab_av1_temp_folders(output_dir)
+                    logger.error(f"CRF search failed down to minimum VMAF {MIN_VMAF_FALLBACK_TARGET}. Stopping.")
+                    last_error_info["error_details"] = f"CRF search failed down to VMAF {MIN_VMAF_FALLBACK_TARGET}"
                     break
+                logger.error(f"Non-recoverable error type '{error_type}'. Stopping attempts for this file.")
+                clean_ab_av1_temp_folders(output_dir)
+                break
 
         # --- End of VMAF Fallback Loop ---
 
@@ -517,21 +515,21 @@ class AbAv1Wrapper:
                 logger.error(error_msg)
                 logger.error(f"Last Cmd: {last_error_info['command']}")
                 logger.error(f"Last Output tail ({len(last_error_info['output_tail'])} lines):\n{''.join(last_error_info['output_tail'])}")
-                
+
                 if self.file_info_callback:
                     self.file_info_callback(
-                        os.path.basename(input_path), 
-                        "failed", 
+                        os.path.basename(input_path),
+                        "failed",
                         {
-                            "message": error_msg, 
-                            "type": last_error_info['error_type'], 
-                            "details": last_error_info['error_details'], 
-                            "command": last_error_info['command']
+                            "message": error_msg,
+                            "type": last_error_info["error_type"],
+                            "details": last_error_info["error_details"],
+                            "command": last_error_info["command"]
                         }
                     )
-                    
+
                 # Map error types to exception classes
-                error_type = last_error_info['error_type']
+                error_type = last_error_info["error_type"]
                 exc_map = {
                     "invalid_input_data": InputFileError,
                     "file_not_found": InputFileError,
@@ -551,21 +549,20 @@ class AbAv1Wrapper:
                 }
                 exception_class = exc_map.get(error_type, AbAv1Error)
                 raise exception_class(
-                    error_msg, 
-                    command=last_error_info['command'], 
-                    output=full_output_text, 
+                    error_msg,
+                    command=last_error_info["command"],
+                    output=full_output_text,
                     error_type=error_type
                 )
-            else:
-                generic_error_msg = f"Encode failed for {anonymized_input_path} for unknown reasons after loop."
-                logger.error(generic_error_msg)
-                if self.file_info_callback:
-                    self.file_info_callback(
-                        os.path.basename(input_path), 
-                        "failed", 
-                        {"message": generic_error_msg, "type": "unknown_loop_error"}
-                    )
-                raise AbAv1Error(generic_error_msg, error_type="unknown_loop_error")
+            generic_error_msg = f"Encode failed for {anonymized_input_path} for unknown reasons after loop."
+            logger.error(generic_error_msg)
+            if self.file_info_callback:
+                self.file_info_callback(
+                    os.path.basename(input_path),
+                    "failed",
+                    {"message": generic_error_msg, "type": "unknown_loop_error"}
+                )
+            raise AbAv1Error(generic_error_msg, error_type="unknown_loop_error")
 
         # --- Success Path ---
         logger.info(f"ab-av1 completed successfully for {anonymized_input_path} (used VMAF target {stats.get('vmaf_target_used', '?')})")
@@ -587,8 +584,8 @@ class AbAv1Wrapper:
             logger.error(error_msg)
             if self.file_info_callback:
                 self.file_info_callback(
-                    os.path.basename(input_path), 
-                    "failed", 
+                    os.path.basename(input_path),
+                    "failed",
                     {"message": error_msg, "type": "missing_output_post_success"}
                 )
             raise OutputFileError(error_msg, command=cmd_str_log, error_type="missing_output_post_success")
@@ -599,8 +596,8 @@ class AbAv1Wrapper:
                 "message": f"Complete (VMAF {stats.get('vmaf', 'N/A'):.2f} @ Target {stats.get('vmaf_target_used','?')})",
                 "vmaf": stats.get("vmaf"),
                 "crf": stats.get("crf"),
-                "vmaf_target_used": stats.get('vmaf_target_used'),
-                "size_reduction": stats.get('size_reduction'),
+                "vmaf_target_used": stats.get("vmaf_target_used"),
+                "size_reduction": stats.get("size_reduction"),
                 "output_path": output_path
             }
             try:

@@ -7,18 +7,16 @@ events like progress updates, errors, or completion for a single file.
 """
 
 import logging
-import statistics
-import time # Needed for handle_progress -> update_conversion_statistics logic
+
+from src.gui.gui_updates import (
+    update_conversion_statistics,  # update_total_elapsed_time called by update_elapsed_time
+    update_progress_bars,
+    update_statistics_summary,
+)
+from src.models import ErrorInfo, FileInfoEvent, ProgressEvent, RetryInfo, SkippedInfo
 
 # Project Imports
-from src.utils import (
-    format_time, format_file_size, update_ui_safely, anonymize_filename
-)
-from src.gui.gui_updates import (
-    update_statistics_summary, reset_current_file_details, update_progress_bars,
-    update_conversion_statistics, update_elapsed_time # update_total_elapsed_time called by update_elapsed_time
-)
-from src.config import DEFAULT_VMAF_TARGET # Needed for reset/defaults
+from src.utils import anonymize_filename, format_file_size, update_ui_safely
 
 logger = logging.getLogger(__name__)
 
@@ -35,104 +33,126 @@ def handle_starting(gui, filename) -> None:
 
 def handle_file_info(gui, filename, info) -> None:
     """Handle initial file information updates (e.g., size)."""
-    if info and 'file_size_mb' in info:
-         size_str = format_file_size(info['file_size_mb'] * (1024**2))
+    if info and "file_size_mb" in info:
+         # Construct FileInfoEvent from dict for type safety
+         event = FileInfoEvent(file_size_mb=info.get("file_size_mb", 0.0))
+         size_str = format_file_size(int(event.file_size_mb * (1024**2)))
          # Update original size label in the UI
          update_ui_safely(gui.root, lambda ss=size_str: gui.orig_size_label.config(text=ss))
          logger.debug(f"Updated original size display for {anonymize_filename(filename)} to {size_str}")
 
 def handle_progress(gui, filename: str, info: dict) -> None:
     """Handle progress updates from the conversion process."""
-    quality_prog = info.get("progress_quality", 0)
-    encoding_prog = info.get("progress_encoding", 0)
-    phase = info.get("phase", "crf-search")
-    message = info.get("message", "")
+    # Construct ProgressEvent from dict for type safety
+    progress_event = ProgressEvent(
+        progress_quality=info.get("progress_quality", 0.0),
+        progress_encoding=info.get("progress_encoding", 0.0),
+        phase=info.get("phase", "crf-search"),
+        message=info.get("message", ""),
+        vmaf=info.get("vmaf"),
+        crf=info.get("crf"),
+        vmaf_target_used=info.get("vmaf_target_used"),
+        size_reduction=info.get("size_reduction"),
+        original_size=info.get("original_size"),
+        output_size=info.get("output_size"),
+        is_estimate=info.get("is_estimate"),
+        eta_text=info.get("eta_text"),
+        file_size_mb=info.get("file_size_mb")
+    )
+
     anonymized_file = anonymize_filename(filename)
 
     # Update progress bars
-    update_ui_safely(gui.root, update_progress_bars, gui, quality_prog, encoding_prog)
+    update_ui_safely(gui.root, update_progress_bars, gui, progress_event.progress_quality, progress_event.progress_encoding)
 
     # Update current file message
-    update_ui_safely(gui.root, lambda f=filename, m=message: gui.current_file_label.config(text=f"Processing: {f} - {m}"))
+    update_ui_safely(gui.root, lambda f=filename, m=progress_event.message: gui.current_file_label.config(text=f"Processing: {f} - {m}"))
 
     # Ensure original size is available for statistics calculations
-    if "original_size" not in info and hasattr(gui, 'last_input_size') and gui.last_input_size is not None:
+    if progress_event.original_size is None and hasattr(gui, "last_input_size") and gui.last_input_size is not None:
         info["original_size"] = gui.last_input_size
 
-    # Update ETA, VMAF, CRF, Size Prediction labels
+    # Update ETA, VMAF, CRF, Size Prediction labels (still pass dict for now)
     update_conversion_statistics(gui, info) # This function handles UI updates safely
 
     # Force UI updates during encoding phase to maintain responsiveness
-    if phase == "encoding":
+    if progress_event.phase == "encoding":
         def force_update():
             try: gui.root.update_idletasks()
-            except Exception as e: logging.error(f"Error in forced UI update: {e}")
+            except Exception as e: logging.exception(f"Error in forced UI update: {e}")
         update_ui_safely(gui.root, force_update)
 
     # Minimal logging here, more detailed progress logging is in the wrapper/parser
-    logger.debug(f"Progress update for {anonymized_file}: Qual={quality_prog:.1f}%, Enc={encoding_prog:.1f}%, Phase={phase}")
+    logger.debug(f"Progress update for {anonymized_file}: Qual={progress_event.progress_quality:.1f}%, Enc={progress_event.progress_encoding:.1f}%, Phase={progress_event.phase}")
 
 def handle_error(gui, filename, error_info) -> None:
     """Handle errors that occur during file processing."""
-    message="Unknown error"; error_type="unknown"; details=""
+    # Construct ErrorInfo from dict or string for type safety
     if isinstance(error_info, dict):
-        message = error_info.get("message", "Unknown error")
-        error_type = error_info.get("type", "unknown")
-        details = error_info.get("details", "")
+        error = ErrorInfo(
+            message=error_info.get("message", "Unknown error"),
+            error_type=error_info.get("type", "unknown"),
+            details=error_info.get("details", ""),
+            stack_trace=error_info.get("stack_trace")
+        )
     elif isinstance(error_info, str):
-        message = error_info # Assume the string is the message
+        error = ErrorInfo(message=error_info, error_type="unknown", details="")
+    else:
+        error = ErrorInfo(message="Unknown error", error_type="unknown", details="")
 
     anonymized_name = anonymize_filename(filename)
-    log_msg = f"Error converting {anonymized_name} (Type: {error_type}): {message}"
-    if details: log_msg += f" - Details: {details}"
+    log_msg = f"Error converting {anonymized_name} (Type: {error.error_type}): {error.message}"
+    if error.details: log_msg += f" - Details: {error.details}"
     logger.error(log_msg)
 
     # Log stack trace if provided
-    if isinstance(error_info, dict) and "stack_trace" in error_info:
-        logger.error(f"Stack Trace for {anonymized_name}:\n{error_info['stack_trace']}")
+    if error.stack_trace:
+        logger.error(f"Stack Trace for {anonymized_name}:\n{error.stack_trace}")
 
     # Increment error count on the GUI object (thread-safe)
     def update_error_count():
-        if hasattr(gui,'error_count'): gui.error_count += 1
+        if hasattr(gui,"error_count"): gui.error_count += 1
         else: gui.error_count = 1
     update_ui_safely(gui.root, update_error_count)
 
     # Track error details for summary (thread-safe)
     def update_error_details():
-        if not hasattr(gui, 'error_details'):
+        if not hasattr(gui, "error_details"):
             gui.error_details = []
         gui.error_details.append({
-            'filename': filename,
-            'error_type': error_type,
-            'message': message,
-            'details': details
+            "filename": filename,
+            "error_type": error.error_type,
+            "message": error.message,
+            "details": error.details
         })
     update_ui_safely(gui.root, update_error_details)
 
     # Update overall status label in the UI to reflect the error count
     def update_status():
-        total_files = len(gui.video_files) if hasattr(gui,'video_files') and gui.video_files else 0
+        total_files = len(gui.video_files) if hasattr(gui,"video_files") and gui.video_files else 0
         base_status = f"Progress: {gui.processed_files}/{total_files} files ({gui.successful_conversions} successful)"
         gui.status_label.config(text=f"{base_status} - {gui.error_count} errors")
     update_ui_safely(gui.root, update_status)
 
 def handle_retrying(gui, filename, info) -> None:
     """Handle retry attempts with fallback VMAF targets."""
-    message = "Retrying"; log_details = ""; current_target_vmaf = None
+    # Construct RetryInfo from dict for type safety
     if isinstance(info, dict):
-        message = info.get("message", message)
-        # The key 'fallback_vmaf' now holds the VMAF target *being attempted*
-        if "fallback_vmaf" in info:
-            current_target_vmaf = info['fallback_vmaf']
-            log_details = f" (Target VMAF: {current_target_vmaf})"
+        retry = RetryInfo(
+            message=info.get("message", "Retrying"),
+            fallback_vmaf=info.get("fallback_vmaf")
+        )
+    else:
+        retry = RetryInfo(message="Retrying")
 
     anonymized_file = anonymize_filename(filename)
-    logger.info(f"{message} for {anonymized_file}{log_details}")
+    log_details = f" (Target VMAF: {retry.fallback_vmaf})" if retry.fallback_vmaf else ""
+    logger.info(f"{retry.message} for {anonymized_file}{log_details}")
 
     # Update UI: Show retrying message and the VMAF target being attempted
-    update_ui_safely(gui.root, lambda f=filename, m=message: gui.current_file_label.config(text=f"Processing: {f} - {m}"))
-    if current_target_vmaf:
-        update_ui_safely(gui.root, lambda v=current_target_vmaf: gui.vmaf_label.config(text=f"{v} (Target)"))
+    update_ui_safely(gui.root, lambda f=filename, m=retry.message: gui.current_file_label.config(text=f"Processing: {f} - {m}"))
+    if retry.fallback_vmaf:
+        update_ui_safely(gui.root, lambda v=retry.fallback_vmaf: gui.vmaf_label.config(text=f"{v} (Target)"))
 
 def handle_completed(gui, filename, info) -> None:
     """Handle successful completion of a file conversion and update stats."""
@@ -140,12 +160,14 @@ def handle_completed(gui, filename, info) -> None:
     log_msg = f"Successfully converted {anonymized_name}"
 
     # Extract values from info dict or fall back to gui attributes
+    # Note: ConversionResult would need input_path and elapsed_seconds which aren't in info dict,
+    # so we'll just extract the fields we need rather than constructing a full ConversionResult here
     vmaf_value = info.get("vmaf")
     crf_value = info.get("crf")
-    original_size = getattr(gui, 'last_input_size', None)
+    original_size = getattr(gui, "last_input_size", None)
     # Get final output size directly from info (more reliable than gui attribute)
     output_size = info.get("output_size")
-    elapsed_time = getattr(gui, 'last_elapsed_time', None) # Get from GUI state set by worker
+    elapsed_time = getattr(gui, "last_elapsed_time", None) # Get from GUI state set by worker
 
     # Update VMAF stats (thread-safe)
     if vmaf_value is not None:
@@ -208,21 +230,27 @@ def handle_skipped(gui, filename, reason) -> None:
 
 def handle_skipped_not_worth(gui, filename, info):
     """Handle files skipped because conversion isn't worthwhile."""
-    message = info.get("message", "Conversion not beneficial")
-    original_size = info.get("original_size")
-    min_vmaf = info.get("min_vmaf_attempted", None)
-    
+    # Construct SkippedInfo from dict for type safety
+    if isinstance(info, dict):
+        skipped = SkippedInfo(
+            message=info.get("message", "Conversion not beneficial"),
+            original_size=info.get("original_size"),
+            min_vmaf_attempted=info.get("min_vmaf_attempted")
+        )
+    else:
+        skipped = SkippedInfo(message="Conversion not beneficial")
+
     anonymized_name = anonymize_filename(filename)
-    log_msg = f"Skipped {anonymized_name} (not worth converting): {message}"
-    
-    if original_size:
-        log_msg += f" - Original size: {format_file_size(original_size)}"
-    
+    log_msg = f"Skipped {anonymized_name} (not worth converting): {skipped.message}"
+
+    if skipped.original_size:
+        log_msg += f" - Original size: {format_file_size(skipped.original_size)}"
+
     logger.info(log_msg)
 
     # Update skipped count instead of error count (thread-safe)
     def update_skipped_count():
-        if hasattr(gui, 'skipped_not_worth_count'):
+        if hasattr(gui, "skipped_not_worth_count"):
             gui.skipped_not_worth_count += 1
         else:
             gui.skipped_not_worth_count = 1
@@ -230,11 +258,11 @@ def handle_skipped_not_worth(gui, filename, info):
 
     # Track filename for summary (thread-safe)
     def update_skipped_files():
-        if not hasattr(gui, 'skipped_not_worth_files'):
+        if not hasattr(gui, "skipped_not_worth_files"):
             gui.skipped_not_worth_files = []
         gui.skipped_not_worth_files.append(filename)
     update_ui_safely(gui.root, update_skipped_files)
-    
+
     # Update UI to show this as a skip, not an error
     update_ui_safely(gui.root, lambda: gui.current_file_label.config(
         text=f"Skipped (inefficient): {filename}"

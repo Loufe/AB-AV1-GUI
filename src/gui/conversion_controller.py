@@ -4,55 +4,51 @@ Conversion control logic (start, stop, force-stop), state management,
 and GUI interaction layer for the conversion process.
 """
 # Standard library imports
-import os
-import sys
-import glob
-import json
-import threading
-import time
 import logging
-import shutil
-import subprocess
+import os
 import signal
 import statistics
-import traceback
+import subprocess
+import sys
+import threading
+import time
 from pathlib import Path
-import math # For ceil
-import datetime # For history timestamp
 
 # GUI-related imports
 from tkinter import messagebox
-import tkinter as tk # For type hinting if needed
 
 # Project imports
 # Import from specific ab_av1 submodules
-from src.ab_av1.checker import check_ab_av1_available
-# Import from utils
-from src.utils import (
-    get_video_info, format_time, format_file_size, anonymize_filename,
-    check_ffmpeg_availability, update_ui_safely,
-    append_to_history, get_history_file_path,
-    prevent_sleep_mode, allow_sleep_mode
-)
 # Import constants from config
-from src.config import (
-    DEFAULT_VMAF_TARGET, DEFAULT_ENCODING_PRESET,
-    MIN_RESOLUTION_WIDTH, MIN_RESOLUTION_HEIGHT
-)
-# Import the single-file processing function
-from src.video_conversion import process_video
-# Import GUI update functions
-from src.gui.gui_updates import (
-    update_statistics_summary, reset_current_file_details, update_progress_bars,
-    update_conversion_statistics, update_elapsed_time, update_total_elapsed_time,
-    update_total_remaining_time
-)
-# Import GUI actions needed here (like check_ffmpeg)
-from src.gui.gui_actions import check_ffmpeg
+from src.config import DEFAULT_ENCODING_PRESET, DEFAULT_VMAF_TARGET, MIN_RESOLUTION_HEIGHT, MIN_RESOLUTION_WIDTH
+from src.conversion_engine.cleanup import schedule_temp_folder_cleanup  # Import cleaner scheduling
+
 # Import from the new conversion_engine package
 from src.conversion_engine.worker import sequential_conversion_worker
-from src.conversion_engine.cleanup import schedule_temp_folder_cleanup # Import cleaner scheduling
 
+# Import GUI actions needed here (like check_ffmpeg)
+from src.gui.gui_actions import check_ffmpeg
+
+# Import GUI update functions
+from src.gui.gui_updates import (
+    reset_current_file_details,
+    update_statistics_summary,
+    update_total_elapsed_time,
+    update_total_remaining_time,
+)
+from src.models import ConversionConfig
+
+# Import from utils
+from src.utils import (
+    allow_sleep_mode,
+    anonymize_filename,
+    format_file_size,
+    format_time,
+    prevent_sleep_mode,
+    update_ui_safely,
+)
+
+# Import the single-file processing function
 
 logger = logging.getLogger(__name__)
 
@@ -162,21 +158,21 @@ def start_conversion(gui) -> None:
     gui.elapsed_timer_id = None  # Initialize timer ID
     gui.pending_files = []  # Initialize pending files as empty - will be populated after scan
     gui.current_file_path = None  # Initialize current file path
-    
+
     logger.info("Initialized conversion state variables")
-    
+
     # Start timer for total elapsed time immediately
     def start_total_timer():
         update_total_elapsed_time(gui)
         if gui.conversion_running:
             gui.root.after(1000, start_total_timer)
-    
+
     # Start separate timer for remaining time updates - less frequent
     def start_remaining_timer():
         update_total_remaining_time(gui)
         if gui.conversion_running:
             gui.root.after(5000, start_remaining_timer)  # Update every 5 seconds instead of 1
-    
+
     start_total_timer()
     start_remaining_timer()
 
@@ -197,13 +193,22 @@ def start_conversion(gui) -> None:
     update_statistics_summary(gui) # Reset overall stats display
     reset_current_file_details(gui) # Reset current file details display
 
+    # Create ConversionConfig with all settings
+    config = ConversionConfig(
+        input_folder=input_folder,
+        output_folder=output_folder,
+        extensions=selected_extensions,
+        overwrite=overwrite,
+        delete_original=delete_original,
+        convert_audio=convert_audio,
+        audio_codec=audio_codec
+    )
+
     # Start the conversion worker thread
     # Pass necessary callbacks (store_process_id, conversion_complete)
     gui.conversion_thread = threading.Thread(
         target=sequential_conversion_worker,
-        args=(gui, input_folder, output_folder, overwrite, gui.stop_event,
-              convert_audio, audio_codec, delete_original, # Pass the delete_original flag
-              store_process_id, conversion_complete),
+        args=(gui, config, gui.stop_event, store_process_id, conversion_complete),
         daemon=True # Ensure thread exits if main app crashes
     )
     gui.conversion_thread.start()
@@ -299,7 +304,7 @@ def force_stop_conversion(gui, confirm: bool = True) -> None:
         except ProcessLookupError:
             logger.warning(f"Process PID {pid_to_kill} not found during termination attempt.")
         except Exception as e:
-            logger.error(f"Failed to terminate process PID {pid_to_kill}: {str(e)}")
+            logger.error(f"Failed to terminate process PID {pid_to_kill}: {e!s}")
     else:
         logger.warning("Force stop: No active process PID was recorded. Cannot target specific process.")
         # Fallback: try killing any ffmpeg process if PID wasn't known
@@ -320,7 +325,7 @@ def force_stop_conversion(gui, confirm: bool = True) -> None:
         try:
             in_path_obj = Path(input_path_killed)
             out_folder_obj = Path(gui.output_folder.get())
-            relative_dir = Path(".")
+            relative_dir = Path()
             try: # Calculate relative path for output dir structure
                 relative_dir = in_path_obj.parent.relative_to(Path(gui.input_folder.get()))
             except ValueError: logger.debug("Killed file not relative to input base.")
@@ -340,7 +345,7 @@ def force_stop_conversion(gui, confirm: bool = True) -> None:
 
     # --- Restore System State & Reset UI ---
     # Restore sleep functionality if it was active
-    if hasattr(gui, 'sleep_prevention_active') and gui.sleep_prevention_active:
+    if hasattr(gui, "sleep_prevention_active") and gui.sleep_prevention_active:
         allow_sleep_mode()
         logger.info("System sleep prevention disabled after force stop.")
         gui.sleep_prevention_active = False
@@ -359,7 +364,7 @@ def force_stop_conversion(gui, confirm: bool = True) -> None:
 
     # Schedule general temp folder cleanup (for .ab-av1-* folders) after a short delay
     # Use the output folder path stored on the gui object
-    output_dir_to_clean = getattr(gui, 'output_folder_path', None) or gui.output_folder.get()
+    output_dir_to_clean = getattr(gui, "output_folder_path", None) or gui.output_folder.get()
     if output_dir_to_clean:
         gui.root.after(500, lambda dir=output_dir_to_clean: schedule_temp_folder_cleanup(dir))
     else:
@@ -378,14 +383,14 @@ def conversion_complete(gui, final_message="Conversion complete"):
     logger.info(f"--- {final_message} ---")
 
     # Schedule final cleanup of general temp folders
-    output_dir_to_clean = getattr(gui, 'output_folder_path', None) or gui.output_folder.get()
+    output_dir_to_clean = getattr(gui, "output_folder_path", None) or gui.output_folder.get()
     if output_dir_to_clean:
         gui.root.after(100, lambda dir=output_dir_to_clean: schedule_temp_folder_cleanup(dir))
     else:
          logger.warning("Cannot schedule final temp folder cleanup: output directory unclear.")
 
     # Log final statistics
-    total_duration = time.time() - gui.total_conversion_start_time if hasattr(gui,'total_conversion_start_time') else 0
+    total_duration = time.time() - gui.total_conversion_start_time if hasattr(gui,"total_conversion_start_time") else 0
     logger.info(f"Total elapsed time: {format_time(total_duration)}")
     logger.info(f"Files processed: {gui.processed_files}, Successful: {gui.successful_conversions}, Errors: {gui.error_count}")
     if gui.vmaf_scores: logger.info(f"VMAF (Avg/Min/Max): {statistics.mean(gui.vmaf_scores):.1f}/{min(gui.vmaf_scores):.1f}/{max(gui.vmaf_scores):.1f}")
@@ -404,7 +409,7 @@ def conversion_complete(gui, final_message="Conversion complete"):
     reset_current_file_details(gui) # Clear current file section
 
     # Restore sleep functionality if it was active
-    if hasattr(gui, 'sleep_prevention_active') and gui.sleep_prevention_active:
+    if hasattr(gui, "sleep_prevention_active") and gui.sleep_prevention_active:
         allow_sleep_mode()
         logger.info("System sleep prevention disabled.")
         gui.sleep_prevention_active = False
@@ -423,7 +428,7 @@ def conversion_complete(gui, final_message="Conversion complete"):
     if gui.elapsed_timer_id: # Ensure timer is stopped if still running
         gui.root.after_cancel(gui.elapsed_timer_id)
         gui.elapsed_timer_id = None
-    
+
     # Update statistics to show historical data
     update_statistics_summary(gui)
 
@@ -432,50 +437,50 @@ def conversion_complete(gui, final_message="Conversion complete"):
         summary_msg = f"{final_message}.\n\n" \
                       f"Files Processed: {gui.processed_files}\n" \
                       f"Successfully Converted: {gui.successful_conversions}\n"
-        
+
         # Show different skip categories
-        skipped_not_worth = getattr(gui, 'skipped_not_worth_count', 0)
-        skipped_low_resolution = getattr(gui, 'skipped_low_resolution_count', 0)
-        
+        skipped_not_worth = getattr(gui, "skipped_not_worth_count", 0)
+        skipped_low_resolution = getattr(gui, "skipped_low_resolution_count", 0)
+
         if skipped_not_worth > 0:
             summary_msg += f"Skipped (Inefficient): {skipped_not_worth}\n"
-        
+
         if skipped_low_resolution > 0:
             summary_msg += f"Skipped (Low Resolution): {skipped_low_resolution}\n"
-        
+
         # Count other skips
-        error_count = getattr(gui, 'error_count', 0)
+        error_count = getattr(gui, "error_count", 0)
         other_skips = gui.processed_files - gui.successful_conversions - skipped_not_worth - skipped_low_resolution - error_count
         if other_skips > 0:
             summary_msg += f"Skipped (Other): {other_skips}\n"
-        
+
         if error_count > 0:
             summary_msg += f"Errors: {error_count}\n"
-        
+
         summary_msg += f"\nTotal Time: {format_time(total_duration)}\n\n"
-        
+
         # Show conversion stats if available
         if gui.successful_conversions > 0:
-            summary_msg += f"--- Avg. Stats (Successful Files) ---\n"
+            summary_msg += "--- Avg. Stats (Successful Files) ---\n"
             summary_msg += f"VMAF Score: {f'{statistics.mean(gui.vmaf_scores):.1f}' if gui.vmaf_scores else 'N/A'}\n"
             summary_msg += f"CRF Value: {f'{statistics.mean(gui.crf_values):.1f}' if gui.crf_values else 'N/A'}\n"
             summary_msg += f"Size Reduction: {f'{statistics.mean(gui.size_reductions):.1f}%' if gui.size_reductions else 'N/A'}\n\n" \
                            f"--- Overall Performance ---\n" \
                            f"Total Data Saved: {data_saved_str}\n" \
                            f"Avg. Processing Time: {time_per_gb_str} per GB Input\n"
-        
+
         # Show error details if any
-        error_details = getattr(gui, 'error_details', [])
+        error_details = getattr(gui, "error_details", [])
         if error_details:
             summary_msg += "\n--- Error Details ---\n"
             # Group errors by type
             error_types = {}
             for error in error_details:
-                error_type = error.get('error_type', 'unknown')
+                error_type = error.get("error_type", "unknown")
                 if error_type not in error_types:
                     error_types[error_type] = []
-                error_types[error_type].append(error['filename'])
-            
+                error_types[error_type].append(error["filename"])
+
             # Display up to 3 files per error type
             for error_type, filenames in error_types.items():
                 summary_msg += f"\n{error_type}: {len(filenames)} file{'s' if len(filenames) > 1 else ''}\n"
@@ -483,21 +488,21 @@ def conversion_complete(gui, final_message="Conversion complete"):
                     summary_msg += f"  - {filename}\n"
                 if len(filenames) > 3:
                     summary_msg += f"  ... and {len(filenames) - 3} more\n"
-            
+
             summary_msg += f"\nCheck the logs ({gui.log_directory}) for full details."
-        
+
         # Show files skipped due to inefficiency
-        skipped_files = getattr(gui, 'skipped_not_worth_files', [])
+        skipped_files = getattr(gui, "skipped_not_worth_files", [])
         if skipped_files:
             summary_msg += "\n--- Files Skipped (Inefficient Conversion) ---\n"
-            summary_msg += f"Files where conversion would not save space:\n"
+            summary_msg += "Files where conversion would not save space:\n"
             for i, filename in enumerate(skipped_files[:5]):
                 summary_msg += f"  - {filename}\n"
             if len(skipped_files) > 5:
                 summary_msg += f"  ... and {len(skipped_files) - 5} more\n"
-        
+
         # Show files skipped due to low resolution
-        skipped_low_res_files = getattr(gui, 'skipped_low_resolution_files', [])
+        skipped_low_res_files = getattr(gui, "skipped_low_resolution_files", [])
         if skipped_low_res_files:
             summary_msg += "\n--- Files Skipped (Low Resolution) ---\n"
             summary_msg += f"Files below {MIN_RESOLUTION_WIDTH}x{MIN_RESOLUTION_HEIGHT}:\n"
@@ -505,7 +510,7 @@ def conversion_complete(gui, final_message="Conversion complete"):
                 summary_msg += f"  - {filename}\n"
             if len(skipped_low_res_files) > 5:
                 summary_msg += f"  ... and {len(skipped_low_res_files) - 5} more\n"
-        
+
         if error_count > 0:
             messagebox.showwarning("Conversion Summary", summary_msg)
         else:

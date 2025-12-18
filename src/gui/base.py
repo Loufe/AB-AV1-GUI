@@ -3,7 +3,7 @@
 Base GUI components for the AV1 Video Converter application.
 """
 import tkinter as tk
-from tkinter import ttk
+
 
 class ToolTip:
     """Tooltip class for providing helpful information"""

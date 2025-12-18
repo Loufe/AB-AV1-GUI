@@ -2,14 +2,12 @@
 """
 Settings tab module for the AV1 Video Converter application.
 """
-import tkinter as tk
+import logging  # Added for logging
 from tkinter import ttk
-import os # Added for path joining
-import logging # Added for logging
-import sys # For platform check
 
 # Project imports - Replace 'convert_app' with 'src'
 from src.gui.base import ToolTip
+
 # Import operations functions needed for this tab
 # No longer needed as commands are methods on gui instance pointing to imported functions
 
@@ -69,7 +67,7 @@ def create_settings_tab(gui):
     ToolTip(audio_check, "When enabled, audio tracks not already AAC or Opus will be re-encoded to the selected codec.\nIf disabled, original audio tracks are copied without re-encoding.")
 
     audio_combo = ttk.Combobox(audio_frame, textvariable=gui.audio_codec, width=10, state="readonly") # Readonly state
-    audio_combo['values'] = ('opus', 'aac')
+    audio_combo["values"] = ("opus", "aac")
     audio_combo.pack(side="left")
     ToolTip(audio_combo, "Select audio codec for re-encoding. Opus offers better compression. AAC is widely compatible.")
 

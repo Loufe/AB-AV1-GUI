@@ -2,8 +2,8 @@
 """
 Checks for the availability of the ab-av1 executable.
 """
-import os
 import logging
+import os
 
 logger = logging.getLogger(__name__)
 
@@ -26,8 +26,7 @@ def check_ab_av1_available() -> tuple:
     if os.path.exists(expected_path):
         logger.info(f"ab-av1 found: {expected_path}")
         return True, expected_path, f"ab-av1 available at {expected_path}"
-    else:
-        # Adjusted error message
-        error_msg = f"ab-av1.exe not found. Place inside 'src' dir.\nExpected: {expected_path}"
-        logger.error(error_msg)
-        return False, expected_path, error_msg
+    # Adjusted error message
+    error_msg = f"ab-av1.exe not found. Place inside 'src' dir.\nExpected: {expected_path}"
+    logger.error(error_msg)
+    return False, expected_path, error_msg
