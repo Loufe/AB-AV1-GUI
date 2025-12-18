@@ -12,10 +12,9 @@ import time
 # GUI-related imports
 import tkinter as tk  # For type hinting if needed
 
-from src import utils  # For the new estimation functions
-
 # Import constant from config
 from src.config import DEFAULT_ENCODING_PRESET, DEFAULT_VMAF_TARGET
+from src.estimation import estimate_remaining_time
 
 # Project imports
 from src.utils import (
@@ -77,27 +76,21 @@ def update_progress_bars(gui, quality_percent: float, encoding_percent: float) -
     update_ui_safely(gui.root, _update_ui)
 
 
-def update_conversion_statistics(gui, info: dict = None) -> None:
-    """Update the conversion statistics like ETA, VMAF, CRF in the UI.
+def update_vmaf_display(gui, info: dict) -> None:
+    """Update the VMAF label based on conversion progress information.
 
     Args:
-        gui: The main GUI instance containing statistic display widgets
-        info: Dictionary containing conversion progress information
+        gui: The main GUI instance containing the VMAF label widget
+        info: Dictionary containing VMAF-related information
     """
-    if not info or not gui.conversion_running:
-        logging.debug("Skipping update_conversion_statistics: no info or not running")
-        return
-
-    # Log received info for debugging
-    logging.debug(f"Processing statistics update: {info}")
-
-    # VMAF Updates
     if "vmaf" in info and info["vmaf"] is not None:
-        try: # Ensure vmaf value is valid
+        try:
             vmaf_val = float(info["vmaf"])
             vmaf_status = f"{vmaf_val:.1f}"
-            if info.get("phase") == "crf-search": vmaf_status += " (Current)"
-            if info.get("used_fallback"): vmaf_status += " (Fallback Used)" # Check if fallback was used
+            if info.get("phase") == "crf-search":
+                vmaf_status += " (Current)"
+            if info.get("used_fallback"):
+                vmaf_status += " (Fallback Used)"
             update_ui_safely(gui.root, lambda v=vmaf_status: gui.vmaf_label.config(text=v))
             logging.info(f"VMAF update: {vmaf_status}")
         except (ValueError, TypeError) as e:
@@ -107,37 +100,48 @@ def update_conversion_statistics(gui, info: dict = None) -> None:
         vmaf_target = info.get("vmaf_target_used", DEFAULT_VMAF_TARGET)
         update_ui_safely(gui.root, lambda v=vmaf_target: gui.vmaf_label.config(text=f"{v} (Target)"))
 
-    # CRF Updates
+
+def update_crf_display(gui, info: dict) -> None:
+    """Update the CRF and encoding settings label.
+
+    Args:
+        gui: The main GUI instance containing the encoding settings label
+        info: Dictionary containing CRF-related information
+    """
     if "crf" in info and info["crf"] is not None:
-        try: # Ensure crf value is valid
+        try:
             crf_val = int(info["crf"])
-            # Use constant for preset
             settings_text = f"CRF: {crf_val}, Preset: {DEFAULT_ENCODING_PRESET}"
             update_ui_safely(gui.root, lambda s=settings_text: gui.encoding_settings_label.config(text=s))
             logging.info(f"Encoding settings update: {settings_text}")
         except (ValueError, TypeError) as e:
             logging.warning(f"Invalid CRF value in info for update: {info.get('crf')} - {e}")
 
-    # ETA Calculation - Store AB-AV1's reported ETA and count down
+
+def update_eta_from_progress_info(gui, info: dict) -> None:
+    """Update the ETA (Estimated Time of Arrival) label from progress info dictionary.
+
+    Args:
+        gui: The main GUI instance containing the ETA label
+        info: Dictionary containing progress and timing information
+    """
     encoding_prog = info.get("progress_encoding", 0)
-    gui.last_encoding_progress = encoding_prog  # Store for continuous ETA updates
+    gui.last_encoding_progress = encoding_prog
     logging.debug(f"Encoding progress: {encoding_prog}, Phase: {info.get('phase', 'unknown')}")
 
     # Check if we have AB-AV1's ETA text
     if info.get("eta_text"):
-        # Parse AB-AV1's ETA and store it with timestamp
         eta_seconds = parse_eta_text(info["eta_text"])
-        # Only store non-zero ETAs or if we don't have one already
         if eta_seconds > 0 or not hasattr(gui, "last_eta_seconds"):
             gui.last_eta_seconds = eta_seconds
             gui.last_eta_timestamp = time.time()
             logging.debug(f"Captured AB-AV1 ETA: {info['eta_text']} -> {eta_seconds} seconds")
 
     if encoding_prog > 0:
+        # Mark when encoding phase starts
         if hasattr(gui, "current_file_start_time") and gui.current_file_start_time:
             if not hasattr(gui, "current_file_encoding_start_time") or not gui.current_file_encoding_start_time:
-                # Check if encoding phase *just* started - check phase directly
-                if info.get("phase") == "encoding": # Remove threshold check
+                if info.get("phase") == "encoding":
                     gui.current_file_encoding_start_time = time.time()
                     logging.info("Encoding phase started - initializing timer")
 
@@ -146,11 +150,8 @@ def update_conversion_statistics(gui, info: dict = None) -> None:
             elapsed_since_update = time.time() - gui.last_eta_timestamp
             remaining_eta = max(0, gui.last_eta_seconds - elapsed_since_update)
             eta_str = format_time(remaining_eta)
-
-            # Update the display
             update_ui_safely(gui.root, lambda eta=eta_str: gui.eta_label.config(text=eta))
             logging.debug(f"ETA countdown: {eta_str} (base: {gui.last_eta_seconds}s, elapsed: {elapsed_since_update:.1f}s)")
-
         elif hasattr(gui, "current_file_encoding_start_time") and gui.current_file_encoding_start_time:
             # Fallback: calculate based on progress if no AB-AV1 ETA is stored
             elapsed_encoding_time = time.time() - gui.current_file_encoding_start_time
@@ -175,67 +176,80 @@ def update_conversion_statistics(gui, info: dict = None) -> None:
     else:
         update_ui_safely(gui.root, lambda: gui.eta_label.config(text="-"))
 
-    # Size Prediction - prioritize actual file size estimates
+
+def update_size_prediction(gui, info: dict) -> None:
+    """Update the output size prediction label.
+
+    Args:
+        gui: The main GUI instance containing the output size label
+        info: Dictionary containing size-related information
+    """
     # Check if we have an estimated_output_size from the partial file
     if "output_size" in info and "original_size" in info and info.get("is_estimate", False):
-        # This is from a real-time measurement of the partial output file
         current_size = info["output_size"]
         original_size = info["original_size"]
         if original_size is not None and original_size > 0 and current_size is not None:
-            try: # Ensure values are valid numbers
+            try:
                 current_size_f = float(current_size)
                 original_size_f = float(original_size)
                 ratio = (current_size_f / original_size_f) * 100
-                # Use the estimated size directly
                 size_str = f"{format_file_size(current_size_f)} ({ratio:.1f}%) [Est]"
-                # CRITICAL: Use explicit lambda to capture the current value
                 update_ui_safely(gui.root, lambda s=size_str: gui.output_size_label.config(text=s))
                 logging.info(f"Output size estimate (from partial file): {size_str}")
             except (ValueError, TypeError, ZeroDivisionError) as e:
-                 logging.warning(f"Invalid size data for estimate: {current_size}, {original_size} - {e}")
-
-    # Otherwise check if we have a size_reduction percentage (likely from ab-av1 final output)
+                logging.warning(f"Invalid size data for estimate: {current_size}, {original_size} - {e}")
+    # Check if we have a size_reduction percentage
     elif "size_reduction" in info and info["size_reduction"] is not None:
-        # If we have size_reduction percentage but not actual sizes yet
         try:
-            # Get original size from the file if available
             if hasattr(gui, "last_input_size") and gui.last_input_size:
                 original_size = gui.last_input_size
-                size_reduction_f = float(info["size_reduction"]) # Ensure float
+                size_reduction_f = float(info["size_reduction"])
                 size_percentage = 100.0 - size_reduction_f
                 output_size_estimate = original_size * (size_percentage / 100.0)
                 ratio = size_percentage
                 size_str = f"{format_file_size(output_size_estimate)} ({ratio:.1f}%)"
-
-                # Update the last_output_size for future use (like final completion summary)
                 gui.last_output_size = output_size_estimate
-
-                # CRITICAL: Use explicit lambda to capture the current value
                 update_ui_safely(gui.root, lambda s=size_str: gui.output_size_label.config(text=s))
-
                 logging.info(f"Output size prediction: {size_str} (reduction: {info['size_reduction']:.1f}%)")
         except (ValueError, TypeError, ZeroDivisionError) as e:
             logging.exception(f"Error calculating output size from reduction: {e}")
-        except Exception as e: # Catch other potential errors
-             logging.exception(f"Unexpected error calculating output size from reduction: {e}")
-
+        except Exception as e:
+            logging.exception(f"Unexpected error calculating output size from reduction: {e}")
     # Direct size information if available (typically on completion)
     elif "output_size" in info and "original_size" in info:
         current_size = info["output_size"]
         original_size = info["original_size"]
         if original_size is not None and original_size > 0 and current_size is not None:
-            try: # Ensure values are valid numbers
+            try:
                 current_size_f = float(current_size)
                 original_size_f = float(original_size)
                 ratio = (current_size_f / original_size_f) * 100
                 size_str = f"{format_file_size(current_size_f)} ({ratio:.1f}%)"
-
-                # CRITICAL: Use explicit lambda to capture the current value
                 update_ui_safely(gui.root, lambda s=size_str: gui.output_size_label.config(text=s))
-
                 logging.info(f"Output size update: {size_str}")
             except (ValueError, TypeError, ZeroDivisionError) as e:
-                 logging.warning(f"Invalid size data for final update: {current_size}, {original_size} - {e}")
+                logging.warning(f"Invalid size data for final update: {current_size}, {original_size} - {e}")
+
+
+def update_conversion_statistics(gui, info: dict = None) -> None:
+    """Update the conversion statistics like ETA, VMAF, CRF in the UI.
+
+    Args:
+        gui: The main GUI instance containing statistic display widgets
+        info: Dictionary containing conversion progress information
+    """
+    if not info or not gui.conversion_running:
+        logging.debug("Skipping update_conversion_statistics: no info or not running")
+        return
+
+    # Log received info for debugging
+    logging.debug(f"Processing statistics update: {info}")
+
+    # Update individual display components
+    update_vmaf_display(gui, info)
+    update_crf_display(gui, info)
+    update_eta_from_progress_info(gui, info)
+    update_size_prediction(gui, info)
 
 
 def update_elapsed_time(gui, start_time: float) -> None:
@@ -261,8 +275,8 @@ def update_elapsed_time(gui, start_time: float) -> None:
     # Also update total elapsed time
     update_total_elapsed_time(gui)
 
-    # Update ETA display if we're in encoding phase
-    update_eta_display(gui)
+    # Update ETA countdown if we're in encoding phase
+    update_eta_countdown(gui)
 
     # Remove direct call to update_total_remaining_time since it's now on its own timer
 
@@ -300,7 +314,7 @@ def update_total_remaining_time(gui) -> None:
             current_file_info = {"path": gui.current_file_path}
 
         # Estimate remaining time
-        total_remaining = utils.estimate_remaining_time(gui, current_file_info)
+        total_remaining = estimate_remaining_time(gui, current_file_info)
         remaining_str = format_time(total_remaining) if total_remaining > 0 else "Calculating..."
 
         logging.debug(f"Total remaining time: {total_remaining}s, display: {remaining_str}")
@@ -615,8 +629,8 @@ def update_statistics_summary_current_session(gui) -> None:
     update_ui_safely(gui.root, lambda t=total_saved_text: gui.total_saved_label.config(text=t))
 
 
-def update_eta_display(gui) -> None:
-    """Update the ETA display based on stored AB-AV1 ETA or progress.
+def update_eta_countdown(gui) -> None:
+    """Update the ETA display by counting down from stored AB-AV1 ETA.
     This function is called every second to provide continuous countdown.
     """
     if not gui.conversion_running:

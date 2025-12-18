@@ -14,11 +14,6 @@ from pathlib import Path
 from typing import Callable  # Import Callable
 
 # Project imports
-# Import GUI update functions (needed by callback dispatcher indirectly via handlers)
-from src.gui.gui_updates import (
-    reset_current_file_details,
-    update_elapsed_time,
-)
 from src.models import ConversionConfig, HistoryRecord
 from src.utils import (
     anonymize_filename,
@@ -29,18 +24,7 @@ from src.utils import (
 )
 from src.video_conversion import process_video
 
-from .callback_handlers import (
-    handle_completed,
-    handle_error,
-    handle_file_info,
-    handle_progress,
-    handle_retrying,
-    handle_skipped,
-    handle_skipped_not_worth,
-    handle_starting,
-)
-
-# Import functions/modules from the engine package and GUI updates
+# Import functions/modules from the engine package
 from .scanner import scan_video_needs_conversion
 
 # REMOVED direct import causing circular dependency. Functions are passed as args.
@@ -51,8 +35,11 @@ logger = logging.getLogger(__name__)
 
 
 def sequential_conversion_worker(gui, config: ConversionConfig, stop_event,
-                                 pid_storage_callback: Callable, # Changed to Callable
-                                 completion_callback: Callable): # Changed to Callable
+                                 file_event_callback: Callable,
+                                 reset_ui_callback: Callable,
+                                 elapsed_time_callback: Callable,
+                                 pid_storage_callback: Callable,
+                                 completion_callback: Callable):
     """Process files sequentially, scanning and converting each eligible video.
 
     This is the main worker function that runs in a separate thread to handle
@@ -62,6 +49,9 @@ def sequential_conversion_worker(gui, config: ConversionConfig, stop_event,
         gui: The main GUI instance (passed for accessing settings, state, and root window).
         config: ConversionConfig containing all conversion settings.
         stop_event: Threading event to signal stopping.
+        file_event_callback: Callback for file conversion events (progress, errors, completion).
+        reset_ui_callback: Callback to reset UI details for a new file.
+        elapsed_time_callback: Callback to update elapsed time display.
         pid_storage_callback: Function to call to store the process ID (e.g., store_process_id(gui, pid, path)).
         completion_callback: Function to call when the worker finishes (e.g., conversion_complete(gui, message)).
     """
@@ -154,8 +144,8 @@ def sequential_conversion_worker(gui, config: ConversionConfig, stop_event,
                         gui.skipped_low_resolution_files.append(filename)
                     update_ui_safely(gui.root, update_low_res_skip)
 
-                # Log skip reason using the handler for consistency
-                handle_skipped(gui, filename, reason)
+                # Log skip reason using the callback
+                file_event_callback(filename, "skipped", reason)
         except Exception as e:
             logger.error(f"Unexpected error during detailed scan for {anonymize_filename(video_path)}: {e}", exc_info=True)
             skipped_files_count += 1
@@ -184,46 +174,6 @@ def sequential_conversion_worker(gui, config: ConversionConfig, stop_event,
 
     gui.processed_files = 0; gui.successful_conversions = 0
 
-    # --- Callback Dispatcher Definition ---
-    def file_callback_dispatcher(filename, status, info=None):
-        """Dispatch file status events to appropriate handler functions."""
-        logging.debug(f"Callback Dispatcher: File={filename}, Status={status}, Info={info}")
-        try:
-            handler_map = {
-                "starting": handle_starting,
-                "file_info": handle_file_info,
-                "progress": handle_progress,
-                "warning": handle_error, # Treat warning as error for logging/counting
-                "error": handle_error,
-                "failed": handle_error,
-                "retrying": handle_retrying,
-                "completed": handle_completed,
-                "skipped": handle_skipped,
-                "skipped_not_worth": handle_skipped_not_worth,
-            }
-            handler = handler_map.get(status)
-            if handler:
-                # Pass the gui object and necessary arguments to the handler
-                if status == "starting":
-                    # handle_starting only takes gui and filename
-                    handler(gui, filename)
-                elif status == "skipped":
-                    # handle_skipped takes gui, filename, and reason (which is passed as info)
-                    handler(gui, filename, info)
-                elif info is not None:
-                    # Most other handlers take gui, filename, and info dict
-                    handler(gui, filename, info)
-                else:
-                    # Fallback for handlers that might expect info but didn't receive it
-                    # (e.g., if error reporting changes in future)
-                    logger.warning(f"Handler for status '{status}' called without info data.")
-                    handler(gui, filename, {}) # Pass empty dict to avoid crash
-            else:
-                logger.warning(f"Unknown status '{status}' received for file {filename}. Info: {info}")
-        except Exception as e:
-            logger.error(f"Error executing callback handler for status '{status}': {e}", exc_info=True)
-
-
     # --- File Processing Loop ---
     for video_path in files_to_process:
         if stop_event.is_set():
@@ -243,7 +193,7 @@ def sequential_conversion_worker(gui, config: ConversionConfig, stop_event,
         filename = os.path.basename(video_path)
         anonymized_name = anonymize_filename(video_path)
         update_ui_safely(gui.root, lambda: gui.status_label.config(text=f"Converting {file_number}/{total_videos_to_process}: {filename}"))
-        update_ui_safely(gui.root, reset_current_file_details, gui) # Reset UI elements for the new file
+        update_ui_safely(gui.root, reset_ui_callback) # Reset UI elements for the new file
 
         original_size = 0; input_vcodec = "?"; input_acodec = "?"; input_duration = 0.0
         output_acodec = "?" # Initialize output audio codec
@@ -285,7 +235,7 @@ def sequential_conversion_worker(gui, config: ConversionConfig, stop_event,
         gui.current_file_start_time = time.time(); gui.current_file_encoding_start_time = None
         if not hasattr(gui, "elapsed_timer_id"):
             gui.elapsed_timer_id = None
-        update_ui_safely(gui.root, update_elapsed_time, gui, gui.current_file_start_time) # Start timer UI updates
+        update_ui_safely(gui.root, elapsed_time_callback, gui.current_file_start_time) # Start timer UI updates
         gui.current_process_info = None # Reset PID info for the new file
 
         # --- Process Video ---
@@ -300,7 +250,7 @@ def sequential_conversion_worker(gui, config: ConversionConfig, stop_event,
                 overwrite=config.overwrite,
                 convert_audio=config.convert_audio,
                 audio_codec=config.audio_codec,
-                file_info_callback=file_callback_dispatcher, # Pass the dispatcher
+                file_info_callback=file_event_callback, # Pass the dispatcher
                 pid_callback=lambda pid, path=video_path: pid_storage_callback(gui, pid, path), # Use lambda to pass gui object and path
                 total_duration_seconds=input_duration
             )
@@ -322,7 +272,7 @@ def sequential_conversion_worker(gui, config: ConversionConfig, stop_event,
         except Exception as e:
             logger.error(f"Critical error during process_video call for {anonymized_name}: {e}", exc_info=True)
             # Dispatch a generic failure if process_video itself crashes
-            file_callback_dispatcher(filename, "failed", {"message": f"Internal processing error: {e}", "type": "processing_crash"})
+            file_event_callback(filename, "failed", {"message": f"Internal processing error: {e}", "type": "processing_crash"})
             process_successful = False
             gui.last_output_size = None
             gui.last_elapsed_time = None
@@ -369,7 +319,7 @@ def sequential_conversion_worker(gui, config: ConversionConfig, stop_event,
             # Dispatch completed callback *after* history attempt
             # Pass necessary info for the handler
             completed_info = {"vmaf": final_vmaf, "crf": final_crf, "output_size": output_size}
-            file_callback_dispatcher(filename, "completed", completed_info)
+            file_event_callback(filename, "completed", completed_info)
         else:
             # Error handling is done via the callback dispatcher calling handle_error
             pass

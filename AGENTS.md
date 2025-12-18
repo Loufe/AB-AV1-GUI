@@ -39,13 +39,13 @@ src/
 │   ├── exceptions.py          # Custom exception hierarchy
 │   ├── checker.py             # ab-av1 availability check
 │   └── cleaner.py             # Temp folder cleanup
-├── conversion_engine/         # Batch conversion
+├── conversion_engine/         # Batch conversion (no GUI imports)
 │   ├── worker.py              # Sequential worker thread
-│   ├── scanner.py             # Video file scanning/filtering
-│   └── callback_handlers.py   # Event dispatch to GUI
+│   └── scanner.py             # Video file scanning/filtering
 └── gui/                       # Tkinter GUI
     ├── main_window.py         # Main window, settings persistence
-    ├── conversion_controller.py # Start/stop/force-stop logic
+    ├── conversion_controller.py # Start/stop/force-stop logic, callback dispatcher
+    ├── callback_handlers.py   # Event handlers (progress, completed, error, etc.)
     ├── gui_updates.py         # Thread-safe UI updates
     ├── gui_actions.py         # User interaction handlers
     └── tabs/                  # Tab implementations
@@ -106,10 +106,11 @@ When refactoring:
 2. Update ALL affected code in the same commit
 3. Leave no artifacts of the old approach
 4. If something breaks, fix it - don't add compatibility layers
+5. **Use `git mv` when moving files** - Preserves git history; never delete+create
 
 ### Conventions
 - **Thread safety**: Never update GUI from worker thread directly. Use `update_ui_safely()`.
-- **Callbacks**: Events dispatch via `handle_*` functions in `conversion_controller.py`.
+- **Callbacks**: Events dispatch via `handle_*` functions in `gui/callback_handlers.py`.
 - **Exceptions**: Custom hierarchy in `ab_av1/exceptions.py` (InputFileError, OutputFileError, VMAFError, etc.)
 - **Persistence**: JSON with atomic writes using `os.replace()`.
 - **Process management**: Track PID for graceful/force stop. Use `taskkill /T` on Windows.

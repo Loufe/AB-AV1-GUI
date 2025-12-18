@@ -1,4 +1,4 @@
-# src/conversion_engine/callback_handlers.py
+# src/gui/callback_handlers.py
 """
 Callback handler functions for events dispatched from the conversion process.
 

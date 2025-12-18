@@ -29,9 +29,22 @@ from src.conversion_engine.worker import sequential_conversion_worker
 # Import GUI actions needed here (like check_ffmpeg)
 from src.gui.gui_actions import check_ffmpeg
 
+# Import callback handlers
+from src.gui.callback_handlers import (
+    handle_completed,
+    handle_error,
+    handle_file_info,
+    handle_progress,
+    handle_retrying,
+    handle_skipped,
+    handle_skipped_not_worth,
+    handle_starting,
+)
+
 # Import GUI update functions
 from src.gui.gui_updates import (
     reset_current_file_details,
+    update_elapsed_time,
     update_statistics_summary,
     update_total_elapsed_time,
     update_total_remaining_time,
@@ -51,6 +64,56 @@ from src.utils import (
 # Import the single-file processing function
 
 logger = logging.getLogger(__name__)
+
+
+# --- Callback Dispatcher ---
+
+def create_file_callback_dispatcher(gui):
+    """Create a callback dispatcher for file conversion events.
+
+    This dispatcher routes file status events to appropriate handler functions.
+    Defined in GUI layer to avoid conversion_engine importing from gui.
+
+    Args:
+        gui: The main GUI instance
+
+    Returns:
+        A callback function that can be passed to the worker
+    """
+    def file_callback_dispatcher(filename, status, info=None):
+        """Dispatch file status events to appropriate handler functions."""
+        logging.debug(f"Callback Dispatcher: File={filename}, Status={status}, Info={info}")
+        try:
+            handler_map = {
+                "starting": handle_starting,
+                "starting_no_size": handle_starting,
+                "file_info": handle_file_info,
+                "progress": handle_progress,
+                "warning": handle_error,
+                "error": handle_error,
+                "failed": handle_error,
+                "retrying": handle_retrying,
+                "completed": handle_completed,
+                "skipped": handle_skipped,
+                "skipped_not_worth": handle_skipped_not_worth,
+            }
+            handler = handler_map.get(status)
+            if handler:
+                if status in ("starting", "starting_no_size"):
+                    handler(gui, filename)
+                elif status == "skipped":
+                    handler(gui, filename, info)
+                elif info is not None:
+                    handler(gui, filename, info)
+                else:
+                    logger.warning(f"Handler for status '{status}' called without info data.")
+                    handler(gui, filename, {})
+            else:
+                logger.warning(f"Unknown status '{status}' received for file {filename}. Info: {info}")
+        except Exception as e:
+            logger.error(f"Error executing callback handler for status '{status}': {e}", exc_info=True)
+
+    return file_callback_dispatcher
 
 
 # --- Process Management & State ---
@@ -204,11 +267,16 @@ def start_conversion(gui) -> None:
         audio_codec=audio_codec
     )
 
+    # Create callbacks in the GUI layer to pass to worker
+    file_callback = create_file_callback_dispatcher(gui)
+    reset_ui_callback = lambda: reset_current_file_details(gui)
+    elapsed_time_callback = lambda start_time: update_elapsed_time(gui, start_time)
+
     # Start the conversion worker thread
-    # Pass necessary callbacks (store_process_id, conversion_complete)
+    # Pass necessary callbacks (file_callback, reset_ui, elapsed_time, pid_storage, completion)
     gui.conversion_thread = threading.Thread(
         target=sequential_conversion_worker,
-        args=(gui, config, gui.stop_event, store_process_id, conversion_complete),
+        args=(gui, config, gui.stop_event, file_callback, reset_ui_callback, elapsed_time_callback, store_process_id, conversion_complete),
         daemon=True # Ensure thread exits if main app crashes
     )
     gui.conversion_thread.start()
@@ -235,6 +303,136 @@ def stop_conversion(gui) -> None:
         logger.info("Stop signal has already been sent.")
 
 
+def terminate_process(pid: int) -> bool:
+    """Terminate a process by PID, using platform-specific methods.
+
+    Args:
+        pid: Process ID to terminate
+
+    Returns:
+        True if termination was successful or process not found, False on error
+    """
+    if not pid:
+        logger.warning("No PID provided for termination")
+        return False
+
+    logger.info(f"Attempting to terminate process PID {pid}...")
+    try:
+        if sys.platform == "win32":
+            # Use taskkill on Windows with /T to kill process tree, /F for force
+            startupinfo = subprocess.STARTUPINFO()
+            startupinfo.dwFlags |= subprocess.STARTF_USESHOWWINDOW
+            startupinfo.wShowWindow = subprocess.SW_HIDE
+            result = subprocess.run(
+                ["taskkill", "/F", "/T", "/PID", str(pid)],
+                capture_output=True,
+                text=True,
+                check=False,
+                startupinfo=startupinfo
+            )
+            if result.returncode == 0:
+                logger.info(f"Successfully terminated PID {pid} and its child processes via taskkill.")
+                return True
+            else:
+                logger.warning(f"taskkill failed for PID {pid} (rc={result.returncode}): {result.stderr.strip()}")
+                # Fallback: try killing ffmpeg directly if taskkill failed
+                try:
+                    subprocess.run(
+                        ["taskkill", "/F", "/IM", "ffmpeg.exe"],
+                        capture_output=True,
+                        text=True,
+                        check=False,
+                        startupinfo=startupinfo
+                    )
+                    logger.info("Attempted fallback kill of ffmpeg.exe processes.")
+                    return True
+                except Exception as ffmpeg_e:
+                    logger.error(f"Failed fallback kill of ffmpeg processes: {ffmpeg_e}")
+                    return False
+        else:  # Linux/macOS
+            # Try SIGTERM first, then SIGKILL
+            os.kill(pid, signal.SIGTERM)
+            time.sleep(0.5)
+            try:
+                os.kill(pid, 0)  # Check if process still exists
+                # If it exists, SIGTERM failed, use SIGKILL
+                logger.warning(f"Process {pid} still alive after SIGTERM, sending SIGKILL.")
+                os.kill(pid, signal.SIGKILL)
+                logger.info(f"Sent SIGKILL to PID {pid}.")
+                return True
+            except ProcessLookupError:
+                logger.info(f"Process {pid} terminated successfully with SIGTERM.")
+                return True
+    except ProcessLookupError:
+        logger.warning(f"Process PID {pid} not found during termination attempt.")
+        return True  # Process already gone
+    except Exception as e:
+        logger.error(f"Failed to terminate process PID {pid}: {e!s}")
+        return False
+
+
+def cleanup_temp_file(input_path: str, output_folder: str, input_folder: str) -> None:
+    """Clean up temporary conversion file associated with an input file.
+
+    Args:
+        input_path: Path to the input file that was being converted
+        output_folder: Output folder path
+        input_folder: Input folder path (for calculating relative paths)
+    """
+    if not input_path or not output_folder:
+        logger.debug("Cannot cleanup temp file: missing paths")
+        return
+
+    temp_filename = "unknown_temp_file.mkv"
+    try:
+        in_path_obj = Path(input_path)
+        out_folder_obj = Path(output_folder)
+        relative_dir = Path()
+
+        try:
+            relative_dir = in_path_obj.parent.relative_to(Path(input_folder))
+        except ValueError:
+            logger.debug("Killed file not relative to input base.")
+
+        output_dir_for_file = out_folder_obj / relative_dir
+        temp_filename = in_path_obj.stem + ".mkv.temp.mkv"
+        temp_file_path = output_dir_for_file / temp_filename
+
+        if temp_file_path.exists():
+            logger.info(f"Removing temporary file: {temp_file_path}")
+            os.remove(temp_file_path)
+            logger.info("Removed temporary file successfully.")
+        else:
+            logger.debug(f"Specific temp file not found for cleanup: {temp_file_path}")
+    except Exception as cleanup_err:
+        logger.error(f"Failed to remove specific temp file '{temp_filename}': {cleanup_err}")
+
+
+def restore_ui_after_stop(gui) -> None:
+    """Restore UI state and system settings after stopping conversion.
+
+    Args:
+        gui: The main GUI instance
+    """
+    # Restore sleep functionality if it was active
+    if hasattr(gui, "sleep_prevention_active") and gui.sleep_prevention_active:
+        allow_sleep_mode()
+        logger.info("System sleep prevention disabled after force stop.")
+        gui.sleep_prevention_active = False
+
+    # Reset UI and internal state
+    gui.conversion_running = False
+    if gui.elapsed_timer_id:
+        gui.root.after_cancel(gui.elapsed_timer_id)
+        gui.elapsed_timer_id = None
+
+    update_ui_safely(gui.root, lambda: gui.status_label.config(text="Conversion force stopped"))
+    update_ui_safely(gui.root, reset_current_file_details, gui)
+    update_ui_safely(gui.root, lambda: gui.start_button.config(state="normal"))
+    update_ui_safely(gui.root, lambda: gui.stop_button.config(state="disabled"))
+    update_ui_safely(gui.root, lambda: gui.force_stop_button.config(state="disabled"))
+
+
 def force_stop_conversion(gui, confirm: bool = True) -> None:
     """Force stop the conversion process immediately by killing the process and cleaning temp files.
 
@@ -248,122 +446,60 @@ def force_stop_conversion(gui, confirm: bool = True) -> None:
 
     if confirm:
         # Ask for user confirmation before proceeding with force stop
-        if not messagebox.askyesno("Confirm Force Stop",
-                                   "This will immediately terminate the current conversion.\n"
-                                   "The current file will be incomplete.\n\n"
-                                   "Are you sure you want to force stop?"):
+        if not messagebox.askyesno(
+            "Confirm Force Stop",
+            "This will immediately terminate the current conversion.\n"
+            "The current file will be incomplete.\n\n"
+            "Are you sure you want to force stop?"
+        ):
             logger.info("User cancelled the force stop request.")
             return
 
     logger.warning("Force stop initiated by user or internal call.")
     gui.status_label.config(text="Force stopping...")
     if gui.stop_event:
-        gui.stop_event.set() # Signal the worker thread as well, though process kill is primary
+        gui.stop_event.set()
 
+    # Get process information
     pid_to_kill = None
     input_path_killed = None
-    # Get PID of the currently running process, if available
     if gui.current_process_info:
         pid_to_kill = gui.current_process_info.get("pid")
         input_path_killed = gui.current_process_info.get("input_path")
 
-    # --- Terminate Process ---
+    # Terminate the process
     if pid_to_kill:
-        logger.info(f"Attempting to terminate process PID {pid_to_kill}...")
-        try:
-            if sys.platform == "win32":
-                # Use taskkill on Windows with /T to kill process tree, /F for force
-                startupinfo = subprocess.STARTUPINFO()
-                startupinfo.dwFlags |= subprocess.STARTF_USESHOWWINDOW
-                startupinfo.wShowWindow = subprocess.SW_HIDE
-                result = subprocess.run(["taskkill", "/F", "/T", "/PID", str(pid_to_kill)],
-                                       capture_output=True, text=True, check=False, startupinfo=startupinfo)
-                if result.returncode == 0:
-                    logger.info(f"Successfully terminated PID {pid_to_kill} and its child processes via taskkill.")
-                else:
-                    # Log failure details if taskkill returns non-zero
-                    logger.warning(f"taskkill failed for PID {pid_to_kill} (rc={result.returncode}): {result.stderr.strip()}")
-                    # Fallback: try killing ffmpeg directly if taskkill failed
-                    try:
-                        subprocess.run(["taskkill", "/F", "/IM", "ffmpeg.exe"], capture_output=True, text=True, check=False, startupinfo=startupinfo)
-                        logger.info("Attempted fallback kill of ffmpeg.exe processes.")
-                    except Exception as ffmpeg_e:
-                        logger.error(f"Failed fallback kill of ffmpeg processes: {ffmpeg_e}")
-            else: # Linux/macOS
-                # Try SIGTERM first, then SIGKILL
-                os.kill(pid_to_kill, signal.SIGTERM)
-                time.sleep(0.5) # Give it a moment
-                try:
-                    os.kill(pid_to_kill, 0) # Check if process still exists
-                    # If it exists, SIGTERM failed, use SIGKILL
-                    logger.warning(f"Process {pid_to_kill} still alive after SIGTERM, sending SIGKILL.")
-                    os.kill(pid_to_kill, signal.SIGKILL)
-                    logger.info(f"Sent SIGKILL to PID {pid_to_kill}.")
-                except ProcessLookupError:
-                    logger.info(f"Process {pid_to_kill} terminated successfully with SIGTERM.")
-        except ProcessLookupError:
-            logger.warning(f"Process PID {pid_to_kill} not found during termination attempt.")
-        except Exception as e:
-            logger.error(f"Failed to terminate process PID {pid_to_kill}: {e!s}")
+        terminate_process(pid_to_kill)
     else:
         logger.warning("Force stop: No active process PID was recorded. Cannot target specific process.")
         # Fallback: try killing any ffmpeg process if PID wasn't known
         if sys.platform == "win32":
-             try:
-                 startupinfo = subprocess.STARTUPINFO(); startupinfo.dwFlags |= subprocess.STARTF_USESHOWWINDOW; startupinfo.wShowWindow = subprocess.SW_HIDE
-                 subprocess.run(["taskkill", "/F", "/IM", "ffmpeg.exe"], capture_output=True, text=True, check=False, startupinfo=startupinfo)
-                 logger.info("Attempted fallback kill of any running ffmpeg.exe processes.")
-             except Exception as e: logger.error(f"Failed fallback kill of ffmpeg processes: {e}")
+            try:
+                startupinfo = subprocess.STARTUPINFO()
+                startupinfo.dwFlags |= subprocess.STARTF_USESHOWWINDOW
+                startupinfo.wShowWindow = subprocess.SW_HIDE
+                subprocess.run(
+                    ["taskkill", "/F", "/IM", "ffmpeg.exe"],
+                    capture_output=True,
+                    text=True,
+                    check=False,
+                    startupinfo=startupinfo
+                )
+                logger.info("Attempted fallback kill of any running ffmpeg.exe processes.")
+            except Exception as e:
+                logger.error(f"Failed fallback kill of ffmpeg processes: {e}")
 
-    # Clear the process info AFTER termination attempts complete to avoid race condition
+    # Clear the process info after termination
     gui.current_process_info = None
 
-    # --- Cleanup Temporary Files ---
-    # Attempt to remove the specific '.temp.mkv' file associated with the killed process
+    # Clean up temporary files
     if input_path_killed and gui.output_folder.get():
-        temp_filename = "unknown_temp_file.mkv" # Initialize temp_filename
-        try:
-            in_path_obj = Path(input_path_killed)
-            out_folder_obj = Path(gui.output_folder.get())
-            relative_dir = Path()
-            try: # Calculate relative path for output dir structure
-                relative_dir = in_path_obj.parent.relative_to(Path(gui.input_folder.get()))
-            except ValueError: logger.debug("Killed file not relative to input base.")
+        cleanup_temp_file(input_path_killed, gui.output_folder.get(), gui.input_folder.get())
 
-            output_dir_for_file = out_folder_obj / relative_dir
-            temp_filename = in_path_obj.stem + ".mkv.temp.mkv"
-            temp_file_path = output_dir_for_file / temp_filename
+    # Restore UI and system state
+    restore_ui_after_stop(gui)
 
-            if temp_file_path.exists():
-                logger.info(f"Removing temporary file: {temp_file_path}")
-                os.remove(temp_file_path)
-                logger.info("Removed temporary file successfully.")
-            else:
-                logger.debug(f"Specific temp file not found for cleanup: {temp_file_path}")
-        except Exception as cleanup_err:
-            logger.error(f"Failed to remove specific temp file '{temp_filename}': {cleanup_err}")
-
-    # --- Restore System State & Reset UI ---
-    # Restore sleep functionality if it was active
-    if hasattr(gui, "sleep_prevention_active") and gui.sleep_prevention_active:
-        allow_sleep_mode()
-        logger.info("System sleep prevention disabled after force stop.")
-        gui.sleep_prevention_active = False
-
-    # Reset UI and internal state
-    gui.conversion_running = False
-    if gui.elapsed_timer_id: # Stop the elapsed timer updates
-        gui.root.after_cancel(gui.elapsed_timer_id)
-        gui.elapsed_timer_id = None
-
-    update_ui_safely(gui.root, lambda: gui.status_label.config(text="Conversion force stopped"))
-    update_ui_safely(gui.root, reset_current_file_details, gui) # Reset current file details
-    update_ui_safely(gui.root, lambda: gui.start_button.config(state="normal"))
-    update_ui_safely(gui.root, lambda: gui.stop_button.config(state="disabled"))
-    update_ui_safely(gui.root, lambda: gui.force_stop_button.config(state="disabled"))
-
-    # Schedule general temp folder cleanup (for .ab-av1-* folders) after a short delay
-    # Use the output folder path stored on the gui object
+    # Schedule general temp folder cleanup
     output_dir_to_clean = getattr(gui, "output_folder_path", None) or gui.output_folder.get()
     if output_dir_to_clean:
         gui.root.after(500, lambda dir=output_dir_to_clean: schedule_temp_folder_cleanup(dir))
@@ -371,6 +507,129 @@ def force_stop_conversion(gui, confirm: bool = True) -> None:
         logger.warning("Cannot schedule general temp folder cleanup: output directory unclear.")
 
     logger.info("Conversion force stop procedure complete.")
+
+
+def build_summary_message(gui, final_message: str, total_duration: float) -> str:
+    """Build the completion summary message with statistics.
+
+    Args:
+        gui: The main GUI instance containing conversion statistics
+        final_message: The main completion message
+        total_duration: Total conversion time in seconds
+
+    Returns:
+        Formatted summary message string
+    """
+    if gui.processed_files == 0:
+        return ""
+
+    summary_msg = f"{final_message}.\n\n" \
+                  f"Files Processed: {gui.processed_files}\n" \
+                  f"Successfully Converted: {gui.successful_conversions}\n"
+
+    # Show different skip categories
+    skipped_not_worth = getattr(gui, "skipped_not_worth_count", 0)
+    skipped_low_resolution = getattr(gui, "skipped_low_resolution_count", 0)
+
+    if skipped_not_worth > 0:
+        summary_msg += f"Skipped (Inefficient): {skipped_not_worth}\n"
+
+    if skipped_low_resolution > 0:
+        summary_msg += f"Skipped (Low Resolution): {skipped_low_resolution}\n"
+
+    # Count other skips
+    error_count = getattr(gui, "error_count", 0)
+    other_skips = gui.processed_files - gui.successful_conversions - skipped_not_worth - skipped_low_resolution - error_count
+    if other_skips > 0:
+        summary_msg += f"Skipped (Other): {other_skips}\n"
+
+    if error_count > 0:
+        summary_msg += f"Errors: {error_count}\n"
+
+    summary_msg += f"\nTotal Time: {format_time(total_duration)}\n\n"
+
+    # Show conversion stats if available
+    if gui.successful_conversions > 0:
+        data_saved_bytes = gui.total_input_bytes_success - gui.total_output_bytes_success
+        input_gb_success = gui.total_input_bytes_success / (1024**3)
+        time_per_gb = (gui.total_time_success / input_gb_success) if input_gb_success > 0 else 0
+        data_saved_str = format_file_size(data_saved_bytes) if data_saved_bytes > 0 else "N/A"
+        time_per_gb_str = format_time(time_per_gb) if time_per_gb > 0 else "N/A"
+
+        summary_msg += "--- Avg. Stats (Successful Files) ---\n"
+        summary_msg += f"VMAF Score: {f'{statistics.mean(gui.vmaf_scores):.1f}' if gui.vmaf_scores else 'N/A'}\n"
+        summary_msg += f"CRF Value: {f'{statistics.mean(gui.crf_values):.1f}' if gui.crf_values else 'N/A'}\n"
+        summary_msg += f"Size Reduction: {f'{statistics.mean(gui.size_reductions):.1f}%' if gui.size_reductions else 'N/A'}\n\n" \
+                       f"--- Overall Performance ---\n" \
+                       f"Total Data Saved: {data_saved_str}\n" \
+                       f"Avg. Processing Time: {time_per_gb_str} per GB Input\n"
+
+    return summary_msg
+
+
+def format_error_details(error_details: list) -> str:
+    """Format error details for display in the summary.
+
+    Args:
+        error_details: List of error detail dictionaries
+
+    Returns:
+        Formatted error details string
+    """
+    if not error_details:
+        return ""
+
+    msg = "\n--- Error Details ---\n"
+    # Group errors by type
+    error_types = {}
+    for error in error_details:
+        error_type = error.get("error_type", "unknown")
+        if error_type not in error_types:
+            error_types[error_type] = []
+        error_types[error_type].append(error["filename"])
+
+    # Display up to 3 files per error type
+    for error_type, filenames in error_types.items():
+        msg += f"\n{error_type}: {len(filenames)} file{'s' if len(filenames) > 1 else ''}\n"
+        for i, filename in enumerate(filenames[:3]):
+            msg += f"  - {filename}\n"
+        if len(filenames) > 3:
+            msg += f"  ... and {len(filenames) - 3} more\n"
+
+    return msg
+
+
+def format_skip_details(skipped_files: list, skipped_low_res_files: list) -> str:
+    """Format skip details for display in the summary.
+
+    Args:
+        skipped_files: List of files skipped due to inefficiency
+        skipped_low_res_files: List of files skipped due to low resolution
+
+    Returns:
+        Formatted skip details string
+    """
+    msg = ""
+
+    # Show files skipped due to inefficiency
+    if skipped_files:
+        msg += "\n--- Files Skipped (Inefficient Conversion) ---\n"
+        msg += "Files where conversion would not save space:\n"
+        for i, filename in enumerate(skipped_files[:5]):
+            msg += f"  - {filename}\n"
+        if len(skipped_files) > 5:
+            msg += f"  ... and {len(skipped_files) - 5} more\n"
+
+    # Show files skipped due to low resolution
+    if skipped_low_res_files:
+        msg += "\n--- Files Skipped (Low Resolution) ---\n"
+        msg += f"Files below {MIN_RESOLUTION_WIDTH}x{MIN_RESOLUTION_HEIGHT}:\n"
+        for i, filename in enumerate(skipped_low_res_files[:5]):
+            msg += f"  - {filename}\n"
+        if len(skipped_low_res_files) > 5:
+            msg += f"  ... and {len(skipped_low_res_files) - 5} more\n"
+
+    return msg
 
 
 def conversion_complete(gui, final_message="Conversion complete"):
@@ -434,83 +693,22 @@ def conversion_complete(gui, final_message="Conversion complete"):
 
     # Show summary message box if files were processed
     if gui.processed_files > 0:
-        summary_msg = f"{final_message}.\n\n" \
-                      f"Files Processed: {gui.processed_files}\n" \
-                      f"Successfully Converted: {gui.successful_conversions}\n"
+        # Build main summary message
+        summary_msg = build_summary_message(gui, final_message, total_duration)
 
-        # Show different skip categories
-        skipped_not_worth = getattr(gui, "skipped_not_worth_count", 0)
-        skipped_low_resolution = getattr(gui, "skipped_low_resolution_count", 0)
-
-        if skipped_not_worth > 0:
-            summary_msg += f"Skipped (Inefficient): {skipped_not_worth}\n"
-
-        if skipped_low_resolution > 0:
-            summary_msg += f"Skipped (Low Resolution): {skipped_low_resolution}\n"
-
-        # Count other skips
-        error_count = getattr(gui, "error_count", 0)
-        other_skips = gui.processed_files - gui.successful_conversions - skipped_not_worth - skipped_low_resolution - error_count
-        if other_skips > 0:
-            summary_msg += f"Skipped (Other): {other_skips}\n"
-
-        if error_count > 0:
-            summary_msg += f"Errors: {error_count}\n"
-
-        summary_msg += f"\nTotal Time: {format_time(total_duration)}\n\n"
-
-        # Show conversion stats if available
-        if gui.successful_conversions > 0:
-            summary_msg += "--- Avg. Stats (Successful Files) ---\n"
-            summary_msg += f"VMAF Score: {f'{statistics.mean(gui.vmaf_scores):.1f}' if gui.vmaf_scores else 'N/A'}\n"
-            summary_msg += f"CRF Value: {f'{statistics.mean(gui.crf_values):.1f}' if gui.crf_values else 'N/A'}\n"
-            summary_msg += f"Size Reduction: {f'{statistics.mean(gui.size_reductions):.1f}%' if gui.size_reductions else 'N/A'}\n\n" \
-                           f"--- Overall Performance ---\n" \
-                           f"Total Data Saved: {data_saved_str}\n" \
-                           f"Avg. Processing Time: {time_per_gb_str} per GB Input\n"
-
-        # Show error details if any
+        # Add error details if any
         error_details = getattr(gui, "error_details", [])
         if error_details:
-            summary_msg += "\n--- Error Details ---\n"
-            # Group errors by type
-            error_types = {}
-            for error in error_details:
-                error_type = error.get("error_type", "unknown")
-                if error_type not in error_types:
-                    error_types[error_type] = []
-                error_types[error_type].append(error["filename"])
-
-            # Display up to 3 files per error type
-            for error_type, filenames in error_types.items():
-                summary_msg += f"\n{error_type}: {len(filenames)} file{'s' if len(filenames) > 1 else ''}\n"
-                for i, filename in enumerate(filenames[:3]):
-                    summary_msg += f"  - {filename}\n"
-                if len(filenames) > 3:
-                    summary_msg += f"  ... and {len(filenames) - 3} more\n"
-
+            summary_msg += format_error_details(error_details)
             summary_msg += f"\nCheck the logs ({gui.log_directory}) for full details."
 
-        # Show files skipped due to inefficiency
+        # Add skip details if any
         skipped_files = getattr(gui, "skipped_not_worth_files", [])
-        if skipped_files:
-            summary_msg += "\n--- Files Skipped (Inefficient Conversion) ---\n"
-            summary_msg += "Files where conversion would not save space:\n"
-            for i, filename in enumerate(skipped_files[:5]):
-                summary_msg += f"  - {filename}\n"
-            if len(skipped_files) > 5:
-                summary_msg += f"  ... and {len(skipped_files) - 5} more\n"
-
-        # Show files skipped due to low resolution
         skipped_low_res_files = getattr(gui, "skipped_low_resolution_files", [])
-        if skipped_low_res_files:
-            summary_msg += "\n--- Files Skipped (Low Resolution) ---\n"
-            summary_msg += f"Files below {MIN_RESOLUTION_WIDTH}x{MIN_RESOLUTION_HEIGHT}:\n"
-            for i, filename in enumerate(skipped_low_res_files[:5]):
-                summary_msg += f"  - {filename}\n"
-            if len(skipped_low_res_files) > 5:
-                summary_msg += f"  ... and {len(skipped_low_res_files) - 5} more\n"
+        summary_msg += format_skip_details(skipped_files, skipped_low_res_files)
 
+        # Show appropriate message box
+        error_count = getattr(gui, "error_count", 0)
         if error_count > 0:
             messagebox.showwarning("Conversion Summary", summary_msg)
         else:
