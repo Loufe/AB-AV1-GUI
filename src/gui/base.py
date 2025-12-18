@@ -1,12 +1,14 @@
-#src/gui/base.py
+# src/gui/base.py
 """
 Base GUI components for the AV1 Video Converter application.
 """
+
 import tkinter as tk
 
 
 class ToolTip:
     """Tooltip class for providing helpful information"""
+
     def __init__(self, widget, text):
         self.widget = widget
         self.text = text
@@ -24,9 +26,17 @@ class ToolTip:
         self.tooltip.wm_overrideredirect(True)
         self.tooltip.wm_geometry(f"+{x}+{y}")
 
-        label = tk.Label(self.tooltip, text=self.text, background="lightyellow",
-                        relief="solid", borderwidth=1, padx=5, pady=3,
-                        wraplength=300, justify="left")
+        label = tk.Label(
+            self.tooltip,
+            text=self.text,
+            background="lightyellow",
+            relief="solid",
+            borderwidth=1,
+            padx=5,
+            pady=3,
+            wraplength=300,
+            justify="left",
+        )
         label.pack()
 
     def hide_tooltip(self, event=None):

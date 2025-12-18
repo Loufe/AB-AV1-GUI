@@ -47,6 +47,7 @@ class ProgressEvent:
 @dataclass
 class FileInfoEvent:
     """Initial file information sent at start of processing."""
+
     file_size_mb: float
 
 
@@ -130,6 +131,7 @@ class ConversionConfig:
 @dataclass
 class HistoryRecord:
     """Record of a completed conversion for history persistence."""
+
     timestamp: str
     input_file: str
     output_file: str

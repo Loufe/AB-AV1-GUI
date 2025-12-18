@@ -7,15 +7,17 @@ Focuses on lines expected directly from ab-av1 via stdout/stderr.
 import logging
 import os
 import re
+from typing import Any, Callable
 
 from src.utils import anonymize_filename
 
 logger = logging.getLogger(__name__)
 
+
 class AbAv1Parser:
     """Parses output lines from ab-av1 to extract progress and stats."""
 
-    def __init__(self, file_info_callback: callable = None):
+    def __init__(self, file_info_callback: Callable[..., Any] | None = None):
         """
         Args:
             file_info_callback: Optional callback function to send progress updates.
@@ -34,21 +36,30 @@ class AbAv1Parser:
         self._re_ffmpeg_size = re.compile(r"size=\s*(\d+)([kKmMgG]?[bB])", re.IGNORECASE)
 
         # Refined regex patterns based on actual formats in logs
-        self._re_phase_encode_start = re.compile(r"ab_av1::command::encode\]\s*encoding(?:\s+video|\s+\S+\.mkv|\s|$)|Starting encoding", re.IGNORECASE)
-        self._re_sample_progress = re.compile(r"\[.*?sample_encode\].*?(\d+(\.\d+)?)%,\s*(\d+)\s*fps,\s*eta\s*(.*?)(?=$|\))", re.IGNORECASE)
-        self._re_main_encoding = re.compile(r"command::encode\]\s*(\d+)%,\s*(\d+)\s*fps,\s*eta\s+([\w\s]+)(?:$|\)|\])", re.IGNORECASE)
+        self._re_phase_encode_start = re.compile(
+            r"ab_av1::command::encode\]\s*encoding(?:\s+video|\s+\S+\.mkv|\s|$)|Starting encoding", re.IGNORECASE
+        )
+        self._re_sample_progress = re.compile(
+            r"\[.*?sample_encode\].*?(\d+(\.\d+)?)%,\s*(\d+)\s*fps,\s*eta\s*(.*?)(?=$|\))", re.IGNORECASE
+        )
+        self._re_main_encoding = re.compile(
+            r"command::encode\]\s*(\d+)%,\s*(\d+)\s*fps,\s*eta\s+([\w\s]+)(?:$|\)|\])", re.IGNORECASE
+        )
         self._re_crf_vmaf = re.compile(r"crf\s+(\d+)\s+VMAF\s+(\d+\.?\d*)", re.IGNORECASE)
         self._re_best_crf = re.compile(r"Best\s+CRF:\s+(\d+)", re.IGNORECASE)
-        self._re_size_reduction_percent = re.compile(r"predicted video stream size.*?\((\d+\.?\d*)\s*%\)", re.IGNORECASE)
+        self._re_size_reduction_percent = re.compile(
+            r"predicted video stream size.*?\((\d+\.?\d*)\s*%\)", re.IGNORECASE
+        )
 
         # Encoding Phase Summary Line (ab-av1 direct output)
         # Example: ⠖ 00:00:37 Encoding -------- (encoding, eta 0s)
-        self._re_ab_av1_encoding_summary = re.compile(r"\b(Encoding)\s*-*\s*\((\w+),\s*eta\s*([\w\s:]+)\)", re.IGNORECASE)
+        self._re_ab_av1_encoding_summary = re.compile(
+            r"\b(Encoding)\s*-*\s*\((\w+),\s*eta\s*([\w\s:]+)\)", re.IGNORECASE
+        )
 
         # Error patterns
         self._re_error_generic = re.compile(r"error|failed|invalid", re.IGNORECASE)
         self._re_error_crf_fail = re.compile(r"Failed\s+to\s+find\s+a\s+suitable\s+crf", re.IGNORECASE)
-
 
     def parse_line(self, line: str, stats: dict) -> dict:
         """
@@ -64,16 +75,18 @@ class AbAv1Parser:
         """
         line = line.strip()
         if not line:
-            return stats # Skip empty lines
+            return stats  # Skip empty lines
 
         try:
             anonymized_input_basename = os.path.basename(stats.get("input_path", "unknown_file"))
             current_phase = stats.get("phase", "crf-search")
-            processed_line = False # Flag if line yielded useful info
+            processed_line = False  # Flag if line yielded useful info
 
             # --- Phase Transition Detection ---
             if current_phase == "crf-search" and self._re_phase_encode_start.search(line):
-                logger.info(f"Phase transition to Encoding detected for {anonymize_filename(stats.get('input_path', ''))}")
+                logger.info(
+                    f"Phase transition to Encoding detected for {anonymize_filename(stats.get('input_path', ''))}"
+                )
                 stats["phase"] = "encoding"
                 stats["progress_quality"] = 100.0
                 stats["progress_encoding"] = 0.0
@@ -81,21 +94,26 @@ class AbAv1Parser:
                 processed_line = True
 
                 # Log extra information about this transition
-                logger.info(f"Starting encoding phase with CRF: {stats.get('crf', '?')}, VMAF Target: {stats.get('vmaf_target_used', '?')}")
+                logger.info(
+                    f"Starting encoding phase with CRF: {stats.get('crf', '?')}, VMAF Target: {stats.get('vmaf_target_used', '?')}"
+                )
                 logger.info(f"Duration in seconds: {stats.get('total_duration_seconds', '?')}")
                 logger.info("Looking for ffmpeg progress output lines in the form 'frame=XXX fps=XXX time=XX:XX:XX'")
 
                 if self.file_info_callback:
                     callback_info = {
-                        "progress_quality": 100.0, "progress_encoding": 0.0,
-                        "message": "Encoding started", "phase": stats["phase"],
-                        "vmaf": stats.get("vmaf"), "crf": stats.get("crf"),
-                        "size_reduction": stats.get("size_reduction"), # Use predicted if available
+                        "progress_quality": 100.0,
+                        "progress_encoding": 0.0,
+                        "message": "Encoding started",
+                        "phase": stats["phase"],
+                        "vmaf": stats.get("vmaf"),
+                        "crf": stats.get("crf"),
+                        "size_reduction": stats.get("size_reduction"),  # Use predicted if available
                         "original_size": stats.get("original_size"),
-                        "vmaf_target_used": stats.get("vmaf_target_used")
+                        "vmaf_target_used": stats.get("vmaf_target_used"),
                     }
                     self.file_info_callback(anonymized_input_basename, "progress", callback_info)
-                return stats # Return early
+                return stats  # Return early
 
             # --- CRF Search Phase Parsing ---
             if current_phase == "crf-search":
@@ -139,8 +157,7 @@ class AbAv1Parser:
                             stats["size_reduction"] = new_size_reduction
                             logger.info(f"Parsed predicted size reduction: {stats['size_reduction']:.1f}%")
                     except (ValueError, IndexError) as e:
-                         logger.warning(f"Cannot parse predicted size reduction % from line '{line[:80]}...': {e}")
-
+                        logger.warning(f"Cannot parse predicted size reduction % from line '{line[:80]}...': {e}")
 
                 # Send callback if quality progress increased
                 if new_quality_progress > stats.get("progress_quality", 0):
@@ -149,16 +166,21 @@ class AbAv1Parser:
                         vmaf_part = "?"
                         current_vmaf = stats.get("vmaf")
                         if current_vmaf is not None:
-                            try: vmaf_part = f"{float(current_vmaf):.1f}"
-                            except (ValueError, TypeError): vmaf_part = str(current_vmaf)
+                            try:
+                                vmaf_part = f"{float(current_vmaf):.1f}"
+                            except (ValueError, TypeError):
+                                vmaf_part = str(current_vmaf)
 
                         callback_info = {
-                            "progress_quality": stats["progress_quality"], "progress_encoding": 0,
+                            "progress_quality": stats["progress_quality"],
+                            "progress_encoding": 0,
                             "message": f"Detecting Quality (CRF:{stats.get('crf', '?')}, VMAF:{vmaf_part})",
-                            "phase": current_phase, "vmaf": stats.get("vmaf"), "crf": stats.get("crf"),
-                            "size_reduction": stats.get("size_reduction"), # Include prediction
+                            "phase": current_phase,
+                            "vmaf": stats.get("vmaf"),
+                            "crf": stats.get("crf"),
+                            "size_reduction": stats.get("size_reduction"),  # Include prediction
                             "original_size": stats.get("original_size"),
-                            "vmaf_target_used": stats.get("vmaf_target_used")
+                            "vmaf_target_used": stats.get("vmaf_target_used"),
                         }
                         self.file_info_callback(anonymized_input_basename, "progress", callback_info)
 
@@ -194,7 +216,7 @@ class AbAv1Parser:
                             "size_reduction": stats.get("size_reduction"),
                             "output_size": stats.get("estimated_output_size"),
                             "is_estimate": True if stats.get("estimated_output_size") else False,
-                            "vmaf_target_used": stats.get("vmaf_target_used")
+                            "vmaf_target_used": stats.get("vmaf_target_used"),
                         }
                         self.file_info_callback(anonymized_input_basename, "progress", callback_data)
 
@@ -233,7 +255,7 @@ class AbAv1Parser:
                             "size_reduction": stats.get("size_reduction"),
                             "output_size": stats.get("estimated_output_size"),
                             "is_estimate": True if stats.get("estimated_output_size") else False,
-                            "vmaf_target_used": stats.get("vmaf_target_used")
+                            "vmaf_target_used": stats.get("vmaf_target_used"),
                         }
                         self.file_info_callback(anonymized_input_basename, "progress", callback_data)
 
@@ -261,7 +283,7 @@ class AbAv1Parser:
                             "original_size": stats.get("original_size"),
                             "vmaf": stats.get("vmaf"),
                             "crf": stats.get("crf"),
-                            "size_reduction": stats.get("size_reduction")
+                            "size_reduction": stats.get("size_reduction"),
                         }
                         self.file_info_callback(anonymized_input_basename, "progress", callback_data)
 
@@ -276,11 +298,11 @@ class AbAv1Parser:
                         eta_text = summary_match.group(3).strip()
                         # Only update ETA if it changed to avoid spamming logs/UI
                         if stats.get("eta_text") != eta_text:
-                             stats["eta_text"] = eta_text
-                             logger.info(f"Parsed ab-av1 summary: Phase='{phase_text}', ETA='{eta_text}'")
+                            stats["eta_text"] = eta_text
+                            logger.info(f"Parsed ab-av1 summary: Phase='{phase_text}', ETA='{eta_text}'")
 
-                             # Send progress update using existing percentage, new ETA
-                             if self.file_info_callback:
+                            # Send progress update using existing percentage, new ETA
+                            if self.file_info_callback:
                                 current_progress = stats.get("progress_encoding", 0.0)
                                 callback_data = {
                                     "progress_quality": 100.0,
@@ -291,16 +313,18 @@ class AbAv1Parser:
                                     "original_size": stats.get("original_size"),
                                     "vmaf": stats.get("vmaf"),
                                     "crf": stats.get("crf"),
-                                    "size_reduction": stats.get("size_reduction"), # Use prediction if available
-                                    "output_size": stats.get("estimated_output_size"), # Use estimate if available
+                                    "size_reduction": stats.get("size_reduction"),  # Use prediction if available
+                                    "output_size": stats.get("estimated_output_size"),  # Use estimate if available
                                     "is_estimate": True if stats.get("estimated_output_size") else False,
-                                    "vmaf_target_used": stats.get("vmaf_target_used")
+                                    "vmaf_target_used": stats.get("vmaf_target_used"),
                                 }
-                                logger.debug(f"Sending progress callback (from summary update): {callback_data['progress_encoding']:.1f}%")
+                                logger.debug(
+                                    f"Sending progress callback (from summary update): {callback_data['progress_encoding']:.1f}%"
+                                )
                                 self.file_info_callback(anonymized_input_basename, "progress", callback_data)
 
                     except IndexError:
-                         logger.warning(f"Error parsing groups from ab-av1 summary line: '{line}'")
+                        logger.warning(f"Error parsing groups from ab-av1 summary line: '{line}'")
 
             # --- General Error Detection ---
             # Check for generic error keywords OR the specific CRF fail message
@@ -311,21 +335,23 @@ class AbAv1Parser:
             # Debug log after parsing attempt if useful info was found
             if processed_line:
                 # Log key stats that are expected to be updated by this parser
-                logger.debug(f"Post-Parse Stats: Phase={stats.get('phase')}, Qual={stats.get('progress_quality', 0):.1f}%, VMAF={stats.get('vmaf')}, CRF={stats.get('crf')}, ETA={stats.get('eta_text')}, SizeReduc={stats.get('size_reduction')}")
+                logger.debug(
+                    f"Post-Parse Stats: Phase={stats.get('phase')}, Qual={stats.get('progress_quality', 0):.1f}%, VMAF={stats.get('vmaf')}, CRF={stats.get('crf')}, ETA={stats.get('eta_text')}, SizeReduc={stats.get('size_reduction')}"
+                )
 
         except Exception as e:
             logger.error(f"General error processing output line: '{line[:80]}...' - {e}", exc_info=True)
 
-        return stats # Always return the potentially modified stats dictionary
+        return stats  # Always return the potentially modified stats dictionary
 
-    def _parse_ffmpeg_progress(self, line: str, stats: dict) -> dict:
+    def _parse_ffmpeg_progress(self, line: str, stats: dict[str, Any]) -> dict[str, Any] | None:
         """
         Parse FFmpeg progress output lines to extract encoding progress information.
-        
+
         Args:
             line: The line of text from FFmpeg stderr output.
             stats: Current stats dictionary to use for duration reference.
-            
+
         Returns:
             Dictionary with progress information or None if not a progress line.
         """
@@ -403,7 +429,7 @@ class AbAv1Parser:
                     size_bytes = size_value * 1024
                 elif size_unit.lower() == "mb":
                     size_bytes = size_value * 1024 * 1024
-                else: # Assume bytes
+                else:  # Assume bytes
                     size_bytes = size_value
 
             # Extract speed information
@@ -418,7 +444,7 @@ class AbAv1Parser:
                 "fps": fps,
                 "eta_text": eta_text,
                 "size_bytes": size_bytes,
-                "speed": speed
+                "speed": speed,
             }
 
             return result
@@ -470,7 +496,7 @@ class AbAv1Parser:
         # --- Final Size Reduction ---
         # Use the value potentially parsed earlier from predicted size line
         if stats.get("size_reduction") is not None:
-             logger.info(f"[Final Parse] Using previously parsed size reduction: {stats['size_reduction']:.2f}%")
+            logger.info(f"[Final Parse] Using previously parsed size reduction: {stats['size_reduction']:.2f}%")
         else:
             # Try parsing the predicted size line again from the full text as a last resort
             size_match = self._re_size_reduction_percent.search(output_text)
@@ -479,10 +505,14 @@ class AbAv1Parser:
                     size_percentage = float(size_match.group(1))
                     final_size_reduction = 100.0 - size_percentage
                     stats["size_reduction"] = final_size_reduction
-                    logger.info(f"[Final Parse] Found predicted size reduction in final text: {stats['size_reduction']:.1f}%")
+                    logger.info(
+                        f"[Final Parse] Found predicted size reduction in final text: {stats['size_reduction']:.1f}%"
+                    )
                 except (ValueError, IndexError) as e:
                     logger.warning(f"[Final Parse] Cannot parse final predicted size reduction %: {e}")
             else:
-                logger.warning("[Final Parse] Size reduction percentage not found in main pipe output and wasn't parsed previously.")
+                logger.warning(
+                    "[Final Parse] Size reduction percentage not found in main pipe output and wasn't parsed previously."
+                )
 
         return stats

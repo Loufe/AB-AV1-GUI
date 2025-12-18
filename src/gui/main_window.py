@@ -1,7 +1,8 @@
-#src/gui/main_window.py
+# src/gui/main_window.py
 """
 Main window module for the AV1 Video Converter application.
 """
+
 # Standard library imports
 import json  # For settings persistence
 import logging
@@ -34,6 +35,7 @@ logger = logging.getLogger(__name__)
 # Place config file next to script/executable
 CONFIG_FILE = os.path.join(get_script_directory(), "av1_converter_config.json")
 
+
 class VideoConverterGUI:
     """Main application window for the AV1 Video Converter application."""
 
@@ -58,7 +60,6 @@ class VideoConverterGUI:
         except Exception as e:
             logger.error(f"Unexpected error setting window icon: {e}")
 
-
         # Load settings first
         self.config = self.load_settings()
 
@@ -67,8 +68,8 @@ class VideoConverterGUI:
 
         # Setup logging using initialized variables (which hold config values or defaults)
         try:
-            log_dir_pref = self.log_folder.get() # Get value from tk.StringVar
-            anonymize_pref = self.anonymize_logs.get() # Get value from tk.BooleanVar
+            log_dir_pref = self.log_folder.get()  # Get value from tk.StringVar
+            anonymize_pref = self.anonymize_logs.get()  # Get value from tk.BooleanVar
             # Store the *actual* directory used by logging setup
             self.log_directory = setup_logging(log_directory=log_dir_pref, anonymize=anonymize_pref)
 
@@ -79,17 +80,19 @@ class VideoConverterGUI:
             else:
                 # If setup_logging failed to return a valid dir, clear the field maybe?
                 # Clearing the field makes it clear that the configured path isn't being used.
-                self.log_folder.set("") # Clear the entry field if logging dir failed
+                self.log_folder.set("")  # Clear the entry field if logging dir failed
                 logger.warning("Log directory could not be determined or created. GUI display cleared.")
 
-            logger.info("=== Starting AV1 Video Converter ===") # Now log start message
+            logger.info("=== Starting AV1 Video Converter ===")  # Now log start message
 
         except Exception as e:
             # Handle errors during logging setup itself
             messagebox.showerror("Logging Error", f"Failed to initialize logging:\n{e}\n\nApplication cannot start.")
             # Attempt to clean up tk window if it exists
-            try: root.destroy()
-            except: pass
+            try:
+                root.destroy()
+            except Exception as e:
+                logger.debug(f"Error destroying root window: {e}")
             sys.exit(1)
 
         # Register exit handler AFTER logging is potentially set up
@@ -114,16 +117,22 @@ class VideoConverterGUI:
         # Update statistics panel with historical data
         update_statistics_summary(self)
 
-        check_ffmpeg(self) # Check dependencies after UI is built
+        check_ffmpeg(self)  # Check dependencies after UI is built
 
     def load_settings(self):
         """Load settings from JSON config file"""
         try:
             if os.path.exists(CONFIG_FILE):
                 with open(CONFIG_FILE, encoding="utf-8") as f:
-                    config = json.load(f); logger.info(f"Loaded settings from {CONFIG_FILE}"); return config # Changed print to logger
-            else: logger.info(f"Config file {CONFIG_FILE} not found, using defaults."); return {} # Changed print to logger
-        except Exception as e: logger.error(f"Error loading settings from {CONFIG_FILE}: {e}. Using defaults."); return {} # Changed print to logger
+                    config = json.load(f)
+                    logger.info(f"Loaded settings from {CONFIG_FILE}")
+                    return config  # Changed print to logger
+            else:
+                logger.info(f"Config file {CONFIG_FILE} not found, using defaults.")
+                return {}  # Changed print to logger
+        except Exception as e:
+            logger.error(f"Error loading settings from {CONFIG_FILE}: {e}. Using defaults.")
+            return {}  # Changed print to logger
 
     def save_settings(self):
         """Save settings to JSON config file"""
@@ -134,29 +143,41 @@ class VideoConverterGUI:
             log_folder_to_save = self.log_folder.get()
 
             current_config = {
-                "input_folder": self.input_folder.get(), "output_folder": self.output_folder.get(),
-                "overwrite": self.overwrite.get(), "ext_mp4": self.ext_mp4.get(),
-                "ext_mkv": self.ext_mkv.get(), "ext_avi": self.ext_avi.get(), "ext_wmv": self.ext_wmv.get(),
-                "convert_audio": self.convert_audio.get(), "audio_codec": self.audio_codec.get(),
-                "log_folder": log_folder_to_save, # Save the potentially user-modified path
+                "input_folder": self.input_folder.get(),
+                "output_folder": self.output_folder.get(),
+                "overwrite": self.overwrite.get(),
+                "ext_mp4": self.ext_mp4.get(),
+                "ext_mkv": self.ext_mkv.get(),
+                "ext_avi": self.ext_avi.get(),
+                "ext_wmv": self.ext_wmv.get(),
+                "convert_audio": self.convert_audio.get(),
+                "audio_codec": self.audio_codec.get(),
+                "log_folder": log_folder_to_save,  # Save the potentially user-modified path
                 "anonymize_logs": self.anonymize_logs.get(),
                 "anonymize_history": self.anonymize_history.get(),
-                "delete_original_after_conversion": self.delete_original_var.get() # Added
+                "delete_original_after_conversion": self.delete_original_var.get(),  # Added
             }
             temp_config_file = CONFIG_FILE + ".tmp"
-            with open(temp_config_file, "w", encoding="utf-8") as f: json.dump(current_config, f, indent=4)
+            with open(temp_config_file, "w", encoding="utf-8") as f:
+                json.dump(current_config, f, indent=4)
             os.replace(temp_config_file, CONFIG_FILE)
             logger.info(f"Saved settings to {CONFIG_FILE} (Log folder saved: '{log_folder_to_save}')")
-        except Exception as e: logger.error(f"Error saving settings to {CONFIG_FILE}: {e}")
+        except Exception as e:
+            logger.error(f"Error saving settings to {CONFIG_FILE}: {e}")
 
     def setup_styles(self):
         """Set up the GUI styles"""
         self.style = ttk.Style()
-        try: logger.debug(f"Using theme: {self.style.theme_use()}")
-        except tk.TclError: logging.warning("Could not detect theme, using default.")
-        self.style.configure("TFrame", background="#f0f0f0"); self.style.configure("TButton", font=("Arial", 10))
-        self.style.configure("TLabel", font=("Arial", 10), background="#f0f0f0"); self.style.configure("Header.TLabel", font=("Arial", 10, "bold"), background="#f0f0f0")
-        self.style.configure("ExtButton.TCheckbutton", font=("Arial", 9)); self.style.configure("TLabelframe", background="#f0f0f0", padding=5)
+        try:
+            logger.debug(f"Using theme: {self.style.theme_use()}")
+        except tk.TclError:
+            logger.warning("Could not detect theme, using default.")
+        self.style.configure("TFrame", background="#f0f0f0")
+        self.style.configure("TButton", font=("Arial", 10))
+        self.style.configure("TLabel", font=("Arial", 10), background="#f0f0f0")
+        self.style.configure("Header.TLabel", font=("Arial", 10, "bold"), background="#f0f0f0")
+        self.style.configure("ExtButton.TCheckbutton", font=("Arial", 9))
+        self.style.configure("TLabelframe", background="#f0f0f0", padding=5)
         self.style.configure("TLabelframe.Label", font=("Arial", 10, "bold"), background="#f0f0f0")
 
         # Add custom style for range text - dark gray color
@@ -181,23 +202,40 @@ class VideoConverterGUI:
         self.audio_codec = tk.StringVar(value=self.config.get("audio_codec", "opus"))
         self.delete_original_var = tk.BooleanVar(value=self.config.get("delete_original_after_conversion", False))
         # Non-saved variables
-        self.vmaf_scores = []; self.crf_values = []; self.size_reductions = []
-        try: self.cpu_count = max(1, multiprocessing.cpu_count())
-        except NotImplementedError: self.cpu_count = 1; logger.warning("Could not detect CPU count.")
+        self.vmaf_scores = []
+        self.crf_values = []
+        self.size_reductions = []
+        try:
+            self.cpu_count = max(1, multiprocessing.cpu_count())
+        except NotImplementedError:
+            self.cpu_count = 1
+            logger.warning("Could not detect CPU count.")
 
     def initialize_conversion_state(self):
         """Initialize conversion state variables"""
-        self.conversion_running = False; self.conversion_thread = None; self.stop_event = None
-        self.video_files = []; self.processed_files = 0; self.successful_conversions = 0
-        self.elapsed_timer_id = None; self.output_folder_path = ""; self.current_process_info = None
-        self.error_count = 0; self.total_input_bytes_success = 0; self.total_output_bytes_success = 0; self.total_time_success = 0
-        self.sleep_prevention_active = False # Added state for sleep prevention
+        self.conversion_running = False
+        self.conversion_thread = None
+        self.stop_event = None
+        self.video_files = []
+        self.processed_files = 0
+        self.successful_conversions = 0
+        self.elapsed_timer_id = None
+        self.output_folder_path = ""
+        self.current_process_info = None
+        self.error_count = 0
+        self.total_input_bytes_success = 0
+        self.total_output_bytes_success = 0
+        self.total_time_success = 0
+        self.sleep_prevention_active = False  # Added state for sleep prevention
 
     def initialize_button_states(self):
         """Initialize button states"""
-        if hasattr(self, "start_button"): self.start_button.config(state="normal")
-        if hasattr(self, "stop_button"): self.stop_button.config(state="disabled")
-        if hasattr(self, "force_stop_button"): self.force_stop_button.config(state="disabled")
+        if hasattr(self, "start_button"):
+            self.start_button.config(state="normal")
+        if hasattr(self, "stop_button"):
+            self.stop_button.config(state="disabled")
+        if hasattr(self, "force_stop_button"):
+            self.force_stop_button.config(state="disabled")
 
     def on_exit(self):
         """Handle application exit: confirm, save settings, cleanup"""
@@ -205,44 +243,80 @@ class VideoConverterGUI:
         if hasattr(self, "conversion_running") and self.conversion_running:
             confirm_exit = messagebox.askyesno("Confirm Exit", "Conversion running. Exit will stop it.\nAre you sure?")
         if confirm_exit:
-            logger.info("=== AV1 Video Converter Exiting ==="); self.save_settings()
+            logger.info("=== AV1 Video Converter Exiting ===")
+            self.save_settings()
             if hasattr(self, "conversion_running") and self.conversion_running:
-                logger.info("Signalling conversion thread to stop..."); self.force_stop_conversion(confirm=False)
-            self._cleanup_threads(); self.root.after(100, self._complete_exit)
-        else: logger.info("User cancelled application exit.")
+                logger.info("Signalling conversion thread to stop...")
+                self.force_stop_conversion(confirm=False)
+            self._cleanup_threads()
+            self.root.after(100, self._complete_exit)
+        else:
+            logger.info("User cancelled application exit.")
 
     def _cleanup_threads(self):
         """Ensure all threads are properly cleaned up before exit"""
         if hasattr(self, "elapsed_timer_id") and self.elapsed_timer_id:
-            try: self.root.after_cancel(self.elapsed_timer_id); self.elapsed_timer_id = None; logger.debug("Cancelled timer")
-            except Exception as e: logger.error(f"Error cancelling timer: {e!s}")
-        if hasattr(self, "stop_event") and self.stop_event: self.stop_event.set(); logger.debug("Stop event set.")
+            try:
+                self.root.after_cancel(self.elapsed_timer_id)
+                self.elapsed_timer_id = None
+                logger.debug("Cancelled timer")
+            except Exception as e:
+                logger.error(f"Error cancelling timer: {e!s}")
+        if hasattr(self, "stop_event") and self.stop_event:
+            self.stop_event.set()
+            logger.debug("Stop event set.")
         if hasattr(self, "conversion_thread") and self.conversion_thread and self.conversion_thread.is_alive():
             try:
-                logger.info("Waiting briefly for thread..."); self.conversion_thread.join(timeout=1.0)
-                if self.conversion_thread.is_alive(): logger.warning("Thread did not terminate quickly")
-                else: logger.debug("Thread terminated")
-            except Exception as e: logger.error(f"Error joining thread: {e!s}")
-        self.conversion_thread = None; self.conversion_running = False; self.stop_event = None
+                logger.info("Waiting briefly for thread...")
+                self.conversion_thread.join(timeout=1.0)
+                if self.conversion_thread.is_alive():
+                    logger.warning("Thread did not terminate quickly")
+                else:
+                    logger.debug("Thread terminated")
+            except Exception as e:
+                logger.error(f"Error joining thread: {e!s}")
+        self.conversion_thread = None
+        self.conversion_running = False
+        self.stop_event = None
 
     def _complete_exit(self):
         """Complete the exit process: shutdown logging, destroy window, force process exit"""
         logger.info("Destroying main window and exiting process.")
-        try: logging.shutdown()
-        except Exception as log_e: print(f"Error shutting down logging: {log_e}")
-        try: self.root.destroy()
-        except tk.TclError: pass
-        except Exception as e: print(f"Error destroying root window: {e}")
+        try:
+            logging.shutdown()
+        except Exception as log_e:
+            print(f"Error shutting down logging: {log_e}")
+        try:
+            self.root.destroy()
+        except tk.TclError:
+            pass
+        except Exception as e:
+            print(f"Error destroying root window: {e}")
         # Use os._exit(0) for a more forceful exit if needed after cleanup attempts
         logger.info("Forcing process exit.")
-        os._exit(0) # Changed print to logger before exit
+        os._exit(0)  # Changed print to logger before exit
 
     # Method references for GUI callbacks - now pointing to imported functions
-    def on_browse_input_folder(self): browse_input_folder(self)
-    def on_browse_output_folder(self): browse_output_folder(self)
-    def on_browse_log_folder(self): browse_log_folder(self)
-    def on_open_log_folder(self): open_log_folder_action(self)
-    def on_open_history_file(self): open_history_file_action(self)
-    def on_start_conversion(self): start_conversion(self)
-    def on_stop_conversion(self): stop_conversion(self)
-    def on_force_stop_conversion(self, confirm=True): force_stop_conversion(self, confirm=confirm)
+    def on_browse_input_folder(self):
+        browse_input_folder(self)
+
+    def on_browse_output_folder(self):
+        browse_output_folder(self)
+
+    def on_browse_log_folder(self):
+        browse_log_folder(self)
+
+    def on_open_log_folder(self):
+        open_log_folder_action(self)
+
+    def on_open_history_file(self):
+        open_history_file_action(self)
+
+    def on_start_conversion(self):
+        start_conversion(self)
+
+    def on_stop_conversion(self):
+        stop_conversion(self)
+
+    def on_force_stop_conversion(self, confirm=True):
+        force_stop_conversion(self, confirm=confirm)

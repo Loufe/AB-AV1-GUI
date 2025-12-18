@@ -87,6 +87,7 @@ AbAv1Wrapper.auto_encode()
 - Prefer creating focused modules over expanding large files
 - **No tests** - This project does not use automated testing
 - **No time estimates** - Never provide effort/duration estimates for tasks
+- **No git commits** - Never run `git add`, `git commit`, or `git push`. The user handles all git operations.
 
 ### Zero Backwards Compatibility Policy
 **NEVER add backwards compatibility code.** This is a single-developer project with no external consumers. Backwards compatibility is wasted effort.

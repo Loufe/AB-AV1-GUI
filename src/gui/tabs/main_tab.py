@@ -1,7 +1,8 @@
-#src/gui/tabs/main_tab.py
+# src/gui/tabs/main_tab.py
 """
 Main tab module for the AV1 Video Converter application.
 """
+
 import tkinter as tk
 from tkinter import ttk
 
@@ -50,27 +51,37 @@ def create_main_tab(gui):
     ToolTip(gui.start_button, "Begin converting all selected video types in the input folder.")
 
     # Use the method reference from the main GUI instance
-    gui.stop_button = ttk.Button(control_frame, text="Stop After Current File", command=gui.on_stop_conversion, state="disabled")
+    gui.stop_button = ttk.Button(
+        control_frame, text="Stop After Current File", command=gui.on_stop_conversion, state="disabled"
+    )
     gui.stop_button.pack(side="left", padx=5)
     ToolTip(gui.stop_button, "Signal the converter to stop gracefully after the currently processing file is finished.")
 
     # Use the method reference from the main GUI instance
-    gui.force_stop_button = ttk.Button(control_frame, text="Force Stop", command=gui.on_force_stop_conversion, state="disabled")
+    gui.force_stop_button = ttk.Button(
+        control_frame, text="Force Stop", command=gui.on_force_stop_conversion, state="disabled"
+    )
     gui.force_stop_button.pack(side="left", padx=5)
-    ToolTip(gui.force_stop_button, "Immediately terminate the current encoding process.\nMay leave temporary files if cleanup fails.")
+    ToolTip(
+        gui.force_stop_button,
+        "Immediately terminate the current encoding process.\nMay leave temporary files if cleanup fails.",
+    )
 
     def on_delete_original_toggle():
         """Saves the checkbox state when it's changed by calling the main GUI's save_settings."""
-        gui.save_settings() # Call the save_settings method of the main GUI instance
+        gui.save_settings()  # Call the save_settings method of the main GUI instance
 
     gui.delete_original_checkbox = ttk.Checkbutton(
         control_frame,
         text="Delete original after successful conversion",
         variable=gui.delete_original_var,
-        command=on_delete_original_toggle # Call save when state changes
+        command=on_delete_original_toggle,  # Call save when state changes
     )
-    gui.delete_original_checkbox.pack(side="left", padx=5, pady=(0,0))
-    ToolTip(gui.delete_original_checkbox, "If checked, the original file will be deleted after a successful conversion. This setting is saved.")
+    gui.delete_original_checkbox.pack(side="left", padx=5, pady=(0, 0))
+    ToolTip(
+        gui.delete_original_checkbox,
+        "If checked, the original file will be deleted after a successful conversion. This setting is saved.",
+    )
 
     # Overall progress bar
     ttk.Label(main_frame, text="Overall Progress").grid(row=5, column=0, sticky="w", pady=(10, 5))
@@ -106,10 +117,12 @@ def create_main_tab(gui):
     # Current file progress frame
     file_frame = ttk.LabelFrame(main_frame, text="Current File")
     file_frame.grid(row=8, column=0, columnspan=2, sticky="ew", padx=5, pady=5)
-    file_frame.columnconfigure(1, weight=1) # Make progress bars expand
+    file_frame.columnconfigure(1, weight=1)  # Make progress bars expand
 
     # Current file label
-    gui.current_file_label = ttk.Label(file_frame, text="No file processing", wraplength=650, justify=tk.LEFT) # Allow wrapping
+    gui.current_file_label = ttk.Label(
+        file_frame, text="No file processing", wraplength=650, justify=tk.LEFT
+    )  # Allow wrapping
     gui.current_file_label.grid(row=0, column=0, columnspan=3, sticky="w", padx=5, pady=5)
 
     # --- Dual Progress Bars ---
@@ -128,7 +141,6 @@ def create_main_tab(gui):
     gui.encoding_percent_label.grid(row=2, column=2, sticky="w", padx=(0, 5), pady=2)
     # --- End Dual Progress Bars ---
 
-
     # Conversion details frame
     details_frame = ttk.LabelFrame(main_frame, text="Conversion Details")
     details_frame.grid(row=9, column=0, columnspan=2, sticky="ew", padx=5, pady=5)
@@ -146,10 +158,12 @@ def create_main_tab(gui):
     gui.orig_size_label.grid(row=1, column=1, sticky="w", pady=3)  # Increased pady from 2 to 3
     # Use imported constant directly from config
     ttk.Label(left_col, text="VMAF Target:").grid(row=2, column=0, sticky="w", pady=3)  # Increased pady from 2 to 3
-    gui.vmaf_label = ttk.Label(left_col, text=f"{DEFAULT_VMAF_TARGET}") # Show target initially
+    gui.vmaf_label = ttk.Label(left_col, text=f"{DEFAULT_VMAF_TARGET}")  # Show target initially
     gui.vmaf_label.grid(row=2, column=1, sticky="w", pady=3)  # Increased pady from 2 to 3
-    ttk.Label(left_col, text="Encoding Settings:").grid(row=3, column=0, sticky="w", pady=3)  # Increased pady from 2 to 3
-    gui.encoding_settings_label = ttk.Label(left_col, text="-") # Will show CRF/Preset
+    ttk.Label(left_col, text="Encoding Settings:").grid(
+        row=3, column=0, sticky="w", pady=3
+    )  # Increased pady from 2 to 3
+    gui.encoding_settings_label = ttk.Label(left_col, text="-")  # Will show CRF/Preset
     gui.encoding_settings_label.grid(row=3, column=1, sticky="w", pady=3)  # Increased pady from 2 to 3
 
     right_col = ttk.Frame(details_grid)
@@ -157,10 +171,14 @@ def create_main_tab(gui):
     ttk.Label(right_col, text="Elapsed Time:").grid(row=0, column=0, sticky="w", pady=3)  # Increased pady from 2 to 3
     gui.elapsed_label = ttk.Label(right_col, text="-")
     gui.elapsed_label.grid(row=0, column=1, sticky="w", pady=3)  # Increased pady from 2 to 3
-    ttk.Label(right_col, text="Est. Remaining (Enc):").grid(row=1, column=0, sticky="w", pady=3)  # Increased pady from 2 to 3
+    ttk.Label(right_col, text="Est. Remaining (Enc):").grid(
+        row=1, column=0, sticky="w", pady=3
+    )  # Increased pady from 2 to 3
     gui.eta_label = ttk.Label(right_col, text="-")
     gui.eta_label.grid(row=1, column=1, sticky="w", pady=3)  # Increased pady from 2 to 3
-    ttk.Label(right_col, text="Est. Final Size:").grid(row=2, column=0, sticky="w", pady=3)  # Increased pady from 2 to 3
+    ttk.Label(right_col, text="Est. Final Size:").grid(
+        row=2, column=0, sticky="w", pady=3
+    )  # Increased pady from 2 to 3
     gui.output_size_label = ttk.Label(right_col, text="-")
     gui.output_size_label.grid(row=2, column=1, sticky="w", pady=3)  # Increased pady from 2 to 3
 
@@ -213,5 +231,5 @@ def create_main_tab(gui):
 
     # Make UI elements respond to window resizing
     main_frame.columnconfigure(0, weight=1)
-    main_frame.rowconfigure(8, weight=1) # Allow file frame to expand if needed
-    main_frame.rowconfigure(9, weight=1) # Allow details frame to expand
+    main_frame.rowconfigure(8, weight=1)  # Allow file frame to expand if needed
+    main_frame.rowconfigure(9, weight=1)  # Allow details frame to expand

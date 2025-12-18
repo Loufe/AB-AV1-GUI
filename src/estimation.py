@@ -7,6 +7,7 @@ Provides functions to estimate remaining time based on:
 - Current file progress
 - Pending files in queue
 """
+
 import logging
 import os
 import time
@@ -162,11 +163,7 @@ def get_file_processing_estimate(file_path: str, history: list | None = None) ->
             file_duration = 0
 
     # First, try to find a similar file in history
-    similar_file = find_similar_file_in_history({
-        "codec": file_codec,
-        "duration": file_duration,
-        "size": file_size
-    })
+    similar_file = find_similar_file_in_history({"codec": file_codec, "duration": file_duration, "size": file_size})
 
     if similar_file:
         time_est = similar_file.get("time_sec", 0)

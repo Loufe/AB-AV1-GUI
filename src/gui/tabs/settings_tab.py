@@ -1,7 +1,8 @@
-#src/gui/tabs/settings_tab.py
+# src/gui/tabs/settings_tab.py
 """
 Settings tab module for the AV1 Video Converter application.
 """
+
 import logging  # Added for logging
 from tkinter import ttk
 
@@ -13,6 +14,7 @@ from src.gui.base import ToolTip
 
 logger = logging.getLogger(__name__)
 
+
 def create_settings_tab(gui):
     """Create the settings tab"""
     settings_frame = ttk.Frame(gui.settings_tab)
@@ -21,19 +23,26 @@ def create_settings_tab(gui):
     # --- General Settings ---
     general_frame = ttk.LabelFrame(settings_frame, text="General")
     general_frame.grid(row=0, column=0, sticky="ew", padx=5, pady=(10, 10))
-    general_frame.columnconfigure(0, weight=1) # Allow expansion
+    general_frame.columnconfigure(0, weight=1)  # Allow expansion
 
     # Overwrite option
-    overwrite_check = ttk.Checkbutton(general_frame, text="Overwrite output file if it already exists", variable=gui.overwrite)
+    overwrite_check = ttk.Checkbutton(
+        general_frame, text="Overwrite output file if it already exists", variable=gui.overwrite
+    )
     overwrite_check.grid(row=0, column=0, sticky="w", pady=(5, 10), padx=10)
-    ToolTip(overwrite_check, "If checked, existing files in the output folder with the same name will be replaced.\nIf unchecked, files that already exist in the output folder will be skipped.")
+    ToolTip(
+        overwrite_check,
+        "If checked, existing files in the output folder with the same name will be replaced.\nIf unchecked, files that already exist in the output folder will be skipped.",
+    )
 
     # --- File Processing Settings ---
     processing_frame = ttk.LabelFrame(settings_frame, text="File Processing")
     processing_frame.grid(row=1, column=0, sticky="ew", padx=5, pady=(0, 10))
 
     # File extensions label
-    ttk.Label(processing_frame, text="File Extensions to Process:", style="Header.TLabel").grid(row=0, column=0, sticky="w", padx=10, pady=(10, 5))
+    ttk.Label(processing_frame, text="File Extensions to Process:", style="Header.TLabel").grid(
+        row=0, column=0, sticky="w", padx=10, pady=(10, 5)
+    )
 
     # File extensions checkboxes
     ext_frame = ttk.Frame(processing_frame)
@@ -56,26 +65,34 @@ def create_settings_tab(gui):
     ToolTip(wmv_check, "Process .wmv video files")
 
     # Audio conversion settings label
-    ttk.Label(processing_frame, text="Audio Settings:", style="Header.TLabel").grid(row=2, column=0, sticky="w", padx=10, pady=(10, 5))
+    ttk.Label(processing_frame, text="Audio Settings:", style="Header.TLabel").grid(
+        row=2, column=0, sticky="w", padx=10, pady=(10, 5)
+    )
 
     # Audio conversion frame
     audio_frame = ttk.Frame(processing_frame)
     audio_frame.grid(row=3, column=0, sticky="w", padx=10, pady=(0, 15))
 
-    audio_check = ttk.Checkbutton(audio_frame, text="Convert non-AAC/Opus audio to", variable=gui.convert_audio) # Clarified text
+    audio_check = ttk.Checkbutton(
+        audio_frame, text="Convert non-AAC/Opus audio to", variable=gui.convert_audio
+    )  # Clarified text
     audio_check.pack(side="left", padx=(0, 5))
-    ToolTip(audio_check, "When enabled, audio tracks not already AAC or Opus will be re-encoded to the selected codec.\nIf disabled, original audio tracks are copied without re-encoding.")
+    ToolTip(
+        audio_check,
+        "When enabled, audio tracks not already AAC or Opus will be re-encoded to the selected codec.\nIf disabled, original audio tracks are copied without re-encoding.",
+    )
 
-    audio_combo = ttk.Combobox(audio_frame, textvariable=gui.audio_codec, width=10, state="readonly") # Readonly state
+    audio_combo = ttk.Combobox(audio_frame, textvariable=gui.audio_codec, width=10, state="readonly")  # Readonly state
     audio_combo["values"] = ("opus", "aac")
     audio_combo.pack(side="left")
-    ToolTip(audio_combo, "Select audio codec for re-encoding. Opus offers better compression. AAC is widely compatible.")
-
+    ToolTip(
+        audio_combo, "Select audio codec for re-encoding. Opus offers better compression. AAC is widely compatible."
+    )
 
     # --- Logging & History Settings ---
     log_hist_frame = ttk.LabelFrame(settings_frame, text="Logging & History")
     log_hist_frame.grid(row=2, column=0, sticky="ew", padx=5, pady=(0, 10))
-    log_hist_frame.columnconfigure(1, weight=1) # Make entry expand
+    log_hist_frame.columnconfigure(1, weight=1)  # Make entry expand
 
     # Log folder setting
     ttk.Label(log_hist_frame, text="Log Folder:").grid(row=0, column=0, sticky="w", padx=(10, 5), pady=(10, 5))
@@ -94,9 +111,14 @@ def create_settings_tab(gui):
     log_open_btn.pack(side="left", padx=(0, 10))
     ToolTip(log_open_btn, "Open the folder containing the application log files.")
 
-    anonymize_log_check = ttk.Checkbutton(log_actions_frame, text="Anonymize Filenames in Logs", variable=gui.anonymize_logs)
+    anonymize_log_check = ttk.Checkbutton(
+        log_actions_frame, text="Anonymize Filenames in Logs", variable=gui.anonymize_logs
+    )
     anonymize_log_check.pack(side="left")
-    ToolTip(anonymize_log_check, "If checked, replaces specific filenames in logs with generic placeholders (e.g., video_SIZE.mkv) for privacy.")
+    ToolTip(
+        anonymize_log_check,
+        "If checked, replaces specific filenames in logs with generic placeholders (e.g., video_SIZE.mkv) for privacy.",
+    )
 
     # History actions frame
     history_actions_frame = ttk.Frame(log_hist_frame)
@@ -107,6 +129,11 @@ def create_settings_tab(gui):
     history_open_btn.pack(side="left", padx=(0, 10))
     ToolTip(history_open_btn, "Open the conversion_history.json file (if it exists).")
 
-    anonymize_history_check = ttk.Checkbutton(history_actions_frame, text="Anonymize Filenames in History", variable=gui.anonymize_history)
+    anonymize_history_check = ttk.Checkbutton(
+        history_actions_frame, text="Anonymize Filenames in History", variable=gui.anonymize_history
+    )
     anonymize_history_check.pack(side="left")
-    ToolTip(anonymize_history_check, "If checked, replaces specific filenames in the conversion_history.json file with generic placeholders for privacy.")
+    ToolTip(
+        anonymize_history_check,
+        "If checked, replaces specific filenames in the conversion_history.json file with generic placeholders for privacy.",
+    )

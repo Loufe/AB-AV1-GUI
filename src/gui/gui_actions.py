@@ -3,6 +3,7 @@
 GUI action functions (browsing, opening files/folders, dependency checks)
 for the AV1 Video Converter application.
 """
+
 # Standard library imports
 import logging
 import os
@@ -33,6 +34,7 @@ def browse_input_folder(gui) -> None:
         gui.output_folder.set(folder)
         logger.info(f"Output folder automatically set to match input: {folder}")
 
+
 def browse_output_folder(gui) -> None:
     """Open file dialog to choose output folder and update GUI state.
 
@@ -44,6 +46,7 @@ def browse_output_folder(gui) -> None:
         gui.output_folder.set(folder)
         logger.info(f"Output folder selected: {folder}")
 
+
 def browse_log_folder(gui) -> None:
     """Open file dialog to choose log folder and update GUI state.
 
@@ -54,7 +57,11 @@ def browse_log_folder(gui) -> None:
     if folder:
         gui.log_folder.set(folder)
         logger.info(f"Log folder selected by user: {folder}")
-        messagebox.showinfo("Log Folder Changed", "Log folder preference updated.\nNew logs will be written to the selected folder on next application start.")
+        messagebox.showinfo(
+            "Log Folder Changed",
+            "Log folder preference updated.\nNew logs will be written to the selected folder on next application start.",
+        )
+
 
 def open_log_folder_action(gui) -> None:
     """Open the currently used log folder in the file explorer.
@@ -69,9 +76,9 @@ def open_log_folder_action(gui) -> None:
             logger.info(f"Opening log folder: {log_dir}")
             if sys.platform == "win32":
                 os.startfile(log_dir)
-            elif sys.platform == "darwin": # macOS
+            elif sys.platform == "darwin":  # macOS
                 subprocess.run(["open", log_dir], check=True)
-            else: # Linux and other POSIX
+            else:  # Linux and other POSIX
                 subprocess.run(["xdg-open", log_dir], check=True)
         else:
             logger.warning("Log directory not set or invalid, cannot open.")
@@ -80,6 +87,7 @@ def open_log_folder_action(gui) -> None:
         log_dir_str = gui.log_directory if hasattr(gui, "log_directory") else "N/A"
         logger.error(f"Failed to open log folder '{log_dir_str}': {e}")
         messagebox.showerror("Error", f"Could not open log folder:\n{e}")
+
 
 def open_history_file_action(gui) -> None:
     """Open the conversion history json file in the default text editor.
@@ -94,7 +102,7 @@ def open_history_file_action(gui) -> None:
             if sys.platform == "win32":
                 os.startfile(history_path)
             elif sys.platform == "darwin":
-                subprocess.run(["open", "-t", history_path], check=True) # Open with default text editor
+                subprocess.run(["open", "-t", history_path], check=True)  # Open with default text editor
             else:
                 # Try common text editors first, then xdg-open
                 editors = ["gedit", "kate", "mousepad", "xdg-open"]
@@ -107,15 +115,18 @@ def open_history_file_action(gui) -> None:
                         break
                     except FileNotFoundError:
                         continue
-                    except Exception as editor_e: # Catch other potential errors
+                    except Exception as editor_e:  # Catch other potential errors
                         logger.warning(f"Error trying editor {editor}: {editor_e}")
-                        continue # Try next editor
+                        continue  # Try next editor
                 if not opened:
                     logger.warning("Could not find common text editor, falling back to xdg-open.")
                     subprocess.run(["xdg-open", history_path], check=True)
         else:
             logger.info("History file does not exist yet.")
-            messagebox.showinfo("History File Not Found", f"The history file ({os.path.basename(history_path)}) has not been created yet.\nIt will be created after the first successful conversion.")
+            messagebox.showinfo(
+                "History File Not Found",
+                f"The history file ({os.path.basename(history_path)}) has not been created yet.\nIt will be created after the first successful conversion.",
+            )
     except Exception as e:
         logger.error(f"Failed to open history file '{history_path}': {e}")
         messagebox.showerror("Error", f"Could not open history file:\n{e}")
@@ -142,7 +153,9 @@ def check_ffmpeg(gui) -> bool:
     if not svt_av1_available:
         warning_msg = "Warning: Your ffmpeg lacks SVT-AV1 support (libsvtav1)."
         logger.warning(warning_msg)
-        if not messagebox.askokcancel("SVT-AV1 Support Missing?", f"{warning_msg}\nab-av1 requires this. Continue anyway?"):
+        if not messagebox.askokcancel(
+            "SVT-AV1 Support Missing?", f"{warning_msg}\nab-av1 requires this. Continue anyway?"
+        ):
             return False
     else:
         logger.info("FFmpeg with SVT-AV1 support detected.")

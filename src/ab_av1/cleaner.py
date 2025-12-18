@@ -2,6 +2,7 @@
 """
 Utility functions for cleaning up temporary files/folders created by ab-av1.
 """
+
 import logging
 import os
 import shutil
@@ -9,7 +10,8 @@ from pathlib import Path
 
 logger = logging.getLogger(__name__)
 
-def clean_ab_av1_temp_folders(base_dir: str = None) -> int:
+
+def clean_ab_av1_temp_folders(base_dir: str | None = None) -> int:
     """Clean up temporary folders created by ab-av1 (typically named '.ab-av1-*').
 
     Args:
@@ -61,7 +63,9 @@ def clean_ab_av1_temp_folders(base_dir: str = None) -> int:
             logger.warning(f"Failed to clean up temporary item {item}: {e!s}")
 
     if cleaned_count == 0 and temp_items:
-        logger.info(f"Found {len(temp_items)} potential temp items but none were removed (check permissions or if they were directories).")
+        logger.info(
+            f"Found {len(temp_items)} potential temp items but none were removed (check permissions or if they were directories)."
+        )
     elif cleaned_count > 0:
         logger.info(f"Successfully cleaned {cleaned_count} temporary folder(s) in {base_dir}.")
 
