@@ -72,8 +72,8 @@ def main():
             try:
                 logger.info("Attempting to destroy root window due to error...")
                 root.destroy()
-            except Exception as destroy_e:
-                logger.exception(f"Error destroying root window during error handling: {destroy_e}")
+            except Exception:
+                logger.exception("Error destroying root window during error handling")
 
         # Try to show a final error message
         try:

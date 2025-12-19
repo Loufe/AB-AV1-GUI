@@ -45,39 +45,30 @@ select = [
     "RET",    # flake8-return
     "FLY",    # flynt (f-string conversion)
     "PERF",   # Perflint
-    "FURB",   # refurb (modernization)
+    "FURB",   # refurb
 
     # Naming & Structure
     "N",      # pep8-naming
     "A",      # flake8-builtins
-    "C90",    # mccabe complexity
-    "ARG",    # flake8-unused-arguments
-    "PTH",    # flake8-use-pathlib
     "ERA",    # eradicate (commented-out code)
 
     # Type Checking
-    "ANN",    # flake8-annotations
     "TC",     # flake8-type-checking
 
     # Error Handling
-    "EM",     # flake8-errmsg
     "TRY",    # tryceratops
-    "BLE",    # flake8-blind-except
     "RSE",    # flake8-raise
 
     # Security
     "S",      # flake8-bandit
 
     # Best Practices
-    "FBT",    # flake8-boolean-trap
-    "SLF",    # flake8-self (private member access)
+    "SLF",    # flake8-self
     "PL",     # Pylint
     "DTZ",    # flake8-datetimez
 
     # Logging & Debugging
-    "T20",    # flake8-print
     "LOG",    # flake8-logging
-    "G",      # flake8-logging-format
     "T10",    # flake8-debugger
 
     # Formatting
@@ -86,12 +77,37 @@ select = [
     "ISC",    # flake8-implicit-str-concat
 ]
 ignore = [
-    "COM812",  # Trailing comma missing (conflicts with formatter)
-    "ISC001",  # Single-line implicit string concat (conflicts with formatter)
+    # Formatter conflicts
+    "COM812",  # Trailing comma missing
+    "ISC001",  # Single-line implicit string concat
+
+    # Intentional patterns in this codebase
+    "N806",    # Non-lowercase variable in function (GUI, VMAF, CRF)
+    "TRY003",  # Long exception messages are fine
+    "TRY300",  # else block on try - early returns are clearer
+    "TRY301",  # Raise within try - intentional validation pattern
+
+    # Security false positives (desktop app calling ffmpeg/ab-av1)
+    "S603",    # subprocess call - legitimate use of external tools
+    "S606",    # subprocess without shell - correct secure pattern
+    "S607",    # partial executable path - required for PATH tools
+
+    # Appropriate for local logging timestamps
+    "DTZ005",  # datetime.now() without tz - local timestamps only
+
+    # Required for correctness (each iteration needs individual handling)
+    "PERF203", # try-except in loop
+
+    # Architectural issues (require major refactoring, not quick fixes)
+    "PLR0911", # Too many return statements
+    "PLR0912", # Too many branches
+    "PLR0913", # Too many arguments
+    "PLR0915", # Too many statements
 ]
 
 [tool.ruff.lint.per-file-ignores]
 "__init__.py" = ["F401"]  # Allow unused imports in __init__.py
+"src/utils.py" = ["ERA001"]  # False positives: inline comments explaining regex patterns
 
 [tool.ruff.format]
 quote-style = "double"

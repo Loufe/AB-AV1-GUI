@@ -32,7 +32,8 @@ def create_settings_tab(gui):
     overwrite_check.grid(row=0, column=0, sticky="w", pady=(5, 10), padx=10)
     ToolTip(
         overwrite_check,
-        "If checked, existing files in the output folder with the same name will be replaced.\nIf unchecked, files that already exist in the output folder will be skipped.",
+        "If checked, existing files in the output folder with the same name will be replaced.\n"
+        "If unchecked, files that already exist in the output folder will be skipped.",
     )
 
     # --- File Processing Settings ---
@@ -79,14 +80,16 @@ def create_settings_tab(gui):
     audio_check.pack(side="left", padx=(0, 5))
     ToolTip(
         audio_check,
-        "When enabled, audio tracks not already AAC or Opus will be re-encoded to the selected codec.\nIf disabled, original audio tracks are copied without re-encoding.",
+        "When enabled, audio tracks not already AAC or Opus will be re-encoded to the selected codec.\n"
+        "If disabled, original audio tracks are copied without re-encoding.",
     )
 
     audio_combo = ttk.Combobox(audio_frame, textvariable=gui.audio_codec, width=10, state="readonly")  # Readonly state
     audio_combo["values"] = ("opus", "aac")
     audio_combo.pack(side="left")
     ToolTip(
-        audio_combo, "Select audio codec for re-encoding. Opus offers better compression. AAC is widely compatible."
+        audio_combo,
+        "Select audio codec for re-encoding. Opus offers better compression. AAC is widely compatible.",
     )
 
     # --- Logging & History Settings ---
@@ -114,10 +117,18 @@ def create_settings_tab(gui):
     anonymize_log_check = ttk.Checkbutton(
         log_actions_frame, text="Anonymize Filenames in Logs", variable=gui.anonymize_logs
     )
-    anonymize_log_check.pack(side="left")
+    anonymize_log_check.pack(side="left", padx=(0, 10))
     ToolTip(
         anonymize_log_check,
-        "If checked, replaces specific filenames in logs with generic placeholders (e.g., video_SIZE.mkv) for privacy.",
+        "If checked, replaces specific filenames in logs with generic placeholders for privacy.",
+    )
+
+    scrub_logs_btn = ttk.Button(log_actions_frame, text="Scrub Logs", command=gui.on_scrub_logs)
+    scrub_logs_btn.pack(side="left")
+    ToolTip(
+        scrub_logs_btn,
+        "Permanently anonymize all existing file paths in log files. "
+        "This cannot be undone.",
     )
 
     # History actions frame
@@ -132,8 +143,17 @@ def create_settings_tab(gui):
     anonymize_history_check = ttk.Checkbutton(
         history_actions_frame, text="Anonymize Filenames in History", variable=gui.anonymize_history
     )
-    anonymize_history_check.pack(side="left")
+    anonymize_history_check.pack(side="left", padx=(0, 10))
     ToolTip(
         anonymize_history_check,
-        "If checked, replaces specific filenames in the conversion_history.json file with generic placeholders for privacy.",
+        "If checked, replaces specific filenames in the conversion_history.json file "
+        "with generic placeholders for privacy.",
+    )
+
+    scrub_history_btn = ttk.Button(history_actions_frame, text="Scrub History", command=gui.on_scrub_history)
+    scrub_history_btn.pack(side="left")
+    ToolTip(
+        scrub_history_btn,
+        "Permanently anonymize all existing file paths in the history file. "
+        "This cannot be undone.",
     )

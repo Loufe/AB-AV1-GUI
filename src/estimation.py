@@ -59,12 +59,8 @@ def find_similar_file_in_history(current_file_info: dict, tolerance: dict | None
         if current_duration > 0 and hist_duration > 0:
             duration_diff = abs(hist_duration - current_duration) / hist_duration
         else:
-            duration_diff = 1  # High value if can't compare
-
-        if current_size > 0 and hist_size > 0:
-            size_diff = abs(hist_size - current_size) / hist_size
-        else:
-            size_diff = 1  # High value if can't compare
+            duration_diff = 1
+        size_diff = abs(hist_size - current_size) / hist_size if current_size > 0 and hist_size > 0 else 1
 
         if duration_diff <= tolerance["duration"] and size_diff <= tolerance["size"]:
             # Score based on similarity (lower is better)

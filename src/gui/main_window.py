@@ -28,7 +28,7 @@ from src.gui.tabs.main_tab import create_main_tab
 from src.gui.tabs.settings_tab import create_settings_tab
 
 # Import setup_logging only needed here now - Replace 'convert_app' with 'src'
-from src.utils import get_script_directory, setup_logging  # Added get_script_directory
+from src.utils import get_script_directory, scrub_history_paths, scrub_log_files, setup_logging
 
 logger = logging.getLogger(__name__)
 
@@ -38,6 +38,11 @@ CONFIG_FILE = os.path.join(get_script_directory(), "av1_converter_config.json")
 
 class VideoConverterGUI:
     """Main application window for the AV1 Video Converter application."""
+
+    # Button widgets (created in create_main_tab)
+    start_button: ttk.Button
+    stop_button: ttk.Button
+    force_stop_button: ttk.Button
 
     def __init__(self, root):
         """Initialize the main window and all components."""
@@ -57,8 +62,8 @@ class VideoConverterGUI:
         except tk.TclError as e:
             # Handle cases where iconbitmap might not be supported (e.g., some Linux WMs)
             logger.warning(f"Failed to set window icon (TclError, platform compatibility?): {e}")
-        except Exception as e:
-            logger.error(f"Unexpected error setting window icon: {e}")
+        except Exception:
+            logger.exception("Unexpected error setting window icon")
 
         # Load settings first
         self.config = self.load_settings()
@@ -130,8 +135,8 @@ class VideoConverterGUI:
             else:
                 logger.info(f"Config file {CONFIG_FILE} not found, using defaults.")
                 return {}  # Changed print to logger
-        except Exception as e:
-            logger.error(f"Error loading settings from {CONFIG_FILE}: {e}. Using defaults.")
+        except Exception:
+            logger.exception(f"Error loading settings from {CONFIG_FILE}. Using defaults.")
             return {}  # Changed print to logger
 
     def save_settings(self):
@@ -162,8 +167,8 @@ class VideoConverterGUI:
                 json.dump(current_config, f, indent=4)
             os.replace(temp_config_file, CONFIG_FILE)
             logger.info(f"Saved settings to {CONFIG_FILE} (Log folder saved: '{log_folder_to_save}')")
-        except Exception as e:
-            logger.error(f"Error saving settings to {CONFIG_FILE}: {e}")
+        except Exception:
+            logger.exception(f"Error saving settings to {CONFIG_FILE}")
 
     def setup_styles(self):
         """Set up the GUI styles"""
@@ -212,30 +217,64 @@ class VideoConverterGUI:
             logger.warning("Could not detect CPU count.")
 
     def initialize_conversion_state(self):
-        """Initialize conversion state variables"""
+        """Initialize conversion state variables.
+
+        All gui.* attributes that are set during conversion should be initialized here
+        to avoid AttributeError and make the codebase more predictable.
+        """
+        # Core conversion state
         self.conversion_running = False
         self.conversion_thread = None
         self.stop_event = None
-        self.video_files = []
+        self.sleep_prevention_active = False
+
+        # File lists
+        self.video_files: list[str] = []
+        self.pending_files: list[str] = []
+
+        # Progress counters
         self.processed_files = 0
         self.successful_conversions = 0
-        self.elapsed_timer_id = None
-        self.output_folder_path = ""
-        self.current_process_info = None
         self.error_count = 0
+
+        # Timing
+        self.elapsed_timer_id = None
+        self.total_conversion_start_time: float | None = None
+        self.current_file_start_time: float | None = None
+        self.current_file_encoding_start_time: float | None = None
+
+        # Current file tracking
+        self.output_folder_path = ""
+        self.current_process_info: dict | None = None
+        self.current_file_path: str | None = None
+
+        # Statistics accumulators
         self.total_input_bytes_success = 0
         self.total_output_bytes_success = 0
         self.total_time_success = 0
-        self.sleep_prevention_active = False  # Added state for sleep prevention
+
+        # ETA calculation state
+        self.last_encoding_progress: float = 0
+        self.last_eta_seconds: float | None = None
+        self.last_eta_timestamp: float | None = None
+
+        # Per-file state for callbacks
+        self.last_input_size: int | None = None
+        self.last_output_size: int | None = None
+        self.last_elapsed_time: float | None = None
+
+        # Error and skip tracking
+        self.error_details: list[str] = []
+        self.skipped_not_worth_count = 0
+        self.skipped_not_worth_files: list[str] = []
+        self.skipped_low_resolution_count = 0
+        self.skipped_low_resolution_files: list[str] = []
 
     def initialize_button_states(self):
-        """Initialize button states"""
-        if hasattr(self, "start_button"):
-            self.start_button.config(state="normal")
-        if hasattr(self, "stop_button"):
-            self.stop_button.config(state="disabled")
-        if hasattr(self, "force_stop_button"):
-            self.force_stop_button.config(state="disabled")
+        """Initialize button states. Called after create_main_tab() creates buttons."""
+        self.start_button.config(state="normal")
+        self.stop_button.config(state="disabled")
+        self.force_stop_button.config(state="disabled")
 
     def on_exit(self):
         """Handle application exit: confirm, save settings, cleanup"""
@@ -247,7 +286,7 @@ class VideoConverterGUI:
             self.save_settings()
             if hasattr(self, "conversion_running") and self.conversion_running:
                 logger.info("Signalling conversion thread to stop...")
-                self.force_stop_conversion(confirm=False)
+                force_stop_conversion(self, confirm=False)
             self._cleanup_threads()
             self.root.after(100, self._complete_exit)
         else:
@@ -260,8 +299,8 @@ class VideoConverterGUI:
                 self.root.after_cancel(self.elapsed_timer_id)
                 self.elapsed_timer_id = None
                 logger.debug("Cancelled timer")
-            except Exception as e:
-                logger.error(f"Error cancelling timer: {e!s}")
+            except Exception:
+                logger.exception("Error cancelling timer")
         if hasattr(self, "stop_event") and self.stop_event:
             self.stop_event.set()
             logger.debug("Stop event set.")
@@ -273,8 +312,8 @@ class VideoConverterGUI:
                     logger.warning("Thread did not terminate quickly")
                 else:
                     logger.debug("Thread terminated")
-            except Exception as e:
-                logger.error(f"Error joining thread: {e!s}")
+            except Exception:
+                logger.exception("Error joining thread")
         self.conversion_thread = None
         self.conversion_running = False
         self.stop_event = None
@@ -311,6 +350,64 @@ class VideoConverterGUI:
 
     def on_open_history_file(self):
         open_history_file_action(self)
+
+    def on_scrub_history(self):
+        """Scrub all file paths in the history file after confirmation."""
+        confirmed = messagebox.askyesno(
+            "Scrub History - Irreversible",
+            "This will permanently replace all file paths in your conversion history "
+            "with anonymized hashes.\n\n"
+            "The original filenames and paths will be unrecoverable.\n\n"
+            "Technical data (sizes, durations, VMAF scores, etc.) will be preserved.\n\n"
+            "Are you sure you want to continue?",
+            icon="warning",
+        )
+        if not confirmed:
+            return
+
+        total, modified = scrub_history_paths()
+        if total == 0:
+            messagebox.showinfo("Scrub History", "No history records found.")
+        elif modified == 0:
+            messagebox.showinfo("Scrub History", f"All {total} records were already anonymized.")
+        elif modified == total:
+            messagebox.showinfo("Scrub History", f"Anonymized all {total} history records.")
+        else:
+            unchanged = total - modified
+            messagebox.showinfo(
+                "Scrub History",
+                f"Anonymized {modified} history records.\n\n"
+                f"{unchanged} record(s) were already anonymized.",
+            )
+
+    def on_scrub_logs(self):
+        """Scrub all file paths in existing log files after confirmation."""
+        confirmed = messagebox.askyesno(
+            "Scrub Logs - Irreversible",
+            "This will permanently replace all file paths in your log files "
+            "with anonymized hashes.\n\n"
+            "The original filenames and paths will be unrecoverable.\n\n"
+            "Are you sure you want to continue?",
+            icon="warning",
+        )
+        if not confirmed:
+            return
+
+        log_dir = getattr(self, "log_directory", None)
+        total, modified = scrub_log_files(log_dir)
+        if total == 0:
+            messagebox.showinfo("Scrub Logs", "No log files found.")
+        elif modified == 0:
+            messagebox.showinfo("Scrub Logs", f"All {total} log files were already anonymized or contained no paths.")
+        elif modified == total:
+            messagebox.showinfo("Scrub Logs", f"Anonymized all {total} log files.")
+        else:
+            unchanged = total - modified
+            messagebox.showinfo(
+                "Scrub Logs",
+                f"Anonymized {modified} log files.\n\n"
+                f"{unchanged} file(s) were already anonymized or contained no paths.",
+            )
 
     def on_start_conversion(self):
         start_conversion(self)

@@ -3,7 +3,9 @@
 Utility functions for the AV1 Video Converter application.
 """
 
+import ctypes
 import datetime
+import hashlib
 import json
 import logging
 import os
@@ -11,11 +13,31 @@ import re  # Need for parse_eta_text
 import shutil
 import subprocess
 import sys  # Needed for sys.argv access
+import tkinter as tk
 from logging.handlers import RotatingFileHandler
-from typing import Any, Callable, cast
+from typing import Any, Callable
 
 # Logging setup
 logger = logging.getLogger(__name__)
+
+
+# --- Windows Subprocess Helper ---
+
+
+def get_windows_subprocess_startupinfo() -> tuple[Any, int]:
+    """Get Windows subprocess startup info to hide console windows.
+
+    Returns:
+        Tuple of (startupinfo, creationflags). On non-Windows, returns (None, 0).
+    """
+    if sys.platform != "win32":
+        return None, 0
+    startupinfo = subprocess.STARTUPINFO()
+    startupinfo.dwFlags |= subprocess.STARTF_USESHOWWINDOW
+    startupinfo.wShowWindow = subprocess.SW_HIDE
+    creationflags = subprocess.CREATE_NO_WINDOW
+    return startupinfo, creationflags
+
 
 # --- ETA Parsing Function ---
 
@@ -51,8 +73,7 @@ def parse_eta_text(eta_text: str) -> float:
             # Format: "30 seconds"
             match = re.search(r"(\d+(\.\d+)?)", eta_lower)
             if match:
-                seconds = float(match.group(1))
-                return seconds
+                return float(match.group(1))
         if "h" in eta_lower and "m" in eta_lower:
             # Format: "3h 20m"
             match = re.match(r"(\d+)h\s*(\d+)m", eta_lower)
@@ -66,8 +87,8 @@ def parse_eta_text(eta_text: str) -> float:
         parts = re.findall(r"(\d+(?:\.\d+)?)\s*(hour|minute|second|h|m|s)", eta_lower)
         total_seconds = 0
 
-        for value, unit in parts:
-            value = float(value)
+        for value_str, unit in parts:
+            value = float(value_str)
             if unit.startswith("h"):
                 total_seconds += value * 3600
             elif unit.startswith("m"):
@@ -81,8 +102,7 @@ def parse_eta_text(eta_text: str) -> float:
         return 0
 
 
-# --- Constants and Formatting Functions ---
-# Moved to src/config.py: DEFAULT_VMAF_TARGET, DEFAULT_ENCODING_PRESET
+# --- Formatting Functions ---
 
 
 def format_time(seconds: float) -> str:
@@ -115,7 +135,7 @@ def format_file_size(size_bytes: int) -> str:
     """
     if size_bytes is None or size_bytes < 0:
         return "-"
-    if size_bytes < 1024:
+    if size_bytes < 1024:  # noqa: PLR2004
         return f"{size_bytes} B"
     if size_bytes < 1024**2:
         return f"{size_bytes / 1024:.2f} KB"
@@ -124,76 +144,237 @@ def format_file_size(size_bytes: int) -> str:
     return f"{size_bytes / (1024**3):.2f} GB"
 
 
-# --- Filename Anonymization ---
-# File mapping for filename anonymization
-filename_size_map: dict[str, str] = {}
+# --- Path Anonymization (BLAKE2b Hash-Based) ---
+
+# Configured folders for special labeling (set via set_anonymization_folders)
+_configured_input_folder: str | None = None
+_configured_output_folder: str | None = None
+
+# Cache for hash lookups (avoids recomputing)
+_path_hash_cache: dict[str, str] = {}
+
+
+def _normalize_path(path: str) -> str:
+    """Normalize a path for consistent hashing across platforms.
+
+    Args:
+        path: File or directory path to normalize
+
+    Returns:
+        Normalized path string suitable for hashing
+    """
+    # Get absolute path and normalize separators
+    normalized = os.path.normpath(os.path.abspath(path))
+    # Lowercase on Windows (case-insensitive filesystem)
+    if sys.platform == "win32":
+        normalized = normalized.lower()
+    # Use forward slashes consistently
+    return normalized.replace("\\", "/")
+
+
+def _compute_hash(value: str, length: int = 12) -> str:
+    """Compute a BLAKE2b hash of a string, truncated for readability.
+
+    Args:
+        value: String to hash
+        length: Number of hex characters to return (default 12)
+
+    Returns:
+        Truncated hex hash string
+    """
+    # Use BLAKE2b with 16-byte digest (32 hex chars), then truncate
+    hash_bytes = hashlib.blake2b(value.encode("utf-8"), digest_size=16).digest()
+    return hash_bytes.hex()[:length]
+
+
+def set_anonymization_folders(input_folder: str | None, output_folder: str | None) -> None:
+    """Set the configured input/output folders for special labeling.
+
+    When these folders appear in paths, they'll be shown as [input_folder]
+    or [output_folder] instead of hashes for readability.
+
+    Args:
+        input_folder: The configured input folder path
+        output_folder: The configured output folder path
+    """
+    global _configured_input_folder, _configured_output_folder  # noqa: PLW0603
+    _configured_input_folder = _normalize_path(input_folder) if input_folder else None
+    _configured_output_folder = _normalize_path(output_folder) if output_folder else None
+
+
+def anonymize_folder(folder_path: str) -> str:
+    """Anonymize a folder path using BLAKE2b hash or special labels.
+
+    Args:
+        folder_path: Full path to the folder
+
+    Returns:
+        Anonymized folder identifier like '[input_folder]' or 'folder_7f3a9c2b1e4d'
+    """
+    if not folder_path:
+        return "[unknown]"
+
+    normalized = _normalize_path(folder_path)
+
+    # Check for configured special folders
+    if _configured_input_folder and normalized == _configured_input_folder:
+        return "[input_folder]"
+    if _configured_output_folder and normalized == _configured_output_folder:
+        return "[output_folder]"
+
+    # Check cache
+    cache_key = f"folder:{normalized}"
+    if cache_key in _path_hash_cache:
+        return _path_hash_cache[cache_key]
+
+    # Compute hash
+    folder_hash = _compute_hash(normalized)
+    result = f"folder_{folder_hash}"
+    _path_hash_cache[cache_key] = result
+    return result
+
+
+def anonymize_file(filename: str) -> str:
+    """Anonymize a filename (basename only) using BLAKE2b hash.
+
+    Args:
+        filename: Just the filename (not full path), e.g., 'video.mp4'
+
+    Returns:
+        Anonymized filename like 'file_7f3a9c2b1e4d.mp4'
+    """
+    if not filename:
+        return "file_unknown"
+
+    # Extract just the basename if a full path was passed
+    basename = os.path.basename(filename)
+
+    # Normalize for consistent hashing
+    normalized = basename.lower() if sys.platform == "win32" else basename
+
+    # Check cache
+    cache_key = f"file:{normalized}"
+    if cache_key in _path_hash_cache:
+        return _path_hash_cache[cache_key]
+
+    # Compute hash and preserve extension
+    name_without_ext, ext = os.path.splitext(normalized)
+    file_hash = _compute_hash(name_without_ext)
+    result = f"file_{file_hash}{ext}"
+    _path_hash_cache[cache_key] = result
+    return result
+
+
+def anonymize_path(file_path: str) -> str:
+    """Anonymize a full file path (folder + filename).
+
+    Args:
+        file_path: Full path to the file
+
+    Returns:
+        Anonymized path like '[input_folder]/file_7f3a9c2b1e4d.mp4'
+    """
+    if not file_path:
+        return "[unknown]/file_unknown"
+
+    folder = os.path.dirname(file_path)
+    filename = os.path.basename(file_path)
+
+    anon_folder = anonymize_folder(folder)
+    anon_file = anonymize_file(filename)
+
+    return f"{anon_folder}/{anon_file}"
 
 
 def anonymize_filename(filename: str) -> str:
-    """Replace actual filename with a simplified name for privacy reasons.
+    """Anonymize a file path for privacy (compatibility wrapper).
+
+    This function provides the same interface as the old anonymization system
+    but uses the new BLAKE2b hash-based approach.
 
     Args:
         filename: Original file path or name to anonymize
 
     Returns:
-        Anonymized filename, either basename or size-based representation
+        Anonymized path like '[input_folder]/file_7f3a9c2b1e4d.mp4'
     """
     if not filename:
-        return filename  # Handle None input gracefully
-    if filename in filename_size_map:
-        return filename_size_map[filename]
+        return filename
 
-    anonymized_name = os.path.basename(filename)  # Default to basename
-    try:
-        if os.path.exists(filename):
-            # File exists: Use size-based anonymization
-            file_size_bytes = os.path.getsize(filename)
-            file_size_mb = file_size_bytes / (1024**2)
-            file_ext = os.path.splitext(filename)[1].lower()
-            anonymized_name = f"video_{file_size_mb:.1f}MB{file_ext}"
-        else:
-            # File doesn't exist: Just use the basename, no "file_" prefix
-            anonymized_name = os.path.basename(filename)
+    # If it looks like a full path, anonymize the whole thing
+    if os.path.dirname(filename):
+        return anonymize_path(filename)
 
-        # Store mapping using original full path as key, even if returning basename
-        filename_size_map[filename] = anonymized_name
-        return anonymized_name
-    except Exception as e:
-        logger.debug(f"Error anonymizing '{filename}': {e}")
-        return os.path.basename(filename)  # Fallback
+    # Just a filename, anonymize it alone
+    return anonymize_file(filename)
 
 
-# Custom filter to replace filenames in log messages
-class FilenamePrivacyFilter(logging.Filter):
-    def filter(self, record):
+# Regex patterns for detecting paths and filenames in log messages
+_PATH_PATTERNS = [
+    # Windows drive paths: C:\... or C:/...
+    re.compile(r"[A-Za-z]:[\\\/][^\s\"'<>|*?\n]+"),
+    # UNC paths: \\server\share\...
+    re.compile(r"\\\\[^\s\"'<>|*?\n]+"),
+    # Unix absolute paths with common roots
+    re.compile(r"/(?:home|Users|mnt|media|var|tmp|opt|usr)[^\s\"'<>|*?\n]*"),
+    # Video filenames (may contain spaces, captured after common delimiters)
+    # Matches filenames after: colon, arrow, equals, quotes
+    re.compile(
+        r"(?:(?<=: )|(?<=-> )|(?<== )|(?<=\")|(?<='))[^<>|*?\n\"']+\.(?:mp4|mkv|avi|wmv|mov|webm)",
+        re.IGNORECASE,
+    ),
+    # Fallback: video filenames without spaces (catches simple cases)
+    re.compile(r"[^\s\"'<>|*?\n/\\]+\.(?:mp4|mkv|avi|wmv|mov|webm)", re.IGNORECASE),
+]
+
+
+_MAX_EXTENSION_LENGTH = 5  # Maximum reasonable file extension length
+
+
+def _anonymize_path_match(match: re.Match) -> str:
+    """Replacement function for regex path matching."""
+    path = match.group(0)
+    # Determine if it's a file or directory
+    # If it has an extension, treat as file path
+    _, ext = os.path.splitext(path)
+    if ext and len(ext) <= _MAX_EXTENSION_LENGTH:
+        # Check if it's a standalone filename (no directory component)
+        if not os.path.dirname(path):
+            return anonymize_file(path)
+        return anonymize_path(path)
+    return anonymize_folder(path)
+
+
+class PathPrivacyFilter(logging.Filter):
+    """Log filter that anonymizes file paths using BLAKE2b hashes.
+
+    This filter proactively detects path patterns in log messages and
+    replaces them with anonymized versions, rather than relying on
+    pre-registered paths.
+    """
+
+    def filter(self, record: logging.LogRecord) -> bool:
         if hasattr(record, "msg") and isinstance(record.msg, str):
             temp_msg = record.msg
-            sorted_keys = cast("list[str]", sorted(filename_size_map.keys(), key=len, reverse=True))
-            for original_name in sorted_keys:
-                # Get the *potentially* anonymized name from map (could be size-based or just basename)
-                anonymized_name = filename_size_map[original_name]
-                if original_name in temp_msg:
-                    # Replace the original full path/name with the corresponding map value
-                    temp_msg = temp_msg.replace(original_name, anonymized_name)
-                else:
-                    # If full path wasn't found, try replacing just the basename
-                    original_basename = os.path.basename(original_name)
-                    if original_basename != original_name and original_basename in temp_msg:
-                        # Use the basename of the map value for replacement
-                        anonymized_basename = os.path.basename(anonymized_name)
-                        temp_msg = temp_msg.replace(original_basename, anonymized_basename)
+            for pattern in _PATH_PATTERNS:
+                temp_msg = pattern.sub(_anonymize_path_match, temp_msg)
             record.msg = temp_msg
         return True
+
+
+# Keep old name for backwards compatibility during transition
+FilenamePrivacyFilter = PathPrivacyFilter
 
 
 # Custom filter to suppress excessive sled::pagecache trace messages
 class SledTraceFilter(logging.Filter):
     def filter(self, record):
-        if hasattr(record, "msg") and isinstance(record.msg, str):
-            # Filter out sled::pagecache messages marked as TRACE
-            if "sled::pagecache" in record.msg and "TRACE" in record.msg:
-                return False
-        return True
+        return not (
+            hasattr(record, "msg")
+            and isinstance(record.msg, str)
+            and "sled::pagecache" in record.msg
+            and "TRACE" in record.msg
+        )
 
 
 # --- Logging Setup and Utilities ---
@@ -311,7 +492,8 @@ def log_video_properties(video_info: dict, prefix: str = "Input") -> None:
         duration = 0
         bit_rate = 0
     logger.info(
-        f"{prefix} File - Size: {format_file_size(file_size)}, Duration: {format_time(duration)}, Bitrate: {bit_rate / 1000:.2f} kbps"
+        f"{prefix} File - Size: {format_file_size(file_size)}, Duration: {format_time(duration)}, "
+        f"Bitrate: {bit_rate / 1000:.2f} kbps"
     )
     for stream in video_info.get("streams", []):
         codec_type = stream.get("codec_type", "unknown")
@@ -332,7 +514,8 @@ def log_video_properties(video_info: dict, prefix: str = "Input") -> None:
             profile = stream.get("profile", "unknown")
             pix_fmt = stream.get("pix_fmt", "unknown")
             logger.info(
-                f"{prefix} Video - {width}x{height} ({width * height / 1000000:.2f} MP), {fps_value:.3f} fps, Codec: {codec_name}, Profile: {profile}, Pixel Format: {pix_fmt}"
+                f"{prefix} Video - {width}x{height} ({width * height / 1000000:.2f} MP), "
+                f"{fps_value:.3f} fps, Codec: {codec_name}, Profile: {profile}, Pixel Format: {pix_fmt}"
             )
         elif codec_type == "audio":
             channels = stream.get("channels", 0)
@@ -343,7 +526,8 @@ def log_video_properties(video_info: dict, prefix: str = "Input") -> None:
             except (ValueError, TypeError):
                 audio_bitrate = 0
             logger.info(
-                f"{prefix} Audio - Codec: {codec_name}, Channels: {channels}, Sample Rate: {sample_rate} Hz, Bitrate: {audio_bitrate:.1f} kbps"
+                f"{prefix} Audio - Codec: {codec_name}, Channels: {channels}, "
+                f"Sample Rate: {sample_rate} Hz, Bitrate: {audio_bitrate:.1f} kbps"
             )
 
 
@@ -359,15 +543,16 @@ def log_encoding_parameters(crf: int, preset: str, width: int, height: int, vmaf
     """
     resolution_name = (
         "4K"
-        if width >= 3840 or height >= 2160
+        if width >= 3840 or height >= 2160  # noqa: PLR2004
         else "1080p"
-        if width >= 1920 or height >= 1080
+        if width >= 1920 or height >= 1080  # noqa: PLR2004
         else "720p"
-        if width >= 1280 or height >= 720
+        if width >= 1280 or height >= 720  # noqa: PLR2004
         else "SD"
     )
     logger.info(
-        f"Encoding Parameters - Res: {resolution_name} ({width}x{height}), CRF: {crf}, Preset: {preset}, VMAF Target: {vmaf_target}"
+        f"Encoding Parameters - Res: {resolution_name} ({width}x{height}), CRF: {crf}, "
+        f"Preset: {preset}, VMAF Target: {vmaf_target}"
     )  # Log actual target used
 
 
@@ -382,14 +567,7 @@ def get_video_info(video_path: str) -> dict[str, Any] | None:
     """
     cmd = ["ffprobe", "-v", "quiet", "-print_format", "json", "-show_format", "-show_streams", video_path]
     try:
-        startupinfo = None
-        if sys.platform == "win32":
-            # Use getattr for Windows-only subprocess attributes
-            STARTUPINFO = getattr(subprocess, "STARTUPINFO", None)
-            if STARTUPINFO:
-                startupinfo = STARTUPINFO()
-                startupinfo.dwFlags |= getattr(subprocess, "STARTF_USESHOWWINDOW", 0)
-                startupinfo.wShowWindow = getattr(subprocess, "SW_HIDE", 0)
+        startupinfo, _ = get_windows_subprocess_startupinfo()
         result = subprocess.run(
             cmd, capture_output=True, text=True, check=True, startupinfo=startupinfo, encoding="utf-8"
         )
@@ -400,17 +578,17 @@ def get_video_info(video_path: str) -> dict[str, Any] | None:
             info["file_size"] = 0
             logger.debug(f"No size for {video_path}: {e}")
         return info
-    except subprocess.CalledProcessError as e:
-        logger.exception(f"ffprobe failed for {anonymize_filename(video_path)}: {e.stderr}")
+    except subprocess.CalledProcessError:
+        logger.exception(f"ffprobe failed for {anonymize_filename(video_path)}")
         return None
-    except json.JSONDecodeError as e:
-        logger.exception(f"ffprobe JSON error for {anonymize_filename(video_path)}: {e}")
+    except json.JSONDecodeError:
+        logger.exception(f"ffprobe JSON error for {anonymize_filename(video_path)}")
         return None
     except FileNotFoundError:
-        logger.exception("ffprobe not found.")
+        logger.exception("ffprobe not found")
         return None
-    except Exception as e:
-        logger.exception(f"ffprobe unexpected error {anonymize_filename(video_path)}: {e}")
+    except Exception:
+        logger.exception(f"ffprobe unexpected error {anonymize_filename(video_path)}")
         return None
 
 
@@ -423,15 +601,7 @@ def check_ffmpeg_availability() -> tuple:
     if shutil.which("ffmpeg") is None:
         return False, False, None, "ffmpeg not found in PATH"
     try:
-        # Setup Windows-specific subprocess options
-        startupinfo = None
-        if sys.platform == "win32":
-            STARTUPINFO = getattr(subprocess, "STARTUPINFO", None)
-            if STARTUPINFO:
-                startupinfo = STARTUPINFO()
-                startupinfo.dwFlags |= getattr(subprocess, "STARTF_USESHOWWINDOW", 0)
-                startupinfo.wShowWindow = getattr(subprocess, "SW_HIDE", 0)
-
+        startupinfo, _ = get_windows_subprocess_startupinfo()
         result = subprocess.run(
             ["ffmpeg", "-encoders"],
             capture_output=True,
@@ -463,9 +633,6 @@ def check_ffmpeg_availability() -> tuple:
 
 
 # For UI updates
-import tkinter as tk
-
-
 def update_ui_safely(root: tk.Tk, update_function: Callable[..., Any], *args: Any, **kwargs: Any) -> None:
     """Thread-safe UI update with extra safety checks and logging.
 
@@ -481,21 +648,18 @@ def update_ui_safely(root: tk.Tk, update_function: Callable[..., Any], *args: An
             def _safe_update_wrapper():
                 try:
                     result = update_function(*args, **kwargs)
-                    logger.debug(
-                        f"UI update successful: {update_function.__name__ if hasattr(update_function, '__name__') else 'lambda'}"
-                    )
+                    func_name = update_function.__name__ if hasattr(update_function, "__name__") else "lambda"
+                    logger.debug(f"UI update successful: {func_name}")
                     return result
-                except Exception as inner_e:
-                    logger.exception(
-                        f"Error in UI update function {update_function.__name__ if hasattr(update_function, '__name__') else 'lambda'}: {inner_e}"
-                    )
+                except Exception:
+                    func_name = update_function.__name__ if hasattr(update_function, "__name__") else "lambda"
+                    logger.exception(f"Error in UI update function {func_name}")
 
             # Schedule on the main thread
             root.after(0, _safe_update_wrapper)
-        except Exception as e:
-            logger.exception(
-                f"Error scheduling UI update for {update_function.__name__ if hasattr(update_function, '__name__') else 'lambda'}: {e}"
-            )
+        except Exception:
+            func_name = update_function.__name__ if hasattr(update_function, "__name__") else "lambda"
+            logger.exception(f"Error scheduling UI update for {func_name}")
     else:
         logger.debug("Skipped UI update: root widget invalid or destroyed")
 
@@ -547,19 +711,24 @@ def log_conversion_result(input_path: str, output_path: str, elapsed_time: float
             except (ValueError, TypeError, KeyError) as e:
                 logger.debug(f"Error parsing output bitrate: {e}")
         logger.info(
-            f"Conversion Result [{anonymize_filename(output_path)}]: Input: {format_file_size(input_size)}, Output: {format_file_size(output_size)}, Reduction: {format_file_size(size_reduction)} ({size_reduction_percent:.2f}%), Time: {format_time(elapsed_time)}"
+            f"Conversion Result [{anonymize_filename(output_path)}]: Input: {format_file_size(input_size)}, "
+            f"Output: {format_file_size(output_size)}, Reduction: {format_file_size(size_reduction)} "
+            f"({size_reduction_percent:.2f}%), Time: {format_time(elapsed_time)}"
         )
         if input_bitrate > 0 and output_bitrate > 0:
             bitrate_reduction = input_bitrate - output_bitrate
             bitrate_ratio = (output_bitrate / input_bitrate) * 100 if input_bitrate > 0 else 0
             logger.info(
-                f"Bitrate Details - Input: {input_bitrate:.2f} kbps, Output: {output_bitrate:.2f} kbps, Reduction: {bitrate_reduction:.2f} kbps ({100 - bitrate_ratio:.2f}%), Res: {resolution}"
+                f"Bitrate Details - Input: {input_bitrate:.2f} kbps, Output: {output_bitrate:.2f} kbps, "
+                f"Reduction: {bitrate_reduction:.2f} kbps ({100 - bitrate_ratio:.2f}%), Res: {resolution}"
             )
         print(
-            f"Conversion complete [{anonymize_filename(output_path)}] - Size reduced by {size_reduction_percent:.2f}% from {format_file_size(input_size)} to {format_file_size(output_size)} in {format_time(elapsed_time)}"
+            f"Conversion complete [{anonymize_filename(output_path)}] - Size reduced by "
+            f"{size_reduction_percent:.2f}% from {format_file_size(input_size)} to "
+            f"{format_file_size(output_size)} in {format_time(elapsed_time)}"
         )
-    except Exception as e:
-        logger.exception(f"Error logging conversion result for {anonymize_filename(output_path)}: {e}")
+    except Exception:
+        logger.exception(f"Error logging conversion result for {anonymize_filename(output_path)}")
 
 
 # --- History Management Functions ---
@@ -587,8 +756,8 @@ def load_history() -> list:
             with open(history_path, encoding="utf-8") as f:
                 content = f.read()
                 return json.loads(content) if content else []
-        except (json.JSONDecodeError, OSError) as e:
-            logger.exception(f"Error loading history {history_path}: {e}")
+        except (json.JSONDecodeError, OSError):
+            logger.exception(f"Error loading history {history_path}")
             return []
     return []
 
@@ -610,15 +779,111 @@ def append_to_history(record_dict: dict) -> None:
 
         os.replace(temp_history_path, history_path)
         logger.debug(f"Appended record to history: {history_path}")
-    except OSError as e:
-        logger.exception(f"Error saving history {history_path}: {e}")
-    except Exception as e:
-        logger.error(f"Unexpected error appending history: {e}", exc_info=True)
+    except OSError:
+        logger.exception(f"Error saving history {history_path}")
+    except Exception:
+        logger.exception("Unexpected error appending history")
+
+
+def scrub_history_paths() -> tuple[int, int]:
+    """Anonymize file paths in existing history entries.
+
+    Replaces full file paths with BLAKE2b hashes for privacy.
+    Only modifies entries that still contain full paths (not already anonymized).
+
+    Returns:
+        Tuple of (total_records, records_modified)
+    """
+    history = load_history()
+    if not history:
+        return 0, 0
+
+    modified_count = 0
+    for record in history:
+        record_modified = False
+
+        # Check and anonymize input_file
+        input_file = record.get("input_file", "")
+        if input_file and not input_file.startswith(("file_", "[", "folder_")):
+            # This is an old-style path, anonymize it
+            record["input_file"] = anonymize_path(input_file)
+            record_modified = True
+
+        # Check and anonymize output_file
+        output_file = record.get("output_file", "")
+        if output_file and not output_file.startswith(("file_", "[", "folder_")):
+            record["output_file"] = anonymize_path(output_file)
+            record_modified = True
+
+        if record_modified:
+            modified_count += 1
+
+    # Save the updated history if any records were modified
+    if modified_count > 0:
+        history_path = get_history_file_path()
+        try:
+            temp_history_path = history_path + ".tmp"
+            with open(temp_history_path, "w", encoding="utf-8") as f:
+                json.dump(history, f, indent=2)
+            os.replace(temp_history_path, history_path)
+            logger.info(f"Scrubbed {modified_count} of {len(history)} history records")
+        except OSError:
+            logger.exception("Error saving scrubbed history")
+            return len(history), 0
+
+    return len(history), modified_count
+
+
+def scrub_log_files(log_directory: str | None = None) -> tuple[int, int]:
+    """Anonymize file paths in existing log files.
+
+    Replaces full file paths with BLAKE2b hashes for privacy.
+
+    Args:
+        log_directory: Path to logs directory. If None, uses default logs folder.
+
+    Returns:
+        Tuple of (total_files, files_modified)
+    """
+    if log_directory is None:
+        log_directory = os.path.join(get_script_directory(), "logs")
+
+    if not os.path.isdir(log_directory):
+        return 0, 0
+
+    log_files = [f for f in os.listdir(log_directory) if f.endswith(".log")]
+    if not log_files:
+        return 0, 0
+
+    modified_count = 0
+    for log_filename in log_files:
+        log_path = os.path.join(log_directory, log_filename)
+        try:
+            with open(log_path, encoding="utf-8", errors="replace") as f:
+                original_content = f.read()
+
+            # Apply path anonymization patterns
+            scrubbed_content = original_content
+            for pattern in _PATH_PATTERNS:
+                scrubbed_content = pattern.sub(_anonymize_path_match, scrubbed_content)
+
+            # Only write if content changed
+            if scrubbed_content != original_content:
+                with open(log_path, "w", encoding="utf-8") as f:
+                    f.write(scrubbed_content)
+                modified_count += 1
+
+        except OSError:
+            logger.exception(f"Error scrubbing log file: {log_filename}")
+            continue
+
+    if modified_count > 0:
+        logger.info(f"Scrubbed {modified_count} of {len(log_files)} log files")
+
+    return len(log_files), modified_count
 
 
 # --- Power Management Functions ---
-import ctypes
-
 # Windows constants for SetThreadExecutionState
 ES_CONTINUOUS = 0x80000000
 ES_SYSTEM_REQUIRED = 0x00000001
@@ -639,8 +904,8 @@ def prevent_sleep_mode() -> bool:
         logger.info("Preventing system sleep during conversion")
         ctypes.windll.kernel32.SetThreadExecutionState(ES_CONTINUOUS | ES_SYSTEM_REQUIRED)
         return True
-    except Exception as e:
-        logger.exception(f"Failed to prevent system sleep: {e}")
+    except Exception:
+        logger.exception("Failed to prevent system sleep")
         return False
 
 
@@ -657,11 +922,6 @@ def allow_sleep_mode() -> bool:
         logger.info("Restoring normal power management")
         ctypes.windll.kernel32.SetThreadExecutionState(ES_CONTINUOUS)
         return True
-    except Exception as e:
-        logger.exception(f"Failed to restore normal power management: {e}")
+    except Exception:
+        logger.exception("Failed to restore normal power management")
         return False
-
-
-# --- Estimation Functions for Remaining Time ---
-# MOVED TO: src/estimation.py
-# Import these functions from src.estimation if needed

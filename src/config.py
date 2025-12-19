@@ -14,3 +14,10 @@ VMAF_FALLBACK_STEP = 1  # How much to decrement VMAF target on each fallback att
 # --- Resolution Settings ---
 MIN_RESOLUTION_WIDTH = 1280  # Minimum width to consider for conversion (720p: 1280x720)
 MIN_RESOLUTION_HEIGHT = 720  # Minimum height to consider for conversion
+
+# --- Parsing Thresholds ---
+SIZE_REDUCTION_CHANGE_THRESHOLD = 0.1  # Percentage change to trigger size reduction update
+VMAF_CHANGE_THRESHOLD = 0.01  # VMAF score difference to trigger update
+
+# --- File Validation ---
+MIN_OUTPUT_FILE_SIZE = 1024  # Minimum bytes for valid output file (1 KB)

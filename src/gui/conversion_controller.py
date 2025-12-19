@@ -58,7 +58,9 @@ from src.utils import (
     anonymize_filename,
     format_file_size,
     format_time,
+    get_windows_subprocess_startupinfo,
     prevent_sleep_mode,
+    set_anonymization_folders,
     update_ui_safely,
 )
 
@@ -111,8 +113,8 @@ def create_file_callback_dispatcher(gui):
                     handler(gui, filename, {})
             else:
                 logger.warning(f"Unknown status '{status}' received for file {filename}. Info: {info}")
-        except Exception as e:
-            logger.error(f"Error executing callback handler for status '{status}': {e}", exc_info=True)
+        except Exception:
+            logger.exception(f"Error executing callback handler for status '{status}'")
 
     return file_callback_dispatcher
 
@@ -169,10 +171,13 @@ def start_conversion(gui) -> None:
             logger.info(f"Output folder '{output_folder}' does not exist. Attempting to create.")
             os.makedirs(output_folder, exist_ok=True)
             logger.info(f"Successfully created output folder: {output_folder}")
-        except Exception as e:
-            logger.error(f"Failed to create output folder '{output_folder}': {e}", exc_info=True)
-            messagebox.showerror("Error", f"Cannot create output folder:\n{e}")
+        except Exception:
+            logger.exception(f"Failed to create output folder '{output_folder}'")
+            messagebox.showerror("Error", "Cannot create output folder")
             return
+
+    # Configure anonymization folders for log privacy
+    set_anonymization_folders(input_folder, output_folder)
 
     # Get file extensions to process from GUI state
     selected_extensions = [
@@ -193,9 +198,6 @@ def start_conversion(gui) -> None:
     if not check_ffmpeg(gui):  # check_ffmpeg is from gui_actions
         return
 
-    # --- REMOVED Pre-check for MKV in-place conversion without overwrite ---
-    # This is now handled within process_video by adding a suffix.
-
     # Get remaining conversion settings from GUI state
     convert_audio = gui.convert_audio.get()
     audio_codec = gui.audio_codec.get()
@@ -205,7 +207,8 @@ def start_conversion(gui) -> None:
     logger.info("--- Starting Conversion ---")
     logger.info(f"Input: {input_folder}, Output: {output_folder}, Extensions: {', '.join(selected_extensions)}")
     logger.info(
-        f"Overwrite: {overwrite}, Convert Audio: {convert_audio} (Codec: {audio_codec if convert_audio else 'N/A'}), Delete Original: {delete_original}"
+        f"Overwrite: {overwrite}, Convert Audio: {convert_audio} "
+        f"(Codec: {audio_codec if convert_audio else 'N/A'}), Delete Original: {delete_original}"
     )
     logger.info(f"Using -> Preset: {DEFAULT_ENCODING_PRESET}, VMAF Target: {DEFAULT_VMAF_TARGET}")
 
@@ -281,8 +284,12 @@ def start_conversion(gui) -> None:
 
     # Create callbacks in the GUI layer to pass to worker
     file_callback = create_file_callback_dispatcher(gui)
-    reset_ui_callback = lambda: reset_current_file_details(gui)
-    elapsed_time_callback = lambda start_time: update_elapsed_time(gui, start_time)
+
+    def reset_ui_callback():
+        return reset_current_file_details(gui)
+
+    def elapsed_time_callback(start_time):
+        return update_elapsed_time(gui, start_time)
 
     # Start the conversion worker thread
     # Pass necessary callbacks (file_callback, reset_ui, elapsed_time, pid_storage, completion)
@@ -340,14 +347,7 @@ def terminate_process(pid: int) -> bool:
     logger.info(f"Attempting to terminate process PID {pid}...")
     try:
         if sys.platform == "win32":
-            # Use taskkill on Windows with /T to kill process tree, /F for force
-            # Use getattr for Windows-only subprocess attributes
-            STARTUPINFO = getattr(subprocess, "STARTUPINFO", None)
-            startupinfo = None
-            if STARTUPINFO:
-                startupinfo = STARTUPINFO()
-                startupinfo.dwFlags |= getattr(subprocess, "STARTF_USESHOWWINDOW", 0)
-                startupinfo.wShowWindow = getattr(subprocess, "SW_HIDE", 0)
+            startupinfo, _ = get_windows_subprocess_startupinfo()
             result = subprocess.run(
                 ["taskkill", "/F", "/T", "/PID", str(pid)],
                 capture_output=True,
@@ -370,8 +370,8 @@ def terminate_process(pid: int) -> bool:
                 )
                 logger.info("Attempted fallback kill of ffmpeg.exe processes.")
                 return True
-            except Exception as ffmpeg_e:
-                logger.error(f"Failed fallback kill of ffmpeg processes: {ffmpeg_e}")
+            except Exception:
+                logger.exception("Failed fallback kill of ffmpeg processes")
                 return False
         else:  # Linux/macOS
             # Try SIGTERM first, then SIGKILL
@@ -390,8 +390,8 @@ def terminate_process(pid: int) -> bool:
     except ProcessLookupError:
         logger.warning(f"Process PID {pid} not found during termination attempt.")
         return True  # Process already gone
-    except Exception as e:
-        logger.error(f"Failed to terminate process PID {pid}: {e!s}")
+    except Exception:
+        logger.exception(f"Failed to terminate process PID {pid}")
         return False
 
 
@@ -428,8 +428,8 @@ def cleanup_temp_file(input_path: str, output_folder: str, input_folder: str) ->
             logger.info("Removed temporary file successfully.")
         else:
             logger.debug(f"Specific temp file not found for cleanup: {temp_file_path}")
-    except Exception as cleanup_err:
-        logger.error(f"Failed to remove specific temp file '{temp_filename}': {cleanup_err}")
+    except Exception:
+        logger.exception(f"Failed to remove specific temp file '{temp_filename}'")
 
 
 def restore_ui_after_stop(gui) -> None:
@@ -468,16 +468,14 @@ def force_stop_conversion(gui, confirm: bool = True) -> None:
         logger.info("Force stop requested but conversion is not running.")
         return
 
-    if confirm:
-        # Ask for user confirmation before proceeding with force stop
-        if not messagebox.askyesno(
-            "Confirm Force Stop",
-            "This will immediately terminate the current conversion.\n"
-            "The current file will be incomplete.\n\n"
-            "Are you sure you want to force stop?",
-        ):
-            logger.info("User cancelled the force stop request.")
-            return
+    if confirm and not messagebox.askyesno(
+        "Confirm Force Stop",
+        "This will immediately terminate the current conversion.\n"
+        "The current file will be incomplete.\n\n"
+        "Are you sure you want to force stop?",
+    ):
+        logger.info("User cancelled the force stop request.")
+        return
 
     logger.warning("Force stop initiated by user or internal call.")
     gui.status_label.config(text="Force stopping...")
@@ -499,13 +497,7 @@ def force_stop_conversion(gui, confirm: bool = True) -> None:
         # Fallback: try killing any ffmpeg process if PID wasn't known
         if sys.platform == "win32":
             try:
-                # Use getattr for Windows-only subprocess attributes
-                STARTUPINFO = getattr(subprocess, "STARTUPINFO", None)
-                startupinfo = None
-                if STARTUPINFO:
-                    startupinfo = STARTUPINFO()
-                    startupinfo.dwFlags |= getattr(subprocess, "STARTF_USESHOWWINDOW", 0)
-                    startupinfo.wShowWindow = getattr(subprocess, "SW_HIDE", 0)
+                startupinfo, _ = get_windows_subprocess_startupinfo()
                 subprocess.run(
                     ["taskkill", "/F", "/IM", "ffmpeg.exe"],
                     capture_output=True,
@@ -514,8 +506,8 @@ def force_stop_conversion(gui, confirm: bool = True) -> None:
                     startupinfo=startupinfo,
                 )
                 logger.info("Attempted fallback kill of any running ffmpeg.exe processes.")
-            except Exception as e:
-                logger.error(f"Failed fallback kill of ffmpeg processes: {e}")
+            except Exception:
+                logger.exception("Failed fallback kill of ffmpeg processes")
 
     # Clear the process info after termination
     gui.current_process_info = None
@@ -530,7 +522,7 @@ def force_stop_conversion(gui, confirm: bool = True) -> None:
     # Schedule general temp folder cleanup
     output_dir_to_clean = getattr(gui, "output_folder_path", None) or gui.output_folder.get()
     if output_dir_to_clean:
-        gui.root.after(500, lambda dir=output_dir_to_clean: schedule_temp_folder_cleanup(dir))
+        gui.root.after(500, lambda output_dir=output_dir_to_clean: schedule_temp_folder_cleanup(output_dir))
     else:
         logger.warning("Cannot schedule general temp folder cleanup: output directory unclear.")
 
@@ -625,9 +617,9 @@ def format_error_details(error_details: list) -> str:
     # Display up to 3 files per error type
     for error_type, filenames in error_types.items():
         msg += f"\n{error_type}: {len(filenames)} file{'s' if len(filenames) > 1 else ''}\n"
-        for i, filename in enumerate(filenames[:3]):
+        for _, filename in enumerate(filenames[:3]):
             msg += f"  - {filename}\n"
-        if len(filenames) > 3:
+        if len(filenames) > 3:  # noqa: PLR2004
             msg += f"  ... and {len(filenames) - 3} more\n"
 
     return msg
@@ -649,18 +641,18 @@ def format_skip_details(skipped_files: list, skipped_low_res_files: list) -> str
     if skipped_files:
         msg += "\n--- Files Skipped (Inefficient Conversion) ---\n"
         msg += "Files where conversion would not save space:\n"
-        for i, filename in enumerate(skipped_files[:5]):
+        for _, filename in enumerate(skipped_files[:5]):
             msg += f"  - {filename}\n"
-        if len(skipped_files) > 5:
+        if len(skipped_files) > 5:  # noqa: PLR2004
             msg += f"  ... and {len(skipped_files) - 5} more\n"
 
     # Show files skipped due to low resolution
     if skipped_low_res_files:
         msg += "\n--- Files Skipped (Low Resolution) ---\n"
         msg += f"Files below {MIN_RESOLUTION_WIDTH}x{MIN_RESOLUTION_HEIGHT}:\n"
-        for i, filename in enumerate(skipped_low_res_files[:5]):
+        for _, filename in enumerate(skipped_low_res_files[:5]):
             msg += f"  - {filename}\n"
-        if len(skipped_low_res_files) > 5:
+        if len(skipped_low_res_files) > 5:  # noqa: PLR2004
             msg += f"  ... and {len(skipped_low_res_files) - 5} more\n"
 
     return msg
@@ -678,7 +670,7 @@ def conversion_complete(gui, final_message="Conversion complete"):
     # Schedule final cleanup of general temp folders
     output_dir_to_clean = getattr(gui, "output_folder_path", None) or gui.output_folder.get()
     if output_dir_to_clean:
-        gui.root.after(100, lambda dir=output_dir_to_clean: schedule_temp_folder_cleanup(dir))
+        gui.root.after(100, lambda output_dir=output_dir_to_clean: schedule_temp_folder_cleanup(output_dir))
     else:
         logger.warning("Cannot schedule final temp folder cleanup: output directory unclear.")
 
@@ -690,7 +682,8 @@ def conversion_complete(gui, final_message="Conversion complete"):
     )
     if gui.vmaf_scores:
         logger.info(
-            f"VMAF (Avg/Min/Max): {statistics.mean(gui.vmaf_scores):.1f}/{min(gui.vmaf_scores):.1f}/{max(gui.vmaf_scores):.1f}"
+            f"VMAF (Avg/Min/Max): {statistics.mean(gui.vmaf_scores):.1f}/"
+            f"{min(gui.vmaf_scores):.1f}/{max(gui.vmaf_scores):.1f}"
         )
     if gui.crf_values:
         logger.info(
@@ -698,7 +691,8 @@ def conversion_complete(gui, final_message="Conversion complete"):
         )
     if gui.size_reductions:
         logger.info(
-            f"Size Reduction (Avg/Min/Max): {statistics.mean(gui.size_reductions):.1f}%/{min(gui.size_reductions):.1f}%/{max(gui.size_reductions):.1f}%"
+            f"Size Reduction (Avg/Min/Max): {statistics.mean(gui.size_reductions):.1f}%/"
+            f"{min(gui.size_reductions):.1f}%/{max(gui.size_reductions):.1f}%"
         )
 
     # Update final UI elements

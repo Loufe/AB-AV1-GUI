@@ -89,14 +89,15 @@ def handle_progress(gui, filename: str, info: dict) -> None:
         def force_update():
             try:
                 gui.root.update_idletasks()
-            except Exception as e:
-                logger.exception(f"Error in forced UI update: {e}")
+            except Exception:
+                logger.exception("Error in forced UI update")
 
         update_ui_safely(gui.root, force_update)
 
     # Minimal logging here, more detailed progress logging is in the wrapper/parser
     logger.debug(
-        f"Progress update for {anonymized_file}: Qual={progress_event.progress_quality:.1f}%, Enc={progress_event.progress_encoding:.1f}%, Phase={progress_event.phase}"
+        f"Progress update for {anonymized_file}: Qual={progress_event.progress_quality:.1f}%, "
+        f"Enc={progress_event.progress_encoding:.1f}%, Phase={progress_event.phase}"
     )
 
 

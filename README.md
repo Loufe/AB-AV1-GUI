@@ -19,7 +19,7 @@ Place the downloaded executable (`ab-av1.exe` on Windows, `ab-av1` on Linux/macO
 
 ## Requirements
 
-*   **Python 3** with Tkinter (included in standard installations).
+*   **Python 3.8+** with Tkinter (included in standard installations).
 *   **FFmpeg:** Must be installed and available in your system's PATH. Requires a version with `libsvtav1` (SVT-AV1 encoder) support. You can download builds from [ffmpeg.org](https://ffmpeg.org/download.html) or [Gyan.dev](https://www.gyan.dev/ffmpeg/builds/) (Windows).
 *   **ab-av1:** The [ab-av1](https://github.com/alexheretic/ab-av1) executable (see note above).
 
@@ -47,7 +47,36 @@ Place the downloaded executable (`ab-av1.exe` on Windows, `ab-av1` on Linux/macO
 
 ---
 
+## Privacy Features
+
+The application includes optional privacy features to anonymize file paths in logs and history:
+
+*   **Log Anonymization:** When enabled in Settings, file paths and video filenames in log files are replaced with BLAKE2b hashes (e.g., `file_7f3a9c2b1e4d.mp4`).
+*   **History Anonymization:** Similarly anonymizes the conversion history file.
+*   **Scrub Buttons:** The Settings tab includes "Scrub Logs" and "Scrub History" buttons to retroactively anonymize existing files. This is irreversible.
+*   **Reverse Lookup:** If needed, use `tools/hash_lookup.py` to find original files by their hash.
+
+---
+
+## Troubleshooting
+
+### FFmpeg not found
+Ensure FFmpeg is installed and available in your system PATH. On Windows, you may need to restart your terminal after installation.
+
+### libsvtav1 not available
+Your FFmpeg build must include SVT-AV1 encoder support. Download a full build from [Gyan.dev](https://www.gyan.dev/ffmpeg/builds/) (Windows) or install via your package manager (Linux/macOS).
+
+### Conversion fails immediately
+- Check that `ab-av1` executable is in the `src/` directory
+- Verify the input file is a valid video with a video stream
+- Check the log files in the `logs/` directory for detailed error messages
+
+### GUI freezes during conversion
+This should not happen. If it does, check the log files for errors. The conversion runs in a separate thread to keep the GUI responsive.
+
+---
+
 ## Documentation
 
 - [Architecture](docs/ARCHITECTURE.md) - Technical details, conversion flow diagrams, threading model
-- [AGENTS.md](AGENTS.md) - Development guidelines and project structure
+- [agents.md](agents.md) - Development guidelines and project structure

@@ -207,4 +207,4 @@ Parser uses multiple regex patterns to handle format variations. See `ab_av1/par
 ## See Also
 
 - [README](../README.md) - User installation and usage guide
-- [AGENTS.md](../AGENTS.md) - Development guidelines and project structure
+- [agents.md](../agents.md) - Development guidelines and project structure

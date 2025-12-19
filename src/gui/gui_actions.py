@@ -59,7 +59,8 @@ def browse_log_folder(gui) -> None:
         logger.info(f"Log folder selected by user: {folder}")
         messagebox.showinfo(
             "Log Folder Changed",
-            "Log folder preference updated.\nNew logs will be written to the selected folder on next application start.",
+            "Log folder preference updated.\n"
+            "New logs will be written to the selected folder on next application start.",
         )
 
 
@@ -85,7 +86,7 @@ def open_log_folder_action(gui) -> None:
             messagebox.showwarning("Cannot Open Log Folder", "The log folder location is not set or is invalid.")
     except Exception as e:
         log_dir_str = gui.log_directory if hasattr(gui, "log_directory") else "N/A"
-        logger.error(f"Failed to open log folder '{log_dir_str}': {e}")
+        logger.exception(f"Failed to open log folder '{log_dir_str}'")
         messagebox.showerror("Error", f"Could not open log folder:\n{e}")
 
 
@@ -125,10 +126,11 @@ def open_history_file_action(gui) -> None:
             logger.info("History file does not exist yet.")
             messagebox.showinfo(
                 "History File Not Found",
-                f"The history file ({os.path.basename(history_path)}) has not been created yet.\nIt will be created after the first successful conversion.",
+                f"The history file ({os.path.basename(history_path)}) has not been created yet.\n"
+                "It will be created after the first successful conversion.",
             )
     except Exception as e:
-        logger.error(f"Failed to open history file '{history_path}': {e}")
+        logger.exception(f"Failed to open history file '{history_path}'")
         messagebox.showerror("Error", f"Could not open history file:\n{e}")
 
 
@@ -164,7 +166,7 @@ def check_ffmpeg(gui) -> bool:
         logger.info(f"FFmpeg version: {version_info.splitlines()[0]}")
 
     # Call the imported function from the new location
-    available, path, message = check_ab_av1_available()
+    available, _path, message = check_ab_av1_available()
     if not available:
         logger.error(f"ab-av1 check failed: {message}")
         messagebox.showerror("ab-av1 Not Found", message)

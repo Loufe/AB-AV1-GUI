@@ -24,7 +24,7 @@ from src.ab_av1.exceptions import (
 from src.ab_av1.wrapper import AbAv1Wrapper
 
 # Import constants from config
-from src.config import DEFAULT_ENCODING_PRESET, DEFAULT_VMAF_TARGET
+from src.config import DEFAULT_ENCODING_PRESET, DEFAULT_VMAF_TARGET, MIN_OUTPUT_FILE_SIZE
 from src.utils import (
     anonymize_filename,
     format_file_size,
@@ -65,7 +65,8 @@ def process_video(
         total_duration_seconds: Total duration of the input video in seconds (for progress calc)
 
     Returns:
-        tuple: (output_path, elapsed_time, input_size, output_size, final_crf, final_vmaf, final_vmaf_target) on success, None otherwise.
+        tuple: (output_path, elapsed_time, input_size, output_size, final_crf, final_vmaf,
+                final_vmaf_target) on success, None otherwise.
     """
     input_path = Path(video_path).resolve()
     input_folder_path = Path(input_folder).resolve()
@@ -161,7 +162,8 @@ def process_video(
         if suffixed_output_path.exists():
             # If the suffixed file *also* exists, we must skip
             logger.warning(
-                f"Skipping {anonymized_input_name} - Output with suffix '{suffixed_filename}' already exists: {anonymized_suffixed_output}"
+                f"Skipping {anonymized_input_name} - Output with suffix '{suffixed_filename}' "
+                f"already exists: {anonymized_suffixed_output}"
             )
             if file_info_callback:
                 file_info_callback(input_path.name, "skipped", "Output with '(av1)' suffix exists")
@@ -181,7 +183,8 @@ def process_video(
         # Log it for clarity.
         anonymized_output_name = anonymize_filename(str(output_path))
         logger.warning(
-            f"Skipping {anonymized_input_name} - Final determined output path exists (post-suffix check): {anonymized_output_name}"
+            f"Skipping {anonymized_input_name} - Final determined output path exists "
+            f"(post-suffix check): {anonymized_output_name}"
         )
         if file_info_callback:
             file_info_callback(input_path.name, "skipped", "Final output path exists")
@@ -223,7 +226,7 @@ def process_video(
         if not output_path.exists():
             raise OutputFileError(f"Output missing: {anonymized_final_output_name}", error_type="missing_output")
         output_size = output_path.stat().st_size
-        if output_size < 1024:  # Check if output is suspiciously small
+        if output_size < MIN_OUTPUT_FILE_SIZE:  # Check if output is suspiciously small
             error_msg = f"Output too small ({output_size} bytes): {anonymized_final_output_name}"
             try:
                 output_path.unlink()
@@ -239,7 +242,8 @@ def process_video(
             result_stats.get("vmaf_target_used") if result_stats else DEFAULT_VMAF_TARGET
         )  # Get actual target used
         logger.info(
-            f"Conversion successful - Final VMAF: {final_vmaf if final_vmaf else 'N/A'}, Final CRF: {final_crf if final_crf else 'N/A'} (Target VMAF: {final_vmaf_target})"
+            f"Conversion successful - Final VMAF: {final_vmaf if final_vmaf else 'N/A'}, "
+            f"Final CRF: {final_crf if final_crf else 'N/A'} (Target VMAF: {final_vmaf_target})"
         )
 
         # Check VMAF achieved vs target used (use a small tolerance)
@@ -275,7 +279,7 @@ def process_video(
     except (InputFileError, OutputFileError, VMAFError, EncodingError, AbAv1Error) as e:
         # These errors are logged by the wrapper or dispatcher, just return None
         # Logging the specific error type here might be redundant
-        logger.exception(f"Conversion failed for {anonymized_input_name}: {e}")
+        logger.exception(f"Conversion failed for {anonymized_input_name}")
         # Ensure error callback is triggered if not already done by wrapper
         if file_info_callback:
             file_info_callback(
@@ -284,7 +288,7 @@ def process_video(
         return None
     except Exception as e:
         stack_trace = traceback.format_exc()
-        logger.exception(f"Unexpected error processing {anonymized_input_name}: {e}")
+        logger.exception(f"Unexpected error processing {anonymized_input_name}")
         logger.debug(f"Stack trace:\n{stack_trace}")
         if file_info_callback:
             file_info_callback(

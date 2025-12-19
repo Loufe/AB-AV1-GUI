@@ -54,7 +54,8 @@ def scan_video_needs_conversion(
             # Handle case when input is not relative to input folder (e.g., single file dropped?)
             # In this case, output directly to the base output folder
             logger.debug(
-                f"File {anonymized_input} is not relative to input base {input_base_folder}. Outputting directly to {output_base_folder}."
+                f"File {anonymized_input} is not relative to input base {input_base_folder}. "
+                f"Outputting directly to {output_base_folder}."
             )
             # relative_dir remains "."
 
@@ -63,8 +64,8 @@ def scan_video_needs_conversion(
         output_path = output_dir / output_filename
         anonymized_output = anonymize_filename(str(output_path))
 
-    except Exception as e:
-        logger.error(f"Error determining output path for {anonymized_input}: {e}")
+    except Exception:
+        logger.exception(f"Error determining output path for {anonymized_input}")
         # If path calculation fails, we can't reliably check existence, assume conversion needed
         return True, "Error determining output path", None
 
@@ -128,7 +129,10 @@ def scan_video_needs_conversion(
 
         # Check resolution before other checks
         if width < MIN_RESOLUTION_WIDTH and height < MIN_RESOLUTION_HEIGHT:
-            reason = f"Below minimum resolution ({width}x{height}) - needs at least {MIN_RESOLUTION_WIDTH}x{MIN_RESOLUTION_HEIGHT}"
+            reason = (
+                f"Below minimum resolution ({width}x{height}) - needs at least "
+                f"{MIN_RESOLUTION_WIDTH}x{MIN_RESOLUTION_HEIGHT}"
+            )
             logger.info(f"Skipping {anonymized_input} - {reason}")
             return False, reason, video_info
 
@@ -152,7 +156,7 @@ def scan_video_needs_conversion(
         logger.info(f"Conversion needed for {anonymized_input} - Reason: {reason}")
         return True, reason, video_info
 
-    except Exception as e:
-        logger.error(f"Error checking video stream info for {anonymized_input}: {e!s}", exc_info=True)
+    except Exception:
+        logger.exception(f"Error checking video stream info for {anonymized_input}")
         # If an unexpected error occurs during stream check, assume conversion might be needed
-        return True, f"Error during stream check: {e!s}", video_info
+        return True, "Error during stream check", video_info

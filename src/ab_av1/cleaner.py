@@ -42,8 +42,8 @@ def clean_ab_av1_temp_folders(base_dir: str | None = None) -> int:
         temp_items = list(base_path.glob(pattern))
         logger.debug(f"Found {len(temp_items)} potential temp items matching '{pattern}' in {base_dir}")
 
-    except Exception as e:
-        logger.error(f"Error finding temp folders in {base_dir}: {e}")
+    except Exception:
+        logger.exception(f"Error finding temp folders in {base_dir}")
         return 0
 
     # Remove the found folders
@@ -64,7 +64,8 @@ def clean_ab_av1_temp_folders(base_dir: str | None = None) -> int:
 
     if cleaned_count == 0 and temp_items:
         logger.info(
-            f"Found {len(temp_items)} potential temp items but none were removed (check permissions or if they were directories)."
+            f"Found {len(temp_items)} potential temp items but none were removed "
+            f"(check permissions or if they were directories)."
         )
     elif cleaned_count > 0:
         logger.info(f"Successfully cleaned {cleaned_count} temporary folder(s) in {base_dir}.")

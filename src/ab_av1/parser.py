@@ -9,6 +9,7 @@ import os
 import re
 from typing import Any, Callable
 
+from src.config import SIZE_REDUCTION_CHANGE_THRESHOLD, VMAF_CHANGE_THRESHOLD
 from src.utils import anonymize_filename
 
 logger = logging.getLogger(__name__)
@@ -61,6 +62,42 @@ class AbAv1Parser:
         self._re_error_generic = re.compile(r"error|failed|invalid", re.IGNORECASE)
         self._re_error_crf_fail = re.compile(r"Failed\s+to\s+find\s+a\s+suitable\s+crf", re.IGNORECASE)
 
+    def _build_encoding_callback_data(
+        self,
+        stats: dict[str, Any],
+        progress_encoding: float,
+        message: str,
+        eta_text: str | None = None,
+    ) -> dict[str, Any]:
+        """Build callback data dict for encoding progress updates.
+
+        Args:
+            stats: Current stats dictionary with vmaf, crf, size_reduction, etc.
+            progress_encoding: Current encoding progress percentage (0-100).
+            message: Human-readable progress message.
+            eta_text: Optional ETA text to include.
+
+        Returns:
+            Dictionary suitable for passing to file_info_callback.
+        """
+        data: dict[str, Any] = {
+            "progress_quality": 100.0,
+            "progress_encoding": progress_encoding,
+            "message": message,
+            "phase": "encoding",
+            "original_size": stats.get("original_size"),
+            "vmaf": stats.get("vmaf"),
+            "crf": stats.get("crf"),
+            "size_reduction": stats.get("size_reduction"),
+            "vmaf_target_used": stats.get("vmaf_target_used"),
+        }
+        if eta_text is not None:
+            data["eta_text"] = eta_text
+        if stats.get("estimated_output_size"):
+            data["output_size"] = stats.get("estimated_output_size")
+            data["is_estimate"] = True
+        return data
+
     def parse_line(self, line: str, stats: dict) -> dict:
         """
         Parses a single line of output known to come from ab-av1's stdout/stderr,
@@ -95,7 +132,8 @@ class AbAv1Parser:
 
                 # Log extra information about this transition
                 logger.info(
-                    f"Starting encoding phase with CRF: {stats.get('crf', '?')}, VMAF Target: {stats.get('vmaf_target_used', '?')}"
+                    f"Starting encoding phase with CRF: {stats.get('crf', '?')}, "
+                    f"VMAF Target: {stats.get('vmaf_target_used', '?')}"
                 )
                 logger.info(f"Duration in seconds: {stats.get('total_duration_seconds', '?')}")
                 logger.info("Looking for ffmpeg progress output lines in the form 'frame=XXX fps=XXX time=XX:XX:XX'")
@@ -151,9 +189,14 @@ class AbAv1Parser:
                         # This is percentage *of original*, so reduction is 100 - this
                         new_size_reduction = 100.0 - size_percentage
                         # Only update if changed significantly
-                        # Using None check to prevent TypeError: unsupported operand type(s) for -: 'NoneType' and 'float'
+                        # Using None check to prevent TypeError: unsupported operand type(s)
+                        # for -: 'NoneType' and 'float'
                         current_reduction = stats.get("size_reduction")
-                        if current_reduction is None or abs(current_reduction - new_size_reduction) > 0.1:
+                        reduction_changed = (
+                            current_reduction is None
+                            or abs(current_reduction - new_size_reduction) > SIZE_REDUCTION_CHANGE_THRESHOLD
+                        )
+                        if reduction_changed:
                             stats["size_reduction"] = new_size_reduction
                             logger.info(f"Parsed predicted size reduction: {stats['size_reduction']:.1f}%")
                     except (ValueError, IndexError) as e:
@@ -203,21 +246,7 @@ class AbAv1Parser:
                     # Send progress update
                     if self.file_info_callback:
                         message = f"Encoding: {progress_pct:.1f}% (FPS: {fps}, ETA: {eta_text})"
-
-                        callback_data = {
-                            "progress_quality": 100.0,
-                            "progress_encoding": progress_pct,
-                            "message": message,
-                            "phase": current_phase,
-                            "eta_text": eta_text,
-                            "original_size": stats.get("original_size"),
-                            "vmaf": stats.get("vmaf"),
-                            "crf": stats.get("crf"),
-                            "size_reduction": stats.get("size_reduction"),
-                            "output_size": stats.get("estimated_output_size"),
-                            "is_estimate": True if stats.get("estimated_output_size") else False,
-                            "vmaf_target_used": stats.get("vmaf_target_used"),
-                        }
+                        callback_data = self._build_encoding_callback_data(stats, progress_pct, message, eta_text)
                         self.file_info_callback(anonymized_input_basename, "progress", callback_data)
 
                     processed_line = True
@@ -242,21 +271,7 @@ class AbAv1Parser:
                     # Send progress update
                     if self.file_info_callback:
                         message = f"Encoding: {progress_pct:.1f}% (FPS: {fps}, ETA: {eta_text})"
-
-                        callback_data = {
-                            "progress_quality": 100.0,
-                            "progress_encoding": progress_pct,
-                            "message": message,
-                            "phase": current_phase,
-                            "eta_text": eta_text,
-                            "original_size": stats.get("original_size"),
-                            "vmaf": stats.get("vmaf"),
-                            "crf": stats.get("crf"),
-                            "size_reduction": stats.get("size_reduction"),
-                            "output_size": stats.get("estimated_output_size"),
-                            "is_estimate": True if stats.get("estimated_output_size") else False,
-                            "vmaf_target_used": stats.get("vmaf_target_used"),
-                        }
+                        callback_data = self._build_encoding_callback_data(stats, progress_pct, message, eta_text)
                         self.file_info_callback(anonymized_input_basename, "progress", callback_data)
 
                     processed_line = True
@@ -274,17 +289,7 @@ class AbAv1Parser:
                     # Send progress update
                     if self.file_info_callback:
                         message = f"Encoding: {progress_pct:.1f}%"
-
-                        callback_data = {
-                            "progress_quality": 100.0,
-                            "progress_encoding": progress_pct,
-                            "message": message,
-                            "phase": current_phase,
-                            "original_size": stats.get("original_size"),
-                            "vmaf": stats.get("vmaf"),
-                            "crf": stats.get("crf"),
-                            "size_reduction": stats.get("size_reduction"),
-                        }
+                        callback_data = self._build_encoding_callback_data(stats, progress_pct, message)
                         self.file_info_callback(anonymized_input_basename, "progress", callback_data)
 
                     processed_line = True
@@ -304,23 +309,11 @@ class AbAv1Parser:
                             # Send progress update using existing percentage, new ETA
                             if self.file_info_callback:
                                 current_progress = stats.get("progress_encoding", 0.0)
-                                callback_data = {
-                                    "progress_quality": 100.0,
-                                    "progress_encoding": current_progress,
-                                    "message": f"Encoding: {current_progress:.1f}% (ETA: {eta_text})",
-                                    "phase": current_phase,
-                                    "eta_text": eta_text,
-                                    "original_size": stats.get("original_size"),
-                                    "vmaf": stats.get("vmaf"),
-                                    "crf": stats.get("crf"),
-                                    "size_reduction": stats.get("size_reduction"),  # Use prediction if available
-                                    "output_size": stats.get("estimated_output_size"),  # Use estimate if available
-                                    "is_estimate": True if stats.get("estimated_output_size") else False,
-                                    "vmaf_target_used": stats.get("vmaf_target_used"),
-                                }
-                                logger.debug(
-                                    f"Sending progress callback (from summary update): {callback_data['progress_encoding']:.1f}%"
+                                message = f"Encoding: {current_progress:.1f}% (ETA: {eta_text})"
+                                callback_data = self._build_encoding_callback_data(
+                                    stats, current_progress, message, eta_text
                                 )
+                                logger.debug(f"Sending progress callback (summary): {current_progress:.1f}%")
                                 self.file_info_callback(anonymized_input_basename, "progress", callback_data)
 
                     except IndexError:
@@ -336,11 +329,14 @@ class AbAv1Parser:
             if processed_line:
                 # Log key stats that are expected to be updated by this parser
                 logger.debug(
-                    f"Post-Parse Stats: Phase={stats.get('phase')}, Qual={stats.get('progress_quality', 0):.1f}%, VMAF={stats.get('vmaf')}, CRF={stats.get('crf')}, ETA={stats.get('eta_text')}, SizeReduc={stats.get('size_reduction')}"
+                    f"Post-Parse Stats: Phase={stats.get('phase')}, "
+                    f"Qual={stats.get('progress_quality', 0):.1f}%, VMAF={stats.get('vmaf')}, "
+                    f"CRF={stats.get('crf')}, ETA={stats.get('eta_text')}, "
+                    f"SizeReduc={stats.get('size_reduction')}"
                 )
 
-        except Exception as e:
-            logger.error(f"General error processing output line: '{line[:80]}...' - {e}", exc_info=True)
+        except Exception:
+            logger.exception(f"General error processing output line: '{line[:80]}...'")
 
         return stats  # Always return the potentially modified stats dictionary
 
@@ -406,11 +402,11 @@ class AbAv1Parser:
                     est_remaining_real_seconds = seconds_remaining / processing_rate
 
                     # Format nicely for display
-                    if est_remaining_real_seconds < 60:
+                    if est_remaining_real_seconds < 60:  # noqa: PLR2004
                         eta_text = "< 1 min"
                     else:
                         minutes_remaining = int(est_remaining_real_seconds / 60)
-                        if minutes_remaining < 60:
+                        if minutes_remaining < 60:  # noqa: PLR2004
                             eta_text = f"{minutes_remaining} min{'s' if minutes_remaining != 1 else ''}"
                         else:
                             hours = int(minutes_remaining / 60)
@@ -437,7 +433,7 @@ class AbAv1Parser:
             speed = float(speed_match.group(1)) if speed_match else None
 
             # Return all extracted information
-            result = {
+            return {
                 "progress": progress,
                 "time_seconds": current_time_seconds,
                 "frame": frame,
@@ -446,8 +442,6 @@ class AbAv1Parser:
                 "size_bytes": size_bytes,
                 "speed": speed,
             }
-
-            return result
 
         except Exception as e:
             logger.warning(f"Error parsing FFmpeg progress line '{line[:50]}...': {e}")
@@ -472,7 +466,7 @@ class AbAv1Parser:
             vmaf_matches = re.findall(r"VMAF\s+(\d+\.\d+)", output_text, re.IGNORECASE)
             if vmaf_matches:
                 final_vmaf = float(vmaf_matches[-1])
-                if stats.get("vmaf") is None or abs(stats.get("vmaf", -1.0) - final_vmaf) > 0.01:
+                if stats.get("vmaf") is None or abs(stats.get("vmaf", -1.0) - final_vmaf) > VMAF_CHANGE_THRESHOLD:
                     logger.info(f"[Final Parse] VMAF verified/updated: {final_vmaf:.2f} (from {stats.get('vmaf')})")
                     stats["vmaf"] = final_vmaf
             elif stats.get("vmaf") is None:
@@ -512,7 +506,8 @@ class AbAv1Parser:
                     logger.warning(f"[Final Parse] Cannot parse final predicted size reduction %: {e}")
             else:
                 logger.warning(
-                    "[Final Parse] Size reduction percentage not found in main pipe output and wasn't parsed previously."
+                    "[Final Parse] Size reduction percentage not found in main pipe output "
+                    "and wasn't parsed previously."
                 )
 
         return stats

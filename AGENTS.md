@@ -31,7 +31,9 @@ src/
 ├── convert.py                 # Entry point
 ├── main.py                    # App initialization, Tkinter setup
 ├── config.py                  # Constants (VMAF targets, presets)
-├── utils.py                   # Logging, formatting, ffprobe, helpers
+├── models.py                  # Dataclasses (ProgressEvent, ConversionConfig, etc.)
+├── estimation.py              # Time estimation from history
+├── utils.py                   # Logging, formatting, ffprobe, privacy helpers
 ├── video_conversion.py        # Single-file conversion logic
 ├── ab_av1/                    # ab-av1 wrapper package
 │   ├── wrapper.py             # Subprocess management, VMAF fallback
@@ -49,6 +51,9 @@ src/
     ├── gui_updates.py         # Thread-safe UI updates
     ├── gui_actions.py         # User interaction handlers
     └── tabs/                  # Tab implementations
+
+tools/
+└── hash_lookup.py             # Reverse lookup for anonymized file hashes
 ```
 
 ## Architecture
@@ -87,7 +92,7 @@ AbAv1Wrapper.auto_encode()
 - Prefer creating focused modules over expanding large files
 - **No tests** - This project does not use automated testing
 - **No time estimates** - Never provide effort/duration estimates for tasks
-- **No git commits** - Never run `git add`, `git commit`, or `git push`. The user handles all git operations.
+- **No git commits** - AI assistants must never run `git add`, `git commit`, or `git push`. The user handles all git operations.
 
 ### Zero Backwards Compatibility Policy
 **NEVER add backwards compatibility code.** This is a single-developer project with no external consumers. Backwards compatibility is wasted effort.
@@ -145,10 +150,41 @@ See `ab_av1/wrapper.py` for environment variables that maximize verbosity.
 
 History is used to estimate remaining batch time by finding similar files (resolution/duration) and their actual encoding speeds.
 
-## Security Notes
+## Privacy & Security
+
+### Path Anonymization
+
+When enabled, file paths and filenames are anonymized using BLAKE2b hashes:
+
+| Original | Anonymized |
+|----------|------------|
+| `C:\Videos\movie.mp4` | `folder_7f3a9c2b1e4d/file_8a4b2c1d3e5f.mp4` |
+| Configured input folder | `[input_folder]/file_8a4b2c1d3e5f.mp4` |
+| Configured output folder | `[output_folder]/file_1a2b3c4d5e6f.mkv` |
+
+**Implementation** (`src/utils.py`):
+- `anonymize_file(filename)` - Hashes filename (basename only)
+- `anonymize_folder(path)` - Hashes folder path, or returns `[input_folder]`/`[output_folder]` for configured directories
+- `anonymize_path(full_path)` - Combines folder + file anonymization
+- `PathPrivacyFilter` - Log filter that proactively detects and anonymizes paths via regex
+
+**Patterns detected**:
+- Windows paths (`C:\...`, `C:/...`)
+- UNC paths (`\\server\share\...`)
+- Unix paths (`/home/...`, `/mnt/...`)
+- Video filenames (`.mp4`, `.mkv`, `.avi`, `.wmv`, `.mov`, `.webm`)
+
+**Retroactive scrubbing**: Settings tab provides "Scrub Logs" and "Scrub History" buttons to anonymize existing files (irreversible).
+
+**Reverse lookup**: Use `tools/hash_lookup.py` to find files by hash:
+```bash
+python tools/hash_lookup.py 7f3a9c2b /path/to/videos  # Search by hash prefix
+python tools/hash_lookup.py --list .                   # List all file hashes
+```
+
+### Other Security Notes
 
 - Never commit `av1_converter_config.json` (may contain paths)
-- Log anonymization available via settings
 - Process tree termination required for force-stop
 
 ## Git
@@ -160,4 +196,3 @@ History is used to estimate remaining batch time by finding similar files (resol
 
 - `README.md` - User installation and usage guide
 - `docs/ARCHITECTURE.md` - Technical diagrams and data flow
-- `docs/REFACTORING-PLAN.md` - Planned architectural improvements

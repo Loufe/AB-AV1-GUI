@@ -28,10 +28,6 @@ from src.video_conversion import process_video
 # Import functions/modules from the engine package
 from .scanner import scan_video_needs_conversion
 
-# REMOVED direct import causing circular dependency. Functions are passed as args.
-# from src.gui.conversion_controller import conversion_complete, store_process_id
-
-
 logger = logging.getLogger(__name__)
 
 
@@ -101,12 +97,12 @@ def sequential_conversion_worker(
                     # Ensure it's a file, not a directory ending with the extension
                     if file_path.is_file():
                         all_video_files_set.add(str(file_path.resolve()))
-    except Exception as scan_error:
-        logger.error(f"Error scanning input folder '{config.input_folder}': {scan_error}", exc_info=True)
-        update_ui_safely(gui.root, lambda err=scan_error: completion_callback(gui, f"Error scanning files: {err}"))
+    except Exception:
+        logger.exception(f"Error scanning input folder '{config.input_folder}'")
+        update_ui_safely(gui.root, lambda: completion_callback(gui, "Error scanning files"))
         return
 
-    all_video_files = sorted(list(all_video_files_set))
+    all_video_files = sorted(all_video_files_set)
     total_files_found = len(all_video_files)
     logger.info(f"Found {total_files_found} potential files matching extensions.")
     if not all_video_files:
@@ -156,9 +152,9 @@ def sequential_conversion_worker(
                 # Check if skipped due to resolution (thread-safe)
                 if "Below minimum resolution" in reason:
 
-                    def update_low_res_skip():
+                    def update_low_res_skip(fn=filename):
                         gui.skipped_low_resolution_count += 1
-                        gui.skipped_low_resolution_files.append(filename)
+                        gui.skipped_low_resolution_files.append(fn)
 
                     update_ui_safely(gui.root, update_low_res_skip)
 
@@ -211,17 +207,14 @@ def sequential_conversion_worker(
         gui.current_file_path = video_path
         logger.debug(f"Current file path set to: {video_path}")
 
-        # Move file removal after processing is complete, not at the start
-        # if video_path in gui.pending_files:
-        #     gui.pending_files.remove(video_path)
-        #     logger.debug(f"Removed {video_path} from pending files. Remaining: {len(gui.pending_files)}")
-
         file_number = gui.processed_files + 1
         filename = os.path.basename(video_path)
         anonymized_name = anonymize_filename(video_path)
         update_ui_safely(
             gui.root,
-            lambda: gui.status_label.config(text=f"Converting {file_number}/{total_videos_to_process}: {filename}"),
+            lambda fn=file_number, fname=filename: gui.status_label.config(
+                text=f"Converting {fn}/{total_videos_to_process}: {fname}"
+            ),
         )
         update_ui_safely(gui.root, reset_ui_callback)  # Reset UI elements for the new file
 
@@ -238,8 +231,8 @@ def sequential_conversion_worker(
             logger.warning(f"Cache miss during processing phase for {anonymized_name}. Calling get_video_info again.")
             try:
                 video_info = get_video_info(video_path)  # Attempt to get info again
-            except Exception as e:
-                logger.error(f"Failed to get video info during processing for {anonymized_name}: {e}")
+            except Exception:
+                logger.exception(f"Failed to get video info during processing for {anonymized_name}")
             # Proceed even if video_info is None, process_video might handle it
 
         # --- Extract Info & Update UI ---
@@ -267,8 +260,8 @@ def sequential_conversion_worker(
                 update_ui_safely(gui.root, lambda ss=size_str: gui.orig_size_label.config(text=ss))
                 gui.last_input_size = original_size  # Store for potential use in handlers
                 output_acodec = input_acodec  # Default output codec
-            except Exception as e:
-                logger.error(f"Error extracting details from video_info for {anonymized_name}: {e}")
+            except Exception:
+                logger.exception(f"Error extracting details from video_info for {anonymized_name}")
                 gui.last_input_size = None
                 input_duration = 0.0
         else:
@@ -326,7 +319,7 @@ def sequential_conversion_worker(
                 process_successful = False  # Ensure state reflects failure
 
         except Exception as e:
-            logger.error(f"Critical error during process_video call for {anonymized_name}: {e}", exc_info=True)
+            logger.exception(f"Critical error during process_video call for {anonymized_name}")
             # Dispatch a generic failure if process_video itself crashes
             file_event_callback(
                 filename, "failed", {"message": f"Internal processing error: {e}", "type": "processing_crash"}
@@ -339,12 +332,10 @@ def sequential_conversion_worker(
         gui.processed_files += 1
 
         # Remove file from pending list after processing is complete (thread-safe)
-        def remove_from_pending():
-            if video_path in gui.pending_files:
-                gui.pending_files.remove(video_path)
-                logger.debug(
-                    f"Removed completed file {video_path} from pending files. Remaining: {len(gui.pending_files)}"
-                )
+        def remove_from_pending(vpath=video_path):
+            if vpath in gui.pending_files:
+                gui.pending_files.remove(vpath)
+                logger.debug(f"Removed completed file {vpath} from pending files. Remaining: {len(gui.pending_files)}")
 
         update_ui_safely(gui.root, remove_from_pending)
 
@@ -378,8 +369,8 @@ def sequential_conversion_worker(
                     final_vmaf_target=final_vmaf_target if final_vmaf_target is not None else 95,
                 )
                 append_to_history(dataclasses.asdict(hist_record))
-            except Exception as hist_e:
-                logger.error(f"Failed to append to history for {anonymized_name}: {hist_e}")
+            except Exception:
+                logger.exception(f"Failed to append to history for {anonymized_name}")
             # Dispatch completed callback *after* history attempt
             # Pass necessary info for the handler
             completed_info = {"vmaf": final_vmaf, "crf": final_crf, "output_size": output_size}
@@ -394,8 +385,8 @@ def sequential_conversion_worker(
                 logger.info(f"Deleting original file as requested: {anonymize_filename(video_path)}")
                 os.remove(video_path)
                 logger.info(f"Successfully deleted original file: {anonymize_filename(video_path)}")
-            except OSError as e:
-                logger.error(f"Failed to delete original file '{anonymize_filename(video_path)}': {e}")
+            except OSError:
+                logger.exception(f"Failed to delete original file '{anonymize_filename(video_path)}'")
                 # Optionally, inform the user via a status update or a specific error counter
                 # For now, just logging the error as per instructions.
 

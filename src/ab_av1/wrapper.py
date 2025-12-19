@@ -12,13 +12,12 @@ import logging
 import os
 import re
 import subprocess
-import sys
 import time
 from typing import Any, Callable
 
 # Project imports
 from src.config import DEFAULT_ENCODING_PRESET, DEFAULT_VMAF_TARGET, MIN_VMAF_FALLBACK_TARGET, VMAF_FALLBACK_STEP
-from src.utils import anonymize_filename, format_file_size, get_video_info
+from src.utils import anonymize_filename, format_file_size, get_video_info, get_windows_subprocess_startupinfo
 
 from .cleaner import clean_ab_av1_temp_folders
 
@@ -120,8 +119,8 @@ class AbAv1Wrapper:
         except AbAv1Error:
             raise
         except Exception as e:
-            error_msg = f"Error analyzing {anonymized_input_path}: {e!s}"
-            logger.error(error_msg)
+            error_msg = f"Error analyzing {anonymized_input_path}"
+            logger.exception(error_msg)
             if self.file_info_callback:
                 self.file_info_callback(
                     os.path.basename(input_path), "failed", {"message": error_msg, "type": "analysis_failed"}
@@ -136,8 +135,8 @@ class AbAv1Wrapper:
         try:
             os.makedirs(output_dir, exist_ok=True)
         except Exception as e:
-            error_msg = f"Cannot create output dir: {e!s}"
-            logger.error(error_msg)
+            error_msg = "Cannot create output dir"
+            logger.exception(error_msg)
             if self.file_info_callback:
                 self.file_info_callback(
                     os.path.basename(input_path), "failed", {"message": error_msg, "type": "output_dir_creation_failed"}
@@ -262,17 +261,7 @@ class AbAv1Wrapper:
             pipe_closed_prematurely = False  # Flag for pipe closure check
 
             try:
-                # Setup process startup info to hide window on Windows
-                startupinfo = None
-                creationflags = 0
-                if sys.platform == "win32":
-                    # Use getattr for Windows-only subprocess attributes
-                    STARTUPINFO = getattr(subprocess, "STARTUPINFO", None)
-                    if STARTUPINFO:
-                        startupinfo = STARTUPINFO()
-                        startupinfo.dwFlags |= getattr(subprocess, "STARTF_USESHOWWINDOW", 0)
-                        startupinfo.wShowWindow = getattr(subprocess, "SW_HIDE", 0)
-                        creationflags = getattr(subprocess, "CREATE_NO_WINDOW", 0)
+                startupinfo, creationflags = get_windows_subprocess_startupinfo()
 
                 # Start the process, redirect stderr to stdout
                 process = subprocess.Popen(
@@ -297,9 +286,10 @@ class AbAv1Wrapper:
                 logger.info(f"ab-av1 process {process.pid} started. Reading output...")
                 current_output_lines = []
 
+                assert process.stdout is not None  # Guaranteed by stdout=PIPE  # noqa: S101
                 try:
-                    for line in iter(process.stdout.readline, ""):
-                        line = line.strip()
+                    for raw_line in iter(process.stdout.readline, ""):
+                        line = raw_line.strip()
                         if not line:
                             continue
 
@@ -332,12 +322,12 @@ class AbAv1Wrapper:
                 final_poll_code = process.poll()
                 logger.info(f"Status check after pipe reading: process.poll() returned {final_poll_code}")
 
-                # Close file handles
+                # Close file handles (stderr is None when using STDOUT redirect)
                 try:
-                    process.stdout.close()
-                    process.stderr.close()
+                    if process.stdout:
+                        process.stdout.close()
                 except Exception as e:
-                    logger.warning(f"Error closing process pipes: {e}")
+                    logger.warning(f"Error closing process stdout pipe: {e}")
 
                 # Get the final return code
                 if final_poll_code is None:
@@ -348,7 +338,7 @@ class AbAv1Wrapper:
                         return_code = process.wait(timeout=30)  # Wait up to 30 seconds
                         logger.info(f"Process completed with return code {return_code}")
                     except subprocess.TimeoutExpired:
-                        logger.error("Process did not complete within timeout period, forcing termination")
+                        logger.exception("Process did not complete within timeout period, forcing termination")
                         process.terminate()
                         time.sleep(1)
                         if process.poll() is None:
@@ -371,8 +361,8 @@ class AbAv1Wrapper:
                     ) from read_loop_exception
 
             except FileNotFoundError as e:
-                error_msg = f"Executable not found: {self.executable_path} - {e}"
-                logger.error(error_msg)
+                error_msg = f"Executable not found: {self.executable_path}"
+                logger.exception(error_msg)
                 if self.file_info_callback:
                     self.file_info_callback(
                         os.path.basename(input_path), "failed", {"message": error_msg, "type": "executable_not_found"}
@@ -381,8 +371,8 @@ class AbAv1Wrapper:
 
             except Exception as e:
                 # Catch exceptions from Popen or the loop exception re-raised above
-                error_msg = f"Failed to start or manage process during VMAF {current_vmaf_target}: {e!s}"
-                logger.error(error_msg, exc_info=True)
+                error_msg = f"Failed to start or manage process during VMAF {current_vmaf_target}"
+                logger.exception(error_msg)
 
                 if self.file_info_callback:
                     self.file_info_callback(
@@ -448,7 +438,10 @@ class AbAv1Wrapper:
                     # Check if this is the last attempt (minimum VMAF reached)
                     if current_vmaf_target <= MIN_VMAF_FALLBACK_TARGET:
                         # This means conversion isn't worthwhile
-                        error_msg = f"No efficient conversion possible - CRF search failed even at VMAF {MIN_VMAF_FALLBACK_TARGET}"
+                        error_msg = (
+                            f"No efficient conversion possible - CRF search failed even at "
+                            f"VMAF {MIN_VMAF_FALLBACK_TARGET}"
+                        )
                         logger.info(f"File not worth converting: {anonymized_input_path}")
 
                         if self.file_info_callback:
@@ -507,7 +500,8 @@ class AbAv1Wrapper:
                     else ["<No output captured>"],
                 }
                 logger.warning(
-                    f"[Attempt VMAF {current_vmaf_target}] Failed (rc={return_code}): {error_details} (Type: {error_type})"
+                    f"[Attempt VMAF {current_vmaf_target}] Failed (rc={return_code}): "
+                    f"{error_details} (Type: {error_type})"
                 )
 
                 # Handle fallback for CRF search failures
@@ -535,7 +529,8 @@ class AbAv1Wrapper:
                 logger.error(error_msg)
                 logger.error(f"Last Cmd: {last_error_info['command']}")
                 logger.error(
-                    f"Last Output tail ({len(last_error_info['output_tail'])} lines):\n{''.join(last_error_info['output_tail'])}"
+                    f"Last Output tail ({len(last_error_info['output_tail'])} lines):\n"
+                    f"{''.join(last_error_info['output_tail'])}"
                 )
 
                 if self.file_info_callback:
@@ -583,7 +578,8 @@ class AbAv1Wrapper:
 
         # --- Success Path ---
         logger.info(
-            f"ab-av1 completed successfully for {anonymized_input_path} (used VMAF target {stats.get('vmaf_target_used', '?')})"
+            f"ab-av1 completed successfully for {anonymized_input_path} "
+            f"(used VMAF target {stats.get('vmaf_target_used', '?')})"
         )
         stats = self.parser.parse_final_output(full_output_text, stats)
 
@@ -612,7 +608,9 @@ class AbAv1Wrapper:
         # --- Completion Callback ---
         if self.file_info_callback:
             final_stats_for_callback = {
-                "message": f"Complete (VMAF {stats.get('vmaf', 'N/A'):.2f} @ Target {stats.get('vmaf_target_used', '?')})",
+                "message": (
+                    f"Complete (VMAF {stats.get('vmaf', 'N/A'):.2f} @ Target {stats.get('vmaf_target_used', '?')})"
+                ),
                 "vmaf": stats.get("vmaf"),
                 "crf": stats.get("crf"),
                 "vmaf_target_used": stats.get("vmaf_target_used"),
