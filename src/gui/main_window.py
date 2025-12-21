@@ -10,8 +10,10 @@ import multiprocessing
 import os  # Added import
 import sys
 import tkinter as tk
+import webbrowser
 from tkinter import messagebox, ttk
 
+from src.ab_av1.checker import check_ab_av1_latest_github, get_ab_av1_version
 from src.gui.conversion_controller import force_stop_conversion, start_conversion, stop_conversion
 from src.gui.gui_actions import (
     browse_input_folder,
@@ -28,7 +30,16 @@ from src.gui.tabs.main_tab import create_main_tab
 from src.gui.tabs.settings_tab import create_settings_tab
 
 # Import setup_logging only needed here now - Replace 'convert_app' with 'src'
-from src.utils import get_script_directory, scrub_history_paths, scrub_log_files, setup_logging
+from src.utils import (
+    check_ffmpeg_availability,
+    check_ffmpeg_latest_btbn,
+    check_ffmpeg_latest_gyan,
+    get_script_directory,
+    parse_ffmpeg_version,
+    scrub_history_paths,
+    scrub_log_files,
+    setup_logging,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -408,6 +419,109 @@ class VideoConverterGUI:
                 f"Anonymized {modified} log files.\n\n"
                 f"{unchanged} file(s) were already anonymized or contained no paths.",
             )
+
+    def on_check_ab_av1_updates(self):
+        """Check GitHub for the latest ab-av1 version and update the label."""
+        # Reset label state
+        self._reset_update_label()
+        self.ab_av1_update_label.config(text="Checking...", foreground="gray")
+        self.root.update_idletasks()
+
+        local_version = get_ab_av1_version()
+        latest_version, release_url, message = check_ab_av1_latest_github()
+
+        if latest_version is None:
+            self.ab_av1_update_label.config(text=message, foreground="red")
+            return
+
+        if local_version is None:
+            self.ab_av1_update_label.config(text=f"Latest: {latest_version}", foreground="gray")
+            return
+
+        # Compare versions
+        if local_version == latest_version:
+            self.ab_av1_update_label.config(text=f"Up to date ({latest_version})", foreground="green")
+        else:
+            # Make the label clickable to open the release page
+            self.ab_av1_update_label.config(
+                text=f"Update available: {latest_version}",
+                foreground="blue",
+                cursor="hand2",
+                font=("TkDefaultFont", 9, "underline"),
+            )
+            # Bind click to open release URL
+            self.ab_av1_update_label.bind("<Button-1>", lambda e: webbrowser.open(release_url))
+
+    def _reset_update_label(self):
+        """Reset the update label to non-clickable state."""
+        self.ab_av1_update_label.config(cursor="", font=("TkDefaultFont", 9))
+        self.ab_av1_update_label.unbind("<Button-1>")
+
+    def on_check_ffmpeg_updates(self):
+        """Check GitHub for the latest FFmpeg version and update the label."""
+        if not self.ffmpeg_update_label or not self.ffmpeg_source:
+            return
+
+        # Reset label state
+        self._reset_ffmpeg_update_label()
+        self.ffmpeg_update_label.config(text="Checking...", foreground="gray")
+        self.root.update_idletasks()
+
+        # Get local version
+        _, _, version_string, _ = check_ffmpeg_availability()
+        local_version, _, _ = parse_ffmpeg_version(version_string)
+
+        # Check GitHub based on detected source
+        if self.ffmpeg_source == "gyan.dev":
+            latest_version, release_url, message = check_ffmpeg_latest_gyan()
+        elif self.ffmpeg_source == "BtbN":
+            latest_version, release_url, message = check_ffmpeg_latest_btbn()
+        else:
+            self.ffmpeg_update_label.config(text="Unknown source", foreground="red")
+            return
+
+        if latest_version is None:
+            self.ffmpeg_update_label.config(text=message, foreground="red")
+            return
+
+        # For BtbN, we can't compare versions (date-based tags), so just show latest and link
+        if self.ffmpeg_source == "BtbN":
+            # Extract display date from tag like "autobuild-2025-12-18-12-50" -> "2025-12-18"
+            if "autobuild" in latest_version:
+                display_tag = latest_version.replace("autobuild-", "").rsplit("-", 2)[0]
+            else:
+                display_tag = latest_version
+            self.ffmpeg_update_label.config(
+                text=f"Latest: {display_tag}",
+                foreground="blue",
+                cursor="hand2",
+                font=("TkDefaultFont", 9, "underline"),
+            )
+            self.ffmpeg_update_label.bind("<Button-1>", lambda e: webbrowser.open(release_url))
+            return
+
+        # For gyan.dev, we can compare semantic versions
+        if local_version is None:
+            self.ffmpeg_update_label.config(text=f"Latest: {latest_version}", foreground="gray")
+            return
+
+        if local_version == latest_version:
+            self.ffmpeg_update_label.config(text=f"Up to date ({latest_version})", foreground="green")
+        else:
+            # Make the label clickable to open the release page
+            self.ffmpeg_update_label.config(
+                text=f"Update available: {latest_version}",
+                foreground="blue",
+                cursor="hand2",
+                font=("TkDefaultFont", 9, "underline"),
+            )
+            self.ffmpeg_update_label.bind("<Button-1>", lambda e: webbrowser.open(release_url))
+
+    def _reset_ffmpeg_update_label(self):
+        """Reset the FFmpeg update label to non-clickable state."""
+        if self.ffmpeg_update_label:
+            self.ffmpeg_update_label.config(cursor="", font=("TkDefaultFont", 9))
+            self.ffmpeg_update_label.unbind("<Button-1>")
 
     def on_start_conversion(self):
         start_conversion(self)

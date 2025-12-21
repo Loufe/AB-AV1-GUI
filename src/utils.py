@@ -14,8 +14,10 @@ import shutil
 import subprocess
 import sys  # Needed for sys.argv access
 import tkinter as tk
+import urllib.request
 from logging.handlers import RotatingFileHandler
 from typing import Any, Callable
+from urllib.error import URLError
 
 # Logging setup
 logger = logging.getLogger(__name__)
@@ -632,6 +634,127 @@ def check_ffmpeg_availability() -> tuple:
         return True, False, None, str(e)
 
 
+# GitHub API endpoints for FFmpeg builds
+FFMPEG_GYAN_GITHUB_API = "https://api.github.com/repos/GyanD/codexffmpeg/releases/latest"
+FFMPEG_BTBN_GITHUB_API = "https://api.github.com/repos/BtbN/FFmpeg-Builds/releases/latest"
+
+
+def parse_ffmpeg_version(version_string: str | None) -> tuple[str | None, str | None, str | None]:
+    """Parse FFmpeg version string to extract version number, source, and build type.
+
+    Args:
+        version_string: Full version string like "ffmpeg version 7.1.1-full_build-www.gyan.dev ..."
+
+    Returns:
+        Tuple of (version, source, build_type) where:
+        - version: Version number (e.g., "7.1.1") or None
+        - source: Detected source ("gyan.dev", "BtbN", or None for unknown)
+        - build_type: Build variant ("full", "essentials", etc.) or None
+    """
+    if not version_string:
+        return None, None, None
+
+    # Extract version number - pattern: "ffmpeg version X.Y.Z" or "ffmpeg version N-xxxxx"
+    match = re.search(r"ffmpeg version (\d+\.\d+(?:\.\d+)?)", version_string, re.IGNORECASE)
+    version = match.group(1) if match else None
+
+    # Detect source and build type
+    source = None
+    build_type = None
+    if "gyan.dev" in version_string.lower():
+        source = "gyan.dev"
+        # Extract build type: "full_build", "essentials_build", etc.
+        build_match = re.search(r"(full|essentials)(?:[_-]build)?", version_string.lower())
+        if build_match:
+            build_type = build_match.group(1)
+    elif "btbn" in version_string.lower():
+        source = "BtbN"
+
+    return version, source, build_type
+
+
+def check_ffmpeg_latest_gyan() -> tuple[str | None, str | None, str]:
+    """Check GyanD's GitHub for the latest FFmpeg release version.
+
+    This function makes a network request and should only be called
+    when the user explicitly requests a version check.
+
+    Returns:
+        Tuple of (latest_version, release_url, message) where:
+        - latest_version: Version string (e.g., "8.0.1") or None on error
+        - release_url: URL to the release page, or None on error
+        - message: Descriptive message about the result
+    """
+    try:
+        request = urllib.request.Request(  # noqa: S310 - hardcoded https URL is safe
+            FFMPEG_GYAN_GITHUB_API,
+            headers={"Accept": "application/vnd.github.v3+json", "User-Agent": "Auto-AV1-Converter"},
+        )
+        with urllib.request.urlopen(request, timeout=10) as response:  # noqa: S310
+            data = json.loads(response.read().decode("utf-8"))
+            tag_name = data.get("tag_name", "")
+            html_url = data.get("html_url", "")
+
+            # Tag should be version like "8.0.1"
+            version = tag_name.lstrip("v") if tag_name else None
+
+            if version:
+                return version, html_url, f"Latest version: {version}"
+            return None, None, "Could not parse version from GitHub response"
+
+    except URLError as e:
+        logger.warning(f"Failed to check GitHub for FFmpeg updates: {e}")
+        return None, None, f"Network error: {e.reason}"
+    except json.JSONDecodeError as e:
+        logger.warning(f"Failed to parse GitHub response: {e}")
+        return None, None, "Failed to parse GitHub response"
+    except Exception as e:
+        logger.warning(f"Unexpected error checking GitHub: {e}")
+        return None, None, f"Error: {e}"
+
+
+def check_ffmpeg_latest_btbn() -> tuple[str | None, str | None, str]:
+    """Check BtbN's GitHub for the latest FFmpeg build.
+
+    BtbN uses date-based tags (e.g., "autobuild-2025-12-18-12-50") rather than
+    semantic versions, so we just return the tag for display without comparison.
+
+    Returns:
+        Tuple of (latest_tag, release_url, message) where:
+        - latest_tag: Tag name (e.g., "autobuild-2025-12-18-12-50") or None on error
+        - release_url: URL to the release page, or None on error
+        - message: Descriptive message about the result
+    """
+    try:
+        request = urllib.request.Request(  # noqa: S310 - hardcoded https URL is safe
+            FFMPEG_BTBN_GITHUB_API,
+            headers={"Accept": "application/vnd.github.v3+json", "User-Agent": "Auto-AV1-Converter"},
+        )
+        with urllib.request.urlopen(request, timeout=10) as response:  # noqa: S310
+            data = json.loads(response.read().decode("utf-8"))
+            tag_name = data.get("tag_name", "")
+            html_url = data.get("html_url", "")
+
+            if tag_name:
+                # Extract date from tag like "autobuild-2025-12-18-12-50"
+                if "autobuild" in tag_name:
+                    display_name = tag_name.replace("autobuild-", "").rsplit("-", 2)[0]
+                else:
+                    display_name = tag_name
+                return tag_name, html_url, f"Latest: {display_name}"
+            return None, None, "Could not parse release from GitHub response"
+
+    except URLError as e:
+        logger.warning(f"Failed to check GitHub for BtbN FFmpeg updates: {e}")
+        return None, None, f"Network error: {e.reason}"
+    except json.JSONDecodeError as e:
+        logger.warning(f"Failed to parse GitHub response: {e}")
+        return None, None, "Failed to parse GitHub response"
+    except Exception as e:
+        logger.warning(f"Unexpected error checking GitHub: {e}")
+        return None, None, f"Error: {e}"
+
+
 # For UI updates
 def update_ui_safely(root: tk.Tk, update_function: Callable[..., Any], *args: Any, **kwargs: Any) -> None:
     """Thread-safe UI update with extra safety checks and logging.
@@ -644,13 +767,10 @@ def update_ui_safely(root: tk.Tk, update_function: Callable[..., Any], *args: An
     """
     if root and root.winfo_exists():
         try:
-            # Create a wrapper to capture what we're updating
+            # Create a wrapper to catch errors in UI updates
             def _safe_update_wrapper():
                 try:
-                    result = update_function(*args, **kwargs)
-                    func_name = update_function.__name__ if hasattr(update_function, "__name__") else "lambda"
-                    logger.debug(f"UI update successful: {func_name}")
-                    return result
+                    return update_function(*args, **kwargs)
                 except Exception:
                     func_name = update_function.__name__ if hasattr(update_function, "__name__") else "lambda"
                     logger.exception(f"Error in UI update function {func_name}")
@@ -660,8 +780,6 @@ def update_ui_safely(root: tk.Tk, update_function: Callable[..., Any], *args: An
         except Exception:
             func_name = update_function.__name__ if hasattr(update_function, "__name__") else "lambda"
             logger.exception(f"Error scheduling UI update for {func_name}")
-    else:
-        logger.debug("Skipped UI update: root widget invalid or destroyed")
 
 
 def log_conversion_result(input_path: str, output_path: str, elapsed_time: float) -> None:

@@ -328,7 +328,6 @@ def update_total_remaining_time(gui) -> None:
         total_remaining = estimate_remaining_time(gui, current_file_info)
         remaining_str = format_time(total_remaining) if total_remaining > 0 else "Calculating..."
 
-        logger.debug(f"Total remaining time: {total_remaining}s, display: {remaining_str}")
         update_ui_safely(gui.root, lambda r=remaining_str: gui.total_remaining_label.config(text=r))
     except Exception:
         logger.exception("Error updating total remaining time")

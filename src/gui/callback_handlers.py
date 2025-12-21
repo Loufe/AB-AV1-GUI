@@ -180,14 +180,11 @@ def handle_completed(gui, filename, info) -> None:
     log_msg = f"Successfully converted {anonymized_name}"
 
     # Extract values from info dict or fall back to gui attributes
-    # Note: ConversionResult would need input_path and elapsed_seconds which aren't in info dict,
-    # so we'll just extract the fields we need rather than constructing a full ConversionResult here
     vmaf_value = info.get("vmaf")
     crf_value = info.get("crf")
     original_size = getattr(gui, "last_input_size", None)
     # Get final output size directly from info (more reliable than gui attribute)
     output_size = info.get("output_size")
-    elapsed_time = getattr(gui, "last_elapsed_time", None)  # Get from GUI state set by worker
 
     # Update VMAF stats (thread-safe)
     if vmaf_value is not None:
@@ -227,18 +224,9 @@ def handle_completed(gui, filename, info) -> None:
     # Update the final size label in UI
     update_ui_safely(gui.root, lambda s=size_str: gui.output_size_label.config(text=s))
 
-    # Update total bytes and time stats (used for final summary) - thread-safe
-    if elapsed_time is not None and original_size is not None and output_size is not None:
-        try:
-
-            def update_totals():
-                gui.total_input_bytes_success += original_size
-                gui.total_output_bytes_success += output_size
-                gui.total_time_success += elapsed_time
-
-            update_ui_safely(gui.root, update_totals)
-        except TypeError as e:
-            logger.warning(f"Type error updating totals for {anonymized_name}: {e}")
+    # Note: Total bytes/time stats are updated by the worker (conversion_engine/worker.py)
+    # after process_video returns, since elapsed_time isn't available when this callback
+    # is dispatched from within the wrapper.
 
     # Log completion message and update summary statistics display
     logger.info(log_msg)

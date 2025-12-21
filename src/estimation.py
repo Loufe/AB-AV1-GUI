@@ -107,9 +107,7 @@ def estimate_current_file_eta(gui: Any) -> float:
     # Check for stored AB-AV1 ETA first (most accurate)
     if hasattr(gui, "last_eta_seconds") and hasattr(gui, "last_eta_timestamp"):
         elapsed_since_update = time.time() - gui.last_eta_timestamp
-        current_eta = max(0, gui.last_eta_seconds - elapsed_since_update)
-        logger.debug(f"Using AB-AV1 ETA: {current_eta}s for current file")
-        return current_eta
+        return max(0, gui.last_eta_seconds - elapsed_since_update)
 
     # Fallback to calculation based on progress
     encoding_prog = getattr(gui, "last_encoding_progress", 0)
@@ -162,26 +160,19 @@ def get_file_processing_estimate(file_path: str, history: list | None = None) ->
     similar_file = find_similar_file_in_history({"codec": file_codec, "duration": file_duration, "size": file_size})
 
     if similar_file:
-        time_est = similar_file.get("time_sec", 0)
-        logger.debug(f"Found similar file for {file_path}, estimated time: {time_est}s")
-        return time_est
+        return similar_file.get("time_sec", 0)
 
     # Use average processing speed as fallback
     avg_speed = estimate_processing_speed_from_history()
     if avg_speed > 0 and file_size > 0:
-        time_est = file_size / avg_speed
-        logger.debug(f"Using average speed for {file_path}, estimated time: {time_est}s")
-        return time_est
+        return file_size / avg_speed
 
     # If no historical data, use rough estimate of 1 GB per hour
     if file_size > 0:
         rough_speed = (1024**3) / 3600  # 1 GB per hour
-        time_est = file_size / rough_speed
-        logger.debug(f"No history - using rough estimate for {file_path}, estimated time: {time_est}s")
-        return time_est
+        return file_size / rough_speed
 
     # Default fallback - assume 30 minutes if no size available
-    logger.debug(f"No size for {file_path}, using default 30 minutes")
     return 1800
 
 
@@ -214,14 +205,12 @@ def estimate_pending_files_eta(gui: Any, pending_files: list) -> float:
 
         # Skip if this is the current file and it's already being encoded
         if normalized_file_path == current_path and current_file_handled:
-            logger.debug(f"Skipping current file {file_path} - already in encoding phase")
             continue
 
         # Estimate time for this file
         file_estimate = get_file_processing_estimate(file_path)
         total_time += file_estimate
 
-    logger.debug(f"Estimated {total_time}s for {len(pending_files)} pending files")
     return total_time
 
 
@@ -243,12 +232,10 @@ def estimate_remaining_time(gui: Any, current_file_info: dict | None = None) -> 
     current_file_eta = estimate_current_file_eta(gui)
     if current_file_eta > 0:
         remaining_time += current_file_eta
-        logger.debug("Current file ETA: %ss", current_file_eta)
 
     # Add ETA for pending files
     pending_files = getattr(gui, "pending_files", [])
     pending_eta = estimate_pending_files_eta(gui, pending_files)
     remaining_time += pending_eta
 
-    logger.debug("Total estimated remaining time: %ss", remaining_time)
     return remaining_time

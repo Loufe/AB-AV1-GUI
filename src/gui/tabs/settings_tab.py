@@ -3,14 +3,12 @@
 Settings tab module for the AV1 Video Converter application.
 """
 
-import logging  # Added for logging
+import logging
 from tkinter import ttk
 
-# Project imports - Replace 'convert_app' with 'src'
+from src.ab_av1.checker import get_ab_av1_version
 from src.gui.base import ToolTip
-
-# Import operations functions needed for this tab
-# No longer needed as commands are methods on gui instance pointing to imported functions
+from src.utils import check_ffmpeg_availability, parse_ffmpeg_version
 
 logger = logging.getLogger(__name__)
 
@@ -19,6 +17,7 @@ def create_settings_tab(gui):
     """Create the settings tab"""
     settings_frame = ttk.Frame(gui.settings_tab)
     settings_frame.pack(fill="both", expand=True, padx=10, pady=10)
+    settings_frame.columnconfigure(0, weight=1)  # Allow LabelFrames to expand horizontally
 
     # --- General Settings ---
     general_frame = ttk.LabelFrame(settings_frame, text="General")
@@ -157,3 +156,66 @@ def create_settings_tab(gui):
         "Permanently anonymize all existing file paths in the history file. "
         "This cannot be undone.",
     )
+
+    # --- Version Info ---
+    version_frame = ttk.LabelFrame(settings_frame, text="Version Info")
+    version_frame.grid(row=3, column=0, sticky="ew", padx=5, pady=(0, 10))
+
+    # Get local ab-av1 version
+    local_version = get_ab_av1_version() or "Not found"
+
+    # ab-av1 version row
+    ab_av1_frame = ttk.Frame(version_frame)
+    ab_av1_frame.grid(row=0, column=0, sticky="w", padx=10, pady=(10, 10))
+
+    ttk.Label(ab_av1_frame, text="ab-av1 Version:").pack(side="left", padx=(0, 5))
+    ttk.Label(ab_av1_frame, text=local_version, font=("TkDefaultFont", 9, "bold")).pack(side="left", padx=(0, 15))
+
+    check_update_btn = ttk.Button(ab_av1_frame, text="Check for Updates", command=gui.on_check_ab_av1_updates)
+    check_update_btn.pack(side="left", padx=(0, 10))
+    ToolTip(
+        check_update_btn,
+        "Check GitHub for the latest ab-av1 release.\n"
+        "This will make a network request to api.github.com.\n"
+        "If an update is available, click the link to open the release page.",
+    )
+
+    # Label to show update check result (initially empty)
+    gui.ab_av1_update_label = ttk.Label(ab_av1_frame, text="")
+    gui.ab_av1_update_label.pack(side="left")
+
+    # FFmpeg version row
+    ffmpeg_frame = ttk.Frame(version_frame)
+    ffmpeg_frame.grid(row=1, column=0, sticky="w", padx=10, pady=(0, 10))
+
+    # Get FFmpeg version info
+    _, _, ffmpeg_version_string, _ = check_ffmpeg_availability()
+    ffmpeg_version, ffmpeg_source, ffmpeg_build = parse_ffmpeg_version(ffmpeg_version_string)
+    ffmpeg_display = ffmpeg_version or "Not found"
+    if ffmpeg_source:
+        source_info = ffmpeg_source
+        if ffmpeg_build:
+            source_info += f" {ffmpeg_build}"
+        ffmpeg_display += f" ({source_info})"
+
+    ttk.Label(ffmpeg_frame, text="FFmpeg Version:").pack(side="left", padx=(0, 5))
+    ttk.Label(ffmpeg_frame, text=ffmpeg_display, font=("TkDefaultFont", 9, "bold")).pack(side="left", padx=(0, 15))
+
+    # Show check button for supported sources (gyan.dev and BtbN)
+    if ffmpeg_source in ("gyan.dev", "BtbN"):
+        check_ffmpeg_btn = ttk.Button(ffmpeg_frame, text="Check for Updates", command=gui.on_check_ffmpeg_updates)
+        check_ffmpeg_btn.pack(side="left", padx=(0, 10))
+        tooltip_text = f"Check GitHub for the latest FFmpeg release from {ffmpeg_source}.\n"
+        tooltip_text += "This will make a network request to api.github.com.\n"
+        if ffmpeg_source == "gyan.dev":
+            tooltip_text += "If an update is available, click the link to open the release page."
+        else:
+            tooltip_text += "Click the link to open the releases page."
+        ToolTip(check_ffmpeg_btn, tooltip_text)
+
+        gui.ffmpeg_update_label = ttk.Label(ffmpeg_frame, text="")
+        gui.ffmpeg_update_label.pack(side="left")
+        gui.ffmpeg_source = ffmpeg_source  # Store for use in handler
+    else:
+        gui.ffmpeg_update_label = None
+        gui.ffmpeg_source = None

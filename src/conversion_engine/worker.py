@@ -341,6 +341,21 @@ def sequential_conversion_worker(
 
         if process_successful:
             gui.successful_conversions += 1
+            # Note: The "completed" callback is already dispatched by the wrapper (ab_av1/wrapper.py)
+            # before returning, so we don't call it again here to avoid double-counting statistics.
+            # However, we DO need to update the totals here because the wrapper's callback fires
+            # before we have elapsed_time available (it's calculated after process_video returns).
+            if original_size and output_size and elapsed_time_file:
+
+                def update_totals_from_worker(
+                    inp_size=original_size, out_size=output_size, elapsed=elapsed_time_file
+                ):
+                    gui.total_input_bytes_success += inp_size
+                    gui.total_output_bytes_success += out_size
+                    gui.total_time_success += elapsed
+
+                update_ui_safely(gui.root, update_totals_from_worker)
+
             try:  # Append to History
                 anonymize_hist = gui.anonymize_history.get()
                 input_path_for_hist = anonymize_filename(video_path) if anonymize_hist else video_path
@@ -371,10 +386,6 @@ def sequential_conversion_worker(
                 append_to_history(dataclasses.asdict(hist_record))
             except Exception:
                 logger.exception(f"Failed to append to history for {anonymized_name}")
-            # Dispatch completed callback *after* history attempt
-            # Pass necessary info for the handler
-            completed_info = {"vmaf": final_vmaf, "crf": final_crf, "output_size": output_size}
-            file_event_callback(filename, "completed", completed_info)
         else:
             # Error handling is done via the callback dispatcher calling handle_error
             pass

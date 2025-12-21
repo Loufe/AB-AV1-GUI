@@ -293,27 +293,12 @@ class AbAv1Wrapper:
                         if not line:
                             continue
 
-                        # Filter out sled::pagecache trace messages
-                        if "sled::pagecache" in line and "TRACE" in line:
-                            logger.debug(f"Filtered sled trace: {line}")
+                        # Filter out sled::pagecache trace messages (internal Rust crate noise)
+                        if "sled::pagecache" in line:
                             continue
-
-                        # Special handling for progress information
-                        if "%" in line:
-                            logger.info(f"PROGRESS: {line}")
-                        elif any(
-                            term in line.lower()
-                            for term in ["frame", "fps", "speed", "time=", "bitrate", "progress", "eta", "encoding"]
-                        ):
-                            logger.info(f"POTENTIAL_PROGRESS: {line}")
-                        else:
-                            logger.debug(f"OUTPUT: {line}")
 
                         current_output_lines.append(line + "\n")
                         stats = self.parser.parse_line(line, stats)  # Process every line
-
-                    # Loop finished normally (EOF reached)
-                    logger.info("Pipe reading loop finished (EOF reached normally).")
                 except Exception as loop_err:
                     read_loop_exception = loop_err
                     logger.error(f"Exception in read loop: {loop_err}", exc_info=True)

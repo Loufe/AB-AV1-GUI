@@ -268,13 +268,9 @@ def process_video(
         )
 
     except ConversionNotWorthwhileError as e:
+        # Note: The wrapper already called the file_info_callback with "skipped_not_worth"
+        # before raising this exception, so we don't call it again here to avoid double-counting
         logger.info(f"Conversion not worthwhile for {anonymized_input_name}: {e}")
-        if file_info_callback:
-            file_info_callback(
-                input_path.name,
-                "skipped_not_worth",
-                {"message": str(e), "type": "conversion_not_worthwhile", "original_size": input_size},
-            )
         return None  # Return None like other skipped files, not an error
     except (InputFileError, OutputFileError, VMAFError, EncodingError, AbAv1Error) as e:
         # These errors are logged by the wrapper or dispatcher, just return None
