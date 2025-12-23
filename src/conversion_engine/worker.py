@@ -4,7 +4,6 @@ Contains the main worker thread function for sequential video conversion.
 """
 
 # Standard library imports
-import dataclasses
 import datetime  # For history timestamp
 import logging
 import os
@@ -15,14 +14,10 @@ from pathlib import Path
 from typing import Callable  # Import Callable
 
 # Project imports
-from src.models import ConversionConfig, HistoryRecord
-from src.utils import (
-    anonymize_filename,
-    append_to_history,
-    format_file_size,
-    get_video_info,
-    update_ui_safely,
-)
+from src.config import DEFAULT_VMAF_TARGET
+from src.history_index import compute_path_hash, get_history_index
+from src.models import ConversionConfig, FileRecord, FileStatus
+from src.utils import anonymize_filename, format_file_size, get_video_info, update_ui_safely
 from src.video_conversion import process_video
 
 # Import functions/modules from the engine package
@@ -56,20 +51,30 @@ def sequential_conversion_worker(
         pid_storage_callback: Function to call to store the process ID (e.g., store_process_id(gui, pid, path)).
         completion_callback: Function to call when the worker finishes (e.g., conversion_complete(gui, message)).
     """
-    gui.output_folder_path = config.output_folder  # Store for potential cleanup use later
+    update_ui_safely(gui.root, lambda: setattr(gui.session, "output_folder_path", config.output_folder))
     logger.info(f"Worker started. Input: '{config.input_folder}', Output: '{config.output_folder}'")
+
+    # Capture Tkinter variable value safely from main thread (thread-safety fix)
+    anonymize_history_value = [None]  # Use list for mutability in closure
+
+    def capture_anonymize_setting():
+        anonymize_history_value[0] = gui.anonymize_history.get()
+
+    update_ui_safely(gui.root, capture_anonymize_setting)
+    # Wait briefly to ensure the value is captured (the after() call is async)
+    time.sleep(0.01)
 
     # Initialize conversion state variables (thread-safe)
     def init_state():
-        gui.error_count = 0
-        gui.total_input_bytes_success = 0
-        gui.total_output_bytes_success = 0
-        gui.total_time_success = 0
-        gui.skipped_not_worth_count = 0  # Track files skipped because conversion isn't beneficial
-        gui.skipped_not_worth_files = []  # Track filenames of skipped files
-        gui.skipped_low_resolution_count = 0  # Track files skipped due to low resolution
-        gui.skipped_low_resolution_files = []  # Track filenames of low resolution files
-        gui.error_details = []  # Track error details for summary
+        gui.session.error_count = 0
+        gui.session.total_input_bytes_success = 0
+        gui.session.total_output_bytes_success = 0
+        gui.session.total_time_success = 0
+        gui.session.skipped_not_worth_count = 0  # Track files skipped because conversion isn't beneficial
+        gui.session.skipped_not_worth_files = []  # Track filenames of skipped files
+        gui.session.skipped_low_resolution_count = 0  # Track files skipped due to low resolution
+        gui.session.skipped_low_resolution_files = []  # Track filenames of low resolution files
+        gui.session.error_details = []  # Track error details for summary
 
     update_ui_safely(gui.root, init_state)
 
@@ -153,8 +158,8 @@ def sequential_conversion_worker(
                 if "Below minimum resolution" in reason:
 
                     def update_low_res_skip(fn=filename):
-                        gui.skipped_low_resolution_count += 1
-                        gui.skipped_low_resolution_files.append(fn)
+                        gui.session.skipped_low_resolution_count += 1
+                        gui.session.skipped_low_resolution_files.append(fn)
 
                     update_ui_safely(gui.root, update_low_res_skip)
 
@@ -172,8 +177,8 @@ def sequential_conversion_worker(
     total_videos_to_process = len(files_to_process)
 
     def set_file_lists():
-        gui.video_files = files_to_process
-        gui.pending_files = files_to_process.copy()  # Create a copy for tracking remaining files
+        gui.session.video_files = files_to_process
+        gui.session.pending_files = files_to_process.copy()  # Create a copy for tracking remaining files
 
     update_ui_safely(gui.root, set_file_lists)
 
@@ -194,8 +199,8 @@ def sequential_conversion_worker(
         gui.root, lambda t=total_videos_to_process: gui.status_label.config(text=f"Starting conversion of {t} files...")
     )
 
-    gui.processed_files = 0
-    gui.successful_conversions = 0
+    update_ui_safely(gui.root, lambda: setattr(gui.session, "processed_files", 0))
+    update_ui_safely(gui.root, lambda: setattr(gui.session, "successful_conversions", 0))
 
     # --- File Processing Loop ---
     for video_path in files_to_process:
@@ -204,10 +209,10 @@ def sequential_conversion_worker(
             break  # Exit the loop
 
         # Store current file path for estimation
-        gui.current_file_path = video_path
+        update_ui_safely(gui.root, lambda vp=video_path: setattr(gui.session, "current_file_path", vp))
         logger.debug(f"Current file path set to: {video_path}")
 
-        file_number = gui.processed_files + 1
+        file_number = gui.session.processed_files + 1
         filename = os.path.basename(video_path)
         anonymized_name = anonymize_filename(video_path)
         update_ui_safely(
@@ -222,6 +227,8 @@ def sequential_conversion_worker(
         input_vcodec = "?"
         input_acodec = "?"
         input_duration = 0.0
+        input_width = None
+        input_height = None
         output_acodec = "?"  # Initialize output audio codec
 
         # --- Use Cached Video Info ---
@@ -244,6 +251,8 @@ def sequential_conversion_worker(
                     codec_type = stream.get("codec_type")
                     if codec_type == "video":
                         input_vcodec = stream.get("codec_name", "?").upper()
+                        input_width = stream.get("width")
+                        input_height = stream.get("height")
                     elif codec_type == "audio":
                         input_acodec = stream.get("codec_name", "?").upper()
                 format_info_text = f"{input_vcodec} / {input_acodec}"
@@ -258,23 +267,22 @@ def sequential_conversion_worker(
 
                 update_ui_safely(gui.root, lambda fi=format_info_text: gui.orig_format_label.config(text=fi))
                 update_ui_safely(gui.root, lambda ss=size_str: gui.orig_size_label.config(text=ss))
-                gui.last_input_size = original_size  # Store for potential use in handlers
+                update_ui_safely(gui.root, lambda os=original_size: setattr(gui.session, "last_input_size", os))
                 output_acodec = input_acodec  # Default output codec
             except Exception:
                 logger.exception(f"Error extracting details from video_info for {anonymized_name}")
-                gui.last_input_size = None
+                update_ui_safely(gui.root, lambda: setattr(gui.session, "last_input_size", None))
                 input_duration = 0.0
         else:
             logger.warning(f"Cannot get pre-conversion info for {anonymized_name}.")
-            gui.last_input_size = None
+            update_ui_safely(gui.root, lambda: setattr(gui.session, "last_input_size", None))
             input_duration = 0.0
 
-        gui.current_file_start_time = time.time()
-        gui.current_file_encoding_start_time = None
-        if not hasattr(gui, "elapsed_timer_id"):
-            gui.elapsed_timer_id = None
-        update_ui_safely(gui.root, elapsed_time_callback, gui.current_file_start_time)  # Start timer UI updates
-        gui.current_process_info = None  # Reset PID info for the new file
+        current_time = time.time()
+        update_ui_safely(gui.root, lambda t=current_time: setattr(gui.session, "current_file_start_time", t))
+        update_ui_safely(gui.root, lambda: setattr(gui.session, "current_file_encoding_start_time", None))
+        update_ui_safely(gui.root, elapsed_time_callback, gui.session.current_file_start_time)  # Start timer UI updates
+        update_ui_safely(gui.root, lambda: setattr(gui.session, "current_process_info", None))  # Reset PID info
 
         # --- Process Video ---
         process_successful = False
@@ -306,16 +314,16 @@ def sequential_conversion_worker(
                     result_tuple
                 )
                 process_successful = True
-                gui.last_output_size = output_size  # Store for use in handle_completed
-                gui.last_elapsed_time = elapsed_time_file  # Store for use in handle_completed
+                update_ui_safely(gui.root, lambda os=output_size: setattr(gui.session, "last_output_size", os))
+                update_ui_safely(gui.root, lambda et=elapsed_time_file: setattr(gui.session, "last_elapsed_time", et))
                 # Determine final audio codec based on conversion settings
                 if config.convert_audio and input_acodec.lower() not in ["aac", "opus"]:
                     output_acodec = config.audio_codec.lower()
                 # else: output_acodec remains input_acodec (set earlier)
             else:
                 # If process_video returns None, it means failure was reported via callback
-                gui.last_output_size = None
-                gui.last_elapsed_time = None
+                update_ui_safely(gui.root, lambda: setattr(gui.session, "last_output_size", None))
+                update_ui_safely(gui.root, lambda: setattr(gui.session, "last_elapsed_time", None))
                 process_successful = False  # Ensure state reflects failure
 
         except Exception as e:
@@ -325,70 +333,129 @@ def sequential_conversion_worker(
                 filename, "failed", {"message": f"Internal processing error: {e}", "type": "processing_crash"}
             )
             process_successful = False
-            gui.last_output_size = None
-            gui.last_elapsed_time = None
+            update_ui_safely(gui.root, lambda: setattr(gui.session, "last_output_size", None))
+            update_ui_safely(gui.root, lambda: setattr(gui.session, "last_elapsed_time", None))
 
         # --- Post-processing & History ---
-        gui.processed_files += 1
+        update_ui_safely(gui.root, lambda: setattr(gui.session, "processed_files", gui.session.processed_files + 1))
 
         # Remove file from pending list after processing is complete (thread-safe)
         def remove_from_pending(vpath=video_path):
-            if vpath in gui.pending_files:
-                gui.pending_files.remove(vpath)
-                logger.debug(f"Removed completed file {vpath} from pending files. Remaining: {len(gui.pending_files)}")
+            if vpath in gui.session.pending_files:
+                gui.session.pending_files.remove(vpath)
+                remaining = len(gui.session.pending_files)
+                logger.debug(f"Removed completed file {vpath} from pending files. Remaining: {remaining}")
 
         update_ui_safely(gui.root, remove_from_pending)
 
         if process_successful:
-            gui.successful_conversions += 1
+            update_ui_safely(
+                gui.root, lambda: setattr(gui.session, "successful_conversions", gui.session.successful_conversions + 1)
+            )
             # Note: The "completed" callback is already dispatched by the wrapper (ab_av1/wrapper.py)
             # before returning, so we don't call it again here to avoid double-counting statistics.
             # However, we DO need to update the totals here because the wrapper's callback fires
             # before we have elapsed_time available (it's calculated after process_video returns).
             if original_size and output_size and elapsed_time_file:
 
-                def update_totals_from_worker(
-                    inp_size=original_size, out_size=output_size, elapsed=elapsed_time_file
-                ):
-                    gui.total_input_bytes_success += inp_size
-                    gui.total_output_bytes_success += out_size
-                    gui.total_time_success += elapsed
+                def update_totals_from_worker(inp_size=original_size, out_size=output_size, elapsed=elapsed_time_file):
+                    gui.session.total_input_bytes_success += inp_size
+                    gui.session.total_output_bytes_success += out_size
+                    gui.session.total_time_success += elapsed
 
                 update_ui_safely(gui.root, update_totals_from_worker)
 
-            try:  # Append to History
-                anonymize_hist = gui.anonymize_history.get()
-                input_path_for_hist = anonymize_filename(video_path) if anonymize_hist else video_path
-                # Ensure output_file_path is a string before anonymizing, provide a placeholder if None
-                output_file_path_str = output_file_path if output_file_path is not None else "N/A"
-                output_path_for_hist = (
-                    anonymize_filename(output_file_path_str) if anonymize_hist else output_file_path_str
-                )
-                hist_record = HistoryRecord(
-                    timestamp=datetime.datetime.now().isoformat(sep=" ", timespec="seconds"),
-                    input_file=input_path_for_hist,
-                    output_file=output_path_for_hist,
-                    input_size_mb=round(original_size / (1024**2), 2) if original_size is not None else None,
-                    output_size_mb=round(output_size / (1024**2), 2) if output_size is not None else None,
+            try:  # Record to History Index
+                anonymize_hist = anonymize_history_value[0]
+                path_hash = compute_path_hash(video_path)
+                now = datetime.datetime.now().isoformat(sep=" ", timespec="seconds")
+
+                # Get file mtime for cache validation
+                try:
+                    file_mtime = os.path.getmtime(video_path)
+                except OSError:
+                    file_mtime = 0.0
+
+                # Prepare paths based on anonymization setting
+                original_path = None if anonymize_hist else video_path
+                output_path_str = None
+                if output_file_path:
+                    output_path_str = anonymize_filename(output_file_path) if anonymize_hist else output_file_path
+
+                record = FileRecord(
+                    path_hash=path_hash,
+                    original_path=original_path,
+                    status=FileStatus.CONVERTED,
+                    file_size_bytes=original_size,
+                    file_mtime=file_mtime,
+                    duration_sec=round(input_duration, 1) if input_duration else None,
+                    video_codec=input_vcodec.lower() if input_vcodec != "?" else None,
+                    audio_codec=input_acodec.lower() if input_acodec != "?" else None,
+                    width=input_width,
+                    height=input_height,
+                    output_path=output_path_str,
+                    output_size_bytes=output_size,
                     reduction_percent=round(100 - (output_size / original_size * 100), 1)
                     if original_size and output_size and original_size > 0
                     else None,
-                    duration_sec=round(input_duration, 1) if input_duration is not None else None,
-                    time_sec=round(elapsed_time_file, 1) if elapsed_time_file is not None else None,
-                    input_vcodec=input_vcodec,
-                    input_acodec=input_acodec,
-                    output_acodec=output_acodec,
-                    input_codec=input_vcodec,  # Duplicate for compatibility with estimation functions
+                    conversion_time_sec=round(elapsed_time_file, 1) if elapsed_time_file else None,
                     final_crf=final_crf,
                     final_vmaf=round(final_vmaf, 2) if final_vmaf is not None else None,
-                    final_vmaf_target=final_vmaf_target if final_vmaf_target is not None else 95,
+                    vmaf_target_used=final_vmaf_target if final_vmaf_target is not None else 95,
+                    output_audio_codec=output_acodec.lower() if output_acodec != "?" else None,
+                    first_seen=now,
+                    last_updated=now,
                 )
-                append_to_history(dataclasses.asdict(hist_record))
+                index = get_history_index()
+                index.upsert(record)
+                index.save()
             except Exception:
-                logger.exception(f"Failed to append to history for {anonymized_name}")
-        else:
-            # Error handling is done via the callback dispatcher calling handle_error
-            pass
+                logger.exception(f"Failed to record history for {anonymized_name}")
+        # Check if this was a NOT_WORTHWHILE skip and record to history
+        elif gui.session.last_skip_reason:
+            try:  # Record NOT_WORTHWHILE to History Index
+                anonymize_hist = anonymize_history_value[0]
+                path_hash = compute_path_hash(video_path)
+                now = datetime.datetime.now().isoformat(sep=" ", timespec="seconds")
+
+                # Get file mtime for cache validation
+                try:
+                    file_mtime = os.path.getmtime(video_path)
+                except OSError:
+                    file_mtime = 0.0
+
+                # Prepare path based on anonymization setting
+                original_path = None if anonymize_hist else video_path
+
+                record = FileRecord(
+                    path_hash=path_hash,
+                    original_path=original_path,
+                    status=FileStatus.NOT_WORTHWHILE,
+                    file_size_bytes=original_size,
+                    file_mtime=file_mtime,
+                    duration_sec=round(input_duration, 1) if input_duration else None,
+                    video_codec=input_vcodec.lower() if input_vcodec != "?" else None,
+                    audio_codec=input_acodec.lower() if input_acodec != "?" else None,
+                    width=input_width,
+                    height=input_height,
+                    vmaf_target_when_analyzed=DEFAULT_VMAF_TARGET,
+                    vmaf_target_attempted=DEFAULT_VMAF_TARGET,
+                    min_vmaf_attempted=gui.session.last_min_vmaf_attempted,
+                    skip_reason=gui.session.last_skip_reason,
+                    first_seen=now,
+                    last_updated=now,
+                )
+                index = get_history_index()
+                index.upsert(record)
+                index.save()
+                logger.info(f"Recorded NOT_WORTHWHILE status to history for {anonymized_name}")
+
+                # Clear the stored skip data
+                update_ui_safely(gui.root, lambda: setattr(gui.session, "last_skip_reason", None))
+                update_ui_safely(gui.root, lambda: setattr(gui.session, "last_min_vmaf_attempted", None))
+            except Exception:
+                logger.exception(f"Failed to record NOT_WORTHWHILE history for {anonymized_name}")
+            # Else: Error handling is done via the callback dispatcher calling handle_error
 
         # --- Delete Original File if Requested ---
         if process_successful and config.delete_original and video_path and os.path.exists(video_path):
@@ -402,29 +469,31 @@ def sequential_conversion_worker(
                 # For now, just logging the error as per instructions.
 
         # --- Update Overall Progress ---
-        overall_progress_percent = (gui.processed_files / total_videos_to_process) * 100
+        overall_progress_percent = (gui.session.processed_files / total_videos_to_process) * 100
         update_ui_safely(gui.root, lambda p=overall_progress_percent: gui.overall_progress.config(value=p))
 
         def update_final_status():  # Update overall status label text
-            base_status = f"Progress: {gui.processed_files}/{total_videos_to_process} files"
-            converted_msg = f" ({gui.successful_conversions} converted"
+            base_status = f"Progress: {gui.session.processed_files}/{total_videos_to_process} files"
+            converted_msg = f" ({gui.session.successful_conversions} converted"
 
             # Show different skip categories
-            if gui.skipped_not_worth_count > 0:
-                converted_msg += f", {gui.skipped_not_worth_count} inefficient"
+            if gui.session.skipped_not_worth_count > 0:
+                converted_msg += f", {gui.session.skipped_not_worth_count} inefficient"
 
-            if gui.skipped_low_resolution_count > 0:
-                converted_msg += f", {gui.skipped_low_resolution_count} low-res"
+            if gui.session.skipped_low_resolution_count > 0:
+                converted_msg += f", {gui.session.skipped_low_resolution_count} low-res"
 
             # Calculate other skips (files skipped for reasons other than "not worth" and low resolution)
-            other_skips = skipped_files_count - gui.skipped_not_worth_count - gui.skipped_low_resolution_count
+            other_skips = (
+                skipped_files_count - gui.session.skipped_not_worth_count - gui.session.skipped_low_resolution_count
+            )
             if other_skips > 0:
                 converted_msg += f", {other_skips} skipped"
 
             converted_msg += ")"
 
             # Only show errors if there are actual errors
-            error_suffix = f" - {gui.error_count} errors" if gui.error_count > 0 else ""
+            error_suffix = f" - {gui.session.error_count} errors" if gui.session.error_count > 0 else ""
             gui.status_label.config(text=f"{base_status}{converted_msg}{error_suffix}")
 
         update_ui_safely(gui.root, update_final_status)
@@ -433,8 +502,8 @@ def sequential_conversion_worker(
     final_status_message = "Conversion complete"
     if stop_event.is_set():
         final_status_message = "Conversion stopped by user"
-    elif gui.error_count > 0:
-        final_status_message = f"Conversion complete with {gui.error_count} errors"
+    elif gui.session.error_count > 0:
+        final_status_message = f"Conversion complete with {gui.session.error_count} errors"
 
     logger.info(f"Worker finished. Status: {final_status_message}")
     # Call the completion callback passed from the controller

@@ -4,6 +4,7 @@ Utility functions for the AV1 Video Converter application.
 """
 
 import ctypes
+import dataclasses
 import datetime
 import hashlib
 import json
@@ -18,6 +19,8 @@ import urllib.request
 from logging.handlers import RotatingFileHandler
 from typing import Any, Callable
 from urllib.error import URLError
+
+from src.config import HISTORY_FILE_V2
 
 # Logging setup
 logger = logging.getLogger(__name__)
@@ -289,16 +292,17 @@ def anonymize_path(file_path: str) -> str:
 
 
 def anonymize_filename(filename: str) -> str:
-    """Anonymize a file path for privacy (compatibility wrapper).
+    """Anonymize a file path or filename for privacy.
 
-    This function provides the same interface as the old anonymization system
-    but uses the new BLAKE2b hash-based approach.
+    Convenience function that dispatches to the appropriate anonymization:
+    - Full paths → anonymize_path() (hashes both folder and filename)
+    - Bare filenames → anonymize_file() (hashes just the filename)
 
     Args:
-        filename: Original file path or name to anonymize
+        filename: File path or bare filename to anonymize
 
     Returns:
-        Anonymized path like '[input_folder]/file_7f3a9c2b1e4d.mp4'
+        Anonymized string like '[input_folder]/file_7f3a9c2b1e4d.mp4'
     """
     if not filename:
         return filename
@@ -322,8 +326,7 @@ _PATH_PATTERNS = [
     # Video filenames (may contain spaces, captured after common delimiters)
     # Matches filenames after: colon, arrow, equals, quotes
     re.compile(
-        r"(?:(?<=: )|(?<=-> )|(?<== )|(?<=\")|(?<='))[^<>|*?\n\"']+\.(?:mp4|mkv|avi|wmv|mov|webm)",
-        re.IGNORECASE,
+        r"(?:(?<=: )|(?<=-> )|(?<== )|(?<=\")|(?<='))[^<>|*?\n\"']+\.(?:mp4|mkv|avi|wmv|mov|webm)", re.IGNORECASE
     ),
     # Fallback: video filenames without spaces (catches simple cases)
     re.compile(r"[^\s\"'<>|*?\n/\\]+\.(?:mp4|mkv|avi|wmv|mov|webm)", re.IGNORECASE),
@@ -362,10 +365,6 @@ class PathPrivacyFilter(logging.Filter):
                 temp_msg = pattern.sub(_anonymize_path_match, temp_msg)
             record.msg = temp_msg
         return True
-
-
-# Keep old name for backwards compatibility during transition
-FilenamePrivacyFilter = PathPrivacyFilter
 
 
 # Custom filter to suppress excessive sled::pagecache trace messages
@@ -442,7 +441,7 @@ def setup_logging(log_directory: str | None = None, anonymize: bool = True) -> s
             file_handler.setFormatter(log_formatter)
             file_handler.setLevel(logging.DEBUG)
             if anonymize:
-                file_handler.addFilter(FilenamePrivacyFilter())
+                file_handler.addFilter(PathPrivacyFilter())
             print(f"Log anonymization: {'Enabled' if anonymize else 'Disabled'}")
         except Exception as e:
             print(f"ERROR: Cannot create log file handler: {e}", file=sys.stderr)
@@ -451,7 +450,7 @@ def setup_logging(log_directory: str | None = None, anonymize: bool = True) -> s
     console_handler.setFormatter(log_formatter)
     console_handler.setLevel(logging.INFO)
     if anonymize:
-        console_handler.addFilter(FilenamePrivacyFilter())
+        console_handler.addFilter(PathPrivacyFilter())
     logger = logging.getLogger()
     logger.setLevel(logging.DEBUG)
     for handler in logger.handlers[:]:
@@ -558,11 +557,12 @@ def log_encoding_parameters(crf: int, preset: str, width: int, height: int, vmaf
     )  # Log actual target used
 
 
-def get_video_info(video_path: str) -> dict[str, Any] | None:
+def get_video_info(video_path: str, timeout: int = 30) -> dict[str, Any] | None:
     """Get video file information using ffprobe.
 
     Args:
         video_path: Path to the video file to analyze
+        timeout: Maximum seconds to wait for ffprobe (default 30)
 
     Returns:
         Dictionary containing video metadata or None if analysis failed
@@ -571,7 +571,7 @@ def get_video_info(video_path: str) -> dict[str, Any] | None:
     try:
         startupinfo, _ = get_windows_subprocess_startupinfo()
         result = subprocess.run(
-            cmd, capture_output=True, text=True, check=True, startupinfo=startupinfo, encoding="utf-8"
+            cmd, capture_output=True, text=True, check=True, startupinfo=startupinfo, encoding="utf-8", timeout=timeout
         )
         info = json.loads(result.stdout)
         try:
@@ -580,6 +580,9 @@ def get_video_info(video_path: str) -> dict[str, Any] | None:
             info["file_size"] = 0
             logger.debug(f"No size for {video_path}: {e}")
         return info
+    except subprocess.TimeoutExpired:
+        logger.warning(f"ffprobe timed out after {timeout}s for {anonymize_filename(video_path)}")
+        return None
     except subprocess.CalledProcessError:
         logger.exception(f"ffprobe failed for {anonymize_filename(video_path)}")
         return None
@@ -625,7 +628,9 @@ def check_ffmpeg_availability() -> tuple:
                 encoding="utf-8",
             )
             if version_result.stdout:
-                version_info = version_result.stdout.splitlines()[0]
+                lines = version_result.stdout.splitlines()
+                if lines:
+                    version_info = lines[0]
         except Exception as version_err:
             # Just log and continue if version check fails
             logger.debug(f"Failed to get FFmpeg version: {version_err}")
@@ -850,106 +855,51 @@ def log_conversion_result(input_path: str, output_path: str, elapsed_time: float
 
 
 # --- History Management Functions ---
-HISTORY_FILE = "conversion_history.json"
+# Note: The main history logic is now in src/history_index.py
+# These functions provide utility access for GUI and file operations.
 
 
 def get_history_file_path() -> str:
-    """Get the path to the conversion history JSON file.
+    """Get the path to the conversion history JSON file (v2 format).
 
     Returns:
         Absolute path to the history file
     """
-    return os.path.join(get_script_directory(), HISTORY_FILE)
-
-
-def load_history() -> list:
-    """Load the conversion history from the JSON file.
-
-    Returns:
-        List of conversion history records or empty list if file doesn't exist
-    """
-    history_path = get_history_file_path()
-    if os.path.exists(history_path):
-        try:
-            with open(history_path, encoding="utf-8") as f:
-                content = f.read()
-                return json.loads(content) if content else []
-        except (json.JSONDecodeError, OSError):
-            logger.exception(f"Error loading history {history_path}")
-            return []
-    return []
-
-
-def append_to_history(record_dict: dict) -> None:
-    """Append a new conversion record to the history file.
-
-    Args:
-        record_dict: Dictionary containing details about the conversion
-    """
-    history_path = get_history_file_path()
-    try:
-        history = load_history()
-        history.append(record_dict)
-        temp_history_path = history_path + ".tmp"
-
-        with open(temp_history_path, "w", encoding="utf-8") as f:
-            json.dump(history, f, indent=2)
-
-        os.replace(temp_history_path, history_path)
-        logger.debug(f"Appended record to history: {history_path}")
-    except OSError:
-        logger.exception(f"Error saving history {history_path}")
-    except Exception:
-        logger.exception("Unexpected error appending history")
+    return os.path.join(get_script_directory(), HISTORY_FILE_V2)
 
 
 def scrub_history_paths() -> tuple[int, int]:
     """Anonymize file paths in existing history entries.
 
-    Replaces full file paths with BLAKE2b hashes for privacy.
-    Only modifies entries that still contain full paths (not already anonymized).
+    Sets original_path to None for all records that have it set.
+    This ensures privacy by only keeping the path_hash.
 
     Returns:
         Tuple of (total_records, records_modified)
     """
-    history = load_history()
-    if not history:
+    # Import here to avoid circular imports (history_index imports from utils)
+    from src.history_index import get_history_index  # noqa: PLC0415
+
+    index = get_history_index()
+    all_records = index.get_all_records()
+
+    if not all_records:
         return 0, 0
 
     modified_count = 0
-    for record in history:
-        record_modified = False
-
-        # Check and anonymize input_file
-        input_file = record.get("input_file", "")
-        if input_file and not input_file.startswith(("file_", "[", "folder_")):
-            # This is an old-style path, anonymize it
-            record["input_file"] = anonymize_path(input_file)
-            record_modified = True
-
-        # Check and anonymize output_file
-        output_file = record.get("output_file", "")
-        if output_file and not output_file.startswith(("file_", "[", "folder_")):
-            record["output_file"] = anonymize_path(output_file)
-            record_modified = True
-
-        if record_modified:
+    for record in all_records:
+        if record.original_path is not None:
+            # Create a new record with original_path set to None
+            updated_record = dataclasses.replace(record, original_path=None)
+            index.upsert(updated_record)
             modified_count += 1
 
-    # Save the updated history if any records were modified
+    # Save if any records were modified
     if modified_count > 0:
-        history_path = get_history_file_path()
-        try:
-            temp_history_path = history_path + ".tmp"
-            with open(temp_history_path, "w", encoding="utf-8") as f:
-                json.dump(history, f, indent=2)
-            os.replace(temp_history_path, history_path)
-            logger.info(f"Scrubbed {modified_count} of {len(history)} history records")
-        except OSError:
-            logger.exception("Error saving scrubbed history")
-            return len(history), 0
+        index.save()
+        logger.info(f"Scrubbed {modified_count} of {len(all_records)} history records")
 
-    return len(history), modified_count
+    return len(all_records), modified_count
 
 
 def scrub_log_files(log_directory: str | None = None) -> tuple[int, int]:

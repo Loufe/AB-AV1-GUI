@@ -89,8 +89,7 @@ def check_ab_av1_latest_github() -> tuple[str | None, str | None, str]:
     """
     try:
         request = urllib.request.Request(  # noqa: S310 - hardcoded https URL is safe
-            AB_AV1_GITHUB_API,
-            headers={"Accept": "application/vnd.github.v3+json", "User-Agent": "Auto-AV1-Converter"},
+            AB_AV1_GITHUB_API, headers={"Accept": "application/vnd.github.v3+json", "User-Agent": "Auto-AV1-Converter"}
         )
         with urllib.request.urlopen(request, timeout=10) as response:  # noqa: S310
             data = json.loads(response.read().decode("utf-8"))

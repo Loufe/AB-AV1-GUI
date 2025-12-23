@@ -31,10 +31,12 @@ src/
 ├── convert.py                 # Entry point
 ├── main.py                    # App initialization, Tkinter setup
 ├── config.py                  # Constants (VMAF targets, presets)
-├── models.py                  # Dataclasses (ProgressEvent, ConversionConfig, etc.)
+├── models.py                  # Dataclasses (ProgressEvent, ConversionConfig, FileRecord, etc.)
 ├── estimation.py              # Time estimation from history
 ├── utils.py                   # Logging, formatting, ffprobe, privacy helpers
 ├── video_conversion.py        # Single-file conversion logic
+├── folder_analysis.py         # Analysis tab: scanning, estimation, file classification
+├── history_index.py           # Thread-safe O(1) cache for FileRecord lookups
 ├── ab_av1/                    # ab-av1 wrapper package
 │   ├── wrapper.py             # Subprocess management, VMAF fallback
 │   ├── parser.py              # Regex parsing of ab-av1/ffmpeg output
@@ -51,6 +53,7 @@ src/
     ├── gui_updates.py         # Thread-safe UI updates
     ├── gui_actions.py         # User interaction handlers
     └── tabs/                  # Tab implementations
+        └── analysis_tab.py    # Analysis tab UI definition
 
 tools/
 └── hash_lookup.py             # Reverse lookup for anonymized file hashes
@@ -71,7 +74,35 @@ If target VMAF (default 95) is unattainable, decrements by 1 down to minimum (90
 
 - **Main thread**: Tkinter event loop
 - **Worker thread**: `sequential_conversion_worker()` handles conversion
+- **Analysis threads**: `ThreadPoolExecutor` with 4-8 parallel ffprobe workers
 - **GUI updates**: All UI changes via `utils.update_ui_safely()` → `root.after()`
+
+### Analysis Tab (Three-Phase Model)
+
+The Analysis tab allows users to preview conversion estimates before committing to encoding.
+
+```
+Phase 1: Incremental Scan (on tab open / folder change)
+  └── os.scandir() BFS traversal → populates tree with folder/file names
+  └── No ffprobe, instant feedback, values show "—"
+
+Phase 2: Metadata Analysis (on "Analyze" button click)
+  └── Parallel ffprobe via ThreadPoolExecutor (4-8 workers, 30s timeout)
+  └── Updates tree rows with estimated savings/time as results arrive
+  └── Uses HistoryIndex cache to skip already-analyzed files
+
+Phase 3: Quality Analysis (on "Analyze Quality" button click)
+  └── ab-av1 crf-search on selected files (~1 min/file)
+  └── Provides precise CRF and predicted output size
+  └── Optional - for users who want accurate predictions before encoding
+```
+
+**Key components**:
+- `folder_analysis.py`: `scan_folder_fast()`, `_analyze_file()`, file classification
+- `history_index.py`: Thread-safe `HistoryIndex` with O(1) lookups by path hash
+- `main_window.py`: `_run_analysis_thread()`, `_run_quality_analysis_thread()`
+
+**Cache behavior**: Files are cached in `HistoryIndex` by path hash. Cache is validated by file size + mtime. Cached metadata skips ffprobe on subsequent scans.
 
 ### Callback Flow
 
@@ -145,10 +176,13 @@ See `ab_av1/wrapper.py` for environment variables that maximize verbosity.
 | File | Purpose |
 |------|---------|
 | `av1_converter_config.json` | User settings (managed via GUI) |
-| `conversion_history.json` | Completed conversions (used for time estimation) |
+| `conversion_history_v2.json` | File records: metadata, analysis results, conversion history |
 | `logs/*.log` | Rotating log files |
 
-History is used to estimate remaining batch time by finding similar files (resolution/duration) and their actual encoding speeds.
+**History/Index usage**:
+- **Time estimation**: Find similar files (codec/resolution/duration) to predict encoding time
+- **Analysis cache**: Skip ffprobe for files with valid cached metadata (size + mtime match)
+- **Status tracking**: Track file states (SCANNED, CONVERTED, NOT_WORTHWHILE)
 
 ## Privacy & Security
 

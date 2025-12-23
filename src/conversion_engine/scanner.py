@@ -128,7 +128,7 @@ def scan_video_needs_conversion(
             return False, reason, video_info  # Return info even if skipped
 
         # Check resolution before other checks
-        if width < MIN_RESOLUTION_WIDTH and height < MIN_RESOLUTION_HEIGHT:
+        if width < MIN_RESOLUTION_WIDTH or height < MIN_RESOLUTION_HEIGHT:
             reason = (
                 f"Below minimum resolution ({width}x{height}) - needs at least "
                 f"{MIN_RESOLUTION_WIDTH}x{MIN_RESOLUTION_HEIGHT}"

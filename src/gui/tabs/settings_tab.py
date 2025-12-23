@@ -87,8 +87,7 @@ def create_settings_tab(gui):
     audio_combo["values"] = ("opus", "aac")
     audio_combo.pack(side="left")
     ToolTip(
-        audio_combo,
-        "Select audio codec for re-encoding. Opus offers better compression. AAC is widely compatible.",
+        audio_combo, "Select audio codec for re-encoding. Opus offers better compression. AAC is widely compatible."
     )
 
     # --- Logging & History Settings ---
@@ -118,17 +117,12 @@ def create_settings_tab(gui):
     )
     anonymize_log_check.pack(side="left", padx=(0, 10))
     ToolTip(
-        anonymize_log_check,
-        "If checked, replaces specific filenames in logs with generic placeholders for privacy.",
+        anonymize_log_check, "If checked, replaces specific filenames in logs with generic placeholders for privacy."
     )
 
     scrub_logs_btn = ttk.Button(log_actions_frame, text="Scrub Logs", command=gui.on_scrub_logs)
     scrub_logs_btn.pack(side="left")
-    ToolTip(
-        scrub_logs_btn,
-        "Permanently anonymize all existing file paths in log files. "
-        "This cannot be undone.",
-    )
+    ToolTip(scrub_logs_btn, "Permanently anonymize all existing file paths in log files. This cannot be undone.")
 
     # History actions frame
     history_actions_frame = ttk.Frame(log_hist_frame)
@@ -137,7 +131,7 @@ def create_settings_tab(gui):
     # Use the method reference from the main GUI instance
     history_open_btn = ttk.Button(history_actions_frame, text="Open History File", command=gui.on_open_history_file)
     history_open_btn.pack(side="left", padx=(0, 10))
-    ToolTip(history_open_btn, "Open the conversion_history.json file (if it exists).")
+    ToolTip(history_open_btn, "Open the conversion_history_v2.json file (if it exists).")
 
     anonymize_history_check = ttk.Checkbutton(
         history_actions_frame, text="Anonymize Filenames in History", variable=gui.anonymize_history
@@ -145,16 +139,14 @@ def create_settings_tab(gui):
     anonymize_history_check.pack(side="left", padx=(0, 10))
     ToolTip(
         anonymize_history_check,
-        "If checked, replaces specific filenames in the conversion_history.json file "
+        "If checked, replaces specific filenames in the conversion_history_v2.json file "
         "with generic placeholders for privacy.",
     )
 
     scrub_history_btn = ttk.Button(history_actions_frame, text="Scrub History", command=gui.on_scrub_history)
     scrub_history_btn.pack(side="left")
     ToolTip(
-        scrub_history_btn,
-        "Permanently anonymize all existing file paths in the history file. "
-        "This cannot be undone.",
+        scrub_history_btn, "Permanently anonymize all existing file paths in the history file. This cannot be undone."
     )
 
     # --- Version Info ---

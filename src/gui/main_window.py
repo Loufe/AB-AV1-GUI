@@ -4,16 +4,25 @@ Main window module for the AV1 Video Converter application.
 """
 
 # Standard library imports
+import datetime
 import json  # For settings persistence
 import logging
 import multiprocessing
 import os  # Added import
 import sys
+import threading
 import tkinter as tk
 import webbrowser
+from collections import deque
+from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, wait
+from pathlib import Path
 from tkinter import messagebox, ttk
 
 from src.ab_av1.checker import check_ab_av1_latest_github, get_ab_av1_version
+from src.ab_av1.wrapper import AbAv1Wrapper
+from src.config import DEFAULT_VMAF_TARGET, MIN_FILES_FOR_PERCENT_UPDATES, TREE_UPDATE_BATCH_SIZE
+from src.estimation import estimate_file_time
+from src.folder_analysis import _analyze_file
 from src.gui.conversion_controller import force_stop_conversion, start_conversion, stop_conversion
 from src.gui.gui_actions import (
     browse_input_folder,
@@ -26,22 +35,63 @@ from src.gui.gui_actions import (
 from src.gui.gui_updates import update_statistics_summary
 
 # Project imports - Replace 'convert_app' with 'src'
+from src.gui.tabs.analysis_tab import create_analysis_tab
 from src.gui.tabs.main_tab import create_main_tab
 from src.gui.tabs.settings_tab import create_settings_tab
+from src.history_index import compute_path_hash, get_history_index
+from src.models import ConversionSessionState, FileStatus
 
 # Import setup_logging only needed here now - Replace 'convert_app' with 'src'
 from src.utils import (
     check_ffmpeg_availability,
     check_ffmpeg_latest_btbn,
     check_ffmpeg_latest_gyan,
+    format_file_size,
     get_script_directory,
     parse_ffmpeg_version,
     scrub_history_paths,
     scrub_log_files,
     setup_logging,
+    update_ui_safely,
 )
 
 logger = logging.getLogger(__name__)
+
+# Width of status label in characters (matches width in analysis_tab.py)
+_STATUS_LABEL_WIDTH = 100
+
+# Efficiency formatting threshold (GB/hr)
+_EFFICIENCY_DECIMAL_THRESHOLD = 10  # Show without decimals above this value
+
+
+def _format_status_text(prefix: str, filename: str, label_width: int = _STATUS_LABEL_WIDTH) -> str:
+    """Format status text, dynamically truncating filename to fit within label width.
+
+    Args:
+        prefix: The fixed prefix text (e.g., "Analyzing (5/100): ")
+        filename: The filename to display (may be truncated)
+        label_width: Available width in characters
+
+    Returns:
+        Formatted string that fits within label_width
+    """
+    available = label_width - len(prefix)
+    if available <= 0:
+        return prefix[:label_width]
+
+    if len(filename) <= available:
+        return prefix + filename
+
+    # Truncate with ellipsis, keeping extension visible if possible
+    ellipsis = "..."
+    name, ext = os.path.splitext(filename)
+    if ext and len(ext) + len(ellipsis) + 1 < available:  # Room for at least 1 char of name
+        name_space = available - len(ext) - len(ellipsis)
+        return prefix + name[:name_space] + ellipsis + ext
+
+    # No extension or too long - simple truncation
+    return prefix + filename[: available - len(ellipsis)] + ellipsis
+
 
 # Place config file next to script/executable
 CONFIG_FILE = os.path.join(get_script_directory(), "av1_converter_config.json")
@@ -55,12 +105,26 @@ class VideoConverterGUI:
     stop_button: ttk.Button
     force_stop_button: ttk.Button
 
+    # Analysis tab widgets (created in create_analysis_tab)
+    analyze_button: ttk.Button
+    analyze_quality_button: ttk.Button
+    stop_analyze_button: ttk.Button
+    analysis_progress: ttk.Progressbar
+    analysis_status_label: ttk.Label
+    analysis_tree: ttk.Treeview
+    analysis_total_tree: ttk.Treeview
+
+    # Settings tab widgets (created in create_settings_tab)
+    ab_av1_update_label: ttk.Label
+    ffmpeg_update_label: ttk.Label | None
+    ffmpeg_source: str | None
+
     def __init__(self, root):
         """Initialize the main window and all components."""
         self.root = root
         self.root.title("AV1 Video Converter")
-        self.root.geometry("800x675")  # Increased from 650 to 675
-        self.root.minsize(700, 575)  # Increased from 550 to 575
+        self.root.geometry("950x750")  # Increased for Analysis tab
+        self.root.minsize(850, 650)  # Increased for Analysis tab
 
         # Set application icon (Phase 1)
         try:
@@ -78,6 +142,13 @@ class VideoConverterGUI:
 
         # Load settings first
         self.config = self.load_settings()
+
+        # Initialize conversion session state (always exists, never None)
+        self.session = ConversionSessionState()
+
+        # Thread/Event primitives stay on self, not in session dataclass
+        self.conversion_thread: threading.Thread | None = None
+        self.stop_event: threading.Event | None = None
 
         # Initialize tk variables based on loaded config (needed *before* logging setup uses them)
         self.initialize_variables()
@@ -120,12 +191,15 @@ class VideoConverterGUI:
 
         self.tab_control = ttk.Notebook(self.root)
         self.main_tab = ttk.Frame(self.tab_control)
+        self.analysis_tab = ttk.Frame(self.tab_control)
         self.settings_tab = ttk.Frame(self.tab_control)
         self.tab_control.add(self.main_tab, text="Convert")
+        self.tab_control.add(self.analysis_tab, text="Analysis")
         self.tab_control.add(self.settings_tab, text="Settings")
         self.tab_control.pack(expand=1, fill="both")
 
         create_main_tab(self)
+        create_analysis_tab(self)
         create_settings_tab(self)
         self.initialize_conversion_state()
         self.initialize_button_states()
@@ -134,6 +208,9 @@ class VideoConverterGUI:
         update_statistics_summary(self)
 
         check_ffmpeg(self)  # Check dependencies after UI is built
+
+        # Schedule initial analysis tree population (deferred so UI is fully built)
+        self.root.after(0, self._refresh_analysis_tree)
 
     def load_settings(self):
         """Load settings from JSON config file"""
@@ -199,6 +276,30 @@ class VideoConverterGUI:
         # Add custom style for range text - dark gray color
         self.style.configure("Range.TLabel", font=("Arial", 10), background="#f0f0f0", foreground="#606060")
 
+        # Custom Treeview style without expand/collapse indicator (we use arrows in text instead)
+        self.style.layout(
+            "Analysis.Treeview.Item",
+            [
+                (
+                    "Treeitem.padding",
+                    {
+                        "sticky": "nswe",
+                        "children": [
+                            ("Treeitem.image", {"side": "left", "sticky": ""}),
+                            (
+                                "Treeitem.focus",
+                                {
+                                    "side": "left",
+                                    "sticky": "",
+                                    "children": [("Treeitem.text", {"side": "left", "sticky": ""})],
+                                },
+                            ),
+                        ],
+                    },
+                )
+            ],
+        )
+
     def initialize_variables(self):
         """Initialize the GUI variables, using loaded config"""
         # Initialize StringVars/BooleanVars *first* based on config or defaults
@@ -217,69 +318,44 @@ class VideoConverterGUI:
         self.anonymize_history = tk.BooleanVar(value=self.config.get("anonymize_history", True))
         self.audio_codec = tk.StringVar(value=self.config.get("audio_codec", "opus"))
         self.delete_original_var = tk.BooleanVar(value=self.config.get("delete_original_after_conversion", False))
-        # Non-saved variables
-        self.vmaf_scores = []
-        self.crf_values = []
-        self.size_reductions = []
+
+        # CPU count for display purposes
         try:
             self.cpu_count = max(1, multiprocessing.cpu_count())
         except NotImplementedError:
             self.cpu_count = 1
             logger.warning("Could not detect CPU count.")
 
+        # Analysis state
+        self.analysis_stop_event: threading.Event | None = None
+        self.analysis_thread: threading.Thread | None = None
+        self.quality_analysis_stop_event: threading.Event | None = None
+        self.quality_analysis_thread: threading.Thread | None = None
+        self._tree_item_map: dict[str, str] = {}  # Map file_path -> tree_item_id for updates
+        self._refresh_timer_id: str | None = None  # Debounce timer for auto-refresh
+        self._scan_stop_event: threading.Event | None = None  # Stop event for background scan
+        self._sort_col: str | None = None  # Current sort column
+        self._sort_reverse: bool = False  # Current sort direction
+
+        # Add traces to auto-refresh analysis tree when settings change
+        self.input_folder.trace_add("write", self._on_folder_or_extension_changed)
+        self.ext_mp4.trace_add("write", self._on_folder_or_extension_changed)
+        self.ext_mkv.trace_add("write", self._on_folder_or_extension_changed)
+        self.ext_avi.trace_add("write", self._on_folder_or_extension_changed)
+        self.ext_wmv.trace_add("write", self._on_folder_or_extension_changed)
+
     def initialize_conversion_state(self):
-        """Initialize conversion state variables.
+        """Reset conversion session state for a new conversion.
 
-        All gui.* attributes that are set during conversion should be initialized here
-        to avoid AttributeError and make the codebase more predictable.
+        Creates a fresh ConversionSessionState with output folder pre-filled.
+        Thread/Event primitives stay on self, not in the session dataclass.
         """
-        # Core conversion state
-        self.conversion_running = False
+        # Reset session to fresh state with output folder
+        self.session = ConversionSessionState(output_folder_path=self.output_folder.get())
+
+        # Thread primitives stay on self
         self.conversion_thread = None
-        self.stop_event = None
-        self.sleep_prevention_active = False
-
-        # File lists
-        self.video_files: list[str] = []
-        self.pending_files: list[str] = []
-
-        # Progress counters
-        self.processed_files = 0
-        self.successful_conversions = 0
-        self.error_count = 0
-
-        # Timing
-        self.elapsed_timer_id = None
-        self.total_conversion_start_time: float | None = None
-        self.current_file_start_time: float | None = None
-        self.current_file_encoding_start_time: float | None = None
-
-        # Current file tracking
-        self.output_folder_path = ""
-        self.current_process_info: dict | None = None
-        self.current_file_path: str | None = None
-
-        # Statistics accumulators
-        self.total_input_bytes_success = 0
-        self.total_output_bytes_success = 0
-        self.total_time_success = 0
-
-        # ETA calculation state
-        self.last_encoding_progress: float = 0
-        self.last_eta_seconds: float | None = None
-        self.last_eta_timestamp: float | None = None
-
-        # Per-file state for callbacks
-        self.last_input_size: int | None = None
-        self.last_output_size: int | None = None
-        self.last_elapsed_time: float | None = None
-
-        # Error and skip tracking
-        self.error_details: list[str] = []
-        self.skipped_not_worth_count = 0
-        self.skipped_not_worth_files: list[str] = []
-        self.skipped_low_resolution_count = 0
-        self.skipped_low_resolution_files: list[str] = []
+        self.stop_event = threading.Event()
 
     def initialize_button_states(self):
         """Initialize button states. Called after create_main_tab() creates buttons."""
@@ -290,12 +366,12 @@ class VideoConverterGUI:
     def on_exit(self):
         """Handle application exit: confirm, save settings, cleanup"""
         confirm_exit = True
-        if hasattr(self, "conversion_running") and self.conversion_running:
+        if self.session.running:
             confirm_exit = messagebox.askyesno("Confirm Exit", "Conversion running. Exit will stop it.\nAre you sure?")
         if confirm_exit:
             logger.info("=== AV1 Video Converter Exiting ===")
             self.save_settings()
-            if hasattr(self, "conversion_running") and self.conversion_running:
+            if self.session.running:
                 logger.info("Signalling conversion thread to stop...")
                 force_stop_conversion(self, confirm=False)
             self._cleanup_threads()
@@ -305,17 +381,17 @@ class VideoConverterGUI:
 
     def _cleanup_threads(self):
         """Ensure all threads are properly cleaned up before exit"""
-        if hasattr(self, "elapsed_timer_id") and self.elapsed_timer_id:
+        if self.session.elapsed_timer_id:
             try:
-                self.root.after_cancel(self.elapsed_timer_id)
-                self.elapsed_timer_id = None
+                self.root.after_cancel(self.session.elapsed_timer_id)
+                self.session.elapsed_timer_id = None
                 logger.debug("Cancelled timer")
             except Exception:
                 logger.exception("Error cancelling timer")
-        if hasattr(self, "stop_event") and self.stop_event:
+        if self.stop_event:
             self.stop_event.set()
             logger.debug("Stop event set.")
-        if hasattr(self, "conversion_thread") and self.conversion_thread and self.conversion_thread.is_alive():
+        if self.conversion_thread and self.conversion_thread.is_alive():
             try:
                 logger.info("Waiting briefly for thread...")
                 self.conversion_thread.join(timeout=1.0)
@@ -326,7 +402,7 @@ class VideoConverterGUI:
             except Exception:
                 logger.exception("Error joining thread")
         self.conversion_thread = None
-        self.conversion_running = False
+        self.session.running = False
         self.stop_event = None
 
     def _complete_exit(self):
@@ -387,8 +463,7 @@ class VideoConverterGUI:
             unchanged = total - modified
             messagebox.showinfo(
                 "Scrub History",
-                f"Anonymized {modified} history records.\n\n"
-                f"{unchanged} record(s) were already anonymized.",
+                f"Anonymized {modified} history records.\n\n{unchanged} record(s) were already anonymized.",
             )
 
     def on_scrub_logs(self):
@@ -450,7 +525,8 @@ class VideoConverterGUI:
                 font=("TkDefaultFont", 9, "underline"),
             )
             # Bind click to open release URL
-            self.ab_av1_update_label.bind("<Button-1>", lambda e: webbrowser.open(release_url))
+            if release_url:
+                self.ab_av1_update_label.bind("<Button-1>", lambda e: webbrowser.open(release_url))
 
     def _reset_update_label(self):
         """Reset the update label to non-clickable state."""
@@ -492,12 +568,10 @@ class VideoConverterGUI:
             else:
                 display_tag = latest_version
             self.ffmpeg_update_label.config(
-                text=f"Latest: {display_tag}",
-                foreground="blue",
-                cursor="hand2",
-                font=("TkDefaultFont", 9, "underline"),
+                text=f"Latest: {display_tag}", foreground="blue", cursor="hand2", font=("TkDefaultFont", 9, "underline")
             )
-            self.ffmpeg_update_label.bind("<Button-1>", lambda e: webbrowser.open(release_url))
+            if release_url:
+                self.ffmpeg_update_label.bind("<Button-1>", lambda e: webbrowser.open(release_url))
             return
 
         # For gyan.dev, we can compare semantic versions
@@ -515,7 +589,8 @@ class VideoConverterGUI:
                 cursor="hand2",
                 font=("TkDefaultFont", 9, "underline"),
             )
-            self.ffmpeg_update_label.bind("<Button-1>", lambda e: webbrowser.open(release_url))
+            if release_url:
+                self.ffmpeg_update_label.bind("<Button-1>", lambda e: webbrowser.open(release_url))
 
     def _reset_ffmpeg_update_label(self):
         """Reset the FFmpeg update label to non-clickable state."""
@@ -531,3 +606,1220 @@ class VideoConverterGUI:
 
     def on_force_stop_conversion(self, confirm=True):
         force_stop_conversion(self, confirm=confirm)
+
+    # --- Analysis Tab Handlers ---
+
+    def _on_folder_or_extension_changed(self, *args):
+        """Auto-refresh analysis tree when folder or extensions change.
+
+        Uses a debounce timer to avoid excessive refreshes during rapid changes.
+        """
+        # Cancel pending refresh if any
+        if self._refresh_timer_id:
+            self.root.after_cancel(self._refresh_timer_id)
+
+        # Schedule refresh after 500ms delay (debounce)
+        self._refresh_timer_id = self.root.after(500, self._refresh_analysis_tree)
+
+    def _refresh_analysis_tree(self):
+        """Start background scan to populate tree incrementally."""
+        self._refresh_timer_id = None
+
+        folder = self.input_folder.get()
+        if not folder or not os.path.isdir(folder):
+            # Clear tree if no valid folder
+            for item in self.analysis_tree.get_children():
+                self.analysis_tree.delete(item)
+            self.analysis_status_label.config(text="Select an input folder to analyze")
+            return
+
+        # Get selected extensions
+        extensions = []
+        if self.ext_mp4.get():
+            extensions.append("mp4")
+        if self.ext_mkv.get():
+            extensions.append("mkv")
+        if self.ext_avi.get():
+            extensions.append("avi")
+        if self.ext_wmv.get():
+            extensions.append("wmv")
+
+        if not extensions:
+            # Clear tree if no extensions selected
+            for item in self.analysis_tree.get_children():
+                self.analysis_tree.delete(item)
+            self.analysis_status_label.config(text="Select at least one file extension")
+            return
+
+        # Clear tree and start background scan
+        for item in self.analysis_tree.get_children():
+            self.analysis_tree.delete(item)
+        self._tree_item_map.clear()
+        self._update_total_row(0, 0, 0, 0)  # Reset total row
+        self.analysis_status_label.config(text="Scanning...")
+
+        # Enable stop button
+        self.stop_analyze_button.config(state="normal")
+
+        # Cancel any existing scan
+        if self._scan_stop_event:
+            self._scan_stop_event.set()
+
+        # Start incremental background scan
+        self._scan_stop_event = threading.Event()
+        threading.Thread(
+            target=self._incremental_scan_thread, args=(folder, extensions, self._scan_stop_event), daemon=True
+        ).start()
+
+    def _incremental_scan_thread(self, folder: str, extensions: list[str], stop_event: threading.Event):
+        """Scan folder and populate tree incrementally from background thread.
+
+        Uses breadth-first traversal - shows all top-level folders first,
+        then their children, etc. This gives immediate visual feedback.
+
+        Also checks HistoryIndex cache - if a file was previously analyzed,
+        displays cached values immediately instead of "—".
+        """
+        root_folder = str(Path(folder).resolve())
+        ext_set = {f".{ext.lower()}" for ext in extensions}
+        file_count = 0
+        folder_count = 0
+        index = get_history_index()
+
+        def scan_directory(dirpath: str) -> tuple[list[str], list[tuple[str, int, float]]]:
+            """Scan a directory for subdirs and video files with stats.
+
+            Returns:
+                (subdirs, file_infos) where file_infos is list of (filename, size, mtime)
+            """
+            subdirs = []
+            file_infos = []
+            try:
+                with os.scandir(dirpath) as entries:
+                    for entry in entries:
+                        if stop_event.is_set():
+                            return [], []
+                        if entry.is_dir(follow_symlinks=False):
+                            subdirs.append(entry.path)
+                        elif entry.is_file() and os.path.splitext(entry.name)[1].lower() in ext_set:
+                            try:
+                                stat = entry.stat()
+                                file_infos.append((entry.name, stat.st_size, stat.st_mtime))
+                            except OSError:
+                                file_infos.append((entry.name, 0, 0))
+            except (PermissionError, OSError):
+                pass
+            return sorted(subdirs, key=str.lower), sorted(file_infos, key=lambda x: x[0].lower())
+
+        try:
+            # BFS queue: (dirpath, parent_dirpath or None for root)
+            queue: deque[tuple[str, str | None]] = deque()
+            queue.append((root_folder, None))
+
+            # Track folder tree IDs - populated by UI callbacks
+            folder_tree_ids: dict[str, str] = {}
+            folder_tree_ids[root_folder] = ""  # Root maps to tree root
+
+            while queue and not stop_event.is_set():
+                dirpath, parent_dirpath = queue.popleft()
+
+                # Scan directory in background thread
+                subdirs, file_infos = scan_directory(dirpath)
+                if stop_event.is_set():
+                    break
+
+                # Get parent tree ID
+                parent_tree_id = folder_tree_ids.get(parent_dirpath or root_folder, "")
+
+                # Queue subdirectories for BFS
+                for subdir in subdirs:
+                    queue.append((subdir, dirpath))
+
+                # Pre-compute cached values for each file (in background thread)
+                # This avoids doing index lookups on the UI thread
+                file_display_data = []
+                for filename, file_size, file_mtime in file_infos:
+                    file_path = os.path.join(dirpath, filename)
+                    savings_str = "—"
+                    time_str = "—"
+                    eff_str = "—"
+
+                    # Check cache (use tolerance for mtime due to float precision in JSON)
+                    record = index.lookup_file(file_path)
+                    if record and record.file_size_bytes == file_size and abs(record.file_mtime - file_mtime) < 1.0:
+                        # Cache hit - use cached values
+                        if record.status == FileStatus.CONVERTED:
+                            savings_str = "Done"
+                            time_str = "—"
+                        elif record.status == FileStatus.NOT_WORTHWHILE:
+                            savings_str = "Skip"
+                            time_str = "—"
+                        elif record.estimated_reduction_percent and record.file_size_bytes:
+                            est_savings = int(record.file_size_bytes * record.estimated_reduction_percent / 100)
+                            savings_str = f"~{format_file_size(est_savings)}"
+                            file_time = estimate_file_time(
+                                codec=record.video_codec, duration=record.duration_sec, size=record.file_size_bytes
+                            ).best_seconds
+                            time_str = self._format_compact_time(file_time) if file_time > 0 else "—"
+                            eff_str = self._format_efficiency(est_savings, file_time)
+
+                    file_display_data.append((filename, file_path, savings_str, time_str, eff_str))
+
+                # Prepare UI update
+                is_root = (dirpath == root_folder)
+                folder_name = os.path.basename(dirpath) if not is_root else None
+
+                # Use event to wait for UI update to complete
+                done_event = threading.Event()
+                new_folder_id: list[str] = [""]  # Mutable container to get result back
+
+                def add_to_tree(
+                    dp=dirpath,
+                    pid=parent_tree_id,
+                    fname=folder_name,
+                    fdata=file_display_data,
+                    is_rt=is_root,
+                    result=new_folder_id,
+                    done=done_event,
+                ):
+                    nonlocal file_count, folder_count
+                    try:
+                        if is_rt:
+                            # Root folder: add files at tree root, no folder node
+                            folder_id = ""
+                            for filename, file_path, savings_str, time_str, eff_str in fdata:
+                                item_id = self.analysis_tree.insert(
+                                    "", "end", text=f"🎬 {filename}", values=(savings_str, time_str, eff_str)
+                                )
+                                self._tree_item_map[file_path] = item_id
+                                file_count += 1
+                        else:
+                            # Non-root: create folder node and add files
+                            folder_id = self.analysis_tree.insert(
+                                pid, "end", text=f"▶ 📁 {fname}", values=("—", "—", "—"), open=False
+                            )
+                            folder_count += 1
+                            for filename, file_path, savings_str, time_str, eff_str in fdata:
+                                item_id = self.analysis_tree.insert(
+                                    folder_id, "end", text=f"🎬 {filename}", values=(savings_str, time_str, eff_str)
+                                )
+                                self._tree_item_map[file_path] = item_id
+                                file_count += 1
+                            # Update folder aggregate from its files
+                            if fdata:
+                                self._update_folder_aggregates(folder_id)
+                        result[0] = folder_id
+                    finally:
+                        done.set()
+
+                update_ui_safely(self.root, add_to_tree)
+                done_event.wait(timeout=5.0)  # Wait for UI thread
+
+                # Store folder ID for children to use
+                folder_tree_ids[dirpath] = new_folder_id[0]
+
+                # Update status periodically
+                if folder_count % 5 == 0 or not queue:
+                    update_ui_safely(
+                        self.root,
+                        lambda fc=file_count, dc=folder_count: self.analysis_status_label.config(
+                            text=f"Found {fc} files in {dc} folders..."
+                        ),
+                    )
+
+            # Final status
+            if stop_event.is_set():
+                self._finish_incremental_scan(stopped=True)
+                return
+
+            if file_count == 0:
+                update_ui_safely(
+                    self.root,
+                    lambda: (
+                        self.analysis_status_label.config(text="No video files found"),
+                        self._finish_incremental_scan(stopped=False),
+                    ),
+                )
+            else:
+                update_ui_safely(
+                    self.root,
+                    lambda fc=file_count, dc=folder_count: (
+                        self.analysis_status_label.config(text=f"Found {fc} files in {dc} folders"),
+                        self._finish_incremental_scan(stopped=False),
+                    ),
+                )
+
+        except PermissionError:
+            logger.exception("Permission denied during scan")
+            if not stop_event.is_set():
+                update_ui_safely(
+                    self.root,
+                    lambda: (
+                        self.analysis_status_label.config(text="Error: Permission denied"),
+                        self._finish_incremental_scan(stopped=False),
+                    ),
+                )
+        except OSError as e:
+            logger.exception("OS error during scan")
+            if not stop_event.is_set():
+                msg = e.strerror or "Scanning failed"
+                update_ui_safely(
+                    self.root,
+                    lambda m=msg: (
+                        self.analysis_status_label.config(text=f"Error: {m}"),
+                        self._finish_incremental_scan(stopped=False),
+                    ),
+                )
+        except Exception:
+            logger.exception("Error during incremental scan")
+            if not stop_event.is_set():
+                update_ui_safely(
+                    self.root,
+                    lambda: (
+                        self.analysis_status_label.config(text="Error scanning folder"),
+                        self._finish_incremental_scan(stopped=False),
+                    ),
+                )
+
+    def _prune_empty_folders(self) -> int:
+        """Remove folders with no children from the tree (runs on UI thread).
+
+        Runs repeatedly until no more empty folders are found, handling
+        the case where removing a child folder makes its parent empty.
+
+        Returns:
+            Total number of folders removed.
+        """
+        total_removed = 0
+
+        while True:
+            removed_this_pass = 0
+            items_to_check = list(self.analysis_tree.get_children(""))
+
+            while items_to_check:
+                item_id = items_to_check.pop()
+                children = self.analysis_tree.get_children(item_id)
+
+                if children:
+                    # Has children - check them too
+                    items_to_check.extend(children)
+                else:
+                    # No children - if it's a folder, remove it
+                    text = self.analysis_tree.item(item_id, "text")
+                    if "📁" in text:
+                        self.analysis_tree.delete(item_id)
+                        removed_this_pass += 1
+
+            total_removed += removed_this_pass
+            if removed_this_pass == 0:
+                break  # No more empty folders
+
+        return total_removed
+
+    def _finish_incremental_scan(self, stopped: bool):
+        """Clean up after incremental scan completes (runs on UI thread)."""
+        self.stop_analyze_button.config(state="disabled")
+        if stopped:
+            self.analysis_status_label.config(text="Scan stopped")
+        else:
+            # Prune empty folders after scan completes
+            self._prune_empty_folders()
+
+        # Update total row with any cached data
+        self._update_total_from_tree()
+
+    def on_analyze_folders(self):
+        """Run ffprobe analysis on files already in the tree.
+
+        The tree is populated by the incremental scan when the tab opens or
+        folder changes. This button runs ffprobe to get file metadata and
+        estimate potential savings.
+        """
+        output_folder = self.output_folder.get()
+        if not output_folder:
+            messagebox.showwarning("Invalid Folder", "Please select an output folder for analysis.")
+            return
+
+        # Get file paths from existing tree
+        file_paths = list(self._tree_item_map.keys())
+
+        if not file_paths:
+            messagebox.showinfo(
+                "No Files",
+                "No files to analyze. Select a folder with video files and wait for the scan to complete.",
+            )
+            return
+
+        # Disable button immediately to prevent double-clicks
+        self.analyze_button.config(state="disabled")
+        self.stop_analyze_button.config(state="normal")
+
+        input_folder = self.input_folder.get()
+        logger.info(f"Starting ffprobe analysis of {len(file_paths)} files in: {input_folder}")
+
+        # Cancel any pending auto-refresh timer
+        if self._refresh_timer_id:
+            self.root.after_cancel(self._refresh_timer_id)
+            self._refresh_timer_id = None
+
+        # Cancel any running analysis or incremental scan
+        if self.analysis_stop_event:
+            self.analysis_stop_event.set()
+        if self._scan_stop_event:
+            self._scan_stop_event.set()
+
+        # Show analyzing status
+        self.analysis_status_label.config(text=f"Analyzing {len(file_paths)} files...")
+        self.analysis_progress["value"] = 0
+
+        # Run ffprobe analysis in background thread
+        self.analysis_stop_event = threading.Event()
+        self.analysis_thread = threading.Thread(
+            target=self._run_ffprobe_analysis, args=(file_paths, output_folder), daemon=True
+        )
+        self.analysis_thread.start()
+
+    def _run_ffprobe_analysis(self, file_paths: list[str], output_folder: str):
+        """Run ffprobe analysis on files in parallel.
+
+        This analyzes files already in the tree using ffprobe to get metadata
+        and estimate potential savings. Updates tree rows as results come in.
+
+        Files with valid cache entries return quickly (no ffprobe needed).
+        Cache checking is done inside each parallel worker, so there's no
+        blocking pre-filter step.
+
+        Args:
+            file_paths: List of file paths to analyze.
+            output_folder: Output folder for checking if files are already converted.
+        """
+        input_folder = self.input_folder.get()
+        anonymize = self.anonymize_history.get()
+        index = get_history_index()
+        root_path = Path(input_folder).resolve()
+        output_path = Path(output_folder).resolve()
+
+        total_files = len(file_paths)
+        files_completed = 0
+        cache_hits = 0
+        max_workers = min(8, max(4, total_files // 10 + 1))
+
+        def analyze_one_file(file_path: str) -> tuple[str | None, bool]:
+            """Analyze a single file (runs in thread pool).
+
+            Checks cache first - if valid, skips ffprobe.
+
+            Returns:
+                Tuple of (file_path or None, was_cache_hit).
+            """
+            if self.analysis_stop_event and self.analysis_stop_event.is_set():
+                return None, False
+
+            # Check cache first - if valid, skip ffprobe
+            try:
+                stat = os.stat(file_path)
+                cached = index.lookup_file(file_path)
+                if cached and cached.file_size_bytes == stat.st_size and cached.file_mtime == stat.st_mtime:
+                    return file_path, True  # Cache hit - no ffprobe needed
+            except OSError:
+                pass  # Let _analyze_file handle the error
+
+            # Cache miss - run full analysis with ffprobe
+            try:
+                _analyze_file(file_path, root_path, output_path, index, anonymize)
+                return file_path, False
+            except Exception:
+                logger.exception(f"Error analyzing {os.path.basename(file_path)}")
+                return None, False
+
+        with ThreadPoolExecutor(max_workers=max_workers) as executor:
+            futures = {executor.submit(analyze_one_file, fp): fp for fp in file_paths}
+            pending = set(futures.keys())
+
+            while pending:
+                # Check stop event before waiting for futures
+                if self.analysis_stop_event and self.analysis_stop_event.is_set():
+                    logger.info("Analysis interrupted by user")
+                    executor.shutdown(wait=True, cancel_futures=True)
+                    index.save()
+                    update_ui_safely(self.root, self._on_ffprobe_complete)
+                    return
+
+                # Wait for futures with timeout to allow periodic stop checks
+                done, pending = wait(pending, timeout=0.5, return_when=FIRST_COMPLETED)
+
+                # Collect completed files for batch UI update
+                completed_paths: list[str] = []
+                last_filename = ""
+
+                for future in done:
+                    file_path, was_cached = future.result()
+                    files_completed += 1
+                    if was_cached:
+                        cache_hits += 1
+                    # Use the result path if available, otherwise fall back to the original path
+                    result_path = file_path if file_path else futures[future]
+                    last_filename = os.path.basename(result_path)
+                    if file_path:
+                        completed_paths.append(file_path)
+
+                # Single batched UI update for all completed files in this round
+                if completed_paths or done:
+                    progress = (files_completed / total_files) * 100
+
+                    # Capture snapshot of values for the callback
+                    paths_snapshot = list(completed_paths)
+                    pct, name = progress, last_filename
+                    done_count, total_count, cached_count = files_completed, total_files, cache_hits
+
+                    # Use factory function to capture by value
+                    def make_callback(paths, pct, name, done_count, total_count, cached_count):
+                        def callback():
+                            self._batch_update_tree_rows(paths)
+                            self._update_analysis_progress_with_cache(pct, name, done_count, total_count, cached_count)
+
+                        return callback
+
+                    cb = make_callback(paths_snapshot, pct, name, done_count, total_count, cached_count)
+                    update_ui_safely(self.root, cb)
+
+                # Update totals and save less frequently (every batch or 5% progress)
+                batch_interval = TREE_UPDATE_BATCH_SIZE
+                pct_interval = max(1, total_files // 20)  # 5% increments
+                if files_completed % batch_interval == 0 or (
+                    total_files > MIN_FILES_FOR_PERCENT_UPDATES and files_completed % pct_interval == 0
+                ):
+                    update_ui_safely(self.root, self._update_total_from_tree)
+                    index.save()
+
+        # Save index after all files processed (handles remainder)
+        index.save()
+
+        # Log cache efficiency
+        if cache_hits > 0:
+            logger.info(f"Analysis complete: {cache_hits}/{total_files} from cache")
+
+        # Analysis complete
+        update_ui_safely(self.root, self._on_ffprobe_complete)
+
+    def _update_analysis_progress_with_cache(
+        self, progress: float, filename: str, processed: int, total: int, cache_hits: int
+    ):
+        """Update analysis progress bar and label with cache info (called on main thread)."""
+        self.analysis_progress["value"] = progress
+        if cache_hits > 0:
+            prefix = f"Analyzing ({processed}/{total}, {cache_hits} cached): "
+        else:
+            prefix = f"Analyzing ({processed}/{total}): "
+        self.analysis_status_label.config(text=_format_status_text(prefix, filename))
+
+    def _batch_update_tree_rows(self, file_paths: list[str]) -> None:
+        """Update multiple tree rows efficiently without per-file folder updates.
+
+        Updates file rows and collects affected folders, then updates folder
+        aggregates once at the end. Much faster than calling _update_tree_row
+        for each file individually.
+
+        Args:
+            file_paths: List of file paths to update.
+        """
+        if not file_paths:
+            return
+
+        index = get_history_index()
+        affected_folders: set[str] = set()
+
+        for file_path in file_paths:
+            item_id = self._tree_item_map.get(file_path)
+            if not item_id:
+                continue
+
+            record = index.lookup_file(file_path)
+            if not record:
+                continue
+
+            # Calculate display values
+            if record.status == FileStatus.SCANNED and record.estimated_reduction_percent and record.file_size_bytes:
+                has_layer2 = record.predicted_size_reduction is not None
+                file_savings = int(record.file_size_bytes * record.estimated_reduction_percent / 100)
+                savings_str = format_file_size(file_savings)
+                if not has_layer2:
+                    savings_str = f"~{savings_str}"
+                file_time = estimate_file_time(
+                    codec=record.video_codec, duration=record.duration_sec, size=record.file_size_bytes
+                ).best_seconds
+                time_str = self._format_compact_time(file_time) if file_time > 0 else "—"
+                eff_str = self._format_efficiency(file_savings, file_time)
+            elif record.status in (FileStatus.CONVERTED, FileStatus.NOT_WORTHWHILE):
+                savings_str = "—"
+                time_str = "—"
+                eff_str = "—"
+            else:
+                savings_str = "—"
+                time_str = "—"
+                eff_str = "—"
+
+            # Update tree item
+            self.analysis_tree.item(item_id, values=(savings_str, time_str, eff_str))
+
+            # Track parent folder for batch aggregate update
+            parent_id = self.analysis_tree.parent(item_id)
+            if parent_id:
+                affected_folders.add(parent_id)
+
+        # Update folder aggregates once for all affected folders
+        # Pre-build reverse map once for all folder updates
+        if affected_folders:
+            item_to_path = {item_id: path for path, item_id in self._tree_item_map.items()}
+            for folder_id in affected_folders:
+                self._update_folder_aggregates(folder_id, item_to_path)
+
+    def _on_ffprobe_complete(self):
+        """Handle ffprobe analysis completion (called on main thread)."""
+        self.analyze_button.config(state="normal")
+        self.stop_analyze_button.config(state="disabled")
+        self.analysis_progress["value"] = 100
+
+        # Update total row and get convertible count for status message
+        convertible = self._update_total_from_tree()
+
+        self.analysis_status_label.config(text=f"Analysis complete: {convertible} files ready for conversion")
+
+        # Enable quality button if files are selected
+        self.update_quality_button_state()
+
+    def _update_analysis_progress(self, progress: float, filename: str, processed: int, total: int):
+        """Update analysis progress bar and label (called on main thread)."""
+        self.analysis_progress["value"] = progress
+        prefix = f"Analyzing ({processed}/{total}): "
+        self.analysis_status_label.config(text=_format_status_text(prefix, filename))
+
+    def on_stop_analysis(self):
+        """Stop the current analysis scan."""
+        logger.info("Stopping analysis...")
+        if self._scan_stop_event:
+            self._scan_stop_event.set()
+        if self.analysis_stop_event:
+            self.analysis_stop_event.set()
+        if self.quality_analysis_stop_event:
+            self.quality_analysis_stop_event.set()
+        self.analysis_status_label.config(text="Stopping analysis...")
+        self.stop_analyze_button.config(state="disabled")
+
+    def on_analyze_quality(self):
+        """Run CRF search on selected files from the analysis tree."""
+        # Get selected items from tree
+        selected_items = self.analysis_tree.selection()
+        if not selected_items:
+            messagebox.showwarning("No Selection", "Please select files to analyze from the tree.")
+            return
+
+        # Filter to only file items (not folders)
+        file_items = []
+        for item_id in selected_items:
+            # Check if it's a file (has a parent) or folder (no parent or root)
+            parent = self.analysis_tree.parent(item_id)
+            if parent:  # It's a file (has a folder parent)
+                file_items.append(item_id)
+
+        if not file_items:
+            messagebox.showwarning("No Files", "Please select individual files, not folders.")
+            return
+
+        # Build reverse map for efficient lookup (O(n) once instead of O(n²))
+        item_to_path = {item_id: path for path, item_id in self._tree_item_map.items()}
+
+        # Use reverse map to get file paths from selected items
+        selected_paths = []
+        for item_id in file_items:
+            file_path = item_to_path.get(item_id)
+            if file_path:
+                selected_paths.append(file_path)
+
+        if not selected_paths:
+            messagebox.showerror("Error", "Could not determine file paths from selection.")
+            return
+
+        # Filter to only files that need conversion (SCANNED status in history index)
+        index = get_history_index()
+        convertible_paths = []
+        for path in selected_paths:
+            record = index.lookup_file(path)
+            if record and record.status == FileStatus.SCANNED:
+                convertible_paths.append(path)
+
+        if not convertible_paths:
+            messagebox.showinfo(
+                "No Convertible Files",
+                "The selected files are not eligible for conversion.\n"
+                "Only files with 'needs_conversion' status can be analyzed.",
+            )
+            return
+
+        logger.info(f"Starting quality analysis for {len(convertible_paths)} files")
+        self.analysis_status_label.config(text=f"Analyzing quality for {len(convertible_paths)} files...")
+        self.analyze_button.config(state="disabled")
+        self.analyze_quality_button.config(state="disabled")
+        self.stop_analyze_button.config(state="normal")
+        self.analysis_progress["value"] = 0
+
+        # Create stop event and start quality analysis thread
+        self.quality_analysis_stop_event = threading.Event()
+        self.quality_analysis_thread = threading.Thread(
+            target=self._run_quality_analysis_thread, args=(convertible_paths,), daemon=True
+        )
+        self.quality_analysis_thread.start()
+
+    def _run_quality_analysis_thread(self, file_paths: list[str]):
+        """Run CRF search on multiple files in a background thread."""
+        wrapper = AbAv1Wrapper()
+        index = get_history_index()
+        total_files = len(file_paths)
+
+        for i, file_path in enumerate(file_paths, start=1):
+            if self.quality_analysis_stop_event and self.quality_analysis_stop_event.is_set():
+                logger.info("Quality analysis cancelled by user")
+                index.save()  # Save progress before returning
+                update_ui_safely(self.root, lambda: self._on_quality_analysis_complete(stopped=True))
+                return
+
+            filename = os.path.basename(file_path)
+            logger.info(f"Running CRF search on file {i}/{total_files}: {filename}")
+
+            # Update progress
+            progress = ((i - 1) / total_files) * 100
+            update_ui_safely(
+                self.root,
+                lambda p=progress, n=filename, idx=i, t=total_files: self._update_quality_analysis_progress(
+                    p, n, idx, t
+                ),
+            )
+
+            try:
+                # Capture loop variables for progress callback
+                current_file_index = i
+                current_filename = filename
+
+                # Run CRF search
+                def make_progress_callback(file_idx: int, fname: str):
+                    """Create a progress callback with bound loop variables."""
+
+                    def progress_callback(quality_progress: float, message: str):
+                        # Update sub-progress within current file
+                        overall_progress = ((file_idx - 1) / total_files) * 100 + (quality_progress / total_files)
+                        prefix = f"File {file_idx}/{total_files}: "
+                        status_text = _format_status_text(prefix, f"{fname} - {message}")
+                        update_ui_safely(
+                            self.root,
+                            lambda p=overall_progress, txt=status_text: (
+                                self.analysis_status_label.config(text=txt),
+                                self.analysis_progress.__setitem__("value", p),
+                            ),
+                        )
+
+                    return progress_callback
+
+                progress_cb = make_progress_callback(current_file_index, current_filename)
+
+                result = wrapper.crf_search(
+                    input_path=file_path,
+                    vmaf_target=DEFAULT_VMAF_TARGET,
+                    progress_callback=progress_cb,
+                    stop_event=self.quality_analysis_stop_event,
+                )
+
+                # Update the history index with Layer 2 results
+                path_hash = compute_path_hash(file_path)
+                record = index.get(path_hash)
+
+                if record:
+                    # Update with CRF search results
+                    record.vmaf_target_when_analyzed = DEFAULT_VMAF_TARGET
+                    record.best_crf = result["best_crf"]
+                    record.best_vmaf_achieved = result["best_vmaf"]
+                    record.predicted_output_size = result.get("predicted_output_size")
+                    record.predicted_size_reduction = result.get("predicted_size_reduction")
+
+                    # Update timestamp
+                    record.last_updated = datetime.datetime.now().isoformat(sep=" ", timespec="seconds")
+
+                    # Save to index (per-file save - CRF search is slow, don't lose work)
+                    index.upsert(record)
+                    index.save()
+
+                    # Update tree display for this file
+                    update_ui_safely(
+                        self.root, lambda fp=file_path, r=result: self._update_tree_with_quality_result(fp, r)
+                    )
+
+                logger.info(
+                    f"Quality analysis complete for {filename}: "
+                    f"CRF={result['best_crf']}, VMAF={result['best_vmaf']:.2f}"
+                )
+
+            except Exception as e:
+                logger.exception(f"Error during quality analysis of {filename}")
+                update_ui_safely(
+                    self.root,
+                    lambda n=filename, err=str(e): messagebox.showerror(
+                        "Quality Analysis Error", f"Error analyzing {n}:\n{err}"
+                    ),
+                )
+
+        # Save index after all files are processed
+        index.save()
+
+        # Analysis complete
+        update_ui_safely(self.root, lambda: self._on_quality_analysis_complete(stopped=False))
+
+    def _update_quality_analysis_progress(self, progress: float, filename: str, processed: int, total: int):
+        """Update quality analysis progress bar and label (called on main thread)."""
+        self.analysis_progress["value"] = progress
+        prefix = f"Quality analysis ({processed}/{total}): "
+        self.analysis_status_label.config(text=_format_status_text(prefix, filename))
+
+    def _update_tree_with_quality_result(self, file_path: str, result: dict):
+        """Update tree item with Layer 2 results (called on main thread)."""
+        # Use _tree_item_map to find tree item directly
+        item_id = self._tree_item_map.get(file_path)
+        if not item_id:
+            return
+
+        # Get file data from history index
+        index = get_history_index()
+        record = index.lookup_file(file_path)
+        if not record:
+            return
+
+        # Calculate savings from Layer 2 prediction
+        savings_str = "—"
+        predicted_savings = 0
+        if result.get("predicted_size_reduction") and record.file_size_bytes:
+            predicted_savings = int(record.file_size_bytes * result["predicted_size_reduction"] / 100)
+            savings_str = format_file_size(predicted_savings)
+
+        # Get time estimate
+        file_time = estimate_file_time(
+            codec=record.video_codec, duration=record.duration_sec, size=record.file_size_bytes
+        ).best_seconds
+        time_str = self._format_compact_time(file_time)
+        eff_str = self._format_efficiency(predicted_savings, file_time)
+
+        # Update tree display
+        self.analysis_tree.item(item_id, values=(savings_str, time_str, eff_str))
+
+    def _on_quality_analysis_complete(self, stopped: bool):
+        """Handle quality analysis completion (called on main thread)."""
+        self.analyze_button.config(state="normal")
+        self.analyze_quality_button.config(state="normal")
+        self.stop_analyze_button.config(state="disabled")
+        self.analysis_progress["value"] = 100
+
+        if stopped:
+            self.analysis_status_label.config(text="Quality analysis stopped by user")
+        else:
+            self.analysis_status_label.config(text="Quality analysis complete")
+
+        # Re-enable quality button based on selection
+        self.update_quality_button_state()
+
+    def update_quality_button_state(self):
+        """Enable/disable the Analyze Quality button based on tree selection."""
+        selected_items = self.analysis_tree.selection()
+        # Enable if at least one file is selected (files have no children, folders do)
+        has_files = False
+        for item_id in selected_items:
+            if not self.analysis_tree.get_children(item_id):
+                has_files = True
+                break
+
+        if has_files:
+            self.analyze_quality_button.config(state="normal")
+        else:
+            self.analyze_quality_button.config(state="disabled")
+
+    def get_file_path_for_tree_item(self, item_id: str) -> str | None:
+        """Look up the file path for a given tree item ID.
+
+        Args:
+            item_id: The tree item ID to look up.
+
+        Returns:
+            The file path, or None if not found.
+        """
+        for path, tid in self._tree_item_map.items():
+            if tid == item_id:
+                return path
+        return None
+
+    def _update_tree_row(self, file_path: str):
+        """Update a single file row with data from history index.
+
+        Args:
+            file_path: Path to the file that was analyzed.
+        """
+        # Find the tree item by file_path
+        item_id = self._tree_item_map.get(file_path)
+        if not item_id:
+            return
+
+        # Get file data from history index
+        index = get_history_index()
+        record = index.lookup_file(file_path)
+
+        if not record:
+            return
+
+        has_layer2 = record.predicted_size_reduction is not None
+
+        # Calculate display values based on record status
+        if record.status == FileStatus.SCANNED and record.estimated_reduction_percent and record.file_size_bytes:
+            # File needs conversion - show estimates
+            file_savings = int(record.file_size_bytes * record.estimated_reduction_percent / 100)
+            savings_str = format_file_size(file_savings)
+            if not has_layer2:
+                savings_str = f"~{savings_str}"
+
+            file_time = estimate_file_time(
+                codec=record.video_codec, duration=record.duration_sec, size=record.file_size_bytes
+            ).best_seconds
+            time_str = self._format_compact_time(file_time) if file_time > 0 else "—"
+            eff_str = self._format_efficiency(file_savings, file_time)
+        elif record.status in (FileStatus.CONVERTED, FileStatus.NOT_WORTHWHILE):
+            # Already converted or not worthwhile
+            savings_str = "—"
+            time_str = "—"
+            eff_str = "—"
+        else:
+            # No data yet or skipped
+            savings_str = "—"
+            time_str = "—"
+            eff_str = "—"
+
+        # Update tree item
+        self.analysis_tree.item(item_id, values=(savings_str, time_str, eff_str))
+
+        # Update parent folder aggregates
+        parent_id = self.analysis_tree.parent(item_id)
+        if parent_id:
+            self._update_folder_aggregates(parent_id)
+
+    def _update_folder_aggregates(self, folder_id: str, item_to_path: dict[str, str] | None = None):
+        """Recalculate and update folder aggregate values from history index.
+
+        Args:
+            folder_id: The tree item ID of the folder to update.
+            item_to_path: Optional pre-built reverse map of item_id -> file_path.
+                         If not provided, builds one (slower for batch updates).
+        """
+        if item_to_path is None:
+            item_to_path = {item_id: path for path, item_id in self._tree_item_map.items()}
+
+        # Get all children (files)
+        children = self.analysis_tree.get_children(folder_id)
+
+        # Sum up savings and time from all files using history index
+        total_savings = 0
+        total_time = 0
+
+        index = get_history_index()
+
+        for child_id in children:
+            file_path = item_to_path.get(child_id)
+            if not file_path:
+                continue
+
+            # Look up file data from history index
+            record = index.lookup_file(file_path)
+            if not record:
+                continue
+
+            # Check if file needs conversion and has estimates
+            if record.status == FileStatus.SCANNED and record.estimated_reduction_percent:
+                # Calculate savings from reduction percentage
+                if record.file_size_bytes:
+                    file_savings = int(record.file_size_bytes * record.estimated_reduction_percent / 100)
+                    total_savings += file_savings
+
+                # Get time estimate
+                file_time = estimate_file_time(
+                    codec=record.video_codec, duration=record.duration_sec, size=record.file_size_bytes
+                ).best_seconds
+                total_time += file_time
+
+        # Update folder display (efficiency = aggregate savings / aggregate time)
+        savings_str = format_file_size(total_savings) if total_savings > 0 else "—"
+        time_str = self._format_compact_time(total_time) if total_time > 0 else "—"
+        eff_str = self._format_efficiency(total_savings, total_time)
+        self.analysis_tree.item(folder_id, values=(savings_str, time_str, eff_str))
+
+    def _format_compact_time(self, seconds: float) -> str:
+        """Format time in a compact way for the analysis tree.
+
+        Args:
+            seconds: Time in seconds
+
+        Returns:
+            Formatted string like "2h 15m", "45m", "12m"
+        """
+        if seconds <= 0:
+            return "—"
+
+        hours = int(seconds // 3600)
+        minutes = int((seconds % 3600) // 60)
+
+        if hours > 0:
+            return f"{hours}h {minutes}m"
+        if minutes > 0:
+            return f"{minutes}m"
+        return "< 1m"
+
+    def _format_efficiency(self, savings_bytes: int, time_seconds: float) -> str:
+        """Format efficiency (savings per time) for display.
+
+        Args:
+            savings_bytes: Estimated savings in bytes
+            time_seconds: Estimated conversion time in seconds
+
+        Returns:
+            Formatted string like "2.5 GB/h", "12 GB/h", or "—"
+        """
+        if savings_bytes <= 0 or time_seconds <= 0:
+            return "—"
+
+        # Calculate GB saved per hour
+        gb_per_hr = (savings_bytes / 1_073_741_824) / (time_seconds / 3600)
+
+        # No decimals for >= 10 GB/h
+        if gb_per_hr >= _EFFICIENCY_DECIMAL_THRESHOLD:
+            return f"{gb_per_hr:.0f} GB/h"
+
+        # Show one decimal for smaller values
+        return f"{gb_per_hr:.1f} GB/h"
+
+    def _update_total_row(
+        self, total_files: int, convertible: int, total_savings: int, total_time: float
+    ) -> None:
+        """Update the fixed total row at the bottom of the analysis tree.
+
+        Args:
+            total_files: Total number of files in the tree.
+            convertible: Number of files that can be converted.
+            total_savings: Estimated total savings in bytes.
+            total_time: Estimated total time in seconds.
+        """
+        # Format the display values
+        if convertible > 0:
+            name_text = f"Total ({convertible} convertible / {total_files} files)"
+        else:
+            name_text = f"Total ({total_files} files)"
+
+        savings_str = format_file_size(total_savings) if total_savings > 0 else "—"
+        time_str = self._format_compact_time(total_time) if total_time > 0 else "—"
+        eff_str = self._format_efficiency(total_savings, total_time)
+
+        # Update the total row
+        self.analysis_total_tree.item("total", text=name_text, values=(savings_str, time_str, eff_str))
+
+    def _update_total_from_tree(self) -> int:
+        """Compute and update totals from files in the tree using history index.
+
+        Iterates through all files in _tree_item_map, looks up their records
+        in the history index, and sums up savings/time for convertible files.
+
+        Returns:
+            Number of convertible files found.
+        """
+        index = get_history_index()
+        total_files = len(self._tree_item_map)
+        convertible = 0
+        total_savings = 0
+        total_time = 0.0
+
+        for file_path in self._tree_item_map:
+            record = index.lookup_file(file_path)
+            if record and record.status == FileStatus.SCANNED and record.estimated_reduction_percent:
+                convertible += 1
+                if record.file_size_bytes:
+                    total_savings += int(record.file_size_bytes * record.estimated_reduction_percent / 100)
+                file_time = estimate_file_time(
+                    codec=record.video_codec, duration=record.duration_sec, size=record.file_size_bytes
+                ).best_seconds
+                total_time += file_time
+
+        self._update_total_row(total_files, convertible, total_savings, total_time)
+        return convertible
+
+    def _parse_size_to_bytes(self, size_str: str) -> float:
+        """Parse formatted size string to bytes for sorting.
+
+        Args:
+            size_str: Formatted size like "~1.2 GB", "500 MB", or "—"
+
+        Returns:
+            Size in bytes, or float('inf') for "—"
+        """
+        if size_str == "—":
+            return float("inf")
+
+        # Remove ~ prefix if present
+        size_str = size_str.lstrip("~").strip()
+
+        # Parse value and unit
+        parts = size_str.split()
+        expected_parts = 2
+        if len(parts) != expected_parts:
+            return float("inf")
+
+        try:
+            value = float(parts[0])
+            unit = parts[1].upper()
+
+            # Convert to bytes
+            multipliers = {
+                "B": 1,
+                "KB": 1024,
+                "MB": 1024**2,
+                "GB": 1024**3,
+                "TB": 1024**4,
+            }
+            return value * multipliers.get(unit, 1)
+        except (ValueError, KeyError):
+            return float("inf")
+
+    def _parse_time_to_seconds(self, time_str: str) -> float:
+        """Parse formatted time string to seconds for sorting.
+
+        Args:
+            time_str: Formatted time like "2h 15m", "45m", or "—"
+
+        Returns:
+            Time in seconds, or float('inf') for "—"
+        """
+        if time_str in {"—", "< 1m"}:
+            return float("inf") if time_str == "—" else 30  # Treat "< 1m" as 30 seconds
+
+        total_seconds = 0.0
+        # Parse patterns like "2h 15m" or "45m"
+        parts = time_str.split()
+        for part in parts:
+            try:
+                if part.endswith("h"):
+                    total_seconds += float(part[:-1]) * 3600
+                elif part.endswith("m"):
+                    total_seconds += float(part[:-1]) * 60
+            except ValueError:
+                continue
+
+        return total_seconds if total_seconds > 0 else float("inf")
+
+    def _parse_efficiency_to_value(self, eff_str: str) -> float:
+        """Parse formatted efficiency string to numeric value for sorting.
+
+        Args:
+            eff_str: Formatted efficiency like "2.5 GB/h", "12 GB/h", or "—"
+
+        Returns:
+            Efficiency in GB/hr, or float('-inf') for "—" (sorts last when descending)
+        """
+        if eff_str == "—":
+            return float("-inf")  # Sort "—" last when sorting by efficiency (descending)
+
+        try:
+            parts = eff_str.split()
+            expected_parts = 2
+            if len(parts) != expected_parts:
+                return float("-inf")
+
+            value = float(parts[0])
+            unit = parts[1]
+
+            if unit == "GB/h":
+                return value
+            return float("-inf")
+        except (ValueError, IndexError):
+            return float("-inf")
+
+    def sort_analysis_tree(self, col: str):
+        """Sort the analysis tree by the specified column.
+
+        Sorting is done within each parent (preserves hierarchy).
+        Folders sort before files when sorting by Name.
+        Toggle direction on repeated clicks.
+
+        Args:
+            col: Column to sort by ("#0" for Name, "savings", "time", or "efficiency")
+        """
+        # Toggle direction if same column clicked
+        if self._sort_col == col:
+            self._sort_reverse = not self._sort_reverse
+        else:
+            self._sort_col = col
+            self._sort_reverse = False
+
+        def get_sort_key(item_id: str) -> tuple:
+            """Get sort key for an item.
+
+            Returns tuple: (is_file, sort_value)
+            - Folders always sort before files (is_file=False for folders)
+            - Sort value depends on column
+            """
+            # Check if item is a file (has parent) or folder (no parent or root)
+            parent = self.analysis_tree.parent(item_id)
+            is_file = bool(parent)
+
+            if col == "#0":
+                # Sort by name
+                text = self.analysis_tree.item(item_id, "text")
+                # Remove arrows, icons, and leading spaces
+                name = text.replace("▶", "").replace("▼", "").replace("📁", "").replace("🎬", "").strip()
+                return (is_file, name.lower())
+            if col == "savings":
+                # Sort by estimated savings
+                values = self.analysis_tree.item(item_id, "values")
+                min_columns_for_savings = 1
+                if values and len(values) >= min_columns_for_savings:
+                    size_bytes = self._parse_size_to_bytes(values[0])
+                    return (is_file, size_bytes)
+                return (is_file, float("inf"))
+            if col == "time":
+                # Sort by estimated time
+                values = self.analysis_tree.item(item_id, "values")
+                min_columns_for_time = 2
+                if values and len(values) >= min_columns_for_time:
+                    time_seconds = self._parse_time_to_seconds(values[1])
+                    return (is_file, time_seconds)
+                return (is_file, float("inf"))
+            if col == "efficiency":
+                # Sort by efficiency (higher is better, so negate for default ascending sort)
+                values = self.analysis_tree.item(item_id, "values")
+                min_columns_for_efficiency = 3
+                if values and len(values) >= min_columns_for_efficiency:
+                    eff_value = self._parse_efficiency_to_value(values[2])
+                    # Negate so higher efficiency sorts first in ascending order
+                    return (is_file, -eff_value)
+                return (is_file, float("inf"))
+            return (is_file, "")
+
+        def sort_children(parent_id: str):
+            """Sort children of a parent node recursively."""
+            children = list(self.analysis_tree.get_children(parent_id))
+            if not children:
+                return
+
+            # Sort children
+            children_sorted = sorted(children, key=get_sort_key, reverse=self._sort_reverse)
+
+            # Reorder in tree
+            for index, item_id in enumerate(children_sorted):
+                self.analysis_tree.move(item_id, parent_id, index)
+
+            # Recursively sort children of each child (for folders)
+            for child_id in children_sorted:
+                if self.analysis_tree.get_children(child_id):  # Has children (is a folder)
+                    sort_children(child_id)
+
+        # Sort root level items and their children recursively
+        sort_children("")
+
+        logger.debug(f"Sorted analysis tree by {col}, reverse={self._sort_reverse}")

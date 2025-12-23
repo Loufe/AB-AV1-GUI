@@ -17,6 +17,10 @@ class ToolTip:
         self.widget.bind("<Leave>", self.hide_tooltip)
 
     def show_tooltip(self, event=None):
+        # Prevent duplicate tooltips if Enter fires twice
+        if self.tooltip:
+            return
+
         x, y, _, _ = self.widget.bbox("insert")
         x += self.widget.winfo_rootx() + 25
         y += self.widget.winfo_rooty() + 25

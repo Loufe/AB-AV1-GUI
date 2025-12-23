@@ -109,10 +109,13 @@ ignore = [
 "__init__.py" = ["F401"]  # Allow unused imports in __init__.py
 "src/utils.py" = ["ERA001"]  # False positives: inline comments explaining regex patterns
 
+[tool.ruff.lint.isort]
+split-on-trailing-comma = false
+
 [tool.ruff.format]
 quote-style = "double"
 indent-style = "space"
-skip-magic-trailing-comma = false
+skip-magic-trailing-comma = true
 line-ending = "auto"
 
 [tool.ty.src]

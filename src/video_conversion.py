@@ -44,7 +44,6 @@ def process_video(
     overwrite: bool = False,
     convert_audio: bool = True,
     audio_codec: str = "opus",
-    progress_callback: Callable[..., Any] | None = None,
     file_info_callback: Callable[..., Any] | None = None,
     pid_callback: Callable[..., Any] | None = None,
     total_duration_seconds: float = 0.0,
@@ -59,7 +58,6 @@ def process_video(
         overwrite: Whether to overwrite existing output files
         convert_audio: Whether to convert audio to a different codec
         audio_codec: Target audio codec if conversion is enabled
-        progress_callback: Optional callback for reporting progress (legacy, not used directly)
         file_info_callback: Optional callback for reporting file status changes
         pid_callback: Optional callback for receiving process ID
         total_duration_seconds: Total duration of the input video in seconds (for progress calc)
