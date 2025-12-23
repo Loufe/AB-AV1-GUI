@@ -47,6 +47,60 @@ class FileStatus(str, Enum):
     CONVERTED = "converted"  # Successfully converted
 
 
+class OutputMode(str, Enum):
+    """Output mode for queue items."""
+
+    REPLACE = "replace"  # Same folder, same name, deletes original
+    SUFFIX = "suffix"  # Same folder, adds suffix, keeps original
+    SEPARATE_FOLDER = "separate_folder"  # Different output folder
+
+
+@dataclass
+class QueueItem:
+    """A file or folder in the conversion queue."""
+
+    id: str  # UUID
+    source_path: str  # File or folder path
+    is_folder: bool  # True if folder, False if single file
+    output_mode: OutputMode = OutputMode.REPLACE
+    output_suffix: str | None = None  # Override default suffix (for SUFFIX mode)
+    output_folder: str | None = None  # For SEPARATE_FOLDER mode
+
+    # Runtime state (persisted for queue restoration)
+    status: str = "pending"  # pending/scanning/converting/completed/error
+    total_files: int = 0  # For folders: count after scan
+    processed_files: int = 0
+
+    def to_dict(self) -> dict:
+        """Convert to dictionary for JSON serialization."""
+        return {
+            "id": self.id,
+            "source_path": self.source_path,
+            "is_folder": self.is_folder,
+            "output_mode": self.output_mode.value,
+            "output_suffix": self.output_suffix,
+            "output_folder": self.output_folder,
+            "status": self.status,
+            "total_files": self.total_files,
+            "processed_files": self.processed_files,
+        }
+
+    @classmethod
+    def from_dict(cls, data: dict) -> "QueueItem":
+        """Create from dictionary (JSON deserialization)."""
+        return cls(
+            id=data["id"],
+            source_path=data["source_path"],
+            is_folder=data["is_folder"],
+            output_mode=OutputMode(data.get("output_mode", "replace")),
+            output_suffix=data.get("output_suffix"),
+            output_folder=data.get("output_folder"),
+            status=data.get("status", "pending"),
+            total_files=data.get("total_files", 0),
+            processed_files=data.get("processed_files", 0),
+        )
+
+
 @dataclass
 class FileRecord:
     """Universal record for any file in the history system.
@@ -80,7 +134,8 @@ class FileRecord:
     estimated_from_similar: int | None = None  # Count of similar files used for estimate
 
     # === VMAF Analysis (Layer 2 - CRF search results) ===
-    vmaf_target_when_analyzed: int | None = None  # VMAF target used when Layer 2 analysis was performed
+    vmaf_target_when_analyzed: int | None = None  # VMAF target achieved (may be lower than requested due to fallback)
+    preset_when_analyzed: int | None = None  # Encoding preset used during analysis
     best_crf: int | None = None  # CRF that gave best VMAF (from crf-search)
     best_vmaf_achieved: float | None = None  # Best VMAF score we could achieve (from crf-search)
     predicted_output_size: int | None = None  # Predicted output size in bytes (from crf-search)

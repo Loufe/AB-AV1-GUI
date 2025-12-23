@@ -14,7 +14,7 @@ from pathlib import Path
 from typing import Callable  # Import Callable
 
 # Project imports
-from src.config import DEFAULT_VMAF_TARGET
+from src.config import DEFAULT_ENCODING_PRESET, DEFAULT_VMAF_TARGET
 from src.history_index import compute_path_hash, get_history_index
 from src.models import ConversionConfig, FileRecord, FileStatus
 from src.utils import anonymize_filename, format_file_size, get_video_info, update_ui_safely
@@ -402,6 +402,7 @@ def sequential_conversion_worker(
                     final_crf=final_crf,
                     final_vmaf=round(final_vmaf, 2) if final_vmaf is not None else None,
                     vmaf_target_used=final_vmaf_target if final_vmaf_target is not None else 95,
+                    preset_when_analyzed=DEFAULT_ENCODING_PRESET,
                     output_audio_codec=output_acodec.lower() if output_acodec != "?" else None,
                     first_seen=now,
                     last_updated=now,
@@ -439,6 +440,7 @@ def sequential_conversion_worker(
                     width=input_width,
                     height=input_height,
                     vmaf_target_when_analyzed=DEFAULT_VMAF_TARGET,
+                    preset_when_analyzed=DEFAULT_ENCODING_PRESET,
                     vmaf_target_attempted=DEFAULT_VMAF_TARGET,
                     min_vmaf_attempted=gui.session.last_min_vmaf_attempted,
                     skip_reason=gui.session.last_skip_reason,

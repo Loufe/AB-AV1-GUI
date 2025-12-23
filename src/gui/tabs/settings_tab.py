@@ -35,9 +35,33 @@ def create_settings_tab(gui):
         "If unchecked, files that already exist in the output folder will be skipped.",
     )
 
+    # --- Output Defaults ---
+    output_frame = ttk.LabelFrame(settings_frame, text="Output Defaults")
+    output_frame.grid(row=1, column=0, sticky="ew", padx=5, pady=(0, 10))
+    output_frame.columnconfigure(1, weight=1)
+
+    # Default Output Mode dropdown
+    ttk.Label(output_frame, text="Default Output Mode:").grid(row=0, column=0, sticky="w", padx=10, pady=(10, 5))
+    mode_combo = ttk.Combobox(output_frame, textvariable=gui.default_output_mode, width=18, state="readonly")
+    mode_combo["values"] = ("replace", "suffix", "separate_folder")
+    mode_combo.grid(row=0, column=1, sticky="w", padx=5, pady=(10, 5))
+    ToolTip(mode_combo, "Replace: Delete original after conversion\nSuffix: Keep original, add suffix to output\nSeparate Folder: Output to different folder")
+
+    # Default Suffix entry
+    ttk.Label(output_frame, text="Default Suffix:").grid(row=1, column=0, sticky="w", padx=10, pady=5)
+    suffix_entry = ttk.Entry(output_frame, textvariable=gui.default_suffix, width=15)
+    suffix_entry.grid(row=1, column=1, sticky="w", padx=5, pady=5)
+    ToolTip(suffix_entry, "Suffix added before .mkv extension\nExample: '_av1' creates 'video_av1.mkv'")
+
+    # Default Output Folder (for separate_folder mode)
+    ttk.Label(output_frame, text="Default Output Folder:").grid(row=2, column=0, sticky="w", padx=10, pady=(5, 10))
+    folder_entry = ttk.Entry(output_frame, textvariable=gui.default_output_folder)
+    folder_entry.grid(row=2, column=1, sticky="ew", padx=5, pady=(5, 10))
+    ttk.Button(output_frame, text="Browse...", command=gui.on_browse_default_output_folder).grid(row=2, column=2, padx=(0, 10), pady=(5, 10))
+
     # --- File Processing Settings ---
     processing_frame = ttk.LabelFrame(settings_frame, text="File Processing")
-    processing_frame.grid(row=1, column=0, sticky="ew", padx=5, pady=(0, 10))
+    processing_frame.grid(row=2, column=0, sticky="ew", padx=5, pady=(0, 10))
 
     # File extensions label
     ttk.Label(processing_frame, text="File Extensions to Process:", style="Header.TLabel").grid(
@@ -92,7 +116,7 @@ def create_settings_tab(gui):
 
     # --- Logging & History Settings ---
     log_hist_frame = ttk.LabelFrame(settings_frame, text="Logging & History")
-    log_hist_frame.grid(row=2, column=0, sticky="ew", padx=5, pady=(0, 10))
+    log_hist_frame.grid(row=3, column=0, sticky="ew", padx=5, pady=(0, 10))
     log_hist_frame.columnconfigure(1, weight=1)  # Make entry expand
 
     # Log folder setting
@@ -151,7 +175,7 @@ def create_settings_tab(gui):
 
     # --- Version Info ---
     version_frame = ttk.LabelFrame(settings_frame, text="Version Info")
-    version_frame.grid(row=3, column=0, sticky="ew", padx=5, pady=(0, 10))
+    version_frame.grid(row=4, column=0, sticky="ew", padx=5, pady=(0, 10))
 
     # Get local ab-av1 version
     local_version = get_ab_av1_version() or "Not found"

@@ -24,7 +24,10 @@ from src.ab_av1.exceptions import (
 from src.ab_av1.wrapper import AbAv1Wrapper
 
 # Import constants from config
+from src.cache_helpers import can_reuse_crf, is_file_unchanged
 from src.config import DEFAULT_ENCODING_PRESET, DEFAULT_VMAF_TARGET, MIN_OUTPUT_FILE_SIZE
+from src.history_index import get_history_index
+from src.models import FileStatus
 from src.utils import (
     anonymize_filename,
     format_file_size,
@@ -200,6 +203,42 @@ def process_video(
     logger.info(f"Using settings -> Preset: {DEFAULT_ENCODING_PRESET}, VMAF Target: {DEFAULT_VMAF_TARGET}")
     log_video_properties(video_info, prefix="Input")
 
+    # --- Check for Cached CRF from Quality Analysis ---
+    index = get_history_index()
+    record = index.lookup_file(str(input_path))
+    use_cached_crf = False
+    cached_crf = None
+
+    if record:
+        # Check if file was already marked as not worthwhile
+        if record.status == FileStatus.NOT_WORTHWHILE:
+            if is_file_unchanged(record, str(input_path)):
+                logger.info(f"Skipping {anonymized_input_name} - previously marked not worthwhile")
+                if file_info_callback:
+                    file_info_callback(
+                        input_path.name,
+                        "skipped_not_worth",
+                        {
+                            "message": record.skip_reason or "Not worth converting",
+                            "original_size": input_size,
+                            "min_vmaf_attempted": record.min_vmaf_attempted,
+                        },
+                    )
+                return None
+            else:
+                logger.info(f"File {anonymized_input_name} changed since NOT_WORTHWHILE analysis, re-attempting")
+
+        # Check if we can reuse cached CRF
+        if is_file_unchanged(record, str(input_path)) and can_reuse_crf(
+            record, DEFAULT_VMAF_TARGET, DEFAULT_ENCODING_PRESET
+        ):
+            use_cached_crf = True
+            cached_crf = record.best_crf
+            logger.info(
+                f"Using cached CRF {cached_crf} for {anonymized_input_name} "
+                f"(VMAF {record.vmaf_target_when_analyzed}, preset {record.preset_when_analyzed})"
+            )
+
     # --- Execute Conversion ---
     conversion_start_time = time.time()
     result_stats = None
@@ -208,17 +247,40 @@ def process_video(
     final_vmaf = None
     final_vmaf_target = None
     try:
-        logger.info(f"Starting ab-av1 for {anonymized_input_name} -> {anonymized_final_output_name}")
         ab_av1 = AbAv1Wrapper()
-        result_stats = ab_av1.auto_encode(
-            input_path=str(input_path),
-            output_path=str(output_path),  # Use the potentially modified output_path
-            file_info_callback=file_info_callback,
-            pid_callback=pid_callback,
-            total_duration_seconds=total_duration_seconds,  # Pass duration
-        )
+
+        if use_cached_crf and cached_crf is not None:
+            # Use cached CRF - skip CRF search phase
+            logger.info(
+                f"Starting ab-av1 encode (cached CRF) for {anonymized_input_name} -> "
+                f"{anonymized_final_output_name}"
+            )
+            result_stats = ab_av1.encode_with_crf(
+                input_path=str(input_path),
+                output_path=str(output_path),
+                crf=cached_crf,
+                preset=DEFAULT_ENCODING_PRESET,
+                file_info_callback=file_info_callback,
+                pid_callback=pid_callback,
+                total_duration_seconds=total_duration_seconds,
+            )
+        else:
+            # No cache - run full auto-encode with CRF search
+            logger.info(f"Starting ab-av1 auto-encode for {anonymized_input_name} -> {anonymized_final_output_name}")
+            result_stats = ab_av1.auto_encode(
+                input_path=str(input_path),
+                output_path=str(output_path),
+                file_info_callback=file_info_callback,
+                pid_callback=pid_callback,
+                total_duration_seconds=total_duration_seconds,
+            )
+
         conversion_elapsed_time = time.time() - conversion_start_time
-        logger.info(f"ab-av1 finished for {anonymized_input_name} in {format_time(conversion_elapsed_time)}.")
+        cache_note = " (cached CRF)" if use_cached_crf else ""
+        logger.info(
+            f"ab-av1 finished{cache_note} for {anonymized_input_name} in "
+            f"{format_time(conversion_elapsed_time)}."
+        )
 
         # --- Post-Conversion Verification & Stat Gathering ---
         if not output_path.exists():
@@ -236,9 +298,10 @@ def process_video(
 
         final_vmaf = result_stats.get("vmaf") if result_stats else None
         final_crf = result_stats.get("crf") if result_stats else None
-        final_vmaf_target = (
-            result_stats.get("vmaf_target_used") if result_stats else DEFAULT_VMAF_TARGET
-        )  # Get actual target used
+        if use_cached_crf and record and record.vmaf_target_when_analyzed is not None:
+            final_vmaf_target = record.vmaf_target_when_analyzed
+        else:
+            final_vmaf_target = result_stats.get("vmaf_target_used") if result_stats else DEFAULT_VMAF_TARGET
         logger.info(
             f"Conversion successful - Final VMAF: {final_vmaf if final_vmaf else 'N/A'}, "
             f"Final CRF: {final_crf if final_crf else 'N/A'} (Target VMAF: {final_vmaf_target})"

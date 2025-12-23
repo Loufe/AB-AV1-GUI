@@ -17,10 +17,12 @@ import sys  # Needed for sys.argv access
 import tkinter as tk
 import urllib.request
 from logging.handlers import RotatingFileHandler
+from pathlib import Path
 from typing import Any, Callable
 from urllib.error import URLError
 
 from src.config import HISTORY_FILE_V2
+from src.models import OutputMode
 
 # Logging setup
 logger = logging.getLogger(__name__)
@@ -147,6 +149,71 @@ def format_file_size(size_bytes: int) -> str:
     if size_bytes < 1024**3:
         return f"{size_bytes / (1024**2):.2f} MB"
     return f"{size_bytes / (1024**3):.2f} GB"
+
+
+# --- Output Path Calculation ---
+
+
+def calculate_output_path(
+    input_path: Path,
+    output_mode: OutputMode,
+    suffix: str = "_av1",
+    output_folder: Path | None = None,
+    input_base_folder: Path | None = None,
+) -> Path:
+    """Calculate output path based on output mode.
+
+    Args:
+        input_path: Path to the input video file.
+        output_mode: How to determine the output location.
+        suffix: Suffix to add before extension (for SUFFIX mode).
+        output_folder: Target folder (for SEPARATE_FOLDER mode).
+        input_base_folder: Base folder of source (for maintaining structure in SEPARATE_FOLDER).
+
+    Returns:
+        Path object for the output file (always .mkv extension).
+
+    Raises:
+        ValueError: If output_folder is required but not provided.
+
+    Examples:
+        REPLACE mode:
+            input: /videos/movie.mp4 -> output: /videos/movie.mkv
+
+        SUFFIX mode:
+            input: /videos/movie.mp4, suffix="_av1" -> output: /videos/movie_av1.mkv
+
+        SEPARATE_FOLDER mode:
+            input: /videos/movies/action/film.mp4
+            input_base_folder: /videos/movies
+            output_folder: /converted
+            -> output: /converted/action/film.mkv (preserves relative structure)
+    """
+    if output_mode == OutputMode.REPLACE:
+        # Same folder, same stem, .mkv extension (original will be deleted after success)
+        return input_path.with_suffix(".mkv")
+
+    if output_mode == OutputMode.SUFFIX:
+        # Same folder, add suffix before extension (always adds suffix, even if container changes)
+        return input_path.parent / f"{input_path.stem}{suffix}.mkv"
+
+    if output_mode == OutputMode.SEPARATE_FOLDER:
+        if not output_folder:
+            raise ValueError("output_folder is required for SEPARATE_FOLDER mode")
+
+        # Preserve directory structure relative to input base folder
+        if input_base_folder:
+            try:
+                relative = input_path.parent.relative_to(input_base_folder)
+                return output_folder / relative / f"{input_path.stem}.mkv"
+            except ValueError:
+                # input_path is not relative to input_base_folder, use output_folder directly
+                pass
+
+        return output_folder / f"{input_path.stem}.mkv"
+
+    # Should never happen with enum, but be defensive
+    raise ValueError(f"Unknown output mode: {output_mode}")
 
 
 # --- Path Anonymization (BLAKE2b Hash-Based) ---

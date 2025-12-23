@@ -206,7 +206,6 @@ class AbAv1Wrapper:
                 str(current_vmaf_target),
             ]
             cmd_str = " ".join(cmd)
-            stats["command"] = cmd_str
 
             cmd_for_log = [
                 os.path.basename(self.executable_path),
@@ -221,6 +220,7 @@ class AbAv1Wrapper:
                 str(current_vmaf_target),
             ]
             cmd_str_log = " ".join(cmd_for_log)
+            stats["command"] = cmd_str_log
             logger.debug(f"Running: {cmd_str_log}")
 
             # --- Environment Setup with maximum verbosity and pass-through flags ---
@@ -258,7 +258,6 @@ class AbAv1Wrapper:
             return_code = -1
             full_output_text = ""
             read_loop_exception = None
-            pipe_closed_prematurely = False  # Flag for pipe closure check
 
             try:
                 startupinfo, creationflags = get_windows_subprocess_startupinfo()
@@ -318,7 +317,6 @@ class AbAv1Wrapper:
                 if final_poll_code is None:
                     # Process is still running, we need to wait for it to finish
                     logger.warning("Process is still running after pipe reading completed")
-                    pipe_closed_prematurely = True
                     try:
                         return_code = process.wait(timeout=30)  # Wait up to 30 seconds
                         logger.info(f"Process completed with return code {return_code}")
@@ -377,7 +375,7 @@ class AbAv1Wrapper:
                         logger.debug(f"Error terminating process: {e}")
 
                 # Prepare output for error reporting
-                full_output_text = "".join(current_output_lines if "current_output_lines" in locals() else [])
+                full_output_text = "".join(current_output_lines)
                 return_code = process.poll() if process else -1
 
                 # Re-raise appropriate exception
@@ -440,7 +438,7 @@ class AbAv1Wrapper:
                                 },
                             )
 
-                        # Raise specific exception for this case
+                        clean_ab_av1_temp_folders(output_dir)
                         raise ConversionNotWorthwhileError(
                             error_msg,
                             command=cmd_str_log,
@@ -632,10 +630,13 @@ class AbAv1Wrapper:
         progress_callback: Callable[..., Any] | None = None,
         stop_event: Any | None = None,
     ) -> dict[str, Any]:
-        """Run ab-av1 crf-search only (no full encoding).
+        """Run ab-av1 crf-search with VMAF fallback (no full encoding).
 
         This performs VMAF-targeted CRF search by sampling the video at multiple
         CRF values to find the optimal quality setting. Does NOT encode the full video.
+
+        Uses the same VMAF fallback logic as auto_encode: if the initial VMAF target
+        cannot be achieved, automatically retries with lower targets (95→94→...→90).
 
         Args:
             input_path: Path to the input video file.
@@ -651,10 +652,12 @@ class AbAv1Wrapper:
                 - best_vmaf: float - VMAF score achieved at best CRF
                 - predicted_size_reduction: float - Predicted size reduction percentage
                 - predicted_output_size: int | None - Estimated output file size in bytes
+                - vmaf_target_used: int - Actual VMAF target that succeeded (may be lower than requested)
+                - used_fallback: bool - True if a lower VMAF target was used
 
         Raises:
             InputFileError: If input file is missing or invalid
-            VMAFError: If CRF search fails to find suitable CRF
+            ConversionNotWorthwhileError: If CRF search fails at all VMAF targets down to minimum
             AbAv1Error: For other ab-av1 execution errors
         """
         if vmaf_target is None:
@@ -662,6 +665,7 @@ class AbAv1Wrapper:
         if preset is None:
             preset = DEFAULT_ENCODING_PRESET
 
+        initial_vmaf_target = vmaf_target
         anonymized_input_path = anonymize_filename(input_path)
 
         # --- Input Validation ---
@@ -691,52 +695,383 @@ class AbAv1Wrapper:
             logger.exception(error_msg)
             raise InputFileError(error_msg, error_type="analysis_failed") from e
 
-        # --- Command Preparation ---
-        cmd = [
-            self.executable_path,
-            "crf-search",
-            "-i",
-            input_path,
-            "--preset",
-            str(preset),
-            "--min-vmaf",
-            str(vmaf_target),
-        ]
-        cmd_str = " ".join(cmd)
-
-        cmd_for_log = [
-            os.path.basename(self.executable_path),
-            "crf-search",
-            "-i",
-            os.path.basename(anonymized_input_path),
-            "--preset",
-            str(preset),
-            "--min-vmaf",
-            str(vmaf_target),
-        ]
-        cmd_str_log = " ".join(cmd_for_log)
-        logger.info(f"Running CRF search: {cmd_str_log}")
-
         # --- Environment Setup ---
         process_env = os.environ.copy()
         process_env["RUST_LOG"] = "debug,ab_av1=trace"
         process_env["AV1_PRINT_FFMPEG"] = "1"
 
+        # --- VMAF Fallback Loop ---
+        current_vmaf_target = initial_vmaf_target
+        cmd_str_log = ""
+        full_output_text = ""
+
+        while current_vmaf_target >= MIN_VMAF_FALLBACK_TARGET:
+            # Check for cancellation before starting new attempt
+            if stop_event and stop_event.is_set():
+                raise AbAv1Error("CRF search cancelled by user", error_type="cancelled")
+
+            # --- Command Preparation ---
+            cmd = [
+                self.executable_path,
+                "crf-search",
+                "-i",
+                input_path,
+                "--preset",
+                str(preset),
+                "--min-vmaf",
+                str(current_vmaf_target),
+            ]
+            cmd_str = " ".join(cmd)
+
+            cmd_for_log = [
+                os.path.basename(self.executable_path),
+                "crf-search",
+                "-i",
+                os.path.basename(anonymized_input_path),
+                "--preset",
+                str(preset),
+                "--min-vmaf",
+                str(current_vmaf_target),
+            ]
+            cmd_str_log = " ".join(cmd_for_log)
+
+            if current_vmaf_target != initial_vmaf_target:
+                logger.info(f"Retrying CRF search with VMAF target {current_vmaf_target}: {cmd_str_log}")
+            else:
+                logger.info(f"Running CRF search: {cmd_str_log}")
+
+            # Track parsed results
+            stats: dict[str, Any] = {
+                "phase": "crf-search",
+                "progress_quality": 0,
+                "vmaf": None,
+                "crf": None,
+                "size_reduction": None,
+                "original_size": original_size,
+                "vmaf_target_used": current_vmaf_target,
+            }
+
+            # --- Process Execution ---
+            process = None
+            return_code = -1
+            full_output_text = ""
+            current_output_lines: list[str] = []
+
+            try:
+                startupinfo, creationflags = get_windows_subprocess_startupinfo()
+
+                process = subprocess.Popen(
+                    cmd,
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.STDOUT,
+                    universal_newlines=True,
+                    bufsize=1,
+                    startupinfo=startupinfo,
+                    creationflags=creationflags,
+                    encoding="utf-8",
+                    errors="replace",
+                    env=process_env,
+                )
+
+                logger.info(f"CRF search process {process.pid} started. Reading output...")
+
+                assert process.stdout is not None  # Guaranteed by stdout=PIPE  # noqa: S101
+
+                # Read output line by line, checking stop_event periodically
+                for raw_line in iter(process.stdout.readline, ""):
+                    # Check if we should stop
+                    if stop_event and stop_event.is_set():
+                        logger.info("CRF search cancelled by stop event")
+                        process.terminate()
+                        time.sleep(0.5)
+                        if process.poll() is None:
+                            process.kill()
+                        raise AbAv1Error("CRF search cancelled by user", error_type="cancelled")
+
+                    line = raw_line.strip()
+                    if not line:
+                        continue
+
+                    # Filter out noise
+                    if "sled::pagecache" in line:
+                        continue
+
+                    current_output_lines.append(line + "\n")
+
+                    # Parse for progress
+                    stats = self.parser.parse_line(line, stats)
+
+                    # Send progress updates
+                    if progress_callback and stats.get("progress_quality"):
+                        if current_vmaf_target != initial_vmaf_target:
+                            vmaf_suffix = f" (target: {current_vmaf_target})"
+                        else:
+                            vmaf_suffix = ""
+                        message = f"CRF:{stats.get('crf', '?')}, VMAF:{stats.get('vmaf', '?')}{vmaf_suffix}"
+                        progress_callback(stats["progress_quality"], message)
+
+                # Close stdout
+                try:
+                    if process.stdout:
+                        process.stdout.close()
+                except Exception as e:
+                    logger.warning(f"Error closing process stdout pipe: {e}")
+
+                # Get return code
+                return_code = process.wait(timeout=30)
+                logger.info(f"CRF search process return code: {return_code}")
+                full_output_text = "".join(current_output_lines)
+
+            except AbAv1Error:
+                # Re-raise cancellation and other AbAv1Errors
+                raise
+            except Exception as e:
+                error_msg = f"Failed to run CRF search: {e}"
+                logger.exception(error_msg)
+
+                # Clean up runaway process
+                if process and process.poll() is None:
+                    try:
+                        logger.warning("Terminating/Killing runaway process due to error.")
+                        process.terminate()
+                        time.sleep(0.2)
+                        process.kill()
+                    except Exception as kill_e:
+                        logger.debug(f"Error terminating process: {kill_e}")
+
+                full_output_text = "".join(current_output_lines)
+                raise AbAv1Error(error_msg, command=cmd_str, output=full_output_text, error_type="process_error") from e
+
+            # --- Parse Final Results ---
+            stats = self.parser.parse_final_output(full_output_text, stats)
+
+            # --- Check Result ---
+            if return_code == 0:
+                # Success! Verify we have results
+                if stats.get("crf") is None or stats.get("vmaf") is None:
+                    error_msg = "CRF search completed but could not parse results"
+                    logger.error(error_msg)
+                    logger.error(f"Output:\n{full_output_text[-1000:]}")
+                    raise AbAv1Error(error_msg, command=cmd_str_log, output=full_output_text, error_type="parse_error")
+
+                # Calculate predicted output size
+                predicted_output_size = None
+                if original_size and stats.get("size_reduction"):
+                    predicted_output_size = int(original_size * (1 - stats["size_reduction"] / 100))
+
+                # Build result
+                result = {
+                    "best_crf": stats["crf"],
+                    "best_vmaf": stats["vmaf"],
+                    "predicted_size_reduction": stats.get("size_reduction"),
+                    "predicted_output_size": predicted_output_size,
+                    "vmaf_target_used": current_vmaf_target,
+                    "original_size": original_size,
+                    "used_fallback": current_vmaf_target != initial_vmaf_target,
+                    "preset_used": preset,
+                }
+
+                logger.info(
+                    f"CRF search complete: CRF={result['best_crf']}, "
+                    f"VMAF={result['best_vmaf']:.2f}, "
+                    f"Reduction={result.get('predicted_size_reduction', 'N/A')}%, "
+                    f"Target={current_vmaf_target}"
+                    f"{' (fallback)' if result['used_fallback'] else ''}"
+                )
+
+                return result
+
+            # --- Handle Failure ---
+            if re.search(r"Failed\s+to\s+find\s+a\s+suitable\s+crf", full_output_text, re.IGNORECASE):
+                logger.info(f"CRF search failed at VMAF {current_vmaf_target}, trying lower target...")
+                current_vmaf_target -= VMAF_FALLBACK_STEP
+                continue
+
+            # Other error - don't retry
+            error_msg = f"CRF search failed with exit code {return_code}"
+            logger.error(error_msg)
+            logger.error(f"Output tail:\n{full_output_text[-1000:]}")
+            raise AbAv1Error(error_msg, command=cmd_str_log, output=full_output_text, error_type="crf_search_error")
+
+        # --- All VMAF targets exhausted ---
+        error_msg = (
+            f"No efficient conversion possible - CRF search failed even at "
+            f"VMAF {MIN_VMAF_FALLBACK_TARGET}"
+        )
+        logger.info(f"File not worth converting: {anonymized_input_path}")
+        raise ConversionNotWorthwhileError(
+            error_msg,
+            command=cmd_str_log,
+            output=full_output_text,
+            original_size=original_size,
+        )
+
+    def encode_with_crf(
+        self,
+        input_path: str,
+        output_path: str,
+        crf: int,
+        preset: int | None = None,
+        file_info_callback: Callable[..., Any] | None = None,
+        pid_callback: Callable[..., Any] | None = None,
+        total_duration_seconds: float = 0.0,
+    ) -> dict[str, Any]:
+        """Run ab-av1 encode with explicit CRF (skip CRF search phase).
+
+        Use this when you already know the optimal CRF from previous quality analysis.
+        This skips the CRF search phase entirely and goes straight to encoding.
+
+        Args:
+            input_path: Path to the input video file.
+            output_path: Path where the output file should be saved.
+            crf: Explicit CRF value to use for encoding.
+            preset: SVT-AV1 encoding preset (default: DEFAULT_ENCODING_PRESET).
+            file_info_callback: Optional callback for reporting file status changes.
+            pid_callback: Optional callback to receive the process ID.
+            total_duration_seconds: Total duration of the input video in seconds.
+
+        Returns:
+            Dictionary containing encoding statistics and results.
+
+        Raises:
+            InputFileError, OutputFileError, EncodingError, AbAv1Error
+        """
+        self.file_info_callback = file_info_callback
+        self.parser.file_info_callback = file_info_callback
+
+        if preset is None:
+            preset = DEFAULT_ENCODING_PRESET
+
+        anonymized_input_path = anonymize_filename(input_path)
+
+        # --- Input Validation ---
+        if not os.path.exists(input_path):
+            error_msg = f"Input not found: {anonymized_input_path}"
+            logger.error(error_msg)
+            if self.file_info_callback:
+                self.file_info_callback(
+                    os.path.basename(input_path), "failed", {"message": error_msg, "type": "missing_input"}
+                )
+            raise InputFileError(error_msg, error_type="missing_input")
+
+        try:
+            video_info = get_video_info(input_path)
+            if not video_info or "streams" not in video_info:
+                raise InputFileError("Invalid video file", error_type="invalid_video")
+
+            if not any(s.get("codec_type") == "video" for s in video_info.get("streams", [])):
+                raise InputFileError("No video stream", error_type="no_video_stream")
+
+            try:
+                original_size = os.path.getsize(input_path)
+                stats: dict[str, Any] = {"original_size": original_size}
+                logger.info(f"Original file size: {original_size} bytes ({format_file_size(original_size)})")
+            except Exception as size_e:
+                logger.warning(f"Couldn't get original file size: {size_e}")
+                stats = {}
+        except AbAv1Error:
+            raise
+        except Exception as e:
+            error_msg = f"Error analyzing {anonymized_input_path}"
+            logger.exception(error_msg)
+            if self.file_info_callback:
+                self.file_info_callback(
+                    os.path.basename(input_path), "failed", {"message": error_msg, "type": "analysis_failed"}
+                )
+            raise InputFileError(error_msg, error_type="analysis_failed") from e
+
+        # --- Output Path Setup ---
+        if not output_path.lower().endswith(".mkv"):
+            output_path = os.path.splitext(output_path)[0] + ".mkv"
+
+        output_dir = os.path.dirname(output_path)
+        try:
+            os.makedirs(output_dir, exist_ok=True)
+        except Exception as e:
+            error_msg = "Cannot create output dir"
+            logger.exception(error_msg)
+            if self.file_info_callback:
+                self.file_info_callback(
+                    os.path.basename(input_path), "failed", {"message": error_msg, "type": "output_dir_creation_failed"}
+                )
+            raise OutputFileError(error_msg, error_type="output_dir_creation_failed") from e
+
+        anonymized_output_path = anonymize_filename(output_path)
+
+        # --- Command Preparation ---
+        cmd = [
+            self.executable_path,
+            "encode",
+            "-i",
+            input_path,
+            "-o",
+            output_path,
+            "--preset",
+            str(preset),
+            "--crf",
+            str(crf),
+        ]
+        cmd_str = " ".join(cmd)
+
+        cmd_for_log = [
+            os.path.basename(self.executable_path),
+            "encode",
+            "-i",
+            os.path.basename(anonymized_input_path),
+            "-o",
+            os.path.basename(anonymized_output_path),
+            "--preset",
+            str(preset),
+            "--crf",
+            str(crf),
+        ]
+        cmd_str_log = " ".join(cmd_for_log)
+        logger.info(f"Running encode with cached CRF: {cmd_str_log}")
+
+        # Update stats for encoding phase
+        stats.update(
+            {
+                "phase": "encoding",
+                "progress_quality": 100,  # CRF search already done
+                "progress_encoding": 0,
+                "vmaf": None,
+                "crf": crf,
+                "size_reduction": None,
+                "input_path": input_path,
+                "output_path": output_path,
+                "command": cmd_str,
+                "vmaf_target_used": None,  # Not applicable - using cached CRF
+                "last_ffmpeg_fps": None,
+                "eta_text": None,
+                "total_duration_seconds": total_duration_seconds,
+                "last_reported_encoding_progress": -1.0,
+                "estimated_output_size": None,
+                "estimated_size_reduction": None,
+                "used_cached_crf": True,
+            }
+        )
+
+        # --- Starting Callback ---
+        if self.file_info_callback:
+            callback_info = {
+                "message": f"Encoding with cached CRF {crf}",
+                "crf": crf,
+                "original_size": stats.get("original_size"),
+                "used_cached_crf": True,
+            }
+            self.file_info_callback(os.path.basename(input_path), "starting", callback_info)
+
+        # --- Environment Setup ---
+        process_env = os.environ.copy()
+        process_env["RUST_LOG"] = "debug,ab_av1=trace,ffmpeg=trace"
+        process_env["AV1_PRINT_FFMPEG"] = "1"
+        process_env["AV1_RAW_OUTPUT"] = "1"
+
         # --- Process Execution ---
         process = None
         return_code = -1
         full_output_text = ""
-
-        # Track parsed results
-        stats = {
-            "phase": "crf-search",
-            "progress_quality": 0,
-            "vmaf": None,
-            "crf": None,
-            "size_reduction": None,
-            "original_size": original_size,
-            "vmaf_target_used": vmaf_target,
-        }
+        current_output_lines: list[str] = []
 
         try:
             startupinfo, creationflags = get_windows_subprocess_startupinfo()
@@ -747,6 +1082,7 @@ class AbAv1Wrapper:
                 stderr=subprocess.STDOUT,
                 universal_newlines=True,
                 bufsize=1,
+                cwd=output_dir,
                 startupinfo=startupinfo,
                 creationflags=creationflags,
                 encoding="utf-8",
@@ -754,39 +1090,23 @@ class AbAv1Wrapper:
                 env=process_env,
             )
 
-            logger.info(f"CRF search process {process.pid} started. Reading output...")
-            current_output_lines = []
+            if pid_callback:
+                pid_callback(process.pid)
 
-            assert process.stdout is not None  # Guaranteed by stdout=PIPE  # noqa: S101
+            logger.info(f"Encode process {process.pid} started. Reading output...")
 
-            # Read output line by line, checking stop_event periodically
+            assert process.stdout is not None  # noqa: S101
+
             for raw_line in iter(process.stdout.readline, ""):
-                # Check if we should stop
-                if stop_event and stop_event.is_set():
-                    logger.info("CRF search cancelled by stop event")
-                    process.terminate()
-                    time.sleep(0.5)
-                    if process.poll() is None:
-                        process.kill()
-                    raise AbAv1Error("CRF search cancelled by user", error_type="cancelled")
-
                 line = raw_line.strip()
                 if not line:
                     continue
 
-                # Filter out noise
                 if "sled::pagecache" in line:
                     continue
 
                 current_output_lines.append(line + "\n")
-
-                # Parse for progress
                 stats = self.parser.parse_line(line, stats)
-
-                # Send progress updates
-                if progress_callback and stats.get("progress_quality"):
-                    message = f"CRF:{stats.get('crf', '?')}, VMAF:{stats.get('vmaf', '?')}"
-                    progress_callback(stats["progress_quality"], message)
 
             # Close stdout
             try:
@@ -796,74 +1116,122 @@ class AbAv1Wrapper:
                 logger.warning(f"Error closing process stdout pipe: {e}")
 
             # Get return code
-            return_code = process.wait(timeout=10)
-            logger.info(f"CRF search process return code: {return_code}")
+            final_poll_code = process.poll()
+            if final_poll_code is None:
+                logger.warning("Process is still running after pipe reading completed")
+                try:
+                    return_code = process.wait(timeout=30)
+                except subprocess.TimeoutExpired:
+                    logger.exception("Process did not complete, forcing termination")
+                    process.terminate()
+                    time.sleep(1)
+                    if process.poll() is None:
+                        process.kill()
+                    return_code = -1
+            else:
+                return_code = final_poll_code
+
+            logger.info(f"Encode process return code: {return_code}")
             full_output_text = "".join(current_output_lines)
 
+        except FileNotFoundError as e:
+            error_msg = f"Executable not found: {self.executable_path}"
+            logger.exception(error_msg)
+            if self.file_info_callback:
+                self.file_info_callback(
+                    os.path.basename(input_path), "failed", {"message": error_msg, "type": "executable_not_found"}
+                )
+            raise FileNotFoundError(error_msg) from e
+
         except Exception as e:
-            error_msg = f"Failed to run CRF search: {e}"
+            error_msg = f"Failed to run encode: {e}"
             logger.exception(error_msg)
 
-            # Clean up runaway process
+            if self.file_info_callback:
+                self.file_info_callback(
+                    os.path.basename(input_path),
+                    "failed",
+                    {"message": error_msg, "type": "process_management_failed"},
+                )
+
             if process and process.poll() is None:
                 try:
-                    logger.warning("Terminating/Killing runaway process due to error.")
                     process.terminate()
                     time.sleep(0.2)
                     process.kill()
                 except Exception as kill_e:
                     logger.debug(f"Error terminating process: {kill_e}")
 
-            full_output_text = "".join(current_output_lines if "current_output_lines" in locals() else [])
-            return_code = process.poll() if process else -1
-
-            if not isinstance(e, AbAv1Error):
-                raise AbAv1Error(error_msg, command=cmd_str, output=full_output_text, error_type="process_error") from e
-            raise
-
-        # --- Parse Final Results ---
-        stats = self.parser.parse_final_output(full_output_text, stats)
+            full_output_text = "".join(current_output_lines)
+            raise AbAv1Error(
+                error_msg, command=cmd_str, output=full_output_text, error_type="process_management_failed"
+            ) from e
 
         # --- Check Result ---
         if return_code != 0:
-            # Check for "Failed to find a suitable crf" error
-            if re.search(r"Failed\s+to\s+find\s+a\s+suitable\s+crf", full_output_text, re.IGNORECASE):
-                error_msg = f"Could not find suitable CRF for VMAF {vmaf_target}"
-                logger.warning(error_msg)
-                raise VMAFError(error_msg, command=cmd_str_log, output=full_output_text, error_type="crf_search_failed")
-
-            error_msg = f"CRF search failed with exit code {return_code}"
+            error_msg = f"Encode failed with exit code {return_code}"
             logger.error(error_msg)
             logger.error(f"Output tail:\n{full_output_text[-1000:]}")
-            raise AbAv1Error(error_msg, command=cmd_str_log, output=full_output_text, error_type="crf_search_error")
 
-        # --- Verify Results ---
-        if stats.get("crf") is None or stats.get("vmaf") is None:
-            error_msg = "CRF search completed but could not parse results"
+            if self.file_info_callback:
+                self.file_info_callback(
+                    os.path.basename(input_path),
+                    "failed",
+                    {"message": error_msg, "type": "encoding_failed", "command": cmd_str_log},
+                )
+
+            clean_ab_av1_temp_folders(output_dir)
+            raise EncodingError(error_msg, command=cmd_str_log, output=full_output_text, error_type="encoding_failed")
+
+        # --- Verify Output ---
+        if not os.path.exists(output_path):
+            error_msg = f"Encode reported success but output file is missing: {anonymized_output_path}"
             logger.error(error_msg)
-            logger.error(f"Output:\n{full_output_text[-1000:]}")
-            raise AbAv1Error(error_msg, command=cmd_str_log, output=full_output_text, error_type="parse_error")
+            if self.file_info_callback:
+                self.file_info_callback(
+                    os.path.basename(input_path),
+                    "failed",
+                    {"message": error_msg, "type": "missing_output_on_success"},
+                )
+            raise OutputFileError(error_msg, command=cmd_str_log, error_type="missing_output_on_success")
 
-        # --- Calculate Predicted Output Size ---
-        predicted_output_size = None
-        if original_size and stats.get("size_reduction"):
-            # size_reduction is percentage reduction (e.g., 45.0 means 45% smaller)
-            predicted_output_size = int(original_size * (1 - stats["size_reduction"] / 100))
+        # --- Success ---
+        logger.info(f"Encode completed successfully for {anonymized_input_path} (CRF {crf})")
+        stats = self.parser.parse_final_output(full_output_text, stats)
+        stats["crf"] = crf  # Ensure CRF is set
 
-        # --- Build Result ---
-        result = {
-            "best_crf": stats["crf"],
-            "best_vmaf": stats["vmaf"],
-            "predicted_size_reduction": stats.get("size_reduction"),
-            "predicted_output_size": predicted_output_size,
-            "vmaf_target_used": vmaf_target,
-            "original_size": original_size,
-        }
+        # Calculate actual size reduction
+        if stats.get("original_size"):
+            try:
+                output_size = os.path.getsize(output_path)
+                stats["output_size"] = output_size
+                stats["size_reduction"] = ((stats["original_size"] - output_size) / stats["original_size"]) * 100
+                logger.info(f"Actual size reduction: {stats['size_reduction']:.2f}%")
+            except Exception as e:
+                logger.warning(f"Could not calculate size reduction: {e}")
 
-        logger.info(
-            f"CRF search complete: CRF={result['best_crf']}, "
-            f"VMAF={result['best_vmaf']:.2f}, "
-            f"Reduction={result.get('predicted_size_reduction', 'N/A')}%"
-        )
+        # --- Completion Callback ---
+        if self.file_info_callback:
+            final_stats_for_callback = {
+                "message": f"Complete (CRF {crf}, cached)",
+                "crf": crf,
+                "size_reduction": stats.get("size_reduction"),
+                "output_path": output_path,
+                "used_cached_crf": True,
+            }
+            try:
+                final_size = os.path.getsize(output_path)
+                final_stats_for_callback["output_size"] = final_size
+            except Exception as size_e:
+                logger.debug(f"Could not get final output size: {size_e}")
 
-        return result
+            self.file_info_callback(os.path.basename(input_path), "completed", final_stats_for_callback)
+
+        # --- Cleanup ---
+        cleaned_count = clean_ab_av1_temp_folders(output_dir)
+        if cleaned_count > 0:
+            logger.info(f"Cleaned {cleaned_count} leftover temporary folder(s)")
+
+        self.file_info_callback = None
+        self.parser.file_info_callback = None
+        return stats

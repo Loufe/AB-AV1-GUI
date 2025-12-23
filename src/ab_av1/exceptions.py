@@ -31,13 +31,10 @@ class EncodingError(AbAv1Error):
     pass
 
 
-class ConversionNotWorthwhileError(Exception):
+class ConversionNotWorthwhileError(AbAv1Error):
     """Exception raised when CRF search fails, indicating conversion isn't beneficial."""
 
     def __init__(self, message, command=None, output=None, original_size=None, estimated_size=None):
-        super().__init__(message)
-        self.error_type = "conversion_not_worthwhile"
-        self.command = command
-        self.output = output
+        super().__init__(message, command=command, output=output, error_type="conversion_not_worthwhile")
         self.original_size = original_size
         self.estimated_size = estimated_size

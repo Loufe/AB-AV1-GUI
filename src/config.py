@@ -34,3 +34,8 @@ MIN_SAMPLES_FOR_ESTIMATE = 5  # Minimum conversion history samples needed for es
 MIN_SAMPLES_FOR_QUARTILES = 4  # Minimum samples required by statistics.quantiles(n=4)
 DEFAULT_REDUCTION_ESTIMATE_PERCENT = 45.0  # Default file size reduction estimate if no history data
 RESOLUTION_TOLERANCE_PERCENT = 0.2  # Tolerance for resolution matching (20%)
+
+# --- Queue/Output Settings ---
+DEFAULT_OUTPUT_MODE = "replace"  # "replace", "suffix", "separate_folder"
+DEFAULT_SUFFIX = "_av1"
+OUTPUT_MODE_OPTIONS = ("replace", "suffix", "separate_folder")

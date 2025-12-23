@@ -13,7 +13,7 @@ import sys
 import tkinter as tk
 from tkinter import ttk
 
-from src.gui.base import ToolTip
+from src.gui.base import ToolTip, TreeviewRowTooltip
 
 
 def _open_in_explorer(path: str) -> None:
@@ -91,12 +91,13 @@ def create_analysis_tab(gui):
     tree_container.columnconfigure(0, weight=1)
     tree_container.rowconfigure(0, weight=1)
 
-    columns = ("savings", "time", "efficiency")
+    columns = ("size", "savings", "time", "efficiency")
     gui.analysis_tree = ttk.Treeview(
         tree_container, columns=columns, show="tree headings", selectmode="extended", style="Analysis.Treeview"
     )
 
     gui.analysis_tree.heading("#0", text="Name", anchor="w", command=lambda: gui.sort_analysis_tree("#0"))
+    gui.analysis_tree.heading("size", text="Size", anchor="e", command=lambda: gui.sort_analysis_tree("size"))
     gui.analysis_tree.heading(
         "savings", text="Est. Savings", anchor="e", command=lambda: gui.sort_analysis_tree("savings")
     )
@@ -107,9 +108,14 @@ def create_analysis_tab(gui):
 
     # Name column stretches to fill space, data columns are fixed
     gui.analysis_tree.column("#0", width=300, minwidth=150, stretch=True)
+    gui.analysis_tree.column("size", width=70, minwidth=70, stretch=False, anchor="e")
     gui.analysis_tree.column("savings", width=90, minwidth=90, stretch=False, anchor="e")
     gui.analysis_tree.column("time", width=90, minwidth=90, stretch=False, anchor="e")
     gui.analysis_tree.column("efficiency", width=80, minwidth=80, stretch=False, anchor="e")
+
+    # Configure tags for status coloring (subtle, professional colors)
+    gui.analysis_tree.tag_configure("done", foreground="#2E7D32")  # Dark green
+    gui.analysis_tree.tag_configure("skip", foreground="#C65D00")  # Muted amber
 
     scroll_y = ttk.Scrollbar(tree_container, orient="vertical", command=gui.analysis_tree.yview)
     gui.analysis_tree.configure(yscrollcommand=scroll_y.set)
@@ -201,6 +207,9 @@ def create_analysis_tab(gui):
     # Update quality button state when selection changes
     gui.analysis_tree.bind("<<TreeviewSelect>>", lambda e: gui.update_quality_button_state())
 
+    # Set up row tooltips for file status explanations
+    TreeviewRowTooltip(gui.analysis_tree, gui.get_analysis_tree_tooltip)
+
     # --- Row 3: Fixed total row (non-scrolling, always visible) ---
     # Use a separate single-row Treeview with matching columns for perfect alignment
     total_container = ttk.Frame(main)
@@ -213,12 +222,13 @@ def create_analysis_tab(gui):
 
     # Match column widths exactly with main tree
     gui.analysis_total_tree.column("#0", width=300, minwidth=150, stretch=True)
+    gui.analysis_total_tree.column("size", width=70, minwidth=70, stretch=False, anchor="e")
     gui.analysis_total_tree.column("savings", width=90, minwidth=90, stretch=False, anchor="e")
     gui.analysis_total_tree.column("time", width=90, minwidth=90, stretch=False, anchor="e")
     gui.analysis_total_tree.column("efficiency", width=80, minwidth=80, stretch=False, anchor="e")
 
     # Insert the total row (will be updated dynamically)
-    gui.analysis_total_tree.insert("", "end", iid="total", text="Total", values=("—", "—", "—"))
+    gui.analysis_total_tree.insert("", "end", iid="total", text="Total", values=("—", "—", "—", "—"))
 
     # Add padding on right to align with scrollbar in main tree
     gui.analysis_total_tree.grid(row=0, column=0, sticky="ew", padx=(0, 17))
