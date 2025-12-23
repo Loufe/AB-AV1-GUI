@@ -58,7 +58,7 @@ def create_statistics_tab(gui: "VideoConverterGUI") -> None:
 
     gui.histogram_canvas = tk.Canvas(bar_frame, bg="white", highlightthickness=0)
     gui.histogram_canvas.pack(fill="both", expand=True, padx=5, pady=5)
-    gui.histogram_chart = BarChart(gui.histogram_canvas)
+    gui.histogram_chart = BarChart(gui.histogram_canvas, histogram_mode=True, color_gradient=True)
 
     # Pie chart (right)
     pie_frame = ttk.LabelFrame(main, text="Source Codecs")
@@ -141,9 +141,16 @@ def _create_summary_panel(gui: "VideoConverterGUI", parent: ttk.Frame, row: int)
     gui.size_range_label = ttk.Label(size_row, text="", foreground="#666")
     gui.size_range_label.pack(side="left")
 
+    # Throughput row
+    throughput_row = ttk.Frame(right_col)
+    throughput_row.grid(row=2, column=0, sticky="w", pady=3)
+    ttk.Label(throughput_row, text="Avg Throughput:").pack(side="left")
+    gui.throughput_stats_label = ttk.Label(throughput_row, text="-")
+    gui.throughput_stats_label.pack(side="left", padx=(5, 0))
+
     # Date range row
     date_row = ttk.Frame(right_col)
-    date_row.grid(row=2, column=0, sticky="w", pady=3)
+    date_row.grid(row=3, column=0, sticky="w", pady=3)
     ttk.Label(date_row, text="History Range:").pack(side="left")
     gui.stats_date_range_label = ttk.Label(date_row, text="-")
     gui.stats_date_range_label.pack(side="left", padx=(5, 0))
@@ -159,9 +166,9 @@ def aggregate_size_reduction_histogram(records: list[FileRecord]) -> dict[str, i
         records: List of converted FileRecord objects.
 
     Returns:
-        Dict mapping bucket labels to counts, e.g., {"0-10%": 5, "10-20%": 12, ...}
+        Dict mapping bucket labels to counts, e.g., {"0%-10%": 5, "10%-20%": 12, ...}
     """
-    buckets = {f"{i * 10}-{(i + 1) * 10}%": 0 for i in range(10)}
+    buckets = {f"{i * 10}%-{(i + 1) * 10}%": 0 for i in range(10)}
 
     for record in records:
         if record.reduction_percent is not None:
@@ -169,7 +176,7 @@ def aggregate_size_reduction_histogram(records: list[FileRecord]) -> dict[str, i
             # Clamp to valid range
             pct = max(0, min(pct, 99.99))
             bucket_idx = int(pct // 10)
-            bucket_key = f"{bucket_idx * 10}-{(bucket_idx + 1) * 10}%"
+            bucket_key = f"{bucket_idx * 10}%-{(bucket_idx + 1) * 10}%"
             buckets[bucket_key] += 1
 
     # Remove empty buckets for cleaner display
@@ -249,10 +256,18 @@ def calculate_summary_statistics(records: list[FileRecord]) -> dict[str, Any]:
     total_input = sum(r.file_size_bytes for r in records if r.file_size_bytes)
     total_output = sum(r.output_size_bytes or 0 for r in records)
     total_saved = total_input - total_output
+    total_time_sec = sum(r.conversion_time_sec or 0 for r in records)
 
     reductions = [r.reduction_percent for r in records if r.reduction_percent is not None]
     vmaf_scores = [r.final_vmaf for r in records if r.final_vmaf is not None]
     crf_values = [r.final_crf for r in records if r.final_crf is not None]
+
+    # Calculate throughput in GB/hr
+    gb_per_hour: float | None = None
+    if total_time_sec > 0:
+        total_gb = total_input / (1024**3)
+        total_hours = total_time_sec / 3600
+        gb_per_hour = total_gb / total_hours
 
     dates = [r.first_seen for r in records if r.first_seen]
 
@@ -261,6 +276,8 @@ def calculate_summary_statistics(records: list[FileRecord]) -> dict[str, Any]:
         "total_input_bytes": total_input,
         "total_output_bytes": total_output,
         "total_saved_bytes": total_saved,
+        "total_time_sec": total_time_sec,
+        "gb_per_hour": gb_per_hour,
         "reductions": reductions,
         "vmaf_scores": vmaf_scores,
         "crf_values": crf_values,
@@ -327,6 +344,7 @@ def _clear_summary_labels(gui: "VideoConverterGUI") -> None:
     gui.size_stats_label.config(text="-")
     gui.size_range_label.config(text="")
     gui.total_saved_label.config(text="-")
+    gui.throughput_stats_label.config(text="-")
     gui.stats_date_range_label.config(text="-")
 
 
@@ -393,6 +411,13 @@ def _update_summary_labels(gui: "VideoConverterGUI", summary: dict[str, Any]) ->
         gui.total_saved_label.config(text=format_file_size(total_saved))
     else:
         gui.total_saved_label.config(text="-")
+
+    # Throughput
+    gb_per_hour = summary.get("gb_per_hour")
+    if gb_per_hour is not None:
+        gui.throughput_stats_label.config(text=f"{gb_per_hour:.2f} GB/hr")
+    else:
+        gui.throughput_stats_label.config(text="-")
 
     # Date range
     start_date, end_date = summary.get("date_range", ("-", "-"))

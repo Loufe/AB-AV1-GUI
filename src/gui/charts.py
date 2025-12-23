@@ -7,6 +7,7 @@ No external dependencies - uses only tkinter.Canvas primitives.
 
 import logging
 import tkinter as tk
+from datetime import date
 from typing import Any
 
 logger = logging.getLogger(__name__)
@@ -32,17 +33,45 @@ PIE_COLORS = [
 class BarChart:
     """Canvas-based vertical bar chart."""
 
-    def __init__(self, canvas: tk.Canvas):
+    def __init__(
+        self, canvas: tk.Canvas, *, histogram_mode: bool = False, color_gradient: bool = False
+    ):
+        """Initialize bar chart.
+
+        Args:
+            canvas: Tkinter canvas to draw on.
+            histogram_mode: If True, draw edge labels (for histograms with range buckets).
+                Labels should be "start-end" format (e.g., "0-10%"). Edge labels will
+                show boundary values between bars instead of centered labels.
+            color_gradient: If True, color bars from red (first) to green (last) based
+                on position. Useful for histograms where higher values are "better".
+        """
         self.canvas = canvas
         self.data: dict[str, int] = {}
+        self.histogram_mode = histogram_mode
+        self.color_gradient = color_gradient
         self._margin_left = 50
         self._margin_right = 20
         self._margin_top = 20
-        self._margin_bottom = 50
+        self._margin_bottom = 30 if histogram_mode else 50
         self._resize_timer: str | None = None
 
         # Bind resize
         self.canvas.bind("<Configure>", self._on_resize)
+
+    @staticmethod
+    def _gradient_color(ratio: float) -> str:
+        """Interpolate from red (0) through yellow (0.5) to green (1)."""
+        ratio = max(0.0, min(1.0, ratio))
+        if ratio <= 0.5:  # noqa: PLR2004
+            # Red to yellow
+            r = 255
+            g = int(255 * (ratio * 2))
+        else:
+            # Yellow to green
+            r = int(255 * (1 - (ratio - 0.5) * 2))
+            g = 255
+        return f"#{r:02x}{g:02x}00"
 
     def set_data(self, data: dict[str, int]) -> None:
         """Set chart data and redraw."""
@@ -114,26 +143,56 @@ class BarChart:
             gap = total_bar_area * 0.3
 
             # Draw bars
-            for i, (label, value) in enumerate(zip(labels, values)):
+            for i, value in enumerate(values):
                 x1 = chart_left + i * total_bar_area + gap / 2
                 x2 = x1 + bar_width
                 bar_height = (value / max_val) * chart_height if max_val > 0 else 0
                 y1 = chart_bottom - bar_height
                 y2 = chart_bottom
 
-                color = BAR_COLORS[i % len(BAR_COLORS)]
+                if self.color_gradient and num_bars > 1:
+                    color = self._gradient_color(i / (num_bars - 1))
+                else:
+                    color = BAR_COLORS[i % len(BAR_COLORS)]
                 self.canvas.create_rectangle(x1, y1, x2, y2, fill=color, outline="")
-
-                # X-axis label (rotated via anchor)
-                label_x = (x1 + x2) / 2
-                self.canvas.create_text(
-                    label_x, chart_bottom + 5, text=label, anchor="n", font=("Arial", 8), fill="#444"
-                )
 
                 # Value on top of bar
                 if value > 0:
+                    label_x = (x1 + x2) / 2
                     self.canvas.create_text(
                         label_x, y1 - 5, text=str(value), anchor="s", font=("Arial", 8), fill="#444"
+                    )
+
+            # X-axis labels
+            if self.histogram_mode:
+                # Histogram mode: draw edge labels at bar boundaries
+                # Parse range labels like "40-50%" to extract boundary values
+                edge_labels: list[str] = []
+                for label in labels:
+                    if "-" in label:
+                        start, end = label.split("-", 1)
+                        if not edge_labels:
+                            edge_labels.append(start.strip())
+                        edge_labels.append(end.strip())
+                    else:
+                        # Fallback for non-range labels
+                        edge_labels.append(label)
+
+                # Draw edge labels at bar boundaries
+                for i, edge_label in enumerate(edge_labels):
+                    # Position at the edge between bars
+                    x = chart_left + i * total_bar_area + gap / 2
+                    self.canvas.create_text(
+                        x, chart_bottom + 5, text=edge_label, anchor="n", font=("Arial", 8), fill="#444"
+                    )
+            else:
+                # Standard mode: centered labels under each bar
+                for i, label in enumerate(labels):
+                    x1 = chart_left + i * total_bar_area + gap / 2
+                    x2 = x1 + bar_width
+                    label_x = (x1 + x2) / 2
+                    self.canvas.create_text(
+                        label_x, chart_bottom + 5, text=label, anchor="n", font=("Arial", 8), fill="#444"
                     )
 
         except tk.TclError as e:
@@ -207,7 +266,7 @@ class PieChart:
                 self.canvas.create_text(width / 2, height / 2, text="No data", fill="#888", font=("Arial", 10))
                 return
 
-            # Draw pie segments
+            # Draw pie segments - filter out items with zero entries
             start_angle = 90  # Start from top
             items = [(k, v) for k, v in self.data.items() if v > 0]
 
@@ -253,14 +312,25 @@ class PieChart:
 
                 # Label text - truncate long codec names for legend fit
                 display_label = label[:12] + "..." if len(label) > 12 else label  # noqa: PLR2004
-                self.canvas.create_text(
+                label_id = self.canvas.create_text(
                     legend_x + 20,
                     legend_y + i * line_height + 7,
-                    text=f"{display_label} ({pct:.0f}%)",
+                    text=display_label,
                     anchor="w",
                     font=("Arial", 9),
                     fill="#444",
                 )
+                # Draw percentage in grey after the label
+                label_bbox = self.canvas.bbox(label_id)
+                if label_bbox:
+                    self.canvas.create_text(
+                        label_bbox[2] + 3,
+                        legend_y + i * line_height + 7,
+                        text=f"({pct:.0f}%)",
+                        anchor="w",
+                        font=("Arial", 9),
+                        fill="#999",
+                    )
 
         except tk.TclError as e:
             logger.debug(f"TclError drawing PieChart (widget likely destroyed): {e}")
@@ -366,14 +436,40 @@ class LineGraph:
                     self.canvas.create_oval(x - 4, y - 4, x + 4, y + 4, fill=LINE_COLOR, outline="")
                 return
 
-            x_step = chart_width / (num_points - 1)
+            # Parse dates for proper time-based x-axis positioning
+            parsed_dates: list[date] = []
+            for date_str, _ in self.data:
+                try:
+                    parsed_dates.append(date.fromisoformat(date_str))
+                except ValueError:
+                    # Fallback: if date parsing fails, use index-based spacing
+                    parsed_dates = []
+                    break
 
             # Draw line and points
             points = []
-            for i, (_date_str, value) in enumerate(self.data):
-                x = chart_left + i * x_step
-                y = chart_bottom - (value / max_val) * chart_height if max_val > 0 else chart_bottom
-                points.append((x, y))
+            if parsed_dates:
+                # Time-proportional x-axis: position based on actual dates
+                first_date = parsed_dates[0]
+                last_date = parsed_dates[-1]
+                date_range_days = (last_date - first_date).days
+
+                for i, (_, value) in enumerate(self.data):
+                    if date_range_days > 0:
+                        days_from_start = (parsed_dates[i] - first_date).days
+                        x = chart_left + (days_from_start / date_range_days) * chart_width
+                    else:
+                        # All dates are the same - center the points
+                        x = chart_left + chart_width / 2
+                    y = chart_bottom - (value / max_val) * chart_height if max_val > 0 else chart_bottom
+                    points.append((x, y))
+            else:
+                # Fallback: evenly space points (original behavior)
+                x_step = chart_width / (num_points - 1)
+                for i, (_, value) in enumerate(self.data):
+                    x = chart_left + i * x_step
+                    y = chart_bottom - (value / max_val) * chart_height if max_val > 0 else chart_bottom
+                    points.append((x, y))
 
             # Draw filled area under line
             # Note: Tkinter doesn't support RGBA hex, so use pre-blended light color
@@ -394,14 +490,15 @@ class LineGraph:
                     self.canvas.create_oval(x - 3, y - 3, x + 3, y + 3, fill=LINE_COLOR, outline="white")
 
             # X-axis labels (first and last date)
+            # Use anchors that extend inward to prevent clipping at edges
             if self.data:
-                first_date = self.data[0][0]
-                last_date = self.data[-1][0]
+                first_date_label = self.data[0][0]
+                last_date_label = self.data[-1][0]
                 self.canvas.create_text(
-                    chart_left, chart_bottom + 10, text=first_date, anchor="n", font=("Arial", 8), fill="#666"
+                    chart_left, chart_bottom + 10, text=first_date_label, anchor="nw", font=("Arial", 8), fill="#666"
                 )
                 self.canvas.create_text(
-                    chart_right, chart_bottom + 10, text=last_date, anchor="n", font=("Arial", 8), fill="#666"
+                    chart_right, chart_bottom + 10, text=last_date_label, anchor="ne", font=("Arial", 8), fill="#666"
                 )
 
         except tk.TclError as e:

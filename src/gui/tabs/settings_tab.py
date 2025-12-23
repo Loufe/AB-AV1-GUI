@@ -122,9 +122,46 @@ def create_settings_tab(gui):
         audio_combo, "Select audio codec for re-encoding. Opus offers better compression. AAC is widely compatible."
     )
 
+    # --- Hardware Acceleration Settings ---
+    hw_accel_frame = ttk.LabelFrame(settings_frame, text="Hardware Acceleration")
+    hw_accel_frame.grid(row=3, column=0, sticky="ew", padx=5, pady=(0, 10))
+
+    # Hardware decoding checkbox
+    hw_decode_check = ttk.Checkbutton(
+        hw_accel_frame, text="Use hardware-accelerated decoding", variable=gui.hw_decode_enabled
+    )
+    hw_decode_check.grid(row=0, column=0, sticky="w", padx=10, pady=(10, 5))
+    ToolTip(
+        hw_decode_check,
+        "Enable NVIDIA CUVID or Intel QSV hardware decoding for faster source video decoding.\n"
+        "Requires ab-av1 v0.10.0+ and compatible hardware/drivers.\n"
+        "If unavailable, falls back to software decoding automatically.",
+    )
+
+    # Detected decoders label
+    from src.hardware_accel import get_available_hw_decoders
+
+    detected_decoders = get_available_hw_decoders()
+    if detected_decoders:
+        decoder_list = ", ".join(sorted(detected_decoders))
+        detected_text = f"Detected: {decoder_list}"
+        detected_color = "#008000"  # Green
+    else:
+        detected_text = "No hardware decoders found"
+        detected_color = "#808080"  # Gray
+
+    detected_label = ttk.Label(hw_accel_frame, text=detected_text, foreground=detected_color)
+    detected_label.grid(row=1, column=0, sticky="w", padx=10, pady=(0, 10))
+    ToolTip(
+        detected_label,
+        "Hardware decoders available in your FFmpeg installation.\n"
+        "Supported: h264_cuvid, hevc_cuvid, vp9_cuvid, av1_cuvid (NVIDIA)\n"
+        "           h264_qsv, hevc_qsv, vp9_qsv, av1_qsv (Intel QSV)",
+    )
+
     # --- Logging & History Settings ---
     log_hist_frame = ttk.LabelFrame(settings_frame, text="Logging & History")
-    log_hist_frame.grid(row=3, column=0, sticky="ew", padx=5, pady=(0, 10))
+    log_hist_frame.grid(row=4, column=0, sticky="ew", padx=5, pady=(0, 10))
     log_hist_frame.columnconfigure(1, weight=1)  # Make entry expand
 
     # Log folder setting
@@ -183,7 +220,7 @@ def create_settings_tab(gui):
 
     # --- Version Info ---
     version_frame = ttk.LabelFrame(settings_frame, text="Version Info")
-    version_frame.grid(row=4, column=0, sticky="ew", padx=5, pady=(0, 10))
+    version_frame.grid(row=5, column=0, sticky="ew", padx=5, pady=(0, 10))
 
     # Get local ab-av1 version
     local_version = get_ab_av1_version() or "Not found"

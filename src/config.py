@@ -39,3 +39,12 @@ RESOLUTION_TOLERANCE_PERCENT = 0.2  # Tolerance for resolution matching (20%)
 DEFAULT_OUTPUT_MODE = "replace"  # "replace", "suffix", "separate_folder"
 DEFAULT_SUFFIX = "_av1"
 OUTPUT_MODE_OPTIONS = ("replace", "suffix", "separate_folder")
+
+# --- Hardware Decoder Settings ---
+# Hardware decoder mapping (source codec -> preferred decoders in priority order)
+HW_DECODER_MAP: dict[str, list[str]] = {
+    "h264": ["h264_cuvid", "h264_qsv"],
+    "hevc": ["hevc_cuvid", "hevc_qsv"],
+    "vp9": ["vp9_cuvid", "vp9_qsv"],
+    "av1": ["av1_cuvid", "av1_qsv"],
+}

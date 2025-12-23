@@ -191,6 +191,7 @@ class VideoConverterGUI:
     total_saved_label: ttk.Label
     size_stats_label: ttk.Label
     size_range_label: ttk.Label
+    throughput_stats_label: ttk.Label
     stats_date_range_label: ttk.Label
 
     def __init__(self, root):
@@ -329,6 +330,7 @@ class VideoConverterGUI:
                 "default_output_mode": self.default_output_mode.get(),
                 "default_suffix": self.default_suffix.get(),
                 "default_output_folder": self.default_output_folder.get(),
+                "hw_decode_enabled": self.hw_decode_enabled.get(),
                 "queue_items": [item.to_dict() for item in self._queue_items],
             }
             temp_config_file = CONFIG_FILE + ".tmp"
@@ -398,6 +400,7 @@ class VideoConverterGUI:
         self.anonymize_history = tk.BooleanVar(value=self.config.get("anonymize_history", True))
         self.audio_codec = tk.StringVar(value=self.config.get("audio_codec", "opus"))
         self.delete_original_var = tk.BooleanVar(value=self.config.get("delete_original_after_conversion", False))
+        self.hw_decode_enabled = tk.BooleanVar(value=self.config.get("hw_decode_enabled", False))
 
         # CPU count for display purposes
         try:
@@ -762,16 +765,16 @@ class VideoConverterGUI:
         threading.Thread(target=download_thread, daemon=True).start()
 
     def on_download_ffmpeg(self):
-        """Show FFmpeg download dialog and download to selected location."""
-        # Get existing FFmpeg path for the dialog
+        """Download FFmpeg to vendor folder. Shows dialog if system FFmpeg exists."""
+        # Check for existing system FFmpeg
         existing_ffmpeg = shutil.which("ffmpeg")
 
-        # Show dialog
-        dialog = FFmpegDownloadDialog(self.root, existing_ffmpeg)
-        result = dialog.show()
-
-        if result.cancelled:
-            return
+        # If system FFmpeg exists, show informational dialog
+        if existing_ffmpeg:
+            existing_dir = Path(existing_ffmpeg).parent
+            dialog = FFmpegDownloadDialog(self.root, existing_dir)
+            if not dialog.show():
+                return  # User cancelled
 
         # Disable button and show progress
         if self.ffmpeg_download_btn:
@@ -781,9 +784,6 @@ class VideoConverterGUI:
         if self.ffmpeg_update_label:
             self.ffmpeg_update_label.config(text="Downloading...", foreground="gray")
         self.root.update_idletasks()
-
-        # Capture dialog result for thread
-        dest_dir = result.path
 
         def download_thread():
             def progress_callback(downloaded, total):
@@ -795,7 +795,7 @@ class VideoConverterGUI:
                     if label:
                         self.root.after(0, lambda t=text, lbl=label: lbl.config(text=t))
 
-            success, message = download_ffmpeg(dest_dir, progress_callback)
+            success, message = download_ffmpeg(progress_callback)
 
             def update_ui():
                 if success:
@@ -897,6 +897,7 @@ class VideoConverterGUI:
         self._queue_items.append(item)
         self._save_queue_to_config()
         self._refresh_queue_tree()
+        self.sync_queue_tags_to_analysis_tree()
 
     def on_remove_from_queue(self):
         """Remove selected items from queue."""
@@ -925,6 +926,7 @@ class VideoConverterGUI:
 
         self._save_queue_to_config()
         self._refresh_queue_tree()
+        self.sync_queue_tags_to_analysis_tree()
 
     def on_clear_queue(self):
         """Clear all items from queue."""
@@ -934,6 +936,7 @@ class VideoConverterGUI:
             self._queue_items.clear()
             self._save_queue_to_config()
             self._refresh_queue_tree()
+            self.sync_queue_tags_to_analysis_tree()
 
     def on_queue_selection_changed(self):
         """Handle selection change in queue tree."""
@@ -1233,14 +1236,20 @@ class VideoConverterGUI:
                             savings_str = "Skip"
                             time_str = "—"
                             tag = "skip"
-                        elif record.estimated_reduction_percent and record.file_size_bytes:
-                            est_savings = int(record.file_size_bytes * record.estimated_reduction_percent / 100)
-                            savings_str = f"~{format_file_size(est_savings)}"
-                            file_time = estimate_file_time(
-                                codec=record.video_codec, duration=record.duration_sec, size=record.file_size_bytes
-                            ).best_seconds
-                            time_str = self._format_compact_time(file_time) if file_time > 0 else "—"
-                            eff_str = self._format_efficiency(est_savings, file_time)
+                        else:
+                            # Use Layer 2 data if available, otherwise fall back to Layer 1 estimate
+                            has_layer2 = record.predicted_size_reduction is not None
+                            reduction_percent = record.predicted_size_reduction or record.estimated_reduction_percent
+                            if reduction_percent and record.file_size_bytes:
+                                est_savings = int(record.file_size_bytes * reduction_percent / 100)
+                                savings_str = format_file_size(est_savings)
+                                if not has_layer2:
+                                    savings_str = f"~{savings_str}"
+                                file_time = estimate_file_time(
+                                    codec=record.video_codec, duration=record.duration_sec, size=record.file_size_bytes
+                                ).best_seconds
+                                time_str = self._format_compact_time(file_time) if file_time > 0 else "—"
+                                eff_str = self._format_efficiency(est_savings, file_time)
 
                     file_display_data.append((filename, file_path, size_str, savings_str, time_str, eff_str, tag))
 
@@ -1410,6 +1419,9 @@ class VideoConverterGUI:
 
         # Update total row with any cached data
         self._update_total_from_tree()
+
+        # Sync queue tags to show which files are in the conversion queue
+        self.sync_queue_tags_to_analysis_tree()
 
     def on_analyze_folders(self):
         """Run ffprobe analysis on files already in the tree.
@@ -1624,9 +1636,11 @@ class VideoConverterGUI:
             # Calculate display values
             size_str = format_file_size(record.file_size_bytes) if record.file_size_bytes else "—"
             tag = ""
-            if record.status == FileStatus.SCANNED and record.estimated_reduction_percent and record.file_size_bytes:
-                has_layer2 = record.predicted_size_reduction is not None
-                file_savings = int(record.file_size_bytes * record.estimated_reduction_percent / 100)
+            # Use Layer 2 data if available, otherwise fall back to Layer 1 estimate
+            has_layer2 = record.predicted_size_reduction is not None
+            reduction_percent = record.predicted_size_reduction or record.estimated_reduction_percent
+            if record.status == FileStatus.SCANNED and reduction_percent and record.file_size_bytes:
+                file_savings = int(record.file_size_bytes * reduction_percent / 100)
                 savings_str = format_file_size(file_savings)
                 if not has_layer2:
                     savings_str = f"~{savings_str}"
@@ -1930,6 +1944,11 @@ class VideoConverterGUI:
             savings_str = f"{savings_str}*"
         self.analysis_tree.item(item_id, values=(size_str, savings_str, time_str, eff_str))
 
+        # Update parent folder aggregates to reflect new Layer 2 data
+        parent_id = self.analysis_tree.parent(item_id)
+        if parent_id:
+            self._update_folder_aggregates(parent_id)
+
     def _update_tree_not_worthwhile(self, file_path: str):
         """Update tree item to show file is not worth converting (called on main thread)."""
         item_id = self._tree_item_map.get(file_path)
@@ -2071,13 +2090,15 @@ class VideoConverterGUI:
             return
 
         has_layer2 = record.predicted_size_reduction is not None
+        # Use Layer 2 data if available, otherwise fall back to Layer 1 estimate
+        reduction_percent = record.predicted_size_reduction or record.estimated_reduction_percent
 
         # Calculate display values based on record status
         size_str = format_file_size(record.file_size_bytes) if record.file_size_bytes else "—"
         tag = ""
-        if record.status == FileStatus.SCANNED and record.estimated_reduction_percent and record.file_size_bytes:
+        if record.status == FileStatus.SCANNED and reduction_percent and record.file_size_bytes:
             # File needs conversion - show estimates
-            file_savings = int(record.file_size_bytes * record.estimated_reduction_percent / 100)
+            file_savings = int(record.file_size_bytes * reduction_percent / 100)
             savings_str = format_file_size(file_savings)
             if not has_layer2:
                 savings_str = f"~{savings_str}"
@@ -2131,6 +2152,7 @@ class VideoConverterGUI:
         total_size = 0
         total_savings = 0
         total_time = 0
+        any_estimate = False  # Track if any file lacks CRF search (layer 2) data
 
         index = get_history_index()
 
@@ -2149,10 +2171,16 @@ class VideoConverterGUI:
                 total_size += record.file_size_bytes
 
             # Check if file needs conversion and has estimates
-            if record.status == FileStatus.SCANNED and record.estimated_reduction_percent:
+            # Use Layer 2 data if available, otherwise fall back to Layer 1 estimate
+            reduction_percent = record.predicted_size_reduction or record.estimated_reduction_percent
+            if record.status == FileStatus.SCANNED and reduction_percent:
+                # Track if this file only has ffprobe-level analysis (no CRF search)
+                if record.predicted_size_reduction is None:
+                    any_estimate = True
+
                 # Calculate savings from reduction percentage
                 if record.file_size_bytes:
-                    file_savings = int(record.file_size_bytes * record.estimated_reduction_percent / 100)
+                    file_savings = int(record.file_size_bytes * reduction_percent / 100)
                     total_savings += file_savings
 
                 # Get time estimate
@@ -2164,6 +2192,8 @@ class VideoConverterGUI:
         # Update folder display (efficiency = aggregate savings / aggregate time)
         size_str = format_file_size(total_size) if total_size > 0 else "—"
         savings_str = format_file_size(total_savings) if total_savings > 0 else "—"
+        if any_estimate and savings_str != "—":
+            savings_str = f"~{savings_str}"
         time_str = self._format_compact_time(total_time) if total_time > 0 else "—"
         eff_str = self._format_efficiency(total_savings, total_time)
         self.analysis_tree.item(folder_id, values=(size_str, savings_str, time_str, eff_str))
@@ -2212,6 +2242,143 @@ class VideoConverterGUI:
         # Show one decimal for smaller values
         return f"{gb_per_hr:.1f} GB/h"
 
+    def _get_queued_file_paths(self) -> set[str]:
+        """Get set of all file paths currently in the conversion queue.
+
+        For folder queue items, finds all video files under that folder
+        that are in the analysis tree. For file queue items, returns the path directly.
+
+        Returns:
+            Set of file paths that are in pending/converting queue items.
+        """
+        queued_paths: set[str] = set()
+
+        for item in self._queue_items:
+            if item.status not in ("pending", "converting"):
+                continue
+
+            if item.is_folder:
+                # Find all files in _tree_item_map that are under this folder
+                folder_prefix = item.source_path + os.sep
+                for file_path in self._tree_item_map:
+                    if file_path.startswith(folder_prefix) or file_path == item.source_path:
+                        queued_paths.add(file_path)
+            else:
+                # Single file
+                queued_paths.add(item.source_path)
+
+        return queued_paths
+
+    def sync_queue_tags_to_analysis_tree(self):
+        """Synchronize queue status to analysis tree item tags.
+
+        Applies 'in_queue' tag to files in the queue, 'partial_queue' to folders
+        with some (but not all) files queued, and removes queue tags from items
+        no longer in queue.
+        """
+        if not hasattr(self, "analysis_tree") or not self._tree_item_map:
+            return
+
+        queued_paths = self._get_queued_file_paths()
+
+        # Track which folders need updating and their child stats
+        folder_stats: dict[str, tuple[int, int]] = {}  # folder_id -> (queued_count, total_count)
+
+        # Update file tags
+        for file_path, item_id in self._tree_item_map.items():
+            try:
+                if not self.analysis_tree.exists(item_id):
+                    continue
+
+                current_tags = list(self.analysis_tree.item(item_id, "tags") or ())
+
+                # Remove existing queue tags
+                current_tags = [t for t in current_tags if t not in ("in_queue", "partial_queue")]
+
+                # Add queue tag if file is in queue
+                is_queued = file_path in queued_paths
+                if is_queued:
+                    current_tags.append("in_queue")
+
+                self.analysis_tree.item(item_id, tags=tuple(current_tags))
+
+                # Track parent folder stats
+                parent_id = self.analysis_tree.parent(item_id)
+                if parent_id:
+                    queued, total = folder_stats.get(parent_id, (0, 0))
+                    folder_stats[parent_id] = (queued + (1 if is_queued else 0), total + 1)
+
+            except tk.TclError:
+                continue
+
+        # Update folder tags based on child stats
+        for folder_id, (queued_count, total_count) in folder_stats.items():
+            try:
+                if not self.analysis_tree.exists(folder_id):
+                    continue
+
+                current_tags = list(self.analysis_tree.item(folder_id, "tags") or ())
+                current_tags = [t for t in current_tags if t not in ("in_queue", "partial_queue")]
+
+                if queued_count == total_count and total_count > 0:
+                    # All children queued
+                    current_tags.append("in_queue")
+                elif queued_count > 0:
+                    # Some children queued
+                    current_tags.append("partial_queue")
+
+                self.analysis_tree.item(folder_id, tags=tuple(current_tags))
+            except tk.TclError:
+                continue
+
+    def update_analysis_tree_for_completed_file(self, file_path: str, status: str):
+        """Update analysis tree entry when a file completes conversion.
+
+        Args:
+            file_path: Full path to the completed file.
+            status: Completion status - "done" for successful, "skip" for not worthwhile.
+        """
+        if not hasattr(self, "analysis_tree"):
+            return
+
+        item_id = self._tree_item_map.get(file_path)
+        if not item_id:
+            return
+
+        try:
+            if not self.analysis_tree.exists(item_id):
+                return
+
+            # Get current tags and remove queue-related ones
+            current_tags = list(self.analysis_tree.item(item_id, "tags") or ())
+            current_tags = [t for t in current_tags if t not in ("in_queue", "partial_queue", "done", "skip")]
+
+            # Add the completion status tag
+            current_tags.append(status)
+
+            # Update the tree item
+            if status == "done":
+                self.analysis_tree.item(item_id, tags=tuple(current_tags))
+                self.analysis_tree.set(item_id, "savings", "Done")
+            elif status == "skip":
+                self.analysis_tree.item(item_id, tags=tuple(current_tags))
+                self.analysis_tree.set(item_id, "savings", "Skip")
+
+            # Clear time and efficiency for completed files
+            self.analysis_tree.set(item_id, "time", "—")
+            self.analysis_tree.set(item_id, "efficiency", "—")
+
+            # Update parent folder aggregates
+            parent_id = self.analysis_tree.parent(item_id)
+            if parent_id:
+                self._update_folder_aggregates(parent_id)
+
+            # Sync queue tags since this file is no longer "in queue" effectively
+            self.sync_queue_tags_to_analysis_tree()
+
+        except tk.TclError:
+            pass
+
     def _update_total_row(
         self,
         total_files: int,
@@ -2221,6 +2388,7 @@ class VideoConverterGUI:
         total_size: int,
         total_savings: int,
         total_time: float,
+        any_estimate: bool = False,
     ) -> None:
         """Update the fixed total row at the bottom of the analysis tree.
 
@@ -2232,6 +2400,7 @@ class VideoConverterGUI:
             total_size: Total size of all files in bytes.
             total_savings: Estimated total savings in bytes.
             total_time: Estimated total time in seconds.
+            any_estimate: If True, at least one file lacks CRF search data.
         """
         # Build breakdown string with only non-zero counts
         parts = []
@@ -2246,6 +2415,8 @@ class VideoConverterGUI:
 
         size_str = format_file_size(total_size) if total_size > 0 else "—"
         savings_str = format_file_size(total_savings) if total_savings > 0 else "—"
+        if any_estimate and savings_str != "—":
+            savings_str = f"~{savings_str}"
         time_str = self._format_compact_time(total_time) if total_time > 0 else "—"
         eff_str = self._format_efficiency(total_savings, total_time)
 
@@ -2269,6 +2440,7 @@ class VideoConverterGUI:
         total_size = 0
         total_savings = 0
         total_time = 0.0
+        any_estimate = False  # Track if any file lacks CRF search (layer 2) data
 
         for file_path in self._tree_item_map:
             record = index.lookup_file(file_path)
@@ -2281,16 +2453,24 @@ class VideoConverterGUI:
                 done_count += 1
             elif record.status == FileStatus.NOT_WORTHWHILE:
                 skip_count += 1
-            elif record.status == FileStatus.SCANNED and record.estimated_reduction_percent:
-                convertible += 1
-                if record.file_size_bytes:
-                    total_savings += int(record.file_size_bytes * record.estimated_reduction_percent / 100)
-                file_time = estimate_file_time(
-                    codec=record.video_codec, duration=record.duration_sec, size=record.file_size_bytes
-                ).best_seconds
-                total_time += file_time
+            else:
+                # Use Layer 2 data if available, otherwise fall back to Layer 1 estimate
+                reduction_percent = record.predicted_size_reduction or record.estimated_reduction_percent
+                if record.status == FileStatus.SCANNED and reduction_percent:
+                    convertible += 1
+                    # Track if this file only has ffprobe-level analysis (no CRF search)
+                    if record.predicted_size_reduction is None:
+                        any_estimate = True
+                    if record.file_size_bytes:
+                        total_savings += int(record.file_size_bytes * reduction_percent / 100)
+                    file_time = estimate_file_time(
+                        codec=record.video_codec, duration=record.duration_sec, size=record.file_size_bytes
+                    ).best_seconds
+                    total_time += file_time
 
-        self._update_total_row(total_files, convertible, done_count, skip_count, total_size, total_savings, total_time)
+        self._update_total_row(
+            total_files, convertible, done_count, skip_count, total_size, total_savings, total_time, any_estimate
+        )
         return convertible
 
     def _parse_size_to_bytes(self, size_str: str) -> float:

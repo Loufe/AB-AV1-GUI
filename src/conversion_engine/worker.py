@@ -77,13 +77,15 @@ def sequential_conversion_worker(
     """
     logger.info(f"Worker started with {len(config.queue_items)} queue items")
 
-    # Capture Tkinter variable value safely from main thread (thread-safety fix)
+    # Capture Tkinter variable values safely from main thread (thread-safety fix)
     anonymize_history_value = [None]  # Use list for mutability in closure
+    hw_decode_enabled_value = [None]  # Capture hardware decode setting
 
-    def capture_anonymize_setting():
+    def capture_settings():
         anonymize_history_value[0] = gui.anonymize_history.get()
+        hw_decode_enabled_value[0] = gui.hw_decode_enabled.get()
 
-    update_ui_safely(gui.root, capture_anonymize_setting)
+    update_ui_safely(gui.root, capture_settings)
     # Wait briefly to ensure the value is captured (the after() call is async)
     time.sleep(0.01)
 
@@ -327,6 +329,19 @@ def sequential_conversion_worker(
             )  # Start timer UI updates
             update_ui_safely(gui.root, lambda: setattr(gui.session, "current_process_info", None))  # Reset PID info
 
+            # --- Determine Hardware Decoder ---
+            hw_decoder = None
+            if hw_decode_enabled_value[0] and video_info:
+                from src.hardware_accel import get_hw_decoder_for_codec, get_video_codec_from_info
+
+                source_codec = get_video_codec_from_info(video_info)
+                if source_codec:
+                    hw_decoder = get_hw_decoder_for_codec(source_codec)
+                    if hw_decoder:
+                        logger.info(f"Using hardware decoder {hw_decoder} for {source_codec}")
+                    else:
+                        logger.debug(f"No hardware decoder available for {source_codec}")
+
             # --- Process Video ---
             process_successful = False
             output_file_path = None
@@ -349,6 +364,7 @@ def sequential_conversion_worker(
                     file_info_callback=file_event_callback,
                     pid_callback=lambda pid, path=file_path: pid_storage_callback(gui, pid, path),
                     total_duration_seconds=input_duration,
+                    hw_decoder=hw_decoder,
                 )
                 if result_tuple:
                     # Unpack potentially extended tuple including stats

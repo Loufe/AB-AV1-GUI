@@ -125,6 +125,7 @@ def process_video(
     file_info_callback: Callable[..., Any] | None = None,
     pid_callback: Callable[..., Any] | None = None,
     total_duration_seconds: float = 0.0,
+    hw_decoder: str | None = None,
 ) -> tuple[str, float, int, int, int | None, float | None, int | None] | None:
     """
     Process a single video file using ab-av1 with hardcoded quality settings.
@@ -139,6 +140,7 @@ def process_video(
         file_info_callback: Optional callback for reporting file status changes
         pid_callback: Optional callback for receiving process ID
         total_duration_seconds: Total duration of the input video in seconds (for progress calc)
+        hw_decoder: Optional hardware decoder name (e.g., "h264_cuvid", "hevc_qsv")
 
     Returns:
         tuple: (output_path, elapsed_time, input_size, output_size, final_crf, final_vmaf,
@@ -262,6 +264,7 @@ def process_video(
                 file_info_callback=file_info_callback,
                 pid_callback=pid_callback,
                 total_duration_seconds=total_duration_seconds,
+                hw_decoder=hw_decoder,
             )
         else:
             # No cache - run full auto-encode with CRF search
@@ -272,6 +275,7 @@ def process_video(
                 file_info_callback=file_info_callback,
                 pid_callback=pid_callback,
                 total_duration_seconds=total_duration_seconds,
+                hw_decoder=hw_decoder,
             )
 
         conversion_elapsed_time = time.time() - conversion_start_time

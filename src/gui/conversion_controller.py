@@ -149,6 +149,10 @@ def create_queue_status_callback(gui):
                 except Exception:
                     logger.debug(f"Could not update tree row for {queue_item_id}")
 
+            # Sync analysis tree queue tags when queue item completes
+            if status == "completed":
+                gui.sync_queue_tags_to_analysis_tree()
+
         update_ui_safely(gui.root, update)
 
     return queue_status_callback

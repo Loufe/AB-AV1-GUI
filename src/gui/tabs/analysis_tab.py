@@ -58,12 +58,12 @@ def create_analysis_tab(gui):
 
     ttk.Button(controls_frame, text="Browse...", command=gui.on_browse_input_folder).grid(row=0, column=2, padx=5)
 
-    gui.analyze_button = ttk.Button(controls_frame, text="Analyze", command=gui.on_analyze_folders)
+    gui.analyze_button = ttk.Button(controls_frame, text="Analyze: Basic", command=gui.on_analyze_folders)
     gui.analyze_button.grid(row=0, column=3, padx=5)
     ToolTip(gui.analyze_button, "Scan folders to find convertible files and estimate savings.")
 
     gui.analyze_quality_button = ttk.Button(
-        controls_frame, text="Analyze Quality", command=gui.on_analyze_quality, state="disabled"
+        controls_frame, text="Analyze: Complete", command=gui.on_analyze_quality, state="disabled"
     )
     gui.analyze_quality_button.grid(row=0, column=4, padx=5)
     ToolTip(gui.analyze_quality_button, "Run CRF search on selected files for accurate predictions (~1 min/file)")
@@ -116,6 +116,8 @@ def create_analysis_tab(gui):
     # Configure tags for status coloring (subtle, professional colors)
     gui.analysis_tree.tag_configure("done", foreground="#2E7D32")  # Dark green
     gui.analysis_tree.tag_configure("skip", foreground="#C65D00")  # Muted amber
+    gui.analysis_tree.tag_configure("in_queue", foreground="#1565C0")  # Dark blue - queued file/folder
+    gui.analysis_tree.tag_configure("partial_queue", foreground="#64B5F6")  # Light blue - folder with some queued
 
     scroll_y = ttk.Scrollbar(tree_container, orient="vertical", command=gui.analysis_tree.yview)
     gui.analysis_tree.configure(yscrollcommand=scroll_y.set)
@@ -151,8 +153,15 @@ def create_analysis_tab(gui):
     gui.analysis_tree.bind("<<TreeviewOpen>>", _on_tree_open)
     gui.analysis_tree.bind("<<TreeviewClose>>", _on_tree_close)
 
-    # Right-click context menu
-    context_menu = tk.Menu(gui.analysis_tree, tearoff=0)
+    def _create_context_menu() -> tk.Menu:
+        """Create a fresh context menu with consistent styling."""
+        return tk.Menu(
+            gui.analysis_tree,
+            tearoff=0,
+            background="#ffffff",
+            activebackground="#0078d4",
+            activeforeground="#ffffff",
+        )
 
     def _get_folder_path_from_tree_item(item_id: str) -> str:
         """Reconstruct folder path from tree hierarchy."""
@@ -183,9 +192,6 @@ def create_analysis_tab(gui):
         if not item_id:
             return
 
-        # Dismiss any existing popup before showing new one (prevents ghost outline)
-        context_menu.unpost()
-
         # Preserve multi-selection if right-clicking within existing selection
         current_selection = gui.analysis_tree.selection()
         if item_id in current_selection and len(current_selection) > 1:
@@ -196,16 +202,21 @@ def create_analysis_tab(gui):
             gui.analysis_tree.selection_set(item_id)
             selected_items = (item_id,)
 
-        # Clear menu and rebuild based on selection
-        context_menu.delete(0, tk.END)
+        # Create fresh menu each time (fixes Windows shadow rendering issues)
+        menu = _create_context_menu()
 
-        # Multi-selection: show batch action only
+        # Multi-selection: show batch actions
         if len(selected_items) > 1:
-            context_menu.add_command(
+            menu.add_command(
+                label="Analyze: Complete",
+                command=gui.on_analyze_quality,
+            )
+            menu.add_separator()
+            menu.add_command(
                 label=f"Add {len(selected_items)} Items to Queue",
                 command=lambda items=selected_items: _add_selected_items_to_queue(items),
             )
-            context_menu.tk_popup(event.x_root, event.y_root)
+            menu.tk_popup(event.x_root, event.y_root)
             return
 
         # Single selection: show item-specific actions
@@ -214,12 +225,16 @@ def create_analysis_tab(gui):
         if is_folder:
             folder_path = _get_folder_path_from_tree_item(item_id)
 
-            context_menu.add_command(
+            menu.add_command(
                 label="Open in Explorer",
                 command=lambda p=folder_path: _open_in_explorer(p),
             )
-            context_menu.add_separator()
-            context_menu.add_command(
+            menu.add_separator()
+            menu.add_command(
+                label="Analyze: Complete",
+                command=gui.on_analyze_quality,
+            )
+            menu.add_command(
                 label="Add Folder to Queue",
                 command=lambda p=folder_path: gui.add_to_queue(p, is_folder=True),
             )
@@ -228,21 +243,25 @@ def create_analysis_tab(gui):
             file_path = gui.get_file_path_for_tree_item(item_id)
 
             if file_path:
-                context_menu.add_command(
+                menu.add_command(
                     label="Open File",
                     command=lambda p=file_path: _open_in_explorer(p),
                 )
-                context_menu.add_command(
+                menu.add_command(
                     label="Show in Explorer",
                     command=lambda p=file_path: _reveal_in_explorer(p),
                 )
-                context_menu.add_separator()
-                context_menu.add_command(
+                menu.add_separator()
+                menu.add_command(
+                    label="Analyze: Complete",
+                    command=gui.on_analyze_quality,
+                )
+                menu.add_command(
                     label="Add to Queue",
                     command=lambda p=file_path: gui.add_to_queue(p, is_folder=False),
                 )
 
-        context_menu.tk_popup(event.x_root, event.y_root)
+        menu.tk_popup(event.x_root, event.y_root)
 
     gui.analysis_tree.bind("<Button-3>", _show_context_menu)
 

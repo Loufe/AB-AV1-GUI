@@ -62,6 +62,7 @@ class AbAv1Wrapper:
         file_info_callback: Callable[..., Any] | None = None,
         pid_callback: Callable[..., Any] | None = None,
         total_duration_seconds: float = 0.0,
+        hw_decoder: str | None = None,
     ) -> dict[str, Any]:
         """Run ab-av1 auto-encode with VMAF fallback loop using simple blocking reads.
 
@@ -71,6 +72,7 @@ class AbAv1Wrapper:
             file_info_callback: Optional callback for reporting file status changes.
             pid_callback: Optional callback to receive the process ID.
             total_duration_seconds: Total duration of the input video in seconds.
+            hw_decoder: Optional hardware decoder name (e.g., "h264_cuvid", "hevc_qsv").
 
         Returns:
             Dictionary containing encoding statistics and results.
@@ -197,6 +199,12 @@ class AbAv1Wrapper:
                 "--min-vmaf",
                 str(current_vmaf_target),
             ]
+
+            # Add hardware decoder if specified
+            if hw_decoder:
+                cmd.extend(["--enc-input", f"c:v={hw_decoder}"])
+                logger.info(f"Using hardware decoder: {hw_decoder}")
+
             cmd_str = " ".join(cmd)
 
             cmd_for_log = [
@@ -626,6 +634,7 @@ class AbAv1Wrapper:
         preset: int | None = None,
         progress_callback: Callable[..., Any] | None = None,
         stop_event: Any | None = None,
+        hw_decoder: str | None = None,
     ) -> dict[str, Any]:
         """Run ab-av1 crf-search with VMAF fallback (no full encoding).
 
@@ -642,6 +651,7 @@ class AbAv1Wrapper:
             progress_callback: Optional callback for progress updates.
                 Signature: callback(progress_percent, message)
             stop_event: Optional threading.Event to signal cancellation.
+            hw_decoder: Optional hardware decoder name (e.g., "h264_cuvid", "hevc_qsv").
 
         Returns:
             Dictionary containing:
@@ -718,6 +728,11 @@ class AbAv1Wrapper:
                 "--min-vmaf",
                 str(current_vmaf_target),
             ]
+
+            # Add hardware decoder if specified
+            if hw_decoder:
+                cmd.extend(["--enc-input", f"c:v={hw_decoder}"])
+
             cmd_str = " ".join(cmd)
 
             cmd_for_log = [
@@ -876,6 +891,11 @@ class AbAv1Wrapper:
                     f"{' (fallback)' if result['used_fallback'] else ''}"
                 )
 
+                # Clean up temp folders in input file's directory
+                input_dir = os.path.dirname(input_path)
+                if input_dir:
+                    clean_ab_av1_temp_folders(input_dir)
+
                 return result
 
             # --- Handle Failure ---
@@ -896,7 +916,9 @@ class AbAv1Wrapper:
             f"VMAF {MIN_VMAF_FALLBACK_TARGET}"
         )
         logger.info(f"File not worth converting: {anonymized_input_path}")
-        clean_ab_av1_temp_folders()
+        input_dir = os.path.dirname(input_path)
+        if input_dir:
+            clean_ab_av1_temp_folders(input_dir)
         raise ConversionNotWorthwhileError(
             error_msg,
             command=cmd_str_log,
@@ -913,6 +935,7 @@ class AbAv1Wrapper:
         file_info_callback: Callable[..., Any] | None = None,
         pid_callback: Callable[..., Any] | None = None,
         total_duration_seconds: float = 0.0,
+        hw_decoder: str | None = None,
     ) -> dict[str, Any]:
         """Run ab-av1 encode with explicit CRF (skip CRF search phase).
 
@@ -927,6 +950,7 @@ class AbAv1Wrapper:
             file_info_callback: Optional callback for reporting file status changes.
             pid_callback: Optional callback to receive the process ID.
             total_duration_seconds: Total duration of the input video in seconds.
+            hw_decoder: Optional hardware decoder name (e.g., "h264_cuvid", "hevc_qsv").
 
         Returns:
             Dictionary containing encoding statistics and results.
@@ -1009,6 +1033,11 @@ class AbAv1Wrapper:
             "--crf",
             str(crf),
         ]
+
+        # Add hardware decoder if specified
+        if hw_decoder:
+            cmd.extend(["--enc-input", f"c:v={hw_decoder}"])
+
         cmd_str = " ".join(cmd)
 
         cmd_for_log = [

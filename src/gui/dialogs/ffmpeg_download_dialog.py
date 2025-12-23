@@ -1,60 +1,31 @@
 # src/gui/dialogs/ffmpeg_download_dialog.py
-"""FFmpeg download options dialog."""
+"""FFmpeg download dialog - shown when system FFmpeg exists but user wants vendor copy."""
 
 import tkinter as tk
-import uuid
-from dataclasses import dataclass
 from pathlib import Path
 from tkinter import ttk
 
-from src.vendor_manager import FFMPEG_DIR
-
-
-@dataclass
-class DownloadDialogResult:
-    """Result from the FFmpeg download dialog."""
-
-    cancelled: bool
-    option: str  # "vendor" | "existing"
-    path: Path  # Where to install
-
-
-def _is_dir_writable(path: Path) -> bool:
-    """Check if a directory is writable by actually creating a test file.
-
-    os.access() doesn't work reliably on Windows with UAC-protected directories,
-    so we must actually attempt file creation to get an accurate result.
-    """
-    test_file = path / f".write_test_{uuid.uuid4().hex[:8]}.tmp"
-    try:
-        test_file.touch()
-        test_file.unlink()
-        return True
-    except (OSError, PermissionError):
-        return False
-
 
 class FFmpegDownloadDialog(tk.Toplevel):
-    """Modal dialog for FFmpeg download options."""
+    """Informational dialog shown when downloading FFmpeg while a system copy exists.
 
-    def __init__(self, parent: tk.Tk, existing_ffmpeg_path: str | None):
+    This dialog informs the user that:
+    - A system FFmpeg was detected at [path]
+    - We'll install a portable copy to vendor/ffmpeg/
+    - To update their system FFmpeg, they should use their package manager
+    """
+
+    def __init__(self, parent: tk.Tk, existing_ffmpeg_dir: Path):
         """Initialize the dialog.
 
         Args:
             parent: Parent window
-            existing_ffmpeg_path: Path to existing ffmpeg.exe from shutil.which(), or None
+            existing_ffmpeg_dir: Directory containing existing ffmpeg.exe
         """
         super().__init__(parent)
         self.parent = parent
-        self.existing_ffmpeg_path = existing_ffmpeg_path
-        self.existing_ffmpeg_dir = Path(existing_ffmpeg_path).parent if existing_ffmpeg_path else None
-
-        # Check if existing directory is writable (for protected paths like Chocolatey)
-        self.existing_dir_writable = (
-            _is_dir_writable(self.existing_ffmpeg_dir) if self.existing_ffmpeg_dir else False
-        )
-
-        self.result: DownloadDialogResult | None = None
+        self.existing_ffmpeg_dir = existing_ffmpeg_dir
+        self.cancelled = True
 
         self._setup_window()
         self._create_widgets()
@@ -69,81 +40,58 @@ class FFmpegDownloadDialog(tk.Toplevel):
 
     def _create_widgets(self):
         """Create dialog widgets."""
-        # Main frame with padding
         main_frame = ttk.Frame(self, padding=20)
         main_frame.pack(fill="both", expand=True)
 
         # Header
         ttk.Label(
             main_frame,
-            text="Where would you like to install FFmpeg?",
+            text="Install Portable FFmpeg",
             font=("TkDefaultFont", 10, "bold"),
         ).pack(anchor="w", pady=(0, 15))
 
-        # Radio button variable
-        self.selected_option = tk.StringVar(value="vendor")
-
-        # Option A: Vendor folder (recommended)
-        option_a_frame = ttk.Frame(main_frame)
-        option_a_frame.pack(fill="x", pady=(0, 10))
-
-        ttk.Radiobutton(
-            option_a_frame,
-            text="App folder (vendor/ffmpeg/)",
-            variable=self.selected_option,
-            value="vendor",
+        # Existing installation info
+        ttk.Label(
+            main_frame,
+            text="System FFmpeg detected at:",
         ).pack(anchor="w")
 
         ttk.Label(
-            option_a_frame,
-            text="    Only this app will use it. Portable and isolated.  [Recommended]",
+            main_frame,
+            text=f"    {self.existing_ffmpeg_dir}",
+            foreground="gray",
+        ).pack(anchor="w", pady=(0, 10))
+
+        # What will happen
+        ttk.Label(
+            main_frame,
+            text="This will install a portable copy to vendor/ffmpeg/",
+        ).pack(anchor="w")
+
+        ttk.Label(
+            main_frame,
+            text="This app will use the portable copy instead.",
+        ).pack(anchor="w")
+
+        ttk.Label(
+            main_frame,
+            text="Your system installation will not be modified.",
+            foreground="#c00000",
+        ).pack(anchor="w", pady=(0, 10))
+
+        # Hint about updating system install
+        ttk.Label(
+            main_frame,
+            text="To update your system FFmpeg, use your package manager:",
             foreground="gray",
         ).pack(anchor="w")
 
-        # Option B: Update existing (only if detected AND writable)
-        if self.existing_ffmpeg_path and self.existing_dir_writable:
-            option_b_frame = ttk.Frame(main_frame)
-            option_b_frame.pack(fill="x", pady=(0, 10))
-
-            ttk.Radiobutton(
-                option_b_frame,
-                text="Update existing installation",
-                variable=self.selected_option,
-                value="existing",
-            ).pack(anchor="w")
-
-            ttk.Label(
-                option_b_frame,
-                text=f"    Detected at: {self.existing_ffmpeg_dir}",
-                foreground="gray",
-            ).pack(anchor="w")
-
-            # Warning label
-            warning_frame = ttk.Frame(option_b_frame)
-            warning_frame.pack(anchor="w", padx=(20, 0))
-            ttk.Label(warning_frame, text="⚠", foreground="orange").pack(side="left")
-            ttk.Label(
-                warning_frame,
-                text=" May affect other applications using this FFmpeg",
-                foreground="orange",
-            ).pack(side="left")
-
-        # Show info about non-writable existing installation
-        elif self.existing_ffmpeg_path and not self.existing_dir_writable:
-            info_frame = ttk.Frame(main_frame)
-            info_frame.pack(fill="x", pady=(0, 10))
-
-            ttk.Label(
-                info_frame,
-                text=f"Existing FFmpeg at: {self.existing_ffmpeg_dir}",
-                foreground="gray",
-            ).pack(anchor="w")
-
-            ttk.Label(
-                info_frame,
-                text="    (Protected location - update via package manager)",
-                foreground="gray",
-            ).pack(anchor="w")
+        ttk.Label(
+            main_frame,
+            text="    choco upgrade ffmpeg  /  winget upgrade ffmpeg",
+            foreground="gray",
+            font=("Consolas", 9),
+        ).pack(anchor="w")
 
         # Separator
         ttk.Separator(main_frame, orient="horizontal").pack(fill="x", pady=15)
@@ -155,14 +103,13 @@ class FFmpegDownloadDialog(tk.Toplevel):
             foreground="gray",
         ).pack(anchor="w")
 
-        # Buttons frame
+        # Buttons
         btn_frame = ttk.Frame(main_frame)
         btn_frame.pack(fill="x", pady=(20, 0))
 
         ttk.Button(btn_frame, text="Cancel", command=self._on_cancel).pack(side="right", padx=(5, 0))
         ttk.Button(btn_frame, text="Download", command=self._on_download).pack(side="right")
 
-        # Center on parent after widgets are created so we know the actual size
         self._center_on_parent()
 
     def _center_on_parent(self):
@@ -182,23 +129,19 @@ class FFmpegDownloadDialog(tk.Toplevel):
 
     def _on_cancel(self):
         """Handle cancel button click."""
-        self.result = DownloadDialogResult(cancelled=True, option="", path=Path())
+        self.cancelled = True
         self.destroy()
 
     def _on_download(self):
         """Handle download button click."""
-        option = self.selected_option.get()
-        # Use existing_ffmpeg_dir if selected and set, otherwise fall back to vendor dir
-        path = self.existing_ffmpeg_dir if option == "existing" and self.existing_ffmpeg_dir else FFMPEG_DIR
-
-        self.result = DownloadDialogResult(cancelled=False, option=option, path=path)
+        self.cancelled = False
         self.destroy()
 
-    def show(self) -> DownloadDialogResult:
+    def show(self) -> bool:
         """Show the dialog and wait for result.
 
         Returns:
-            DownloadDialogResult with user's selection
+            True if user clicked Download, False if cancelled.
         """
         self.wait_window()
-        return self.result or DownloadDialogResult(cancelled=True, option="", path=Path())
+        return not self.cancelled

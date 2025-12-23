@@ -102,22 +102,6 @@ def is_using_vendor_ffmpeg() -> bool:
     return FFMPEG_EXE.exists()
 
 
-def get_existing_ffmpeg_dir() -> Path | None:
-    """Get directory of existing FFmpeg installation from system PATH.
-
-    Returns:
-        Parent directory of ffmpeg.exe if found in PATH, otherwise None.
-        Does not return vendor directory - only system installations.
-    """
-    system_ffmpeg = shutil.which("ffmpeg")
-    if system_ffmpeg:
-        ffmpeg_path = Path(system_ffmpeg)
-        # Don't return vendor directory
-        if ffmpeg_path != FFMPEG_EXE:
-            return ffmpeg_path.parent
-    return None
-
-
 # --- GitHub API Helpers ---
 
 
@@ -284,13 +268,11 @@ def get_ffmpeg_latest_release() -> tuple[str | None, str | None, str | None]:
 
 
 def download_ffmpeg(
-    dest_dir: Path | None = None,
     progress_callback: Callable[[int, int], None] | None = None,
 ) -> tuple[bool, str]:
-    """Download the latest FFmpeg full build.
+    """Download the latest FFmpeg full build to vendor/ffmpeg/.
 
     Args:
-        dest_dir: Directory to install FFmpeg to. If None, uses vendor/ffmpeg/.
         progress_callback: Optional callback(bytes_downloaded, total_bytes)
 
     Returns:
@@ -304,16 +286,7 @@ def download_ffmpeg(
     if download_url.endswith(".7z"):
         return False, "FFmpeg 7z extraction not supported. Please install FFmpeg manually or wait for zip release."
 
-    # Determine destination directory
-    if dest_dir is None:
-        dest_dir = FFMPEG_DIR
-        ensure_vendor_dir()
-    else:
-        dest_dir = Path(dest_dir)
-        dest_dir.mkdir(parents=True, exist_ok=True)
-
-    ffmpeg_dest = dest_dir / "ffmpeg.exe"
-    ffprobe_dest = dest_dir / "ffprobe.exe"
+    ensure_vendor_dir()
 
     try:
         # Download to temp file
@@ -344,24 +317,18 @@ def download_ffmpeg(
                 if not bin_dir:
                     return False, "Could not find bin directory in FFmpeg archive"
 
-                # Copy ffmpeg.exe and ffprobe.exe to destination
-                ffmpeg_src = bin_dir / "ffmpeg.exe"
-                ffprobe_src = bin_dir / "ffprobe.exe"
-
-                if not ffmpeg_src.exists():
+                if not (bin_dir / "ffmpeg.exe").exists():
                     return False, "ffmpeg.exe not found in archive"
 
-                # Remove existing files if present
-                if ffmpeg_dest.exists():
-                    ffmpeg_dest.unlink()
-                if ffprobe_dest.exists():
-                    ffprobe_dest.unlink()
+                # Copy all files from bin/ (exe + DLLs) to vendor/ffmpeg/
+                for src_file in bin_dir.iterdir():
+                    if src_file.is_file():
+                        dest_file = FFMPEG_DIR / src_file.name
+                        if dest_file.exists():
+                            dest_file.unlink()
+                        shutil.copy2(str(src_file), str(dest_file))
 
-                shutil.copy2(str(ffmpeg_src), str(ffmpeg_dest))
-                if ffprobe_src.exists():
-                    shutil.copy2(str(ffprobe_src), str(ffprobe_dest))
-
-                logger.info(f"FFmpeg {version} installed to {dest_dir}")
+                logger.info(f"FFmpeg {version} installed to {FFMPEG_DIR}")
                 return True, f"Successfully installed FFmpeg {version}"
 
         finally:
