@@ -9,6 +9,7 @@ from tkinter import ttk
 from src.ab_av1.checker import get_ab_av1_version
 from src.gui.base import ToolTip
 from src.utils import check_ffmpeg_availability, parse_ffmpeg_version
+from src.vendor_manager import get_ab_av1_path, is_using_vendor_ffmpeg
 
 logger = logging.getLogger(__name__)
 
@@ -45,7 +46,12 @@ def create_settings_tab(gui):
     mode_combo = ttk.Combobox(output_frame, textvariable=gui.default_output_mode, width=18, state="readonly")
     mode_combo["values"] = ("replace", "suffix", "separate_folder")
     mode_combo.grid(row=0, column=1, sticky="w", padx=5, pady=(10, 5))
-    ToolTip(mode_combo, "Replace: Delete original after conversion\nSuffix: Keep original, add suffix to output\nSeparate Folder: Output to different folder")
+    ToolTip(
+        mode_combo,
+        "Replace: Delete original after conversion\n"
+        "Suffix: Keep original, add suffix to output\n"
+        "Separate Folder: Output to different folder",
+    )
 
     # Default Suffix entry
     ttk.Label(output_frame, text="Default Suffix:").grid(row=1, column=0, sticky="w", padx=10, pady=5)
@@ -57,7 +63,9 @@ def create_settings_tab(gui):
     ttk.Label(output_frame, text="Default Output Folder:").grid(row=2, column=0, sticky="w", padx=10, pady=(5, 10))
     folder_entry = ttk.Entry(output_frame, textvariable=gui.default_output_folder)
     folder_entry.grid(row=2, column=1, sticky="ew", padx=5, pady=(5, 10))
-    ttk.Button(output_frame, text="Browse...", command=gui.on_browse_default_output_folder).grid(row=2, column=2, padx=(0, 10), pady=(5, 10))
+    ttk.Button(
+        output_frame, text="Browse...", command=gui.on_browse_default_output_folder
+    ).grid(row=2, column=2, padx=(0, 10), pady=(5, 10))
 
     # --- File Processing Settings ---
     processing_frame = ttk.LabelFrame(settings_frame, text="File Processing")
@@ -179,22 +187,39 @@ def create_settings_tab(gui):
 
     # Get local ab-av1 version
     local_version = get_ab_av1_version() or "Not found"
+    has_ab_av1 = get_ab_av1_path() is not None
 
     # ab-av1 version row
     ab_av1_frame = ttk.Frame(version_frame)
     ab_av1_frame.grid(row=0, column=0, sticky="w", padx=10, pady=(10, 10))
+    gui.ab_av1_frame = ab_av1_frame  # Store reference for dynamic button creation
 
     ttk.Label(ab_av1_frame, text="ab-av1 Version:").pack(side="left", padx=(0, 5))
-    ttk.Label(ab_av1_frame, text=local_version, font=("TkDefaultFont", 9, "bold")).pack(side="left", padx=(0, 15))
+    gui.ab_av1_version_label = ttk.Label(ab_av1_frame, text=local_version, font=("TkDefaultFont", 9, "bold"))
+    gui.ab_av1_version_label.pack(side="left", padx=(0, 15))
 
-    check_update_btn = ttk.Button(ab_av1_frame, text="Check for Updates", command=gui.on_check_ab_av1_updates)
-    check_update_btn.pack(side="left", padx=(0, 10))
-    ToolTip(
-        check_update_btn,
-        "Check GitHub for the latest ab-av1 release.\n"
-        "This will make a network request to api.github.com.\n"
-        "If an update is available, click the link to open the release page.",
-    )
+    if not has_ab_av1:
+        # Not installed - show Download button only
+        gui.ab_av1_download_btn = ttk.Button(ab_av1_frame, text="Download", command=gui.on_download_ab_av1)
+        gui.ab_av1_download_btn.pack(side="left", padx=(0, 5))
+        ToolTip(
+            gui.ab_av1_download_btn,
+            "Download the latest ab-av1 from GitHub.\n"
+            "This will download ~3 MB and install to vendor/ab-av1/.",
+        )
+        gui.ab_av1_check_btn = None
+    else:
+        # Installed - show Check for Updates button only (Update button created if needed)
+        gui.ab_av1_download_btn = None
+        gui.ab_av1_check_btn = ttk.Button(
+            ab_av1_frame, text="Check for Updates", command=gui.on_check_ab_av1_updates
+        )
+        gui.ab_av1_check_btn.pack(side="left", padx=(0, 10))
+        ToolTip(
+            gui.ab_av1_check_btn,
+            "Check GitHub for the latest ab-av1 release.\n"
+            "This will make a network request to api.github.com.",
+        )
 
     # Label to show update check result (initially empty)
     gui.ab_av1_update_label = ttk.Label(ab_av1_frame, text="")
@@ -203,35 +228,64 @@ def create_settings_tab(gui):
     # FFmpeg version row
     ffmpeg_frame = ttk.Frame(version_frame)
     ffmpeg_frame.grid(row=1, column=0, sticky="w", padx=10, pady=(0, 10))
+    gui.ffmpeg_frame = ffmpeg_frame  # Store reference for dynamic button creation
 
     # Get FFmpeg version info
-    _, _, ffmpeg_version_string, _ = check_ffmpeg_availability()
+    ffmpeg_available, _, ffmpeg_version_string, _ = check_ffmpeg_availability()
     ffmpeg_version, ffmpeg_source, ffmpeg_build = parse_ffmpeg_version(ffmpeg_version_string)
-    ffmpeg_display = ffmpeg_version or "Not found"
-    if ffmpeg_source:
-        source_info = ffmpeg_source
-        if ffmpeg_build:
-            source_info += f" {ffmpeg_build}"
-        ffmpeg_display += f" ({source_info})"
+    using_vendor = is_using_vendor_ffmpeg()
+
+    # Build display string
+    if not ffmpeg_available:
+        ffmpeg_display = "Not found"
+    else:
+        ffmpeg_display = ffmpeg_version or "Unknown"
+        if using_vendor:
+            ffmpeg_display += " (vendor)"
+        elif ffmpeg_source:
+            source_info = ffmpeg_source
+            if ffmpeg_build:
+                source_info += f" {ffmpeg_build}"
+            ffmpeg_display += f" ({source_info})"
 
     ttk.Label(ffmpeg_frame, text="FFmpeg Version:").pack(side="left", padx=(0, 5))
-    ttk.Label(ffmpeg_frame, text=ffmpeg_display, font=("TkDefaultFont", 9, "bold")).pack(side="left", padx=(0, 15))
+    gui.ffmpeg_version_label = ttk.Label(ffmpeg_frame, text=ffmpeg_display, font=("TkDefaultFont", 9, "bold"))
+    gui.ffmpeg_version_label.pack(side="left", padx=(0, 15))
 
-    # Show check button for supported sources (gyan.dev and BtbN)
-    if ffmpeg_source in ("gyan.dev", "BtbN"):
-        check_ffmpeg_btn = ttk.Button(ffmpeg_frame, text="Check for Updates", command=gui.on_check_ffmpeg_updates)
-        check_ffmpeg_btn.pack(side="left", padx=(0, 10))
-        tooltip_text = f"Check GitHub for the latest FFmpeg release from {ffmpeg_source}.\n"
-        tooltip_text += "This will make a network request to api.github.com.\n"
-        if ffmpeg_source == "gyan.dev":
-            tooltip_text += "If an update is available, click the link to open the release page."
-        else:
-            tooltip_text += "Click the link to open the releases page."
-        ToolTip(check_ffmpeg_btn, tooltip_text)
-
-        gui.ffmpeg_update_label = ttk.Label(ffmpeg_frame, text="")
-        gui.ffmpeg_update_label.pack(side="left")
-        gui.ffmpeg_source = ffmpeg_source  # Store for use in handler
-    else:
+    if not ffmpeg_available:
+        # FFmpeg not found anywhere - show Download button only
+        gui.ffmpeg_download_btn = ttk.Button(ffmpeg_frame, text="Download", command=gui.on_download_ffmpeg)
+        gui.ffmpeg_download_btn.pack(side="left", padx=(0, 5))
+        tooltip = "Download FFmpeg (gyan.dev full build) to vendor/ffmpeg/.\n"
+        tooltip += "This will download ~100 MB and includes libsvtav1."
+        ToolTip(gui.ffmpeg_download_btn, tooltip)
+        gui.ffmpeg_check_btn = None
         gui.ffmpeg_update_label = None
         gui.ffmpeg_source = None
+    else:
+        # FFmpeg exists (vendor or system) - show Check for Updates button only
+        gui.ffmpeg_download_btn = None
+
+        # Determine source for update checking
+        if using_vendor:
+            gui.ffmpeg_source = "gyan.dev"
+        elif ffmpeg_source in ("gyan.dev", "BtbN"):
+            gui.ffmpeg_source = ffmpeg_source
+        else:
+            gui.ffmpeg_source = None  # Unknown source, can't check updates
+
+        if gui.ffmpeg_source:
+            gui.ffmpeg_check_btn = ttk.Button(
+                ffmpeg_frame, text="Check for Updates", command=gui.on_check_ffmpeg_updates
+            )
+            gui.ffmpeg_check_btn.pack(side="left", padx=(0, 10))
+            tooltip_text = f"Check GitHub for the latest FFmpeg release from {gui.ffmpeg_source}.\n"
+            tooltip_text += "This will make a network request to api.github.com."
+            ToolTip(gui.ffmpeg_check_btn, tooltip_text)
+
+            gui.ffmpeg_update_label = ttk.Label(ffmpeg_frame, text="")
+            gui.ffmpeg_update_label.pack(side="left")
+        else:
+            # Unknown source - can't check for updates
+            gui.ffmpeg_check_btn = None
+            gui.ffmpeg_update_label = None

@@ -12,7 +12,6 @@ from dataclasses import replace
 from src.gui.gui_updates import (
     update_conversion_statistics,  # update_total_elapsed_time called by update_elapsed_time
     update_progress_bars,
-    update_statistics_summary,
 )
 from src.models import ErrorInfo, FileInfoEvent, ProgressEvent, RetryInfo, SkippedInfo
 
@@ -205,9 +204,8 @@ def handle_completed(gui, filename, info) -> None:
     # after process_video returns, since elapsed_time isn't available when this callback
     # is dispatched from within the wrapper.
 
-    # Log completion message and update summary statistics display
+    # Log completion message
     logger.info(log_msg)
-    update_statistics_summary(gui)  # Update the overall avg/min/max stats display
 
 
 def handle_skipped(gui, filename, reason) -> None:

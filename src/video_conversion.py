@@ -27,7 +27,7 @@ from src.ab_av1.wrapper import AbAv1Wrapper
 from src.cache_helpers import can_reuse_crf, is_file_unchanged
 from src.config import DEFAULT_ENCODING_PRESET, DEFAULT_VMAF_TARGET, MIN_OUTPUT_FILE_SIZE
 from src.history_index import get_history_index
-from src.models import FileStatus
+from src.models import FileStatus, OutputMode
 from src.utils import (
     anonymize_filename,
     format_file_size,
@@ -40,11 +40,86 @@ from src.utils import (
 logger = logging.getLogger(__name__)
 
 
+def calculate_output_path(
+    input_path: str,
+    output_mode: OutputMode,
+    suffix: str | None = None,
+    output_folder: str | None = None,
+    source_folder: str | None = None,
+) -> tuple[Path, bool, bool]:
+    """Calculate output path based on output mode.
+
+    Args:
+        input_path: Path to input video file
+        output_mode: REPLACE, SUFFIX, or SEPARATE_FOLDER
+        suffix: Suffix to append for SUFFIX mode (e.g., "_av1")
+        output_folder: Target folder for SEPARATE_FOLDER mode
+        source_folder: Base folder for preserving subfolder structure (for folder queue items)
+
+    Returns:
+        Tuple of (output_path, overwrite, delete_original)
+        - output_path: Path object for the output file
+        - overwrite: Whether to allow overwriting existing files
+        - delete_original: Whether to delete the original after conversion
+    """
+    input_file = Path(input_path).resolve()
+
+    if output_mode == OutputMode.REPLACE:
+        # Same folder as input, .mkv extension
+        output_path = input_file.with_suffix(".mkv")
+        overwrite = True
+        # Only delete original if the output path is different from input
+        # (i.e., input wasn't already .mkv)
+        delete_original = input_file != output_path
+
+    elif output_mode == OutputMode.SUFFIX:
+        # Same folder as input, add suffix before extension
+        suffix_str = suffix if suffix else "_av1"
+        output_filename = input_file.stem + suffix_str + ".mkv"
+        output_path = input_file.parent / output_filename
+        overwrite = False
+        delete_original = False
+
+    elif output_mode == OutputMode.SEPARATE_FOLDER:
+        # Output to different folder, preserve subfolder structure if source_folder provided
+        if not output_folder:
+            raise ValueError("output_folder is required for SEPARATE_FOLDER mode")
+
+        output_base = Path(output_folder).resolve()
+
+        # Preserve subfolder structure if source_folder is provided
+        if source_folder:
+            source_base = Path(source_folder).resolve()
+            try:
+                # Get the relative path from source_folder to input file's parent
+                relative_dir = input_file.parent.relative_to(source_base)
+                output_dir = output_base / relative_dir
+            except ValueError:
+                # Input is not relative to source_folder, output to base
+                logger.warning(
+                    f"Input {input_file} not relative to source folder {source_base}. Outputting to base: {output_base}"
+                )
+                output_dir = output_base
+        else:
+            # No source folder - output directly to output_folder
+            output_dir = output_base
+
+        output_filename = input_file.stem + ".mkv"
+        output_path = output_dir / output_filename
+        overwrite = False
+        delete_original = False
+
+    else:
+        raise ValueError(f"Unknown output mode: {output_mode}")
+
+    return output_path, overwrite, delete_original
+
+
 def process_video(
     video_path: str,
-    input_folder: str,
-    output_folder: str,
+    output_path: str,
     overwrite: bool = False,
+    delete_original: bool = False,
     convert_audio: bool = True,
     audio_codec: str = "opus",
     file_info_callback: Callable[..., Any] | None = None,
@@ -56,9 +131,9 @@ def process_video(
 
     Args:
         video_path: Path to the input video file
-        input_folder: Base input folder path for calculating relative paths
-        output_folder: Destination folder for converted files
+        output_path: Pre-calculated path for the output file
         overwrite: Whether to overwrite existing output files
+        delete_original: Whether to delete the original file after successful conversion
         convert_audio: Whether to convert audio to a different codec
         audio_codec: Target audio codec if conversion is enabled
         file_info_callback: Optional callback for reporting file status changes
@@ -70,48 +145,28 @@ def process_video(
                 final_vmaf_target) on success, None otherwise.
     """
     input_path = Path(video_path).resolve()
-    input_folder_path = Path(input_folder).resolve()
-    output_folder_path = Path(output_folder).resolve()
+    output_path_obj = Path(output_path).resolve()
     # Anonymize early for logging consistency
     anonymized_input_name = anonymize_filename(str(input_path))
+    anonymized_output_name = anonymize_filename(str(output_path_obj))
 
     logger.debug(f"Processing video: {anonymized_input_name}")
+    logger.debug(f"Output path: {anonymized_output_name}")
 
-    # --- Determine Standard Output Path ---
+    # --- Create Output Directory ---
     try:
-        relative_dir = input_path.parent.relative_to(input_folder_path)
-        output_dir = output_folder_path / relative_dir
-    except ValueError:
-        logger.warning(
-            f"Input {anonymized_input_name} not relative to input base. Outputting to base: {output_folder_path}"
-        )
-        output_dir = output_folder_path
-        relative_dir = Path()
+        output_path_obj.parent.mkdir(parents=True, exist_ok=True)
     except Exception as e:
-        error_msg = f"Error calculating output dir: {e}"
+        error_msg = f"Failed to create output directory '{output_path_obj.parent}': {e}"
         logger.exception(error_msg)
         if file_info_callback:
             file_info_callback(input_path.name, "failed", {"message": error_msg, "type": "output_dir_error"})
         return None
-
-    try:
-        output_dir.mkdir(parents=True, exist_ok=True)
-    except Exception as e:
-        error_msg = f"Failed create output dir '{output_dir}': {e}"
-        logger.exception(error_msg)
-        if file_info_callback:
-            file_info_callback(input_path.name, "failed", {"message": error_msg, "type": "output_dir_error"})
-        return None
-
-    # Calculate the standard output path (without suffix yet)
-    output_filename = input_path.stem + ".mkv"
-    output_path = output_dir / output_filename
 
     # --- Initial Skip Checks (Standard Overwrite/Existence) ---
     # This check is primarily for non-in-place conversions where output exists
-    if output_path.exists() and not overwrite and input_path != output_path:
-        anonymized_output_name = anonymize_filename(str(output_path))
-        logger.info(f"Skipping {anonymized_input_name} - output exists (standard check): {anonymized_output_name}")
+    if output_path_obj.exists() and not overwrite and input_path != output_path_obj:
+        logger.info(f"Skipping {anonymized_input_name} - output exists: {anonymized_output_name}")
         if file_info_callback:
             file_info_callback(input_path.name, "skipped", "Output exists")
         return None
@@ -119,8 +174,6 @@ def process_video(
     # --- Get Video Info ---
     video_info = None
     input_size = 0
-    input_vcodec = "?"
-    is_av1 = False  # Flag to check if input is AV1
     try:
         video_info = get_video_info(str(input_path))
         if not video_info:
@@ -132,11 +185,6 @@ def process_video(
                 )
             return None
         input_size = video_info.get("file_size", 0)
-        for stream in video_info.get("streams", []):
-            if stream.get("codec_type") == "video":
-                input_vcodec = stream.get("codec_name", "?").upper()
-                if input_vcodec == "AV1":
-                    is_av1 = True
     except Exception as e:
         error_msg = f"Error analyzing {anonymized_input_name}: {e}"
         logger.error(error_msg, exc_info=True)
@@ -146,56 +194,9 @@ def process_video(
             )
         return None
 
-    # --- Handle In-Place, No Overwrite, Non-AV1 MKV Scenario ---
-    if input_path == output_path and not overwrite:
-        # This means input is MKV, output folder = input folder
-        if is_av1:
-            # If it's already AV1, we just skip it as there's nothing to do (in-place, no overwrite)
-            logger.info(f"Skipping {anonymized_input_name} - Already AV1/MKV (in-place, no overwrite)")
-            if file_info_callback:
-                file_info_callback(input_path.name, "skipped", "Already AV1/MKV (in-place, no overwrite)")
-            return None
-        # Input is MKV, but NOT AV1. Attempt to add suffix.
-        suffixed_filename = input_path.stem + " (av1).mkv"
-        suffixed_output_path = output_dir / suffixed_filename
-        anonymized_suffixed_output = anonymize_filename(str(suffixed_output_path))
-
-        if suffixed_output_path.exists():
-            # If the suffixed file *also* exists, we must skip
-            logger.warning(
-                f"Skipping {anonymized_input_name} - Output with suffix '{suffixed_filename}' "
-                f"already exists: {anonymized_suffixed_output}"
-            )
-            if file_info_callback:
-                file_info_callback(input_path.name, "skipped", "Output with '(av1)' suffix exists")
-            return None
-        # Use the suffixed path for this conversion
-        output_path = suffixed_output_path
-        logger.info(f"Input is non-AV1 MKV; Overwrite disabled. Using suffixed output: {anonymized_suffixed_output}")
-
-    # --- Check again if final output path exists (covers case where suffix was added) ---
-    # Note: This check might seem redundant if the suffix logic already checked,
-    # but it ensures correctness if the suffix logic isn't hit.
-    # We only check existence now, as the overwrite logic for the standard path was handled earlier.
-    # If the path was modified by the suffix logic, its existence was checked there.
-    if output_path.exists() and not overwrite:
-        # This condition should primarily catch the case where the *suffixed* file already exists
-        # (which was checked above) OR if somehow the initial non-in-place check was bypassed.
-        # Log it for clarity.
-        anonymized_output_name = anonymize_filename(str(output_path))
-        logger.warning(
-            f"Skipping {anonymized_input_name} - Final determined output path exists "
-            f"(post-suffix check): {anonymized_output_name}"
-        )
-        if file_info_callback:
-            file_info_callback(input_path.name, "skipped", "Final output path exists")
-        return None
-
-    # If we got here, conversion is needed. Proceed.
-    anonymized_final_output_name = anonymize_filename(str(output_path))  # Anonymize final path for logging
-    logger.debug(f"Final Output Path: {anonymized_final_output_name}")  # Log final path
-
+    # --- Log conversion start ---
     logger.info(f"Processing {anonymized_input_name} - Size: {format_file_size(input_size)}")
+    logger.info(f"Output will be written to: {anonymized_output_name}")
     if file_info_callback:
         file_info_callback(input_path.name, "file_info", {"file_size_mb": input_size / (1024**2) if input_size else 0})
 
@@ -225,8 +226,7 @@ def process_video(
                         },
                     )
                 return None
-            else:
-                logger.info(f"File {anonymized_input_name} changed since NOT_WORTHWHILE analysis, re-attempting")
+            logger.info(f"File {anonymized_input_name} changed since NOT_WORTHWHILE analysis, re-attempting")
 
         # Check if we can reuse cached CRF
         if is_file_unchanged(record, str(input_path)) and can_reuse_crf(
@@ -252,12 +252,11 @@ def process_video(
         if use_cached_crf and cached_crf is not None:
             # Use cached CRF - skip CRF search phase
             logger.info(
-                f"Starting ab-av1 encode (cached CRF) for {anonymized_input_name} -> "
-                f"{anonymized_final_output_name}"
+                f"Starting ab-av1 encode (cached CRF) for {anonymized_input_name} -> {anonymized_output_name}"
             )
             result_stats = ab_av1.encode_with_crf(
                 input_path=str(input_path),
-                output_path=str(output_path),
+                output_path=str(output_path_obj),
                 crf=cached_crf,
                 preset=DEFAULT_ENCODING_PRESET,
                 file_info_callback=file_info_callback,
@@ -266,10 +265,10 @@ def process_video(
             )
         else:
             # No cache - run full auto-encode with CRF search
-            logger.info(f"Starting ab-av1 auto-encode for {anonymized_input_name} -> {anonymized_final_output_name}")
+            logger.info(f"Starting ab-av1 auto-encode for {anonymized_input_name} -> {anonymized_output_name}")
             result_stats = ab_av1.auto_encode(
                 input_path=str(input_path),
-                output_path=str(output_path),
+                output_path=str(output_path_obj),
                 file_info_callback=file_info_callback,
                 pid_callback=pid_callback,
                 total_duration_seconds=total_duration_seconds,
@@ -278,23 +277,22 @@ def process_video(
         conversion_elapsed_time = time.time() - conversion_start_time
         cache_note = " (cached CRF)" if use_cached_crf else ""
         logger.info(
-            f"ab-av1 finished{cache_note} for {anonymized_input_name} in "
-            f"{format_time(conversion_elapsed_time)}."
+            f"ab-av1 finished{cache_note} for {anonymized_input_name} in {format_time(conversion_elapsed_time)}."
         )
 
         # --- Post-Conversion Verification & Stat Gathering ---
-        if not output_path.exists():
-            raise OutputFileError(f"Output missing: {anonymized_final_output_name}", error_type="missing_output")
-        output_size = output_path.stat().st_size
+        if not output_path_obj.exists():
+            raise OutputFileError(f"Output missing: {anonymized_output_name}", error_type="missing_output")
+        output_size = output_path_obj.stat().st_size
         if output_size < MIN_OUTPUT_FILE_SIZE:  # Check if output is suspiciously small
-            error_msg = f"Output too small ({output_size} bytes): {anonymized_final_output_name}"
+            error_msg = f"Output too small ({output_size} bytes): {anonymized_output_name}"
             try:
-                output_path.unlink()
+                output_path_obj.unlink()
             except OSError as rm_err:
-                logger.warning(f"Cannot remove small file {anonymized_final_output_name}: {rm_err}")
+                logger.warning(f"Cannot remove small file {anonymized_output_name}: {rm_err}")
             raise OutputFileError(error_msg, error_type="invalid_output")
 
-        log_conversion_result(str(input_path), str(output_path), conversion_elapsed_time)
+        log_conversion_result(str(input_path), str(output_path_obj), conversion_elapsed_time)
 
         final_vmaf = result_stats.get("vmaf") if result_stats else None
         final_crf = result_stats.get("crf") if result_stats else None
@@ -317,9 +315,19 @@ def process_video(
                 f"Final VMAF {final_vmaf:.1f} is below target {final_vmaf_target} for {anonymized_input_name}"
             )
 
+        # --- Delete Original if Requested ---
+        if delete_original and input_path != output_path_obj:
+            try:
+                logger.info(f"Deleting original file: {anonymized_input_name}")
+                input_path.unlink()
+                logger.debug(f"Successfully deleted original: {anonymized_input_name}")
+            except Exception as e:
+                logger.warning(f"Failed to delete original file {anonymized_input_name}: {e}")
+                # Don't fail the conversion if we can't delete the original
+
         # Return success tuple including stats for history
         return (
-            str(output_path),
+            str(output_path_obj),
             conversion_elapsed_time,
             input_size,
             output_size,

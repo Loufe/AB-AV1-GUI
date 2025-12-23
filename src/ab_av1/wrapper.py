@@ -18,6 +18,7 @@ from typing import Any, Callable
 # Project imports
 from src.config import DEFAULT_ENCODING_PRESET, DEFAULT_VMAF_TARGET, MIN_VMAF_FALLBACK_TARGET, VMAF_FALLBACK_STEP
 from src.utils import anonymize_filename, format_file_size, get_video_info, get_windows_subprocess_startupinfo
+from src.vendor_manager import AB_AV1_EXE, FFMPEG_DIR, get_ab_av1_path
 
 from .cleaner import clean_ab_av1_temp_folders
 
@@ -44,22 +45,15 @@ class AbAv1Wrapper:
 
     def __init__(self):
         """Initialize the wrapper, find executable, prepare parser."""
-        script_dir = os.path.dirname(os.path.abspath(__file__))  # src/ab_av1/
-        src_dir = os.path.dirname(script_dir)  # src/
-        self.executable_path = os.path.abspath(os.path.join(src_dir, "ab-av1.exe"))
-        logger.debug(f"AbAv1Wrapper init - expecting executable at: {self.executable_path}")
-        self._verify_executable()
-        self.parser = AbAv1Parser()
-        self.file_info_callback = None
-
-    def _verify_executable(self) -> bool:
-        """Verify that the ab-av1 executable exists at the expected location."""
-        if not os.path.exists(self.executable_path):
-            error_msg = f"ab-av1.exe not found. Place inside 'src' dir.\nExpected: {self.executable_path}"
+        ab_av1_path = get_ab_av1_path()
+        if ab_av1_path is None:
+            error_msg = f"ab-av1.exe not found.\nExpected: {AB_AV1_EXE}\nClick 'Download' in Settings to install it."
             logger.error(error_msg)
             raise FileNotFoundError(error_msg)
-        logger.debug(f"AbAv1Wrapper init - verified: {self.executable_path}")
-        return True
+        self.executable_path = str(ab_av1_path)
+        logger.debug(f"AbAv1Wrapper init - using executable at: {self.executable_path}")
+        self.parser = AbAv1Parser()
+        self.file_info_callback = None
 
     def auto_encode(
         self,
@@ -188,8 +182,6 @@ class AbAv1Wrapper:
             stats["eta_text"] = None
             stats["last_ffmpeg_fps"] = None
 
-            full_output_lines = []  # Reset collected output lines
-
             logger.info(f"[Attempt VMAF {current_vmaf_target}] Starting for {anonymized_input_path}")
 
             # --- Command Preparation ---
@@ -225,6 +217,11 @@ class AbAv1Wrapper:
 
             # --- Environment Setup with maximum verbosity and pass-through flags ---
             process_env = os.environ.copy()
+            # If vendor FFmpeg exists, prepend it to PATH so ab-av1 finds it
+            # This only affects this subprocess - user's system PATH is unchanged
+            if FFMPEG_DIR.exists():
+                process_env["PATH"] = str(FFMPEG_DIR) + os.pathsep + process_env.get("PATH", "")
+                logger.debug(f"Using vendor FFmpeg from {FFMPEG_DIR}")
             # Critical environment variables for ffmpeg output
             process_env["RUST_LOG"] = "debug,ab_av1=trace,ffmpeg=trace"  # Filter out trace from other components
             process_env["AV1_PRINT_FFMPEG"] = "1"  # Force printing of ffmpeg output
@@ -899,6 +896,7 @@ class AbAv1Wrapper:
             f"VMAF {MIN_VMAF_FALLBACK_TARGET}"
         )
         logger.info(f"File not worth converting: {anonymized_input_path}")
+        clean_ab_av1_temp_folders()
         raise ConversionNotWorthwhileError(
             error_msg,
             command=cmd_str_log,
@@ -1039,7 +1037,7 @@ class AbAv1Wrapper:
                 "size_reduction": None,
                 "input_path": input_path,
                 "output_path": output_path,
-                "command": cmd_str,
+                "command": cmd_str_log,
                 "vmaf_target_used": None,  # Not applicable - using cached CRF
                 "last_ffmpeg_fps": None,
                 "eta_text": None,
@@ -1063,6 +1061,11 @@ class AbAv1Wrapper:
 
         # --- Environment Setup ---
         process_env = os.environ.copy()
+        # If vendor FFmpeg exists, prepend it to PATH so ab-av1 finds it
+        # This only affects this subprocess - user's system PATH is unchanged
+        if FFMPEG_DIR.exists():
+            process_env["PATH"] = str(FFMPEG_DIR) + os.pathsep + process_env.get("PATH", "")
+            logger.debug(f"Using vendor FFmpeg from {FFMPEG_DIR}")
         process_env["RUST_LOG"] = "debug,ab_av1=trace,ffmpeg=trace"
         process_env["AV1_PRINT_FFMPEG"] = "1"
         process_env["AV1_RAW_OUTPUT"] = "1"
@@ -1095,7 +1098,7 @@ class AbAv1Wrapper:
 
             logger.info(f"Encode process {process.pid} started. Reading output...")
 
-            assert process.stdout is not None  # noqa: S101
+            assert process.stdout is not None  # noqa: S101 - Guaranteed by stdout=PIPE
 
             for raw_line in iter(process.stdout.readline, ""):
                 line = raw_line.strip()

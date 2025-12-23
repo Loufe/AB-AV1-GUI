@@ -1,6 +1,6 @@
-# src/gui/tabs/queue_tab.py
+# src/gui/tabs/convert_tab.py
 """
-Queue tab module for the AV1 Video Converter application.
+Convert tab module for the AV1 Video Converter application.
 
 This tab allows users to:
 - Add files/folders to a conversion queue
@@ -12,12 +12,13 @@ This tab allows users to:
 import tkinter as tk
 from tkinter import ttk
 
+from src.config import DEFAULT_VMAF_TARGET
 from src.gui.base import ToolTip
 
 
-def create_queue_tab(gui):
-    """Create the queue/conversion tab."""
-    main_frame = ttk.Frame(gui.queue_tab)
+def create_convert_tab(gui):
+    """Create the main conversion tab."""
+    main_frame = ttk.Frame(gui.convert_tab)
     main_frame.pack(fill="both", expand=True, padx=10, pady=10)
     main_frame.columnconfigure(0, weight=1)
     main_frame.rowconfigure(2, weight=1)  # Tree row expands
@@ -66,17 +67,31 @@ def create_queue_tab(gui):
     gui.force_stop_button.pack(side="left", padx=(5, 0))
     ToolTip(gui.force_stop_button, "Immediately stop conversion")
 
-    # --- Row 1: Progress bar and status ---
+    # --- Row 1: Progress bar, status, and time display ---
     progress_frame = ttk.Frame(main_frame)
     progress_frame.grid(row=1, column=0, sticky="ew", pady=(0, 5))
+    progress_frame.columnconfigure(1, weight=1)
+
+    gui.overall_progress = ttk.Progressbar(progress_frame, orient="horizontal", mode="determinate")
+    gui.overall_progress.grid(row=0, column=0, sticky="ew", padx=(0, 10))
     progress_frame.columnconfigure(0, weight=1)
-    progress_frame.columnconfigure(1, weight=2)
 
-    gui.queue_progress = ttk.Progressbar(progress_frame, orient="horizontal", mode="determinate")
-    gui.queue_progress.grid(row=0, column=0, sticky="ew", padx=(0, 10))
+    gui.status_label = ttk.Label(progress_frame, text="Ready - Add items to queue", anchor="w")
+    gui.status_label.grid(row=0, column=1, sticky="ew", padx=(0, 10))
 
-    gui.queue_status_label = ttk.Label(progress_frame, text="Ready - Add items to queue", anchor="w", width=80)
-    gui.queue_status_label.grid(row=0, column=1, sticky="ew")
+    # Time display frame for both elapsed and remaining time
+    time_frame = ttk.Frame(progress_frame)
+    time_frame.grid(row=0, column=2, sticky="e")
+
+    ttk.Label(time_frame, text="Total Time:").pack(side="left", padx=(0, 5))
+    gui.total_elapsed_label = ttk.Label(time_frame, text="-")
+    gui.total_elapsed_label.pack(side="left")
+
+    ttk.Label(time_frame, text="|").pack(side="left", padx=(8, 8))
+
+    ttk.Label(time_frame, text="Est. Remaining:").pack(side="left", padx=(0, 5))
+    gui.total_remaining_label = ttk.Label(time_frame, text="-")
+    gui.total_remaining_label.pack(side="left")
 
     # --- Row 2: Queue Tree with vertical scrollbar ---
     tree_container = ttk.Frame(main_frame)
@@ -212,50 +227,45 @@ def create_queue_tab(gui):
     gui.encoding_percent_label = ttk.Label(file_frame, text="0%", width=5, anchor="w")
     gui.encoding_percent_label.grid(row=2, column=2, sticky="w", padx=(0, 5), pady=2)
 
-    # --- Row 6: Conversion Statistics (same as old main_tab) ---
-    _create_statistics_frame(gui, main_frame, row=6)
+    # --- Row 6: Conversion Details ---
+    details_frame = ttk.LabelFrame(main_frame, text="Conversion Details")
+    details_frame.grid(row=6, column=0, sticky="ew", pady=5)
 
-
-def _create_statistics_frame(gui, parent, row):
-    """Create the conversion statistics frame."""
-    stats_frame = ttk.LabelFrame(parent, text="Conversion Statistics")
-    stats_frame.grid(row=row, column=0, sticky="ew", padx=0, pady=5)
-
-    stats_grid = ttk.Frame(stats_frame)
-    stats_grid.pack(fill="x", padx=5, pady=10)
+    details_grid = ttk.Frame(details_frame)
+    details_grid.pack(fill="x", padx=5, pady=10)
 
     # Left column
-    left_col = ttk.Frame(stats_grid)
+    left_col = ttk.Frame(details_grid)
     left_col.pack(side="left", fill="x", expand=True, padx=(0, 10))
 
-    vmaf_row = ttk.Frame(left_col)
-    vmaf_row.grid(row=0, column=0, columnspan=2, sticky="w", pady=2)
-    ttk.Label(vmaf_row, text="Avg VMAF Score:").pack(side="left")
-    gui.vmaf_stats_label = ttk.Label(vmaf_row, text="-")
-    gui.vmaf_stats_label.pack(side="left", padx=(5, 5))
-    gui.vmaf_range_label = ttk.Label(vmaf_row, text="", style="Range.TLabel")
-    gui.vmaf_range_label.pack(side="left")
+    ttk.Label(left_col, text="Original Format:").grid(row=0, column=0, sticky="w", pady=3)
+    gui.orig_format_label = ttk.Label(left_col, text="-")
+    gui.orig_format_label.grid(row=0, column=1, sticky="w", pady=3)
 
-    crf_row = ttk.Frame(left_col)
-    crf_row.grid(row=1, column=0, columnspan=2, sticky="w", pady=2)
-    ttk.Label(crf_row, text="Avg CRF Value:").pack(side="left")
-    gui.crf_stats_label = ttk.Label(crf_row, text="-")
-    gui.crf_stats_label.pack(side="left", padx=(5, 5))
-    gui.crf_range_label = ttk.Label(crf_row, text="", style="Range.TLabel")
-    gui.crf_range_label.pack(side="left")
+    ttk.Label(left_col, text="Original Size:").grid(row=1, column=0, sticky="w", pady=3)
+    gui.orig_size_label = ttk.Label(left_col, text="-")
+    gui.orig_size_label.grid(row=1, column=1, sticky="w", pady=3)
+
+    ttk.Label(left_col, text="VMAF Target:").grid(row=2, column=0, sticky="w", pady=3)
+    gui.vmaf_label = ttk.Label(left_col, text=f"{DEFAULT_VMAF_TARGET}")
+    gui.vmaf_label.grid(row=2, column=1, sticky="w", pady=3)
+
+    ttk.Label(left_col, text="Encoding Settings:").grid(row=3, column=0, sticky="w", pady=3)
+    gui.encoding_settings_label = ttk.Label(left_col, text="-")
+    gui.encoding_settings_label.grid(row=3, column=1, sticky="w", pady=3)
 
     # Right column
-    right_col = ttk.Frame(stats_grid)
+    right_col = ttk.Frame(details_grid)
     right_col.pack(side="right", fill="x", expand=True, padx=(10, 0))
 
-    size_row = ttk.Frame(right_col)
-    size_row.grid(row=0, column=0, columnspan=2, sticky="w", pady=2)
-    ttk.Label(size_row, text="Avg Size Reduction:").pack(side="left")
-    gui.size_stats_label = ttk.Label(size_row, text="-")
-    gui.size_stats_label.pack(side="left", padx=(5, 5))
-    gui.size_range_label = ttk.Label(size_row, text="", style="Range.TLabel")
-    gui.size_range_label.pack(side="left")
+    ttk.Label(right_col, text="Elapsed Time:").grid(row=0, column=0, sticky="w", pady=3)
+    gui.elapsed_label = ttk.Label(right_col, text="-")
+    gui.elapsed_label.grid(row=0, column=1, sticky="w", pady=3)
 
-    ttk.Label(right_col, text="Total Space Saved:").grid(row=1, column=0, sticky="w", pady=2)
-    gui.total_saved_label = ttk.Label(right_col, text="-")
-    gui.total_saved_label.grid(row=1, column=1, sticky="w", pady=2)
+    ttk.Label(right_col, text="Est. Remaining (Enc):").grid(row=1, column=0, sticky="w", pady=3)
+    gui.eta_label = ttk.Label(right_col, text="-")
+    gui.eta_label.grid(row=1, column=1, sticky="w", pady=3)
+
+    ttk.Label(right_col, text="Est. Final Size:").grid(row=2, column=0, sticky="w", pady=3)
+    gui.output_size_label = ttk.Label(right_col, text="-")
+    gui.output_size_label.grid(row=2, column=1, sticky="w", pady=3)

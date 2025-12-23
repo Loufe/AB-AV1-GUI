@@ -40,3 +40,6 @@ Thumbs.db
 
 # Environment-specific ffmpeg paths
 ffmpeg_path.txt
+
+# Downloaded external tools (ab-av1, ffmpeg)
+vendor/

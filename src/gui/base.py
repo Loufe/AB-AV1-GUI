@@ -31,6 +31,7 @@ class ToolTip:
         self.tooltip = tk.Toplevel(self.widget)
         self.tooltip.wm_overrideredirect(True)
         self.tooltip.wm_geometry(f"+{x}+{y}")
+        self.tooltip.configure(background="lightyellow")
 
         label = tk.Label(
             self.tooltip,
@@ -138,6 +139,7 @@ class TreeviewRowTooltip:
         self.tooltip = tk.Toplevel(self.treeview)
         self.tooltip.wm_overrideredirect(True)
         self.tooltip.wm_geometry(f"+{x + self.OFFSET_X}+{y + self.OFFSET_Y}")
+        self.tooltip.configure(background="lightyellow")
 
         # Prevent tooltip from stealing focus
         self.tooltip.wm_attributes("-topmost", True)

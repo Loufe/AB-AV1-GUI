@@ -21,7 +21,7 @@ from tkinter import messagebox
 # Project imports
 # Import from specific ab_av1 submodules
 # Import constants from config
-from src.config import DEFAULT_ENCODING_PRESET, DEFAULT_VMAF_TARGET, MIN_RESOLUTION_HEIGHT, MIN_RESOLUTION_WIDTH
+from src.config import MIN_RESOLUTION_HEIGHT, MIN_RESOLUTION_WIDTH
 from src.conversion_engine.cleanup import schedule_temp_folder_cleanup  # Import cleaner scheduling
 
 # Import from the new conversion_engine package
@@ -46,11 +46,10 @@ from src.gui.gui_actions import check_ffmpeg
 from src.gui.gui_updates import (
     reset_current_file_details,
     update_elapsed_time,
-    update_statistics_summary,
     update_total_elapsed_time,
     update_total_remaining_time,
 )
-from src.models import ConversionConfig
+from src.models import OutputMode, QueueConversionConfig
 
 # Import from utils
 from src.utils import (
@@ -60,7 +59,6 @@ from src.utils import (
     format_time,
     get_windows_subprocess_startupinfo,
     prevent_sleep_mode,
-    set_anonymization_folders,
     update_ui_safely,
 )
 
@@ -119,6 +117,96 @@ def create_file_callback_dispatcher(gui):
     return file_callback_dispatcher
 
 
+def create_queue_status_callback(gui):
+    """Create callback for updating queue item status in UI.
+
+    Args:
+        gui: The main GUI instance
+
+    Returns:
+        A callback function that updates queue tree rows
+    """
+
+    def queue_status_callback(queue_item_id: str, status: str, processed: int, total: int):
+        """Update queue tree with item status."""
+
+        def update():
+            # Update queue item data
+            for item in gui.get_queue_items():
+                if item.id == queue_item_id:
+                    item.status = status
+                    item.processed_files = processed
+                    item.total_files = total
+                    break
+
+            # Update tree row if it exists
+            tree_id = gui.get_queue_tree_id(queue_item_id)
+            if tree_id:
+                try:
+                    progress_display = f"{processed}/{total}" if total > 0 else "—"
+                    gui.queue_tree.set(tree_id, "status", status.capitalize())
+                    gui.queue_tree.set(tree_id, "progress", progress_display)
+                except Exception:
+                    logger.debug(f"Could not update tree row for {queue_item_id}")
+
+        update_ui_safely(gui.root, update)
+
+    return queue_status_callback
+
+
+def create_get_next_pending_item_callback(gui):
+    """Create callback for dynamic queue item fetching.
+
+    Args:
+        gui: The main GUI instance
+
+    Returns:
+        Callback returning (QueueItem or None, remaining_pending_count, timed_out)
+    """
+
+    def get_next_pending_item():
+        """Fetch next pending queue item dynamically.
+
+        Returns:
+            tuple: (QueueItem or None, remaining_pending_count, timed_out)
+        """
+        done_event = threading.Event()
+        result: list[tuple] = [(None, 0)]
+
+        def fetch_on_main_thread():
+            try:
+                pending_count = 0
+                claimed_item = None
+
+                for item in gui.get_queue_items():
+                    if item.status == "pending":
+                        if claimed_item is None:
+                            claimed_item = item
+                        else:
+                            pending_count += 1
+
+                # Only set status AFTER successful iteration
+                if claimed_item is not None:
+                    claimed_item.status = "converting"
+
+                result[0] = (claimed_item, pending_count)
+            except Exception:
+                logger.exception("Error fetching next pending item")
+                result[0] = (None, 0)
+            finally:
+                done_event.set()
+
+        update_ui_safely(gui.root, fetch_on_main_thread)
+
+        if not done_event.wait(timeout=5.0):
+            logger.warning("Timeout fetching next pending item - will retry")
+            return (None, 0, True)  # timed_out = True
+
+        return (*result[0], False)  # timed_out = False
+
+    return get_next_pending_item
+
+
 # --- Process Management & State ---
 
 
@@ -138,90 +226,81 @@ def store_process_id(gui, pid: int, input_path: str) -> None:
 
 
 def start_conversion(gui) -> None:
-    """Start the video conversion process.
-
-    Initializes the conversion worker thread, sets up UI state, and prevents
-    the system from sleeping during conversion.
-
-    Args:
-        gui: The main GUI instance containing conversion settings and UI elements.
-    """
+    """Start queue-based video conversion process."""
     # Check if already running
     if gui.session.running:
         logger.warning("Start clicked while conversion is already running.")
         return
 
-    # Get input and output folders
-    input_folder = gui.input_folder.get()
-    output_folder = gui.output_folder.get()
-
-    # Validate input folder
-    if not input_folder or not os.path.isdir(input_folder):
-        messagebox.showerror("Error", "Invalid input folder selected.")
+    # Validate queue has items
+    if not gui.get_queue_items():
+        messagebox.showerror("Error", "Add files or folders to the queue first.")
         return
 
-    # If no output folder, use input folder
-    if not output_folder:
-        output_folder = input_folder
-        gui.output_folder.set(output_folder)  # Update the GUI variable
-        logger.info(f"Output folder was empty, automatically set to match input: {output_folder}")
-    # Ensure output folder exists (create if needed)
-    elif not os.path.isdir(output_folder):
-        try:
-            logger.info(f"Output folder '{output_folder}' does not exist. Attempting to create.")
-            os.makedirs(output_folder, exist_ok=True)
-            logger.info(f"Successfully created output folder: {output_folder}")
-        except Exception:
-            logger.exception(f"Failed to create output folder '{output_folder}'")
-            messagebox.showerror("Error", "Cannot create output folder")
-            return
+    # Filter to pending items only
+    pending_items = [item for item in gui.get_queue_items() if item.status == "pending"]
+    if not pending_items:
+        messagebox.showinfo("Info", "All queue items have already been processed.\nClear the queue or add new items.")
+        return
 
-    # Configure anonymization folders for log privacy
-    set_anonymization_folders(input_folder, output_folder)
-
-    # Get file extensions to process from GUI state
+    # Get file extensions for folder scanning
     selected_extensions = [
         ext
         for ext, var in [("mp4", gui.ext_mp4), ("mkv", gui.ext_mkv), ("avi", gui.ext_avi), ("wmv", gui.ext_wmv)]
         if var.get()
     ]
 
-    # Check if at least one extension is selected
     if not selected_extensions:
         messagebox.showerror("Error", "Please select at least one file extension type to process in the Settings tab.")
         return
 
-    # Get overwrite setting from GUI state
-    overwrite = gui.overwrite.get()
+    # Validate SEPARATE_FOLDER items have output folders
+    for item in pending_items:
+        if item.output_mode == OutputMode.SEPARATE_FOLDER:
+            if not item.output_folder:
+                item.output_folder = gui.default_output_folder.get()
+            if not item.output_folder:
+                messagebox.showerror(
+                    "Error",
+                    f"Item '{os.path.basename(item.source_path)}' uses 'separate folder' mode "
+                    "but no output folder is set.\n\n"
+                    "Set a default output folder in Settings, or select the item and set its output folder.",
+                )
+                return
+            # Ensure output folder exists
+            try:
+                os.makedirs(item.output_folder, exist_ok=True)
+            except Exception as e:
+                messagebox.showerror("Error", f"Cannot create output folder '{item.output_folder}':\n{e}")
+                return
 
     # Check FFmpeg and ab-av1 dependencies
-    if not check_ffmpeg(gui):  # check_ffmpeg is from gui_actions
+    if not check_ffmpeg(gui):
         return
 
-    # Get remaining conversion settings from GUI state
-    convert_audio = gui.convert_audio.get()
-    audio_codec = gui.audio_codec.get()
-    delete_original = gui.delete_original_var.get()  # Get the state of the checkbox
-
-    # Log settings for the run
-    logger.info("--- Starting Conversion ---")
-    logger.info(f"Input: {input_folder}, Output: {output_folder}, Extensions: {', '.join(selected_extensions)}")
-    logger.info(
-        f"Overwrite: {overwrite}, Convert Audio: {convert_audio} "
-        f"(Codec: {audio_codec if convert_audio else 'N/A'}), Delete Original: {delete_original}"
+    # Create queue config
+    config = QueueConversionConfig(
+        queue_items=pending_items,
+        extensions=selected_extensions,
+        convert_audio=gui.convert_audio.get(),
+        audio_codec=gui.audio_codec.get(),
+        default_suffix=gui.default_suffix.get(),
     )
-    logger.info(f"Using -> Preset: {DEFAULT_ENCODING_PRESET}, VMAF Target: {DEFAULT_VMAF_TARGET}")
 
-    # Update UI state for running conversion
+    # Log settings
+    logger.info("--- Starting Queue Conversion ---")
+    logger.info(f"Queue items: {len(pending_items)}, Extensions: {', '.join(selected_extensions)}")
+    audio_codec_info = config.audio_codec if config.convert_audio else "N/A"
+    logger.info(f"Convert Audio: {config.convert_audio} (Codec: {audio_codec_info})")
+
+    # Update UI state
     gui.status_label.config(text="Starting...")
-    logger.info("Preparing conversion worker...")
     gui.start_button.config(state="disabled")
     gui.stop_button.config(state="normal")
     gui.force_stop_button.config(state="normal")
 
-    # Initialize conversion state - reset session to fresh state
+    # Initialize conversion state
     gui.session.running = True
-    gui.session.output_folder_path = output_folder
     gui.session.total_start_time = time.time()
     gui.session.vmaf_scores = []
     gui.session.crf_values = []
@@ -236,56 +315,33 @@ def start_conversion(gui) -> None:
     gui.session.elapsed_timer_id = None
     gui.session.pending_files = []
     gui.session.current_file_path = None
-    # Thread primitives stay on gui
     gui.stop_event = threading.Event()
 
-    logger.info("Initialized conversion session state")
-
-    # Start timer for total elapsed time immediately
+    # Start timers
     def start_total_timer():
         update_total_elapsed_time(gui)
         if gui.session.running:
             gui.root.after(1000, start_total_timer)
 
-    # Start separate timer for remaining time updates - less frequent
     def start_remaining_timer():
         update_total_remaining_time(gui)
         if gui.session.running:
-            gui.root.after(5000, start_remaining_timer)  # Update every 5 seconds instead of 1
+            gui.root.after(5000, start_remaining_timer)
 
     start_total_timer()
     start_remaining_timer()
 
-    # Prevent system sleep (Windows only)
+    # Prevent system sleep
     sleep_prevented = prevent_sleep_mode()
-    if sleep_prevented:
-        logger.info("System sleep prevention enabled.")
-        gui.session.sleep_prevention_active = True
-    else:
-        # Log warning if couldn't prevent sleep (non-Windows or error)
-        if sys.platform == "win32":
-            logger.warning("Could not enable sleep prevention on Windows.")
-        else:
-            logger.info("Sleep prevention is only implemented for Windows.")
-        gui.session.sleep_prevention_active = False
+    gui.session.sleep_prevention_active = sleep_prevented
 
-    # Reset UI elements related to conversion progress and stats
-    update_statistics_summary(gui)  # Reset overall stats display
-    reset_current_file_details(gui)  # Reset current file details display
+    # Reset UI elements
+    reset_current_file_details(gui)
 
-    # Create ConversionConfig with all settings
-    config = ConversionConfig(
-        input_folder=input_folder,
-        output_folder=output_folder,
-        extensions=selected_extensions,
-        overwrite=overwrite,
-        delete_original=delete_original,
-        convert_audio=convert_audio,
-        audio_codec=audio_codec,
-    )
-
-    # Create callbacks in the GUI layer to pass to worker
+    # Create callbacks
     file_callback = create_file_callback_dispatcher(gui)
+    queue_callback = create_queue_status_callback(gui)
+    get_next_item_callback = create_get_next_pending_item_callback(gui)
 
     def reset_ui_callback():
         return reset_current_file_details(gui)
@@ -293,8 +349,7 @@ def start_conversion(gui) -> None:
     def elapsed_time_callback(start_time):
         return update_elapsed_time(gui, start_time)
 
-    # Start the conversion worker thread
-    # Pass necessary callbacks (file_callback, reset_ui, elapsed_time, pid_storage, completion)
+    # Start worker thread
     gui.conversion_thread = threading.Thread(
         target=sequential_conversion_worker,
         args=(
@@ -302,15 +357,17 @@ def start_conversion(gui) -> None:
             config,
             gui.stop_event,
             file_callback,
+            queue_callback,
             reset_ui_callback,
             elapsed_time_callback,
             store_process_id,
             conversion_complete,
+            get_next_item_callback,
         ),
-        daemon=True,  # Ensure thread exits if main app crashes
+        daemon=True,
     )
     gui.conversion_thread.start()
-    logger.info("Conversion worker thread started.")
+    logger.info("Queue conversion worker thread started.")
 
 
 def stop_conversion(gui) -> None:
@@ -721,9 +778,6 @@ def conversion_complete(gui, final_message="Conversion complete"):
     if s.elapsed_timer_id:  # Ensure timer is stopped if still running
         gui.root.after_cancel(s.elapsed_timer_id)
         s.elapsed_timer_id = None
-
-    # Update statistics to show historical data
-    update_statistics_summary(gui)
 
     # Show summary message box if files were processed
     if s.processed_files > 0:

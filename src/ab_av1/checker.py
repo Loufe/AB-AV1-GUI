@@ -5,12 +5,12 @@ Checks for the availability and version of the ab-av1 executable.
 
 import json
 import logging
-import os
 import subprocess
 import urllib.request
 from urllib.error import URLError
 
 from src.utils import get_windows_subprocess_startupinfo
+from src.vendor_manager import AB_AV1_EXE, get_ab_av1_path
 
 logger = logging.getLogger(__name__)
 
@@ -19,7 +19,7 @@ AB_AV1_GITHUB_API = "https://api.github.com/repos/alexheretic/ab-av1/releases/la
 
 
 def check_ab_av1_available() -> tuple:
-    """Check if ab-av1 executable is available in the parent 'src' directory.
+    """Check if ab-av1 executable is available in the vendor directory.
 
     Returns:
         Tuple of (is_available, path, message) where:
@@ -27,20 +27,15 @@ def check_ab_av1_available() -> tuple:
         - path: Path to the ab-av1 executable if found, otherwise the expected path.
         - message: Descriptive message about the result
     """
-    # Determine expected path relative to *this* file's location
-    # Assuming this file is src/ab_av1/checker.py, go up one level to src/
-    script_dir = os.path.dirname(os.path.abspath(__file__))  # src/ab_av1/
-    src_dir = os.path.dirname(script_dir)  # src/
-    expected_path = os.path.join(src_dir, "ab-av1.exe")
-    expected_path = os.path.abspath(expected_path)  # Get absolute path
+    ab_av1_path = get_ab_av1_path()
 
-    if os.path.exists(expected_path):
-        logger.info(f"ab-av1 found: {expected_path}")
-        return True, expected_path, f"ab-av1 available at {expected_path}"
-    # Adjusted error message
-    error_msg = f"ab-av1.exe not found. Place inside 'src' dir.\nExpected: {expected_path}"
+    if ab_av1_path:
+        logger.info(f"ab-av1 found: {ab_av1_path}")
+        return True, str(ab_av1_path), f"ab-av1 available at {ab_av1_path}"
+
+    error_msg = f"ab-av1.exe not found.\nExpected: {AB_AV1_EXE}\nClick 'Download' to install it."
     logger.error(error_msg)
-    return False, expected_path, error_msg
+    return False, str(AB_AV1_EXE), error_msg
 
 
 def get_ab_av1_version() -> str | None:

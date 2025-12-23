@@ -9,6 +9,7 @@ import json  # For settings persistence
 import logging
 import multiprocessing
 import os  # Added import
+import shutil
 import sys
 import threading
 import tkinter as tk
@@ -18,6 +19,10 @@ from collections import deque
 from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, wait
 from pathlib import Path
 from tkinter import filedialog, messagebox, ttk
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from src.gui.charts import BarChart, LineGraph, PieChart
 
 from src.ab_av1.checker import check_ab_av1_latest_github, get_ab_av1_version
 from src.ab_av1.exceptions import ConversionNotWorthwhileError
@@ -32,6 +37,7 @@ from src.config import (
 from src.estimation import estimate_file_time
 from src.folder_analysis import _analyze_file
 from src.gui.conversion_controller import force_stop_conversion, start_conversion, stop_conversion
+from src.gui.dialogs import FFmpegDownloadDialog
 from src.gui.gui_actions import (
     browse_input_folder,
     browse_log_folder,
@@ -40,12 +46,12 @@ from src.gui.gui_actions import (
     open_history_file_action,
     open_log_folder_action,
 )
-from src.gui.gui_updates import update_statistics_summary
 
 # Project imports - Replace 'convert_app' with 'src'
 from src.gui.tabs.analysis_tab import create_analysis_tab
 from src.gui.tabs.convert_tab import create_convert_tab
 from src.gui.tabs.settings_tab import create_settings_tab
+from src.gui.tabs.statistics_tab import create_statistics_tab
 from src.history_index import compute_path_hash, get_history_index
 from src.models import ConversionSessionState, FileStatus, OutputMode, QueueItem
 
@@ -62,6 +68,7 @@ from src.utils import (
     setup_logging,
     update_ui_safely,
 )
+from src.vendor_manager import download_ab_av1, download_ffmpeg
 
 logger = logging.getLogger(__name__)
 
@@ -108,10 +115,40 @@ CONFIG_FILE = os.path.join(get_script_directory(), "av1_converter_config.json")
 class VideoConverterGUI:
     """Main application window for the AV1 Video Converter application."""
 
-    # Button widgets (created in create_main_tab)
+    # Convert tab widgets (created in create_convert_tab)
+    add_folder_button: ttk.Button
+    add_files_button: ttk.Button
+    remove_queue_button: ttk.Button
+    clear_queue_button: ttk.Button
     start_button: ttk.Button
     stop_button: ttk.Button
     force_stop_button: ttk.Button
+    overall_progress: ttk.Progressbar
+    status_label: ttk.Label
+    total_elapsed_label: ttk.Label
+    total_remaining_label: ttk.Label
+    queue_tree: ttk.Treeview
+    queue_total_tree: ttk.Treeview
+    queue_properties_frame: ttk.LabelFrame
+    item_output_mode: tk.StringVar
+    item_mode_combo: ttk.Combobox
+    item_suffix: tk.StringVar
+    item_suffix_entry: ttk.Entry
+    item_output_folder: tk.StringVar
+    item_folder_entry: ttk.Entry
+    item_source_label: ttk.Label
+    current_file_label: ttk.Label
+    quality_progress: ttk.Progressbar
+    quality_percent_label: ttk.Label
+    encoding_progress: ttk.Progressbar
+    encoding_percent_label: ttk.Label
+    orig_format_label: ttk.Label
+    orig_size_label: ttk.Label
+    vmaf_label: ttk.Label
+    encoding_settings_label: ttk.Label
+    elapsed_label: ttk.Label
+    eta_label: ttk.Label
+    output_size_label: ttk.Label
 
     # Analysis tab widgets (created in create_analysis_tab)
     analyze_button: ttk.Button
@@ -123,9 +160,38 @@ class VideoConverterGUI:
     analysis_total_tree: ttk.Treeview
 
     # Settings tab widgets (created in create_settings_tab)
+    ab_av1_frame: ttk.Frame
+    ab_av1_version_label: ttk.Label
+    ab_av1_download_btn: ttk.Button | None
+    ab_av1_check_btn: ttk.Button | None
+    ab_av1_update_btn: ttk.Button | None
     ab_av1_update_label: ttk.Label
+    ffmpeg_frame: ttk.Frame
+    ffmpeg_version_label: ttk.Label
+    ffmpeg_download_btn: ttk.Button | None
+    ffmpeg_check_btn: ttk.Button | None
+    ffmpeg_update_btn: ttk.Button | None
     ffmpeg_update_label: ttk.Label | None
     ffmpeg_source: str | None
+
+    # Statistics tab widgets (created in create_statistics_tab)
+    histogram_canvas: tk.Canvas
+    histogram_chart: "BarChart"
+    codec_canvas: tk.Canvas
+    codec_chart: "PieChart"
+    savings_canvas: tk.Canvas
+    savings_chart: "LineGraph"
+    refresh_stats_button: ttk.Button
+    stats_status_label: ttk.Label
+    stats_total_files_label: ttk.Label
+    vmaf_stats_label: ttk.Label
+    vmaf_range_label: ttk.Label
+    crf_stats_label: ttk.Label
+    crf_range_label: ttk.Label
+    total_saved_label: ttk.Label
+    size_stats_label: ttk.Label
+    size_range_label: ttk.Label
+    stats_date_range_label: ttk.Label
 
     def __init__(self, root):
         """Initialize the main window and all components."""
@@ -198,25 +264,22 @@ class VideoConverterGUI:
         # initialize_variables() moved earlier
 
         self.tab_control = ttk.Notebook(self.root)
-        self.queue_tab = ttk.Frame(self.tab_control)
-        self.main_tab = ttk.Frame(self.tab_control)
+        self.convert_tab = ttk.Frame(self.tab_control)
         self.analysis_tab = ttk.Frame(self.tab_control)
+        self.statistics_tab = ttk.Frame(self.tab_control)
         self.settings_tab = ttk.Frame(self.tab_control)
-        self.tab_control.add(self.queue_tab, text="Queue")
-        self.tab_control.add(self.main_tab, text="Convert")
+        self.tab_control.add(self.convert_tab, text="Convert")
         self.tab_control.add(self.analysis_tab, text="Analysis")
+        self.tab_control.add(self.statistics_tab, text="Statistics")
         self.tab_control.add(self.settings_tab, text="Settings")
         self.tab_control.pack(expand=1, fill="both")
 
-        create_queue_tab(self)
-        create_main_tab(self)
+        create_convert_tab(self)
         create_analysis_tab(self)
+        create_statistics_tab(self)
         create_settings_tab(self)
         self.initialize_conversion_state()
         self.initialize_button_states()
-
-        # Update statistics panel with historical data
-        update_statistics_summary(self)
 
         check_ffmpeg(self)  # Check dependencies after UI is built
 
@@ -284,7 +347,6 @@ class VideoConverterGUI:
         except tk.TclError:
             logger.warning("Could not detect theme, using default.")
         self.style.configure("TFrame", background="#f0f0f0")
-        self.style.configure("TButton", font=("Arial", 10))
         self.style.configure("TLabel", font=("Arial", 10), background="#f0f0f0")
         self.style.configure("Header.TLabel", font=("Arial", 10, "bold"), background="#f0f0f0")
         self.style.configure("ExtButton.TCheckbutton", font=("Arial", 9))
@@ -370,6 +432,14 @@ class VideoConverterGUI:
         self.ext_mkv.trace_add("write", self._on_folder_or_extension_changed)
         self.ext_avi.trace_add("write", self._on_folder_or_extension_changed)
         self.ext_wmv.trace_add("write", self._on_folder_or_extension_changed)
+
+    def get_queue_items(self) -> list[QueueItem]:
+        """Return the list of queue items."""
+        return self._queue_items
+
+    def get_queue_tree_id(self, queue_item_id: str) -> str | None:
+        """Return the tree item ID for a queue item, or None if not found."""
+        return self._queue_tree_map.get(queue_item_id)
 
     def initialize_conversion_state(self):
         """Reset conversion session state for a new conversion.
@@ -533,13 +603,19 @@ class VideoConverterGUI:
 
     def on_check_ab_av1_updates(self):
         """Check GitHub for the latest ab-av1 version and update the label."""
+        # Disable check button immediately
+        if self.ab_av1_check_btn:
+            self.ab_av1_check_btn.config(state="disabled")
+
         # Reset label state
         self._reset_update_label()
         self.ab_av1_update_label.config(text="Checking...", foreground="gray")
         self.root.update_idletasks()
 
         local_version = get_ab_av1_version()
-        latest_version, release_url, message = check_ab_av1_latest_github()
+        latest_version, _release_url, message = check_ab_av1_latest_github()
+
+        # Check button stays disabled permanently after use
 
         if latest_version is None:
             self.ab_av1_update_label.config(text=message, foreground="red")
@@ -553,16 +629,15 @@ class VideoConverterGUI:
         if local_version == latest_version:
             self.ab_av1_update_label.config(text=f"Up to date ({latest_version})", foreground="green")
         else:
-            # Make the label clickable to open the release page
-            self.ab_av1_update_label.config(
-                text=f"Update available: {latest_version}",
-                foreground="blue",
-                cursor="hand2",
-                font=("TkDefaultFont", 9, "underline"),
-            )
-            # Bind click to open release URL
-            if release_url:
-                self.ab_av1_update_label.bind("<Button-1>", lambda e: webbrowser.open(release_url))
+            # Update available - create Update button dynamically
+            self.ab_av1_update_label.config(text=f"Update available: {latest_version}", foreground="blue")
+
+            # Create Update button if it doesn't exist
+            if not hasattr(self, "ab_av1_update_btn") or self.ab_av1_update_btn is None:
+                self.ab_av1_update_btn = ttk.Button(
+                    self.ab_av1_frame, text="Update", command=self.on_download_ab_av1
+                )
+                self.ab_av1_update_btn.pack(side="left", padx=(5, 0))
 
     def _reset_update_label(self):
         """Reset the update label to non-clickable state."""
@@ -573,6 +648,10 @@ class VideoConverterGUI:
         """Check GitHub for the latest FFmpeg version and update the label."""
         if not self.ffmpeg_update_label or not self.ffmpeg_source:
             return
+
+        # Disable check button immediately
+        if self.ffmpeg_check_btn:
+            self.ffmpeg_check_btn.config(state="disabled")
 
         # Reset label state
         self._reset_ffmpeg_update_label()
@@ -590,7 +669,10 @@ class VideoConverterGUI:
             latest_version, release_url, message = check_ffmpeg_latest_btbn()
         else:
             self.ffmpeg_update_label.config(text="Unknown source", foreground="red")
+            # Check button stays disabled permanently after use
             return
+
+        # Check button stays disabled permanently after use
 
         if latest_version is None:
             self.ffmpeg_update_label.config(text=message, foreground="red")
@@ -618,21 +700,135 @@ class VideoConverterGUI:
         if local_version == latest_version:
             self.ffmpeg_update_label.config(text=f"Up to date ({latest_version})", foreground="green")
         else:
-            # Make the label clickable to open the release page
-            self.ffmpeg_update_label.config(
-                text=f"Update available: {latest_version}",
-                foreground="blue",
-                cursor="hand2",
-                font=("TkDefaultFont", 9, "underline"),
-            )
-            if release_url:
-                self.ffmpeg_update_label.bind("<Button-1>", lambda e: webbrowser.open(release_url))
+            # Update available - create Update button dynamically
+            self.ffmpeg_update_label.config(text=f"Update available: {latest_version}", foreground="blue")
+
+            # Create Update button if it doesn't exist
+            if not hasattr(self, "ffmpeg_update_btn") or self.ffmpeg_update_btn is None:
+                self.ffmpeg_update_btn = ttk.Button(
+                    self.ffmpeg_frame, text="Update", command=self.on_download_ffmpeg
+                )
+                self.ffmpeg_update_btn.pack(side="left", padx=(5, 0))
 
     def _reset_ffmpeg_update_label(self):
         """Reset the FFmpeg update label to non-clickable state."""
         if self.ffmpeg_update_label:
             self.ffmpeg_update_label.config(cursor="", font=("TkDefaultFont", 9))
             self.ffmpeg_update_label.unbind("<Button-1>")
+
+    def on_download_ab_av1(self):
+        """Download ab-av1 from GitHub in a background thread."""
+        # Disable button and show progress
+        if self.ab_av1_download_btn:
+            self.ab_av1_download_btn.config(state="disabled")
+        if hasattr(self, "ab_av1_update_btn") and self.ab_av1_update_btn:
+            self.ab_av1_update_btn.config(state="disabled")
+        self.ab_av1_update_label.config(text="Downloading...", foreground="gray")
+        self.root.update_idletasks()
+
+        def download_thread():
+            def progress_callback(downloaded, total):
+                if total > 0:
+                    pct = int(downloaded * 100 / total)
+                    self.root.after(0, lambda: self.ab_av1_update_label.config(text=f"Downloading... {pct}%"))
+
+            success, message = download_ab_av1(progress_callback)
+
+            def update_ui():
+                if success:
+                    # Update version label
+                    new_version = get_ab_av1_version() or "Installed"
+                    self.ab_av1_version_label.config(text=new_version)
+                    self.ab_av1_update_label.config(text="Download complete!", foreground="green")
+
+                    # Destroy the Update button if it exists (user is now up to date)
+                    if hasattr(self, "ab_av1_update_btn") and self.ab_av1_update_btn:
+                        self.ab_av1_update_btn.destroy()
+                        self.ab_av1_update_btn = None
+
+                    # Re-enable download button if it exists
+                    if self.ab_av1_download_btn:
+                        self.ab_av1_download_btn.config(state="normal")
+                else:
+                    self.ab_av1_update_label.config(text=message, foreground="red")
+                    # Re-enable buttons on failure
+                    if self.ab_av1_download_btn:
+                        self.ab_av1_download_btn.config(state="normal")
+                    if hasattr(self, "ab_av1_update_btn") and self.ab_av1_update_btn:
+                        self.ab_av1_update_btn.config(state="normal")
+
+            self.root.after(0, update_ui)
+
+        threading.Thread(target=download_thread, daemon=True).start()
+
+    def on_download_ffmpeg(self):
+        """Show FFmpeg download dialog and download to selected location."""
+        # Get existing FFmpeg path for the dialog
+        existing_ffmpeg = shutil.which("ffmpeg")
+
+        # Show dialog
+        dialog = FFmpegDownloadDialog(self.root, existing_ffmpeg)
+        result = dialog.show()
+
+        if result.cancelled:
+            return
+
+        # Disable button and show progress
+        if self.ffmpeg_download_btn:
+            self.ffmpeg_download_btn.config(state="disabled")
+        if hasattr(self, "ffmpeg_update_btn") and self.ffmpeg_update_btn:
+            self.ffmpeg_update_btn.config(state="disabled")
+        if self.ffmpeg_update_label:
+            self.ffmpeg_update_label.config(text="Downloading...", foreground="gray")
+        self.root.update_idletasks()
+
+        # Capture dialog result for thread
+        dest_dir = result.path
+
+        def download_thread():
+            def progress_callback(downloaded, total):
+                if total > 0:
+                    mb_downloaded = downloaded / (1024 * 1024)
+                    mb_total = total / (1024 * 1024)
+                    text = f"Downloading... {mb_downloaded:.0f}/{mb_total:.0f} MB"
+                    label = self.ffmpeg_update_label
+                    if label:
+                        self.root.after(0, lambda t=text, lbl=label: lbl.config(text=t))
+
+            success, message = download_ffmpeg(dest_dir, progress_callback)
+
+            def update_ui():
+                if success:
+                    # Update version label
+                    _, _, version_string, _ = check_ffmpeg_availability()
+                    version, _, _ = parse_ffmpeg_version(version_string)
+                    display = f"{version} (vendor)" if version else "Installed"
+                    self.ffmpeg_version_label.config(text=display)
+                    if self.ffmpeg_update_label:
+                        self.ffmpeg_update_label.config(text="Download complete!", foreground="green")
+                    # Update ffmpeg_source to gyan.dev
+                    self.ffmpeg_source = "gyan.dev"
+
+                    # Destroy the Update button if it exists (user is now up to date)
+                    if hasattr(self, "ffmpeg_update_btn") and self.ffmpeg_update_btn:
+                        self.ffmpeg_update_btn.destroy()
+                        self.ffmpeg_update_btn = None
+
+                    # Re-enable download button if it exists
+                    if self.ffmpeg_download_btn:
+                        self.ffmpeg_download_btn.config(state="normal")
+                else:
+                    if self.ffmpeg_update_label:
+                        self.ffmpeg_update_label.config(text=message, foreground="red")
+                    # Re-enable buttons on failure
+                    if self.ffmpeg_download_btn:
+                        self.ffmpeg_download_btn.config(state="normal")
+                    if hasattr(self, "ffmpeg_update_btn") and self.ffmpeg_update_btn:
+                        self.ffmpeg_update_btn.config(state="normal")
+
+            self.root.after(0, update_ui)
+
+        threading.Thread(target=download_thread, daemon=True).start()
 
     def _load_queue_from_config(self) -> list[QueueItem]:
         """Load queue items from config, filtering out completed/invalid entries."""
@@ -668,7 +864,7 @@ class VideoConverterGUI:
         folder = filedialog.askdirectory(title="Select Folder to Convert")
         if not folder:
             return
-        self._add_to_queue(folder, is_folder=True)
+        self.add_to_queue(folder, is_folder=True)
 
     def on_add_files_to_queue(self):
         """Add individual files to the conversion queue."""
@@ -680,9 +876,9 @@ class VideoConverterGUI:
             ]
         )
         for f in files:
-            self._add_to_queue(f, is_folder=False)
+            self.add_to_queue(f, is_folder=False)
 
-    def _add_to_queue(self, path: str, is_folder: bool):
+    def add_to_queue(self, path: str, is_folder: bool):
         """Add an item to the queue with duplicate checking."""
         # Check for duplicates
         if any(item.source_path == path for item in self._queue_items):
@@ -1747,6 +1943,10 @@ class VideoConverterGUI:
         # Show "Skip" in savings column with skip tag for coloring
         self.analysis_tree.item(item_id, values=(size_str, "Skip", "—", "—"), tags=("skip",))
 
+        parent_id = self.analysis_tree.parent(item_id)
+        if parent_id:
+            self._update_folder_aggregates(parent_id)
+
     def _on_quality_analysis_complete(self, stopped: bool):
         """Handle quality analysis completion (called on main thread)."""
         self.analyze_button.config(state="normal")
@@ -1758,6 +1958,8 @@ class VideoConverterGUI:
             self.analysis_status_label.config(text="Quality analysis stopped by user")
         else:
             self.analysis_status_label.config(text="Quality analysis complete")
+
+        self._update_total_from_tree()
 
         # Re-enable quality button based on selection
         self.update_quality_button_state()
@@ -2040,10 +2242,7 @@ class VideoConverterGUI:
         if skip_count > 0:
             parts.append(f"{skip_count} skipped")
 
-        if parts:
-            name_text = f"Total: {', '.join(parts)} / {total_files} files"
-        else:
-            name_text = f"Total ({total_files} files)"
+        name_text = f"Total: {', '.join(parts)} / {total_files} files" if parts else f"Total ({total_files} files)"
 
         size_str = format_file_size(total_size) if total_size > 0 else "—"
         savings_str = format_file_size(total_savings) if total_savings > 0 else "—"
@@ -2228,21 +2427,21 @@ class VideoConverterGUI:
             if col == "savings":
                 # Sort by estimated savings (values[1])
                 values = self.analysis_tree.item(item_id, "values")
-                if values and len(values) >= 2:
+                if values and len(values) >= 2:  # noqa: PLR2004 - column index bounds check
                     size_bytes = self._parse_size_to_bytes(values[1])
                     return (is_file, size_bytes)
                 return (is_file, float("inf"))
             if col == "time":
                 # Sort by estimated time (values[2])
                 values = self.analysis_tree.item(item_id, "values")
-                if values and len(values) >= 3:
+                if values and len(values) >= 3:  # noqa: PLR2004 - column index bounds check
                     time_seconds = self._parse_time_to_seconds(values[2])
                     return (is_file, time_seconds)
                 return (is_file, float("inf"))
             if col == "efficiency":
                 # Sort by efficiency (values[3], higher is better, so negate for default ascending sort)
                 values = self.analysis_tree.item(item_id, "values")
-                if values and len(values) >= 4:
+                if values and len(values) >= 4:  # noqa: PLR2004 - column index bounds check
                     eff_value = self._parse_efficiency_to_value(values[3])
                     # Negate so higher efficiency sorts first in ascending order
                     return (is_file, -eff_value)

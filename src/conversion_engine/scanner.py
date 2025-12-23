@@ -17,8 +17,7 @@ logger = logging.getLogger(__name__)
 
 def scan_video_needs_conversion(
     input_video_path: str,
-    input_base_folder: str,
-    output_base_folder: str,
+    output_path: str,
     overwrite: bool = False,
     video_info_cache: dict[str, Any] | None = None,
 ) -> tuple[bool, str, dict[str, Any] | None]:
@@ -26,8 +25,7 @@ def scan_video_needs_conversion(
 
     Args:
         input_video_path: Absolute path to the video file to scan.
-        input_base_folder: Absolute path to the base input folder selected by the user.
-        output_base_folder: Absolute path to the base output folder selected by the user.
+        output_path: Absolute path to the output file (pre-calculated by caller).
         overwrite: Whether to overwrite existing output files.
         video_info_cache: Dictionary to use for caching ffprobe results.
 
@@ -38,40 +36,16 @@ def scan_video_needs_conversion(
         - video_info is the dictionary obtained from get_video_info (or cache), or None if failed.
     """
     anonymized_input = anonymize_filename(input_video_path)
+    anonymized_output = anonymize_filename(output_path)
     video_info = None  # Initialize video_info
 
-    try:
-        input_path_obj = Path(input_video_path).resolve()
-        input_folder_obj = Path(input_base_folder).resolve()
-        output_folder_obj = Path(output_base_folder).resolve()
-
-        # Determine output path relative to base folders
-        relative_dir = Path()  # Default if not relative
-        try:
-            # Check if input path is within the input base folder
-            relative_dir = input_path_obj.parent.relative_to(input_folder_obj)
-        except ValueError:
-            # Handle case when input is not relative to input folder (e.g., single file dropped?)
-            # In this case, output directly to the base output folder
-            logger.debug(
-                f"File {anonymized_input} is not relative to input base {input_base_folder}. "
-                f"Outputting directly to {output_base_folder}."
-            )
-            # relative_dir remains "."
-
-        output_dir = output_folder_obj / relative_dir
-        output_filename = input_path_obj.stem + ".mkv"  # Ensure .mkv extension
-        output_path = output_dir / output_filename
-        anonymized_output = anonymize_filename(str(output_path))
-
-    except Exception:
-        logger.exception(f"Error determining output path for {anonymized_input}")
-        # If path calculation fails, we can't reliably check existence, assume conversion needed
-        return True, "Error determining output path", None
+    # Convert output_path to Path object for existence checks
+    input_path_obj = Path(input_video_path).resolve()
+    output_path_obj = Path(output_path).resolve()
 
     # --- Check Output Existence ---
     # Only skip here if the output exists AND it's NOT an in-place conversion (which needs codec check)
-    if output_path.exists() and not overwrite and input_path_obj != output_path:
+    if output_path_obj.exists() and not overwrite and input_path_obj != output_path_obj:
         reason = "Output file exists"
         logger.info(f"Skipping {anonymized_input} - {reason}: {anonymized_output}")
         return False, reason, None

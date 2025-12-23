@@ -154,37 +154,74 @@ def create_analysis_tab(gui):
     # Right-click context menu
     context_menu = tk.Menu(gui.analysis_tree, tearoff=0)
 
+    def _get_folder_path_from_tree_item(item_id: str) -> str:
+        """Reconstruct folder path from tree hierarchy."""
+        path_parts = []
+        current = item_id
+        while current:
+            text = gui.analysis_tree.item(current, "text")
+            # Remove arrows and emoji prefix
+            name = text.replace("▶", "").replace("▼", "").replace("📁", "").replace("🎬", "").strip()
+            path_parts.insert(0, name)
+            current = gui.analysis_tree.parent(current)
+        return os.path.join(gui.input_folder.get(), *path_parts)
+
+    def _add_selected_items_to_queue(selected_items: tuple[str, ...]) -> None:
+        """Add multiple selected items from analysis tree to queue."""
+        for item_id in selected_items:
+            is_folder = bool(gui.analysis_tree.get_children(item_id))
+            if is_folder:
+                folder_path = _get_folder_path_from_tree_item(item_id)
+                gui.add_to_queue(folder_path, is_folder=True)
+            else:
+                file_path = gui.get_file_path_for_tree_item(item_id)
+                if file_path:
+                    gui.add_to_queue(file_path, is_folder=False)
+
     def _show_context_menu(event):
         item_id = gui.analysis_tree.identify_row(event.y)
         if not item_id:
             return
 
-        # Select the right-clicked item
-        gui.analysis_tree.selection_set(item_id)
+        # Dismiss any existing popup before showing new one (prevents ghost outline)
+        context_menu.unpost()
 
-        # Clear menu and rebuild based on item type
+        # Preserve multi-selection if right-clicking within existing selection
+        current_selection = gui.analysis_tree.selection()
+        if item_id in current_selection and len(current_selection) > 1:
+            # Keep multi-selection
+            selected_items = current_selection
+        else:
+            # Select just the right-clicked item
+            gui.analysis_tree.selection_set(item_id)
+            selected_items = (item_id,)
+
+        # Clear menu and rebuild based on selection
         context_menu.delete(0, tk.END)
 
-        # Check if it's a folder (has children) or file
+        # Multi-selection: show batch action only
+        if len(selected_items) > 1:
+            context_menu.add_command(
+                label=f"Add {len(selected_items)} Items to Queue",
+                command=lambda items=selected_items: _add_selected_items_to_queue(items),
+            )
+            context_menu.tk_popup(event.x_root, event.y_root)
+            return
+
+        # Single selection: show item-specific actions
         is_folder = bool(gui.analysis_tree.get_children(item_id))
 
         if is_folder:
-            # Get folder path from tree hierarchy
-            # Walk up to build the path from root folder + tree structure
-            path_parts = []
-            current = item_id
-            while current:
-                text = gui.analysis_tree.item(current, "text")
-                # Remove arrows and emoji prefix
-                name = text.replace("▶", "").replace("▼", "").replace("📁", "").replace("🎬", "").strip()
-                path_parts.insert(0, name)
-                current = gui.analysis_tree.parent(current)
-
-            folder_path = os.path.join(gui.input_folder.get(), *path_parts)
+            folder_path = _get_folder_path_from_tree_item(item_id)
 
             context_menu.add_command(
                 label="Open in Explorer",
                 command=lambda p=folder_path: _open_in_explorer(p),
+            )
+            context_menu.add_separator()
+            context_menu.add_command(
+                label="Add Folder to Queue",
+                command=lambda p=folder_path: gui.add_to_queue(p, is_folder=True),
             )
         else:
             # It's a file - get path from GUI's lookup method
@@ -198,6 +235,11 @@ def create_analysis_tab(gui):
                 context_menu.add_command(
                     label="Show in Explorer",
                     command=lambda p=file_path: _reveal_in_explorer(p),
+                )
+                context_menu.add_separator()
+                context_menu.add_command(
+                    label="Add to Queue",
+                    command=lambda p=file_path: gui.add_to_queue(p, is_folder=False),
                 )
 
         context_menu.tk_popup(event.x_root, event.y_root)

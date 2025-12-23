@@ -42,3 +42,10 @@ Output files mirror the input folder structure, or go to a flat output directory
 **Zero telemetry.** The application never contacts external servers. Even version checks require you to manually click a button—nothing happens automatically.
 
 Optional path anonymization (Settings tab) replaces file paths in logs and conversion history with BLAKE2b hashes. If you need to trace a hash back to the original file, use `tools/hash_lookup.py`.
+
+## Third-Party Software
+
+This application downloads and uses:
+
+- [FFmpeg](https://ffmpeg.org/) (LGPL 2.1+) — video encoding
+- [ab-av1](https://github.com/alexheretic/ab-av1) (MIT) — VMAF-targeted quality optimization

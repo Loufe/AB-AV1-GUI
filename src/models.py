@@ -102,6 +102,21 @@ class QueueItem:
 
 
 @dataclass
+class QueueConversionConfig:
+    """Configuration for queue-based batch conversion.
+
+    Unlike ConversionConfig which uses single input/output folders,
+    this holds a list of QueueItems, each with its own output settings.
+    """
+
+    queue_items: list[QueueItem]
+    extensions: list[str]  # For folder scanning (e.g., ["mp4", "mkv"])
+    convert_audio: bool
+    audio_codec: str  # e.g., "opus", "aac"
+    default_suffix: str = "_av1"
+
+
+@dataclass
 class FileRecord:
     """Universal record for any file in the history system.
 
