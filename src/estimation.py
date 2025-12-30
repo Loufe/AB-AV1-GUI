@@ -14,7 +14,7 @@ import statistics
 import time
 from typing import Any
 
-from src.config import MIN_SAMPLES_FOR_ESTIMATE, MIN_SAMPLES_FOR_QUARTILES
+from src.config import MIN_SAMPLES_FOR_ESTIMATE
 from src.history_index import get_history_index
 from src.models import FileRecord, TimeEstimate
 from src.utils import get_video_info
@@ -112,9 +112,6 @@ def compute_percentiles(values: list[float]) -> dict[str, float] | None:
     """
     if len(values) < MIN_SAMPLES_FOR_ESTIMATE:
         return None
-    if len(values) < MIN_SAMPLES_FOR_QUARTILES:
-        med = statistics.median(values)
-        return {"p25": med, "p50": med, "p75": med}
     quantiles = statistics.quantiles(values, n=4)
     return {"p25": quantiles[0], "p50": quantiles[1], "p75": quantiles[2]}
 

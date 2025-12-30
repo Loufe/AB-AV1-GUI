@@ -33,9 +33,7 @@ PIE_COLORS = [
 class BarChart:
     """Canvas-based vertical bar chart."""
 
-    def __init__(
-        self, canvas: tk.Canvas, *, histogram_mode: bool = False, color_gradient: bool = False
-    ):
+    def __init__(self, canvas: tk.Canvas, *, histogram_mode: bool = False, color_gradient: bool = False):
         """Initialize bar chart.
 
         Args:

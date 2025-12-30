@@ -7,6 +7,7 @@ Contains the main worker thread function for sequential video conversion.
 import datetime  # For history timestamp
 import logging
 import os
+import threading
 import time
 
 # GUI-related imports (for type hinting gui object, not direct use of widgets here)
@@ -14,10 +15,13 @@ from pathlib import Path
 from typing import Callable  # Import Callable
 
 # Project imports
-from src.config import DEFAULT_ENCODING_PRESET, DEFAULT_VMAF_TARGET
+from src.ab_av1.exceptions import ConversionNotWorthwhileError
+from src.ab_av1.wrapper import AbAv1Wrapper
+from src.config import DEFAULT_ENCODING_PRESET, DEFAULT_VMAF_TARGET, MIN_VMAF_FALLBACK_TARGET
+from src.hardware_accel import get_hw_decoder_for_codec, get_video_codec_from_info
 from src.history_index import compute_path_hash, get_history_index
-from src.models import FileRecord, FileStatus, QueueConversionConfig
-from src.utils import anonymize_filename, format_file_size, update_ui_safely
+from src.models import FileRecord, FileStatus, OperationType, ProgressEvent, QueueConversionConfig, QueueItemStatus
+from src.utils import anonymize_filename, format_file_size, get_video_info, update_ui_safely
 from src.video_conversion import calculate_output_path, process_video
 
 # Import functions/modules from the engine package
@@ -80,14 +84,15 @@ def sequential_conversion_worker(
     # Capture Tkinter variable values safely from main thread (thread-safety fix)
     anonymize_history_value = [None]  # Use list for mutability in closure
     hw_decode_enabled_value = [None]  # Capture hardware decode setting
+    capture_complete = threading.Event()
 
     def capture_settings():
         anonymize_history_value[0] = gui.anonymize_history.get()
         hw_decode_enabled_value[0] = gui.hw_decode_enabled.get()
+        capture_complete.set()
 
     update_ui_safely(gui.root, capture_settings)
-    # Wait briefly to ensure the value is captured (the after() call is async)
-    time.sleep(0.01)
+    capture_complete.wait(timeout=1.0)  # Wait for main thread to capture settings
 
     # Initialize conversion state variables (thread-safe)
     def init_state():
@@ -120,10 +125,10 @@ def sequential_conversion_worker(
     logger.info(f"Worker: Processing extensions: {', '.join(extensions)}")
 
     # --- Phase 1: Count pending items (not files) ---
-    update_ui_safely(gui.root, lambda: gui.status_label.config(text="Starting queue conversion..."))
+    update_ui_safely(gui.root, lambda: gui.status_label.config(text="Processing queue..."))
 
     # Count initial pending items
-    items_total = len([item for item in config.queue_items if item.status == "pending"])
+    items_total = len([item for item in config.queue_items if item.status == QueueItemStatus.PENDING])
     items_completed = 0
 
     logger.info(f"Total queue items to process: {items_total}")
@@ -178,15 +183,18 @@ def sequential_conversion_worker(
 
             queue_item.total_files = len(files)
             logger.info(f"Queue item has {len(files)} file(s) to process")
-        except Exception:
+        except Exception as e:
             logger.exception(f"Error getting files for queue item {queue_item.id}")
-            queue_item.status = "error"
+            queue_item.status = QueueItemStatus.ERROR
             queue_item.total_files = 0
-            queue_status_callback(queue_item.id, "error", queue_item.processed_files, queue_item.total_files)
+            queue_item.last_error = f"Error getting files: {e!s}"
+            queue_status_callback(
+                queue_item.id, QueueItemStatus.ERROR, queue_item.processed_files, queue_item.total_files
+            )
             continue
 
         # Update queue status to converting with file count
-        queue_status_callback(queue_item.id, "converting", 0, queue_item.total_files)
+        queue_status_callback(queue_item.id, QueueItemStatus.CONVERTING, 0, queue_item.total_files)
 
         # Process each file in this queue item
         for file_path in files:
@@ -214,66 +222,99 @@ def sequential_conversion_worker(
             )
             update_ui_safely(gui.root, reset_ui_callback)  # Reset UI elements for the new file
 
-            # Calculate output path using the new helper
-            try:
-                output_path_obj, overwrite, delete_original = calculate_output_path(
-                    input_path=file_path,
-                    output_mode=queue_item.output_mode,
-                    suffix=queue_item.output_suffix or config.default_suffix,
-                    output_folder=queue_item.output_folder,
-                    source_folder=queue_item.source_path if queue_item.is_folder else None,
-                )
-                output_path = str(output_path_obj)
-            except Exception:
-                logger.exception(f"Error calculating output path for {anonymized_name}")
-                file_event_callback(
-                    filename, "failed", {"message": "Failed to calculate output path", "type": "path_error"}
-                )
-                queue_item.processed_files += 1
-                queue_status_callback(queue_item.id, "converting", queue_item.processed_files, queue_item.total_files)
-                continue
-
-            # Check eligibility with new scanner signature
-            try:
-                needs_conversion, reason, video_info = scan_video_needs_conversion(
-                    input_video_path=file_path,
-                    output_path=output_path,
-                    overwrite=overwrite,
-                    video_info_cache=video_info_cache,
-                )
-
-                if not needs_conversion:
-                    # File doesn't need conversion, skip it
-                    filename_skip = os.path.basename(file_path)
-                    file_event_callback(filename_skip, "skipped", reason)
-
-                    # Check if skipped due to resolution (thread-safe)
-                    if "Below minimum resolution" in reason:
-
-                        def update_low_res_skip(fn=filename_skip):
-                            gui.session.skipped_low_resolution_count += 1
-                            gui.session.skipped_low_resolution_files.append(fn)
-
-                        update_ui_safely(gui.root, update_low_res_skip)
-
-                    queue_item.processed_files += 1
-                    queue_status_callback(
-                        queue_item.id, "converting", queue_item.processed_files, queue_item.total_files
+            # Calculate output path using the new helper (skip for ANALYZE operations)
+            output_path = None
+            overwrite = False
+            delete_original = False
+            if queue_item.operation_type == OperationType.CONVERT:
+                try:
+                    output_path_obj, overwrite, delete_original = calculate_output_path(
+                        input_path=file_path,
+                        output_mode=queue_item.output_mode,
+                        suffix=queue_item.output_suffix or config.default_suffix,
+                        output_folder=queue_item.output_folder,
+                        source_folder=queue_item.source_path if queue_item.is_folder else None,
                     )
-
-                    # Update overall progress (item-based)
-                    total_files = queue_item.total_files
-                    file_progress = queue_item.processed_files / total_files if total_files > 0 else 0
-                    item_progress = items_completed + file_progress
-                    progress_pct = (item_progress / items_total) * 100 if items_total > 0 else 0
-                    update_ui_safely(gui.root, lambda p=progress_pct: gui.overall_progress.config(value=p))
+                    output_path = str(output_path_obj)
+                except Exception as e:
+                    logger.exception(f"Error calculating output path for {anonymized_name}")
+                    error_msg = f"Failed to calculate output path: {e!s}"
+                    file_event_callback(filename, "failed", {"message": error_msg, "type": "path_error"})
+                    queue_item.processed_files += 1
+                    queue_item.files_failed += 1
+                    queue_item.last_error = error_msg
+                    queue_status_callback(
+                        queue_item.id, QueueItemStatus.CONVERTING, queue_item.processed_files, queue_item.total_files
+                    )
                     continue
 
-            except Exception:
-                logger.exception(f"Error during eligibility scan for {anonymized_name}")
-                file_event_callback(filename, "failed", {"message": "Scan error", "type": "scan_error"})
+            # Check eligibility with new scanner signature (skip for ANALYZE operations)
+            if queue_item.operation_type == OperationType.CONVERT and output_path is not None:
+                try:
+                    needs_conversion, reason, video_info = scan_video_needs_conversion(
+                        input_video_path=file_path,
+                        output_path=output_path,
+                        overwrite=overwrite,
+                        video_info_cache=video_info_cache,
+                    )
+                except Exception as e:
+                    logger.exception(f"Error during eligibility scan for {anonymized_name}")
+                    error_msg = f"Scan error: {e!s}"
+                    file_event_callback(filename, "failed", {"message": error_msg, "type": "scan_error"})
+                    queue_item.processed_files += 1
+                    queue_item.files_failed += 1
+                    queue_item.last_error = error_msg
+                    queue_status_callback(
+                        queue_item.id, QueueItemStatus.CONVERTING, queue_item.processed_files, queue_item.total_files
+                    )
+                    continue
+            else:
+                # ANALYZE operation - always "needs conversion" (really means "needs analysis")
+                needs_conversion = True
+                reason = ""
+
+                try:
+                    video_info = video_info_cache.get(file_path) or get_video_info(file_path)
+                    if video_info and file_path not in video_info_cache:
+                        video_info_cache[file_path] = video_info
+                except Exception as e:
+                    logger.exception(f"Error getting video info for ANALYZE operation: {anonymized_name}")
+                    error_msg = f"Video info error: {e!s}"
+                    file_event_callback(filename, "failed", {"message": error_msg, "type": "video_info_error"})
+                    queue_item.processed_files += 1
+                    queue_item.files_failed += 1
+                    queue_item.last_error = error_msg
+                    queue_status_callback(
+                        queue_item.id, QueueItemStatus.CONVERTING, queue_item.processed_files, queue_item.total_files
+                    )
+                    continue
+
+            if queue_item.operation_type == OperationType.CONVERT and not needs_conversion:
+                # File doesn't need conversion, skip it
+                filename_skip = os.path.basename(file_path)
+                file_event_callback(filename_skip, "skipped", reason)
+
+                # Check if skipped due to resolution (thread-safe)
+                if "Below minimum resolution" in reason:
+
+                    def update_low_res_skip(fn=filename_skip):
+                        gui.session.skipped_low_resolution_count += 1
+                        gui.session.skipped_low_resolution_files.append(fn)
+
+                    update_ui_safely(gui.root, update_low_res_skip)
+
                 queue_item.processed_files += 1
-                queue_status_callback(queue_item.id, "converting", queue_item.processed_files, queue_item.total_files)
+                queue_item.files_skipped += 1
+                queue_status_callback(
+                    queue_item.id, QueueItemStatus.CONVERTING, queue_item.processed_files, queue_item.total_files
+                )
+
+                # Update overall progress (item-based)
+                total_files = queue_item.total_files
+                file_progress = queue_item.processed_files / total_files if total_files > 0 else 0
+                item_progress = items_completed + file_progress
+                progress_pct = (item_progress / items_total) * 100 if items_total > 0 else 0
+                update_ui_safely(gui.root, lambda pct=progress_pct: gui.overall_progress.config(value=pct))
                 continue
 
             # File needs conversion - proceed with processing
@@ -332,8 +373,6 @@ def sequential_conversion_worker(
             # --- Determine Hardware Decoder ---
             hw_decoder = None
             if hw_decode_enabled_value[0] and video_info:
-                from src.hardware_accel import get_hw_decoder_for_codec, get_video_codec_from_info
-
                 source_codec = get_video_codec_from_info(video_info)
                 if source_codec:
                     hw_decoder = get_hw_decoder_for_codec(source_codec)
@@ -352,47 +391,179 @@ def sequential_conversion_worker(
             final_vmaf_target = None
 
             try:
-                # Pass the dispatcher and the specific PID callback for this file
-                # Note: pid_storage_callback is the function reference passed into this worker
-                result_tuple = process_video(
-                    video_path=file_path,
-                    output_path=output_path,
-                    overwrite=overwrite,
-                    delete_original=delete_original,
-                    convert_audio=config.convert_audio,
-                    audio_codec=config.audio_codec,
-                    file_info_callback=file_event_callback,
-                    pid_callback=lambda pid, path=file_path: pid_storage_callback(gui, pid, path),
-                    total_duration_seconds=input_duration,
-                    hw_decoder=hw_decoder,
-                )
-                if result_tuple:
-                    # Unpack potentially extended tuple including stats
-                    output_file_path, elapsed_time_file, _, output_size, final_crf, final_vmaf, final_vmaf_target = (
-                        result_tuple
+                if queue_item.operation_type == OperationType.ANALYZE:
+                    # ANALYZE operation: Run CRF search only, no encoding
+                    logger.info(f"Running CRF search (analysis only) for {anonymized_name}")
+                    wrapper = AbAv1Wrapper()
+
+                    def progress_cb(progress_pct, message, fname=filename):
+                        # Report progress as quality detection progress
+                        event = ProgressEvent(
+                            progress_quality=progress_pct, progress_encoding=0.0, phase="crf-search", message=message
+                        )
+                        file_event_callback(fname, "progress", event)
+
+                    try:
+                        crf_result = wrapper.crf_search(
+                            input_path=file_path,
+                            vmaf_target=DEFAULT_VMAF_TARGET,
+                            preset=DEFAULT_ENCODING_PRESET,
+                            progress_callback=progress_cb,
+                            stop_event=stop_event,
+                            hw_decoder=hw_decoder,
+                        )
+
+                        # Extract results from crf_search
+                        final_crf = crf_result.get("best_crf")
+                        final_vmaf = crf_result.get("best_vmaf")
+                        final_vmaf_target = crf_result.get("vmaf_target_used")
+                        predicted_output_size = crf_result.get("predicted_output_size")
+                        predicted_size_reduction = crf_result.get("predicted_size_reduction")
+
+                        # Update history index with Layer 2 data
+                        anonymize_hist = anonymize_history_value[0]
+                        path_hash = compute_path_hash(file_path)
+                        now = datetime.datetime.now().isoformat(sep=" ", timespec="seconds")
+
+                        try:
+                            file_mtime = os.path.getmtime(file_path)
+                        except OSError:
+                            file_mtime = 0.0
+
+                        original_path_for_record = None if anonymize_hist else file_path
+
+                        record = FileRecord(
+                            path_hash=path_hash,
+                            original_path=original_path_for_record,
+                            status=FileStatus.SCANNED,  # SCANNED, not CONVERTED
+                            file_size_bytes=original_size,
+                            file_mtime=file_mtime,
+                            duration_sec=round(input_duration, 1) if input_duration else None,
+                            video_codec=input_vcodec.lower() if input_vcodec != "?" else None,
+                            audio_codec=input_acodec.lower() if input_acodec != "?" else None,
+                            width=input_width,
+                            height=input_height,
+                            vmaf_target_when_analyzed=final_vmaf_target,
+                            preset_when_analyzed=DEFAULT_ENCODING_PRESET,
+                            best_crf=final_crf,
+                            best_vmaf_achieved=round(final_vmaf, 2) if final_vmaf is not None else None,
+                            predicted_output_size=predicted_output_size,
+                            predicted_size_reduction=round(predicted_size_reduction, 1)
+                            if predicted_size_reduction is not None
+                            else None,
+                            first_seen=now,
+                            last_updated=now,
+                        )
+                        index = get_history_index()
+                        index.upsert(record)
+                        index.save()
+
+                        # Report completion via callback
+                        file_event_callback(
+                            filename,
+                            "completed",
+                            {
+                                "message": f"Analysis complete (CRF {final_crf}, VMAF {final_vmaf:.2f})",
+                                "crf": final_crf,
+                                "vmaf": final_vmaf,
+                                "vmaf_target_used": final_vmaf_target,
+                            },
+                        )
+                        process_successful = True
+                        queue_item.files_succeeded += 1
+                        logger.info(f"Analysis complete for {anonymized_name}: CRF {final_crf}, VMAF {final_vmaf:.2f}")
+
+                    except ConversionNotWorthwhileError as e:
+                        # CRF search failed at all VMAF targets - record as NOT_WORTHWHILE
+                        logger.warning(f"Analysis showed conversion not worthwhile for {anonymized_name}: {e}")
+                        file_event_callback(filename, "skipped", str(e))
+                        queue_item.files_skipped += 1
+
+                        # Record NOT_WORTHWHILE to history
+                        anonymize_hist = anonymize_history_value[0]
+                        path_hash = compute_path_hash(file_path)
+                        now = datetime.datetime.now().isoformat(sep=" ", timespec="seconds")
+
+                        try:
+                            file_mtime = os.path.getmtime(file_path)
+                        except OSError:
+                            file_mtime = 0.0
+
+                        original_path_for_record = None if anonymize_hist else file_path
+
+                        record = FileRecord(
+                            path_hash=path_hash,
+                            original_path=original_path_for_record,
+                            status=FileStatus.NOT_WORTHWHILE,
+                            file_size_bytes=original_size,
+                            file_mtime=file_mtime,
+                            duration_sec=round(input_duration, 1) if input_duration else None,
+                            video_codec=input_vcodec.lower() if input_vcodec != "?" else None,
+                            audio_codec=input_acodec.lower() if input_acodec != "?" else None,
+                            width=input_width,
+                            height=input_height,
+                            vmaf_target_when_analyzed=DEFAULT_VMAF_TARGET,
+                            preset_when_analyzed=DEFAULT_ENCODING_PRESET,
+                            vmaf_target_attempted=DEFAULT_VMAF_TARGET,
+                            min_vmaf_attempted=MIN_VMAF_FALLBACK_TARGET,
+                            skip_reason=str(e),
+                            first_seen=now,
+                            last_updated=now,
+                        )
+                        index = get_history_index()
+                        index.upsert(record)
+                        index.save()
+
+                        process_successful = False
+
+                elif output_path is not None:
+                    # CONVERT operation: Full conversion with process_video
+                    result_tuple = process_video(
+                        video_path=file_path,
+                        output_path=output_path,
+                        overwrite=overwrite,
+                        delete_original=delete_original,
+                        convert_audio=config.convert_audio,
+                        audio_codec=config.audio_codec,
+                        file_info_callback=file_event_callback,
+                        pid_callback=lambda pid, path=file_path: pid_storage_callback(gui, pid, path),
+                        total_duration_seconds=input_duration,
+                        hw_decoder=hw_decoder,
                     )
-                    process_successful = True
-                    update_ui_safely(gui.root, lambda os=output_size: setattr(gui.session, "last_output_size", os))
-                    update_ui_safely(
-                        gui.root, lambda et=elapsed_time_file: setattr(gui.session, "last_elapsed_time", et)
-                    )
-                    # Determine final audio codec based on conversion settings
-                    if config.convert_audio and input_acodec.lower() not in ["aac", "opus"]:
-                        output_acodec = config.audio_codec.lower()
-                    # else: output_acodec remains input_acodec (set earlier)
-                else:
-                    # If process_video returns None, it means failure was reported via callback
-                    update_ui_safely(gui.root, lambda: setattr(gui.session, "last_output_size", None))
-                    update_ui_safely(gui.root, lambda: setattr(gui.session, "last_elapsed_time", None))
-                    process_successful = False  # Ensure state reflects failure
+                    if result_tuple:
+                        # Unpack potentially extended tuple including stats
+                        (
+                            output_file_path,
+                            elapsed_time_file,
+                            _,
+                            output_size,
+                            final_crf,
+                            final_vmaf,
+                            final_vmaf_target,
+                        ) = result_tuple
+                        process_successful = True
+                        update_ui_safely(gui.root, lambda os=output_size: setattr(gui.session, "last_output_size", os))
+                        update_ui_safely(
+                            gui.root, lambda et=elapsed_time_file: setattr(gui.session, "last_elapsed_time", et)
+                        )
+                        # Determine final audio codec based on conversion settings
+                        if config.convert_audio and input_acodec.lower() not in ["aac", "opus"]:
+                            output_acodec = config.audio_codec.lower()
+                        # else: output_acodec remains input_acodec (set earlier)
+                    else:
+                        # If process_video returns None, it means failure was reported via callback
+                        update_ui_safely(gui.root, lambda: setattr(gui.session, "last_output_size", None))
+                        update_ui_safely(gui.root, lambda: setattr(gui.session, "last_elapsed_time", None))
+                        process_successful = False  # Ensure state reflects failure
 
             except Exception as e:
-                logger.exception(f"Critical error during process_video call for {anonymized_name}")
-                # Dispatch a generic failure if process_video itself crashes
-                file_event_callback(
-                    filename, "failed", {"message": f"Internal processing error: {e}", "type": "processing_crash"}
-                )
+                logger.exception(f"Critical error during processing for {anonymized_name}")
+                # Dispatch a generic failure
+                error_msg = f"Internal processing error: {e!s}"
+                file_event_callback(filename, "failed", {"message": error_msg, "type": "processing_crash"})
                 process_successful = False
+                queue_item.files_failed += 1
+                queue_item.last_error = error_msg
                 update_ui_safely(gui.root, lambda: setattr(gui.session, "last_output_size", None))
                 update_ui_safely(gui.root, lambda: setattr(gui.session, "last_elapsed_time", None))
 
@@ -401,13 +572,19 @@ def sequential_conversion_worker(
 
             # Update queue item progress
             queue_item.processed_files += 1
-            queue_status_callback(queue_item.id, "converting", queue_item.processed_files, queue_item.total_files)
+            queue_status_callback(
+                queue_item.id, QueueItemStatus.CONVERTING, queue_item.processed_files, queue_item.total_files
+            )
 
             if process_successful:
                 update_ui_safely(
                     gui.root,
                     lambda: setattr(gui.session, "successful_conversions", gui.session.successful_conversions + 1),
                 )
+                # Track successful file outcome
+                if queue_item.operation_type == OperationType.CONVERT:
+                    queue_item.files_succeeded += 1
+                # Note: For ANALYZE operations, files_succeeded is incremented earlier
                 # Note: The "completed" callback is already dispatched by the wrapper (ab_av1/wrapper.py)
                 # before returning, so we don't call it again here to avoid double-counting statistics.
                 # However, we DO need to update the totals here because the wrapper's callback fires
@@ -459,7 +636,7 @@ def sequential_conversion_worker(
                         conversion_time_sec=round(elapsed_time_file, 1) if elapsed_time_file else None,
                         final_crf=final_crf,
                         final_vmaf=round(final_vmaf, 2) if final_vmaf is not None else None,
-                        vmaf_target_used=final_vmaf_target if final_vmaf_target is not None else 95,
+                        vmaf_target_used=final_vmaf_target if final_vmaf_target is not None else DEFAULT_VMAF_TARGET,
                         preset_when_analyzed=DEFAULT_ENCODING_PRESET,
                         output_audio_codec=output_acodec.lower() if output_acodec != "?" else None,
                         first_seen=now,
@@ -472,6 +649,7 @@ def sequential_conversion_worker(
                     logger.exception(f"Failed to record history for {anonymized_name}")
             # Check if this was a NOT_WORTHWHILE skip and record to history
             elif gui.session.last_skip_reason:
+                queue_item.files_skipped += 1
                 try:  # Record NOT_WORTHWHILE to History Index
                     anonymize_hist = anonymize_history_value[0]
                     path_hash = compute_path_hash(file_path)
@@ -515,7 +693,12 @@ def sequential_conversion_worker(
                     update_ui_safely(gui.root, lambda: setattr(gui.session, "last_min_vmaf_attempted", None))
                 except Exception:
                     logger.exception(f"Failed to record NOT_WORTHWHILE history for {anonymized_name}")
-                # Else: Error handling is done via the callback dispatcher calling handle_error
+            else:
+                # process_video returned None due to error (not a NOT_WORTHWHILE skip)
+                # The error was already reported via callback, but we need to track it in queue item
+                queue_item.files_failed += 1
+                if not queue_item.last_error:
+                    queue_item.last_error = "Processing failed (see logs for details)"
 
             # Note: Original file deletion (for REPLACE mode) is handled by process_video()
 
@@ -524,7 +707,7 @@ def sequential_conversion_worker(
             file_progress = queue_item.processed_files / total_files if total_files > 0 else 0
             item_progress = items_completed + file_progress
             progress_pct = (item_progress / items_total) * 100 if items_total > 0 else 0
-            update_ui_safely(gui.root, lambda p=progress_pct: gui.overall_progress.config(value=p))
+            update_ui_safely(gui.root, lambda pct=progress_pct: gui.overall_progress.config(value=pct))
 
             def update_status(ic=items_completed + 1, it=items_total):  # Capture loop variables
                 base_status = f"Item {ic}/{it}"
@@ -545,21 +728,31 @@ def sequential_conversion_worker(
 
             update_ui_safely(gui.root, update_status)
 
-        # Mark queue item as completed and increment counter
-        queue_item.status = "completed"
-        queue_status_callback(queue_item.id, "completed", queue_item.processed_files, queue_item.total_files)
+        # Mark queue item as completed or stopped and increment counter
+        if stop_event.is_set() and queue_item.processed_files < queue_item.total_files:
+            # Stopped before completing all files
+            queue_item.status = QueueItemStatus.STOPPED
+            queue_status_callback(
+                queue_item.id, QueueItemStatus.STOPPED, queue_item.processed_files, queue_item.total_files
+            )
+        else:
+            # Completed all files (or stopped after completing all files)
+            queue_item.status = QueueItemStatus.COMPLETED
+            queue_status_callback(
+                queue_item.id, QueueItemStatus.COMPLETED, queue_item.processed_files, queue_item.total_files
+            )
         items_completed += 1
 
         # Update overall progress to reflect completed item
         overall_progress_percent = (items_completed / items_total) * 100 if items_total > 0 else 100
-        update_ui_safely(gui.root, lambda p=overall_progress_percent: gui.overall_progress.config(value=p))
+        update_ui_safely(gui.root, lambda pct=overall_progress_percent: gui.overall_progress.config(value=pct))
 
     # --- End of Processing Loop ---
-    final_status_message = "Conversion complete"
+    final_status_message = "Queue complete"
     if stop_event.is_set():
-        final_status_message = "Conversion stopped by user"
+        final_status_message = "Queue stopped by user"
     elif gui.session.error_count > 0:
-        final_status_message = f"Conversion complete with {gui.session.error_count} errors"
+        final_status_message = f"Queue complete with {gui.session.error_count} errors"
 
     logger.info(f"Worker finished. Status: {final_status_message}")
     # Call the completion callback passed from the controller

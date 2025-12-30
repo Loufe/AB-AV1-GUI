@@ -253,9 +253,7 @@ def process_video(
 
         if use_cached_crf and cached_crf is not None:
             # Use cached CRF - skip CRF search phase
-            logger.info(
-                f"Starting ab-av1 encode (cached CRF) for {anonymized_input_name} -> {anonymized_output_name}"
-            )
+            logger.info(f"Starting ab-av1 encode (cached CRF) for {anonymized_input_name} -> {anonymized_output_name}")
             result_stats = ab_av1.encode_with_crf(
                 input_path=str(input_path),
                 output_path=str(output_path_obj),
@@ -345,15 +343,10 @@ def process_video(
         # before raising this exception, so we don't call it again here to avoid double-counting
         logger.info(f"Conversion not worthwhile for {anonymized_input_name}: {e}")
         return None  # Return None like other skipped files, not an error
-    except (InputFileError, OutputFileError, VMAFError, EncodingError, AbAv1Error) as e:
-        # These errors are logged by the wrapper or dispatcher, just return None
-        # Logging the specific error type here might be redundant
+    except (InputFileError, OutputFileError, VMAFError, EncodingError, AbAv1Error):
+        # Note: The wrapper already called the file_info_callback with "failed" status
+        # before raising these exceptions, so we don't call it again here to avoid double-counting
         logger.exception(f"Conversion failed for {anonymized_input_name}")
-        # Ensure error callback is triggered if not already done by wrapper
-        if file_info_callback:
-            file_info_callback(
-                input_path.name, "failed", {"message": str(e), "type": getattr(e, "error_type", "conversion_error")}
-            )
         return None
     except Exception as e:
         stack_trace = traceback.format_exc()

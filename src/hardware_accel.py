@@ -48,18 +48,18 @@ def get_available_hw_decoders() -> frozenset[str]:
         # V..... h264_cuvid           Nvidia CUVID H264 decoder (codec h264)
         # V..... hevc_qsv             H.265 / HEVC (Intel Quick Sync Video acceleration) (codec hevc)
         decoders = set()
-        for line in result.stdout.splitlines():
-            line = line.strip()
-            if not line or line.startswith("=") or line.startswith("-"):
+        for raw_line in result.stdout.splitlines():
+            line = raw_line.strip()
+            if not line or line.startswith(("=", "-")):
                 continue
 
             # Look for lines with decoder names containing "cuvid" or "qsv"
             if "cuvid" in line.lower() or "qsv" in line.lower():
                 # Extract decoder name (second field after capability flags)
                 parts = line.split()
-                if len(parts) >= 2:
+                if len(parts) >= 2:  # noqa: PLR2004
                     decoder_name = parts[1]
-                    if decoder_name.endswith("_cuvid") or decoder_name.endswith("_qsv"):
+                    if decoder_name.endswith(("_cuvid", "_qsv")):
                         decoders.add(decoder_name)
 
         logger.info(f"Detected hardware decoders: {', '.join(sorted(decoders)) if decoders else 'none'}")
@@ -71,8 +71,8 @@ def get_available_hw_decoders() -> frozenset[str]:
     except subprocess.CalledProcessError as e:
         logger.warning(f"FFmpeg decoder query failed: {e}")
         return frozenset()
-    except Exception as e:
-        logger.exception(f"Unexpected error detecting hardware decoders: {e}")
+    except Exception:
+        logger.exception("Unexpected error detecting hardware decoders")
         return frozenset()
 
 

@@ -42,9 +42,30 @@ class FileStatus(str, Enum):
     Inherits from str for easy JSON serialization.
     """
 
-    SCANNED = "scanned"  # Metadata only (Layer 1 analysis)
+    SCANNED = "scanned"  # Metadata only (Level 1 analysis)
     NOT_WORTHWHILE = "not_worthwhile"  # VMAF analysis showed conversion isn't beneficial
     CONVERTED = "converted"  # Successfully converted
+
+
+class AnalysisLevel(int, Enum):
+    """Analysis level of a file, representing how much processing has been done.
+
+    Each level builds on the previous:
+    - Level 0: File discovered via folder scan (os.scandir), no metadata yet
+    - Level 1: Basic scan complete (ffprobe) - has codec, duration, resolution, rough estimates (~)
+    - Level 2: Quality analysis complete (CRF search) - has optimal CRF, accurate predictions
+    - Level 3: Conversion complete - actual output file exists
+
+    Used to determine:
+    - What data is available for display (~ prefix for estimates vs accurate values)
+    - What processing is needed (Analyze+Convert vs Convert-only)
+    - Queue operation display ("Analyze", "Convert", "Analyze+Convert")
+    """
+
+    DISCOVERED = 0  # File found, no analysis yet (values show "—")
+    SCANNED = 1  # ffprobe metadata available (estimates show "~")
+    ANALYZED = 2  # CRF search complete (accurate predictions, no "~")
+    CONVERTED = 3  # Full conversion complete (actual output file)
 
 
 class OutputMode(str, Enum):
@@ -53,6 +74,26 @@ class OutputMode(str, Enum):
     REPLACE = "replace"  # Same folder, same name, deletes original
     SUFFIX = "suffix"  # Same folder, adds suffix, keeps original
     SEPARATE_FOLDER = "separate_folder"  # Different output folder
+
+
+class OperationType(str, Enum):
+    """Operation type for queue items."""
+
+    CONVERT = "convert"  # Full conversion (with CRF search if needed)
+    ANALYZE = "analyze"  # CRF search only, no encoding
+
+
+class QueueItemStatus(str, Enum):
+    """Status of a queue item.
+
+    Inherits from str for easy JSON serialization.
+    """
+
+    PENDING = "pending"  # Waiting to be processed
+    CONVERTING = "converting"  # Currently being processed
+    COMPLETED = "completed"  # All files processed
+    ERROR = "error"  # Failed with error
+    STOPPED = "stopped"  # Interrupted by user stop
 
 
 @dataclass
@@ -65,11 +106,18 @@ class QueueItem:
     output_mode: OutputMode = OutputMode.REPLACE
     output_suffix: str | None = None  # Override default suffix (for SUFFIX mode)
     output_folder: str | None = None  # For SEPARATE_FOLDER mode
+    operation_type: OperationType = OperationType.CONVERT  # Operation type (convert or analyze)
 
     # Runtime state (persisted for queue restoration)
-    status: str = "pending"  # pending/scanning/converting/completed/error
+    status: QueueItemStatus = QueueItemStatus.PENDING
     total_files: int = 0  # For folders: count after scan
     processed_files: int = 0
+
+    # Outcome tracking (persisted for display after completion)
+    files_succeeded: int = 0  # Files successfully converted/analyzed
+    files_skipped: int = 0  # Files skipped (low-res, not-worthwhile, already-exists, already AV1)
+    files_failed: int = 0  # Files that encountered errors
+    last_error: str | None = None  # Most recent error message for display
 
     def to_dict(self) -> dict:
         """Convert to dictionary for JSON serialization."""
@@ -80,9 +128,14 @@ class QueueItem:
             "output_mode": self.output_mode.value,
             "output_suffix": self.output_suffix,
             "output_folder": self.output_folder,
-            "status": self.status,
+            "operation_type": self.operation_type.value,
+            "status": self.status.value,
             "total_files": self.total_files,
             "processed_files": self.processed_files,
+            "files_succeeded": self.files_succeeded,
+            "files_skipped": self.files_skipped,
+            "files_failed": self.files_failed,
+            "last_error": self.last_error,
         }
 
     @classmethod
@@ -95,10 +148,43 @@ class QueueItem:
             output_mode=OutputMode(data.get("output_mode", "replace")),
             output_suffix=data.get("output_suffix"),
             output_folder=data.get("output_folder"),
-            status=data.get("status", "pending"),
+            operation_type=OperationType(data.get("operation_type", "convert")),
+            status=QueueItemStatus(data.get("status", "pending")),
             total_files=data.get("total_files", 0),
             processed_files=data.get("processed_files", 0),
+            files_succeeded=data.get("files_succeeded", 0),
+            files_skipped=data.get("files_skipped", 0),
+            files_failed=data.get("files_failed", 0),
+            last_error=data.get("last_error"),
         )
+
+    def format_status_display(self) -> str:
+        """Format status for display in queue tree.
+
+        Returns human-readable status with outcome counts for terminal states.
+        Examples: "Done (3✓ 1⊘ 1✗)", "Stopped (2✓)", "Error (1✗)", "Converting"
+        """
+        if self.status == QueueItemStatus.COMPLETED:
+            parts = []
+            if self.files_succeeded > 0:
+                parts.append(f"{self.files_succeeded}✓")
+            if self.files_skipped > 0:
+                parts.append(f"{self.files_skipped}⊘")
+            if self.files_failed > 0:
+                parts.append(f"{self.files_failed}✗")
+            return f"Done ({' '.join(parts)})" if parts else "Done"
+        if self.status == QueueItemStatus.STOPPED:
+            parts = []
+            if self.files_succeeded > 0:
+                parts.append(f"{self.files_succeeded}✓")
+            if self.files_skipped > 0:
+                parts.append(f"{self.files_skipped}⊘")
+            if self.files_failed > 0:
+                parts.append(f"{self.files_failed}✗")
+            return f"Stopped ({' '.join(parts)})" if parts else "Stopped"
+        if self.status == QueueItemStatus.ERROR:
+            return f"Error ({self.files_failed}✗)" if self.files_failed else "Error"
+        return self.status.value.capitalize()
 
 
 @dataclass
@@ -174,6 +260,24 @@ class FileRecord:
     # === Timestamps ===
     first_seen: str | None = None  # ISO timestamp when first scanned
     last_updated: str | None = None  # ISO timestamp of last status change
+
+    def get_analysis_level(self) -> AnalysisLevel:
+        """Determine the analysis level of this file record.
+
+        Returns:
+            AnalysisLevel indicating how much processing has been done:
+            - CONVERTED (3): Full conversion complete
+            - ANALYZED (2): CRF search complete, has accurate predictions
+            - SCANNED (1): ffprobe metadata available, has rough estimates
+            - DISCOVERED (0): No analysis data yet
+        """
+        if self.status == FileStatus.CONVERTED:
+            return AnalysisLevel.CONVERTED
+        if self.best_crf is not None and self.best_vmaf_achieved is not None:
+            return AnalysisLevel.ANALYZED
+        if self.video_codec is not None or self.duration_sec is not None:
+            return AnalysisLevel.SCANNED
+        return AnalysisLevel.DISCOVERED
 
 
 @dataclass

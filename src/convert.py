@@ -27,6 +27,9 @@ except ImportError:
     import tty
 
     def wait_for_key(message="Press any key to exit..."):
+        if not sys.stdin.isatty():
+            print()  # Just print newline and return if not interactive
+            return
         print(message, end="", flush=True)
         fd = sys.stdin.fileno()
         old_settings = termios.tcgetattr(fd)

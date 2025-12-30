@@ -44,47 +44,28 @@ class FFmpegDownloadDialog(tk.Toplevel):
         main_frame.pack(fill="both", expand=True)
 
         # Header
-        ttk.Label(
-            main_frame,
-            text="Install Portable FFmpeg",
-            font=("TkDefaultFont", 10, "bold"),
-        ).pack(anchor="w", pady=(0, 15))
+        ttk.Label(main_frame, text="Install Portable FFmpeg", font=("TkDefaultFont", 10, "bold")).pack(
+            anchor="w", pady=(0, 15)
+        )
 
         # Existing installation info
-        ttk.Label(
-            main_frame,
-            text="System FFmpeg detected at:",
-        ).pack(anchor="w")
+        ttk.Label(main_frame, text="System FFmpeg detected at:").pack(anchor="w")
 
-        ttk.Label(
-            main_frame,
-            text=f"    {self.existing_ffmpeg_dir}",
-            foreground="gray",
-        ).pack(anchor="w", pady=(0, 10))
+        ttk.Label(main_frame, text=f"    {self.existing_ffmpeg_dir}", foreground="gray").pack(anchor="w", pady=(0, 10))
 
         # What will happen
-        ttk.Label(
-            main_frame,
-            text="This will install a portable copy to vendor/ffmpeg/",
-        ).pack(anchor="w")
+        ttk.Label(main_frame, text="This will install a portable copy to vendor/ffmpeg/").pack(anchor="w")
 
-        ttk.Label(
-            main_frame,
-            text="This app will use the portable copy instead.",
-        ).pack(anchor="w")
+        ttk.Label(main_frame, text="This app will use the portable copy instead.").pack(anchor="w")
 
-        ttk.Label(
-            main_frame,
-            text="Your system installation will not be modified.",
-            foreground="#c00000",
-        ).pack(anchor="w", pady=(0, 10))
+        ttk.Label(main_frame, text="Your system installation will not be modified.", foreground="#c00000").pack(
+            anchor="w", pady=(0, 10)
+        )
 
         # Hint about updating system install
-        ttk.Label(
-            main_frame,
-            text="To update your system FFmpeg, use your package manager:",
-            foreground="gray",
-        ).pack(anchor="w")
+        ttk.Label(main_frame, text="To update your system FFmpeg, use your package manager:", foreground="gray").pack(
+            anchor="w"
+        )
 
         ttk.Label(
             main_frame,
@@ -97,11 +78,9 @@ class FFmpegDownloadDialog(tk.Toplevel):
         ttk.Separator(main_frame, orient="horizontal").pack(fill="x", pady=15)
 
         # Download info
-        ttk.Label(
-            main_frame,
-            text="Download: ~100 MB (gyan.dev full build with libsvtav1)",
-            foreground="gray",
-        ).pack(anchor="w")
+        ttk.Label(main_frame, text="Download: ~100 MB (gyan.dev full build with libsvtav1)", foreground="gray").pack(
+            anchor="w"
+        )
 
         # Buttons
         btn_frame = ttk.Frame(main_frame)

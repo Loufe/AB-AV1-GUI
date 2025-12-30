@@ -772,12 +772,17 @@ class AbAv1Wrapper:
             try:
                 startupinfo, creationflags = get_windows_subprocess_startupinfo()
 
+                # Use input file's directory as cwd so temp folders are created there
+                # (matching where cleanup looks at lines 895 and 919)
+                input_dir = os.path.dirname(input_path) or os.getcwd()
+
                 process = subprocess.Popen(
                     cmd,
                     stdout=subprocess.PIPE,
                     stderr=subprocess.STDOUT,
                     universal_newlines=True,
                     bufsize=1,
+                    cwd=input_dir,
                     startupinfo=startupinfo,
                     creationflags=creationflags,
                     encoding="utf-8",
@@ -902,6 +907,10 @@ class AbAv1Wrapper:
             if re.search(r"Failed\s+to\s+find\s+a\s+suitable\s+crf", full_output_text, re.IGNORECASE):
                 logger.info(f"CRF search failed at VMAF {current_vmaf_target}, trying lower target...")
                 current_vmaf_target -= VMAF_FALLBACK_STEP
+                # Clean up temp folders before retrying (matches auto_encode pattern)
+                input_dir = os.path.dirname(input_path)
+                if input_dir:
+                    clean_ab_av1_temp_folders(input_dir)
                 continue
 
             # Other error - don't retry
@@ -911,19 +920,13 @@ class AbAv1Wrapper:
             raise AbAv1Error(error_msg, command=cmd_str_log, output=full_output_text, error_type="crf_search_error")
 
         # --- All VMAF targets exhausted ---
-        error_msg = (
-            f"No efficient conversion possible - CRF search failed even at "
-            f"VMAF {MIN_VMAF_FALLBACK_TARGET}"
-        )
+        error_msg = f"No efficient conversion possible - CRF search failed even at VMAF {MIN_VMAF_FALLBACK_TARGET}"
         logger.info(f"File not worth converting: {anonymized_input_path}")
         input_dir = os.path.dirname(input_path)
         if input_dir:
             clean_ab_av1_temp_folders(input_dir)
         raise ConversionNotWorthwhileError(
-            error_msg,
-            command=cmd_str_log,
-            output=full_output_text,
-            original_size=original_size,
+            error_msg, command=cmd_str_log, output=full_output_text, original_size=original_size
         )
 
     def encode_with_crf(
@@ -1181,9 +1184,7 @@ class AbAv1Wrapper:
 
             if self.file_info_callback:
                 self.file_info_callback(
-                    os.path.basename(input_path),
-                    "failed",
-                    {"message": error_msg, "type": "process_management_failed"},
+                    os.path.basename(input_path), "failed", {"message": error_msg, "type": "process_management_failed"}
                 )
 
             if process and process.poll() is None:
@@ -1221,9 +1222,7 @@ class AbAv1Wrapper:
             logger.error(error_msg)
             if self.file_info_callback:
                 self.file_info_callback(
-                    os.path.basename(input_path),
-                    "failed",
-                    {"message": error_msg, "type": "missing_output_on_success"},
+                    os.path.basename(input_path), "failed", {"message": error_msg, "type": "missing_output_on_success"}
                 )
             raise OutputFileError(error_msg, command=cmd_str_log, error_type="missing_output_on_success")
 

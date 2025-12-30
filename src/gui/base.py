@@ -3,9 +3,50 @@
 Base GUI components for the AV1 Video Converter application.
 """
 
+import logging
+import os
+import subprocess
+import sys
 import tkinter as tk
 from tkinter import ttk
 from typing import Callable
+
+logger = logging.getLogger(__name__)
+
+
+def open_in_explorer(path: str) -> None:
+    """Open a file or folder in the native file explorer."""
+    if not os.path.exists(path):
+        logger.warning(f"Cannot open in explorer - path does not exist: {path}")
+        return
+
+    try:
+        if sys.platform == "win32":
+            os.startfile(path)
+        elif sys.platform == "darwin":
+            subprocess.run(["open", path], check=False)
+        else:
+            subprocess.run(["xdg-open", path], check=False)
+    except OSError:
+        logger.exception(f"Failed to open path in explorer: {path}")
+
+
+def reveal_in_explorer(file_path: str) -> None:
+    """Open the containing folder and select the file."""
+    if not os.path.exists(file_path):
+        logger.warning(f"Cannot reveal in explorer - path does not exist: {file_path}")
+        return
+
+    try:
+        if sys.platform == "win32":
+            subprocess.run(["explorer", "/select,", file_path], check=False)
+        elif sys.platform == "darwin":
+            subprocess.run(["open", "-R", file_path], check=False)
+        else:
+            # Linux: just open the containing folder
+            subprocess.run(["xdg-open", os.path.dirname(file_path)], check=False)
+    except OSError:
+        logger.exception(f"Failed to reveal path in explorer: {file_path}")
 
 
 class ToolTip:

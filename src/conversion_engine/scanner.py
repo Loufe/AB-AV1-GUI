@@ -16,10 +16,7 @@ logger = logging.getLogger(__name__)
 
 
 def scan_video_needs_conversion(
-    input_video_path: str,
-    output_path: str,
-    overwrite: bool = False,
-    video_info_cache: dict[str, Any] | None = None,
+    input_video_path: str, output_path: str, overwrite: bool = False, video_info_cache: dict[str, Any] | None = None
 ) -> tuple[bool, str, dict[str, Any] | None]:
     """Scan a video file to determine if it needs conversion, using a cache.
 

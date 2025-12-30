@@ -108,21 +108,13 @@ def is_using_vendor_ffmpeg() -> bool:
 def _github_request(url: str) -> dict:
     """Make a GitHub API request and return JSON response."""
     request = urllib.request.Request(  # noqa: S310 - hardcoded https GitHub URL is safe
-        url,
-        headers={
-            "Accept": "application/vnd.github.v3+json",
-            "User-Agent": "Auto-AV1-Converter",
-        },
+        url, headers={"Accept": "application/vnd.github.v3+json", "User-Agent": "Auto-AV1-Converter"}
     )
     with urllib.request.urlopen(request, timeout=15) as response:  # noqa: S310
         return json.loads(response.read().decode("utf-8"))
 
 
-def _download_file(
-    url: str,
-    dest_path: Path,
-    progress_callback: Callable[[int, int], None] | None = None,
-) -> None:
+def _download_file(url: str, dest_path: Path, progress_callback: Callable[[int, int], None] | None = None) -> None:
     """Download a file from URL to destination path.
 
     Args:
@@ -131,8 +123,7 @@ def _download_file(
         progress_callback: Optional callback(bytes_downloaded, total_bytes)
     """
     request = urllib.request.Request(  # noqa: S310 - downloading from known GitHub URLs
-        url,
-        headers={"User-Agent": "Auto-AV1-Converter"},
+        url, headers={"User-Agent": "Auto-AV1-Converter"}
     )
 
     with urllib.request.urlopen(request, timeout=30) as response:  # noqa: S310
@@ -180,9 +171,7 @@ def get_ab_av1_latest_release() -> tuple[str | None, str | None, str | None]:
         return None, None, None
 
 
-def download_ab_av1(
-    progress_callback: Callable[[int, int], None] | None = None,
-) -> tuple[bool, str]:
+def download_ab_av1(progress_callback: Callable[[int, int], None] | None = None) -> tuple[bool, str]:
     """Download the latest ab-av1.exe to vendor directory.
 
     Args:
@@ -267,9 +256,7 @@ def get_ffmpeg_latest_release() -> tuple[str | None, str | None, str | None]:
         return None, None, None
 
 
-def download_ffmpeg(
-    progress_callback: Callable[[int, int], None] | None = None,
-) -> tuple[bool, str]:
+def download_ffmpeg(progress_callback: Callable[[int, int], None] | None = None) -> tuple[bool, str]:
     """Download the latest FFmpeg full build to vendor/ffmpeg/.
 
     Args:

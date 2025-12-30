@@ -8,33 +8,11 @@ This tab allows users to:
 """
 
 import os
-import subprocess
-import sys
 import tkinter as tk
 from tkinter import ttk
 
-from src.gui.base import ToolTip, TreeviewRowTooltip
-
-
-def _open_in_explorer(path: str) -> None:
-    """Open a file or folder in the native file explorer."""
-    if sys.platform == "win32":
-        os.startfile(path)
-    elif sys.platform == "darwin":
-        subprocess.run(["open", path], check=False)
-    else:
-        subprocess.run(["xdg-open", path], check=False)
-
-
-def _reveal_in_explorer(file_path: str) -> None:
-    """Open the containing folder and select the file."""
-    if sys.platform == "win32":
-        subprocess.run(["explorer", "/select,", file_path], check=False)
-    elif sys.platform == "darwin":
-        subprocess.run(["open", "-R", file_path], check=False)
-    else:
-        # Linux: just open the containing folder
-        subprocess.run(["xdg-open", os.path.dirname(file_path)], check=False)
+from src.gui.base import ToolTip, TreeviewRowTooltip, open_in_explorer, reveal_in_explorer
+from src.models import OperationType
 
 
 def create_analysis_tab(gui):
@@ -44,7 +22,7 @@ def create_analysis_tab(gui):
 
     # Use pack for main sections so they have independent layouts
     main.columnconfigure(0, weight=1)
-    main.rowconfigure(2, weight=1)  # Tree row expands
+    main.rowconfigure(1, weight=1)  # Tree row expands
 
     # --- Row 0: Folder selection and buttons (in its own frame) ---
     controls_frame = ttk.Frame(main)
@@ -58,36 +36,25 @@ def create_analysis_tab(gui):
 
     ttk.Button(controls_frame, text="Browse...", command=gui.on_browse_input_folder).grid(row=0, column=2, padx=5)
 
-    gui.analyze_button = ttk.Button(controls_frame, text="Analyze: Basic", command=gui.on_analyze_folders)
+    gui.analyze_button = ttk.Button(controls_frame, text="Basic Scan", command=gui.on_analyze_folders)
     gui.analyze_button.grid(row=0, column=3, padx=5)
     ToolTip(gui.analyze_button, "Scan folders to find convertible files and estimate savings.")
 
-    gui.analyze_quality_button = ttk.Button(
-        controls_frame, text="Analyze: Complete", command=gui.on_analyze_quality, state="disabled"
+    gui.add_all_analyze_button = ttk.Button(
+        controls_frame, text="Add All: Analyze", command=gui.on_add_all_analyze, state="disabled"
     )
-    gui.analyze_quality_button.grid(row=0, column=4, padx=5)
-    ToolTip(gui.analyze_quality_button, "Run CRF search on selected files for accurate predictions (~1 min/file)")
+    gui.add_all_analyze_button.grid(row=0, column=4, padx=5)
+    ToolTip(gui.add_all_analyze_button, "Add all discovered files to queue for CRF analysis")
 
-    gui.stop_analyze_button = ttk.Button(controls_frame, text="Stop", command=gui.on_stop_analysis, state="disabled")
-    gui.stop_analyze_button.grid(row=0, column=5, padx=(5, 0))
-    ToolTip(gui.stop_analyze_button, "Stop the current analysis scan.")
+    gui.add_all_convert_button = ttk.Button(
+        controls_frame, text="Add All: Convert", command=gui.on_add_all_convert, state="disabled"
+    )
+    gui.add_all_convert_button.grid(row=0, column=5, padx=(5, 0))
+    ToolTip(gui.add_all_convert_button, "Add all discovered files to queue for conversion")
 
-    # --- Row 1: Progress bar (1/3) and status label (2/3) ---
-    progress_frame = ttk.Frame(main)
-    progress_frame.grid(row=1, column=0, sticky="ew", pady=(0, 5))
-    progress_frame.columnconfigure(0, weight=1)  # Progress bar: 1/3
-    progress_frame.columnconfigure(1, weight=2)  # Status label: 2/3
-
-    gui.analysis_progress = ttk.Progressbar(progress_frame, orient="horizontal", mode="determinate")
-    gui.analysis_progress.grid(row=0, column=0, sticky="ew", padx=(0, 10))
-
-    # Fixed width prevents label from resizing during rapid updates; text is truncated dynamically
-    gui.analysis_status_label = ttk.Label(progress_frame, text="Ready to analyze", anchor="w", width=100)
-    gui.analysis_status_label.grid(row=0, column=1, sticky="ew")
-
-    # --- Row 2: Tree with vertical scrollbar only ---
+    # --- Row 1: Tree with vertical scrollbar only ---
     tree_container = ttk.Frame(main)
-    tree_container.grid(row=2, column=0, sticky="nsew", pady=5)
+    tree_container.grid(row=1, column=0, sticky="nsew", pady=5)
     tree_container.columnconfigure(0, weight=1)
     tree_container.rowconfigure(0, weight=1)
 
@@ -156,11 +123,7 @@ def create_analysis_tab(gui):
     def _create_context_menu() -> tk.Menu:
         """Create a fresh context menu with consistent styling."""
         return tk.Menu(
-            gui.analysis_tree,
-            tearoff=0,
-            background="#ffffff",
-            activebackground="#0078d4",
-            activeforeground="#ffffff",
+            gui.analysis_tree, tearoff=0, background="#ffffff", activebackground="#0078d4", activeforeground="#ffffff"
         )
 
     def _get_folder_path_from_tree_item(item_id: str) -> str:
@@ -175,17 +138,23 @@ def create_analysis_tab(gui):
             current = gui.analysis_tree.parent(current)
         return os.path.join(gui.input_folder.get(), *path_parts)
 
-    def _add_selected_items_to_queue(selected_items: tuple[str, ...]) -> None:
-        """Add multiple selected items from analysis tree to queue."""
+    def _add_selected_items_to_queue(selected_items: tuple[str, ...], operation_type: OperationType) -> None:
+        """Add multiple selected items from analysis tree to queue with specified operation type."""
+        # Collect items first
+        items: list[tuple[str, bool]] = []
         for item_id in selected_items:
             is_folder = bool(gui.analysis_tree.get_children(item_id))
             if is_folder:
                 folder_path = _get_folder_path_from_tree_item(item_id)
-                gui.add_to_queue(folder_path, is_folder=True)
+                items.append((folder_path, True))
             else:
                 file_path = gui.get_file_path_for_tree_item(item_id)
                 if file_path:
-                    gui.add_to_queue(file_path, is_folder=False)
+                    items.append((file_path, False))
+
+        # Use bulk add - shows preview if there are conflicts
+        if items:
+            gui.add_items_to_queue(items, operation_type, force_preview=len(items) > 1)
 
     def _show_context_menu(event):
         item_id = gui.analysis_tree.identify_row(event.y)
@@ -208,14 +177,15 @@ def create_analysis_tab(gui):
         # Multi-selection: show batch actions
         if len(selected_items) > 1:
             menu.add_command(
-                label="Analyze: Complete",
-                command=gui.on_analyze_quality,
+                label=f"Add {len(selected_items)} Items to Queue: Convert",
+                command=lambda items=selected_items: _add_selected_items_to_queue(items, OperationType.CONVERT),
             )
-            menu.add_separator()
             menu.add_command(
-                label=f"Add {len(selected_items)} Items to Queue",
-                command=lambda items=selected_items: _add_selected_items_to_queue(items),
+                label=f"Add {len(selected_items)} Items to Queue: Analyze",
+                command=lambda items=selected_items: _add_selected_items_to_queue(items, OperationType.ANALYZE),
             )
+
+            menu.update_idletasks()
             menu.tk_popup(event.x_root, event.y_root)
             return
 
@@ -225,61 +195,69 @@ def create_analysis_tab(gui):
         if is_folder:
             folder_path = _get_folder_path_from_tree_item(item_id)
 
-            menu.add_command(
-                label="Open in Explorer",
-                command=lambda p=folder_path: _open_in_explorer(p),
-            )
+            menu.add_command(label="Open in Explorer", command=lambda path=folder_path: open_in_explorer(path))
             menu.add_separator()
             menu.add_command(
-                label="Analyze: Complete",
-                command=gui.on_analyze_quality,
+                label="Add Folder to Queue: Convert",
+                command=lambda path=folder_path: gui.add_to_queue(
+                    path, is_folder=True, operation_type=OperationType.CONVERT
+                ),
             )
             menu.add_command(
-                label="Add Folder to Queue",
-                command=lambda p=folder_path: gui.add_to_queue(p, is_folder=True),
+                label="Add Folder to Queue: Analyze",
+                command=lambda path=folder_path: gui.add_to_queue(
+                    path, is_folder=True, operation_type=OperationType.ANALYZE
+                ),
             )
         else:
             # It's a file - get path from GUI's lookup method
             file_path = gui.get_file_path_for_tree_item(item_id)
 
             if file_path:
-                menu.add_command(
-                    label="Open File",
-                    command=lambda p=file_path: _open_in_explorer(p),
-                )
-                menu.add_command(
-                    label="Show in Explorer",
-                    command=lambda p=file_path: _reveal_in_explorer(p),
-                )
+                menu.add_command(label="Open File", command=lambda path=file_path: open_in_explorer(path))
+                menu.add_command(label="Show in Explorer", command=lambda path=file_path: reveal_in_explorer(path))
                 menu.add_separator()
                 menu.add_command(
-                    label="Analyze: Complete",
-                    command=gui.on_analyze_quality,
+                    label="Add to Queue: Convert",
+                    command=lambda path=file_path: gui.add_to_queue(
+                        path, is_folder=False, operation_type=OperationType.CONVERT
+                    ),
                 )
                 menu.add_command(
-                    label="Add to Queue",
-                    command=lambda p=file_path: gui.add_to_queue(p, is_folder=False),
+                    label="Add to Queue: Analyze",
+                    command=lambda path=file_path: gui.add_to_queue(
+                        path, is_folder=False, operation_type=OperationType.ANALYZE
+                    ),
                 )
 
+        # Force geometry recalculation before showing (fixes Windows shadow rendering)
+        menu.update_idletasks()
         menu.tk_popup(event.x_root, event.y_root)
 
     gui.analysis_tree.bind("<Button-3>", _show_context_menu)
 
-    # Update quality button state when selection changes
-    gui.analysis_tree.bind("<<TreeviewSelect>>", lambda e: gui.update_quality_button_state())
+    # Double-click opens file/folder in explorer
+    def _on_double_click(event):
+        item_id = gui.analysis_tree.identify_row(event.y)
+        if not item_id:
+            return
+        is_folder = bool(gui.analysis_tree.get_children(item_id))
+        path = _get_folder_path_from_tree_item(item_id) if is_folder else gui.get_file_path_for_tree_item(item_id)
+        if path:
+            open_in_explorer(path)
+
+    gui.analysis_tree.bind("<Double-Button-1>", _on_double_click)
 
     # Set up row tooltips for file status explanations
     TreeviewRowTooltip(gui.analysis_tree, gui.get_analysis_tree_tooltip)
 
-    # --- Row 3: Fixed total row (non-scrolling, always visible) ---
+    # --- Row 2: Fixed total row (non-scrolling, always visible) ---
     # Use a separate single-row Treeview with matching columns for perfect alignment
     total_container = ttk.Frame(main)
-    total_container.grid(row=3, column=0, sticky="ew", pady=(0, 0))
+    total_container.grid(row=2, column=0, sticky="ew", pady=(0, 0))
     total_container.columnconfigure(0, weight=1)
 
-    gui.analysis_total_tree = ttk.Treeview(
-        total_container, columns=columns, show="tree", height=1, selectmode="none"
-    )
+    gui.analysis_total_tree = ttk.Treeview(total_container, columns=columns, show="tree", height=1, selectmode="none")
 
     # Match column widths exactly with main tree
     gui.analysis_total_tree.column("#0", width=300, minwidth=150, stretch=True)
@@ -296,4 +274,5 @@ def create_analysis_tab(gui):
 
     # Disable interaction with total row
     gui.analysis_total_tree.bind("<Button-1>", lambda e: "break")
+    gui.analysis_total_tree.bind("<Button-3>", lambda e: "break")
     gui.analysis_total_tree.bind("<Double-Button-1>", lambda e: "break")

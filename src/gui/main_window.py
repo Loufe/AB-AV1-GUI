@@ -4,7 +4,6 @@ Main window module for the AV1 Video Converter application.
 """
 
 # Standard library imports
-import datetime
 import json  # For settings persistence
 import logging
 import multiprocessing
@@ -25,15 +24,8 @@ if TYPE_CHECKING:
     from src.gui.charts import BarChart, LineGraph, PieChart
 
 from src.ab_av1.checker import check_ab_av1_latest_github, get_ab_av1_version
-from src.ab_av1.exceptions import ConversionNotWorthwhileError
-from src.ab_av1.wrapper import AbAv1Wrapper
-from src.config import (
-    DEFAULT_ENCODING_PRESET,
-    DEFAULT_VMAF_TARGET,
-    MIN_FILES_FOR_PERCENT_UPDATES,
-    MIN_VMAF_FALLBACK_TARGET,
-    TREE_UPDATE_BATCH_SIZE,
-)
+from src.cache_helpers import mtimes_match
+from src.config import MIN_FILES_FOR_PERCENT_UPDATES, TREE_UPDATE_BATCH_SIZE
 from src.estimation import estimate_file_time
 from src.folder_analysis import _analyze_file
 from src.gui.conversion_controller import force_stop_conversion, start_conversion, stop_conversion
@@ -52,8 +44,9 @@ from src.gui.tabs.analysis_tab import create_analysis_tab
 from src.gui.tabs.convert_tab import create_convert_tab
 from src.gui.tabs.settings_tab import create_settings_tab
 from src.gui.tabs.statistics_tab import create_statistics_tab
+from src.gui.widgets.add_to_queue_dialog import AddToQueuePreviewDialog, QueuePreviewData
 from src.history_index import compute_path_hash, get_history_index
-from src.models import ConversionSessionState, FileStatus, OutputMode, QueueItem
+from src.models import ConversionSessionState, FileStatus, OperationType, OutputMode, QueueItem, QueueItemStatus
 
 # Import setup_logging only needed here now - Replace 'convert_app' with 'src'
 from src.utils import (
@@ -72,40 +65,8 @@ from src.vendor_manager import download_ab_av1, download_ffmpeg
 
 logger = logging.getLogger(__name__)
 
-# Width of status label in characters (matches width in analysis_tab.py)
-_STATUS_LABEL_WIDTH = 100
-
 # Efficiency formatting threshold (GB/hr)
 _EFFICIENCY_DECIMAL_THRESHOLD = 10  # Show without decimals above this value
-
-
-def _format_status_text(prefix: str, filename: str, label_width: int = _STATUS_LABEL_WIDTH) -> str:
-    """Format status text, dynamically truncating filename to fit within label width.
-
-    Args:
-        prefix: The fixed prefix text (e.g., "Analyzing (5/100): ")
-        filename: The filename to display (may be truncated)
-        label_width: Available width in characters
-
-    Returns:
-        Formatted string that fits within label_width
-    """
-    available = label_width - len(prefix)
-    if available <= 0:
-        return prefix[:label_width]
-
-    if len(filename) <= available:
-        return prefix + filename
-
-    # Truncate with ellipsis, keeping extension visible if possible
-    ellipsis = "..."
-    name, ext = os.path.splitext(filename)
-    if ext and len(ext) + len(ellipsis) + 1 < available:  # Room for at least 1 char of name
-        name_space = available - len(ext) - len(ellipsis)
-        return prefix + name[:name_space] + ellipsis + ext
-
-    # No extension or too long - simple truncation
-    return prefix + filename[: available - len(ellipsis)] + ellipsis
 
 
 # Place config file next to script/executable
@@ -136,6 +97,7 @@ class VideoConverterGUI:
     item_suffix_entry: ttk.Entry
     item_output_folder: tk.StringVar
     item_folder_entry: ttk.Entry
+    item_folder_browse_button: ttk.Button
     item_source_label: ttk.Label
     current_file_label: ttk.Label
     quality_progress: ttk.Progressbar
@@ -152,10 +114,8 @@ class VideoConverterGUI:
 
     # Analysis tab widgets (created in create_analysis_tab)
     analyze_button: ttk.Button
-    analyze_quality_button: ttk.Button
-    stop_analyze_button: ttk.Button
-    analysis_progress: ttk.Progressbar
-    analysis_status_label: ttk.Label
+    add_all_analyze_button: ttk.Button
+    add_all_convert_button: ttk.Button
     analysis_tree: ttk.Treeview
     analysis_total_tree: ttk.Treeview
 
@@ -269,7 +229,7 @@ class VideoConverterGUI:
         self.analysis_tab = ttk.Frame(self.tab_control)
         self.statistics_tab = ttk.Frame(self.tab_control)
         self.settings_tab = ttk.Frame(self.tab_control)
-        self.tab_control.add(self.convert_tab, text="Convert")
+        self.tab_control.add(self.convert_tab, text="Queue")
         self.tab_control.add(self.analysis_tab, text="Analysis")
         self.tab_control.add(self.statistics_tab, text="Statistics")
         self.tab_control.add(self.settings_tab, text="Settings")
@@ -288,7 +248,7 @@ class VideoConverterGUI:
         self.root.after(0, self._refresh_analysis_tree)
 
         # Populate queue tree from restored items
-        self.root.after(0, self._refresh_queue_tree)
+        self.root.after(0, self.refresh_queue_tree)
 
     def load_settings(self):
         """Load settings from JSON config file"""
@@ -354,6 +314,7 @@ class VideoConverterGUI:
         self.style.configure("ExtButton.TCheckbutton", font=("Arial", 9))
         self.style.configure("TLabelframe", background="#f0f0f0", padding=5)
         self.style.configure("TLabelframe.Label", font=("Arial", 10, "bold"), background="#f0f0f0")
+        self.style.configure("TNotebook.Tab", font=("Arial", 11), padding=(10, 4))
 
         # Add custom style for range text - dark gray color
         self.style.configure("Range.TLabel", font=("Arial", 10), background="#f0f0f0", foreground="#606060")
@@ -400,7 +361,7 @@ class VideoConverterGUI:
         self.anonymize_history = tk.BooleanVar(value=self.config.get("anonymize_history", True))
         self.audio_codec = tk.StringVar(value=self.config.get("audio_codec", "opus"))
         self.delete_original_var = tk.BooleanVar(value=self.config.get("delete_original_after_conversion", False))
-        self.hw_decode_enabled = tk.BooleanVar(value=self.config.get("hw_decode_enabled", False))
+        self.hw_decode_enabled = tk.BooleanVar(value=self.config.get("hw_decode_enabled", True))
 
         # CPU count for display purposes
         try:
@@ -417,12 +378,12 @@ class VideoConverterGUI:
         # Queue state (will be restored from config on startup)
         self._queue_items: list[QueueItem] = self._load_queue_from_config()
         self._queue_tree_map: dict[str, str] = {}  # queue_item.id -> tree_item_id
+        self._queue_items_by_id: dict[str, QueueItem] = {item.id: item for item in self._queue_items}
+        self._tree_queue_map: dict[str, str] = {}  # tree_item_id -> queue_item.id (reverse)
 
         # Analysis state
         self.analysis_stop_event: threading.Event | None = None
         self.analysis_thread: threading.Thread | None = None
-        self.quality_analysis_stop_event: threading.Event | None = None
-        self.quality_analysis_thread: threading.Thread | None = None
         self._tree_item_map: dict[str, str] = {}  # Map file_path -> tree_item_id for updates
         self._refresh_timer_id: str | None = None  # Debounce timer for auto-refresh
         self._scan_stop_event: threading.Event | None = None  # Stop event for background scan
@@ -443,6 +404,20 @@ class VideoConverterGUI:
     def get_queue_tree_id(self, queue_item_id: str) -> str | None:
         """Return the tree item ID for a queue item, or None if not found."""
         return self._queue_tree_map.get(queue_item_id)
+
+    def get_queue_source_path_for_tree_item(self, tree_id: str) -> str | None:
+        """Return the source path for a queue tree item, or None if not found."""
+        item = self.get_queue_item_for_tree_item(tree_id)
+        return item.source_path if item else None
+
+    def get_queue_item_for_tree_item(self, tree_id: str) -> QueueItem | None:
+        """Return the QueueItem for a queue tree item, or None if not found."""
+        queue_id = self._tree_queue_map.get(tree_id)
+        return self._queue_items_by_id.get(queue_id) if queue_id else None
+
+    def get_queue_item_by_id(self, queue_id: str) -> QueueItem | None:
+        """Return the QueueItem for a given queue ID, or None if not found."""
+        return self._queue_items_by_id.get(queue_id)
 
     def initialize_conversion_state(self):
         """Reset conversion session state for a new conversion.
@@ -467,7 +442,7 @@ class VideoConverterGUI:
         """Handle application exit: confirm, save settings, cleanup"""
         confirm_exit = True
         if self.session.running:
-            confirm_exit = messagebox.askyesno("Confirm Exit", "Conversion running. Exit will stop it.\nAre you sure?")
+            confirm_exit = messagebox.askyesno("Confirm Exit", "Queue is running. Exit will stop it.\nAre you sure?")
         if confirm_exit:
             logger.info("=== AV1 Video Converter Exiting ===")
             self.save_settings()
@@ -539,7 +514,6 @@ class VideoConverterGUI:
         if folder:
             self.default_output_folder.set(folder)
             self.save_settings()
-
 
     def on_open_log_folder(self):
         open_log_folder_action(self)
@@ -637,9 +611,7 @@ class VideoConverterGUI:
 
             # Create Update button if it doesn't exist
             if not hasattr(self, "ab_av1_update_btn") or self.ab_av1_update_btn is None:
-                self.ab_av1_update_btn = ttk.Button(
-                    self.ab_av1_frame, text="Update", command=self.on_download_ab_av1
-                )
+                self.ab_av1_update_btn = ttk.Button(self.ab_av1_frame, text="Update", command=self.on_download_ab_av1)
                 self.ab_av1_update_btn.pack(side="left", padx=(5, 0))
 
     def _reset_update_label(self):
@@ -708,9 +680,7 @@ class VideoConverterGUI:
 
             # Create Update button if it doesn't exist
             if not hasattr(self, "ffmpeg_update_btn") or self.ffmpeg_update_btn is None:
-                self.ffmpeg_update_btn = ttk.Button(
-                    self.ffmpeg_frame, text="Update", command=self.on_download_ffmpeg
-                )
+                self.ffmpeg_update_btn = ttk.Button(self.ffmpeg_frame, text="Update", command=self.on_download_ffmpeg)
                 self.ffmpeg_update_btn.pack(side="left", padx=(5, 0))
 
     def _reset_ffmpeg_update_label(self):
@@ -837,14 +807,22 @@ class VideoConverterGUI:
         for data in raw_items:
             try:
                 item = QueueItem.from_dict(data)
-                # Only restore pending items (not completed ones)
-                if item.status == "pending" and os.path.exists(item.source_path):
+                # Reset interrupted items (CONVERTING, STOPPED) to PENDING for retry
+                if item.status in (QueueItemStatus.CONVERTING, QueueItemStatus.STOPPED):
+                    item.status = QueueItemStatus.PENDING
+                    # Reset outcome counters for retry
+                    item.files_succeeded = 0
+                    item.files_skipped = 0
+                    item.files_failed = 0
+                    item.last_error = None
+                # Only restore PENDING items if file exists (skip completed/error items)
+                if item.status == QueueItemStatus.PENDING and os.path.exists(item.source_path):
                     items.append(item)
             except (KeyError, ValueError):
                 continue  # Skip invalid entries
         return items
 
-    def _save_queue_to_config(self):
+    def save_queue_to_config(self):
         """Save current queue state (called on add/remove/modify)."""
         self.save_settings()
 
@@ -870,34 +848,201 @@ class VideoConverterGUI:
         """Add individual files to the conversion queue."""
         files = filedialog.askopenfilenames(
             title="Select Video Files",
-            filetypes=[
-                ("Video files", "*.mp4 *.mkv *.avi *.wmv *.mov *.webm"),
-                ("All files", "*.*")
-            ]
+            filetypes=[("Video files", "*.mp4 *.mkv *.avi *.wmv *.mov *.webm"), ("All files", "*.*")],
         )
         for f in files:
             self.add_to_queue(f, is_folder=False)
 
-    def add_to_queue(self, path: str, is_folder: bool):
-        """Add an item to the queue with duplicate checking."""
-        # Check for duplicates
-        if any(item.source_path == path for item in self._queue_items):
-            messagebox.showwarning("Duplicate", f"'{os.path.basename(path)}' is already in the queue.")
-            return
+    def _find_existing_queue_item(self, path: str) -> QueueItem | None:
+        """Find an existing queue item by path."""
+        for item in self._queue_items:
+            if item.source_path == path:
+                return item
+        return None
 
+    def _create_queue_item(self, path: str, is_folder: bool, operation_type: OperationType) -> QueueItem:
+        """Create a new QueueItem with default settings."""
         default_mode = self.default_output_mode.get()
-        item = QueueItem(
+        return QueueItem(
             id=str(uuid.uuid4()),
             source_path=path,
             is_folder=is_folder,
             output_mode=OutputMode(default_mode),
             output_suffix=self.default_suffix.get() if default_mode == "suffix" else None,
             output_folder=self.default_output_folder.get() if default_mode == "separate_folder" else None,
+            operation_type=operation_type,
         )
-        self._queue_items.append(item)
-        self._save_queue_to_config()
-        self._refresh_queue_tree()
-        self.sync_queue_tags_to_analysis_tree()
+
+    def _categorize_queue_items(
+        self, items: list[tuple[str, bool]], operation_type: OperationType
+    ) -> tuple[list[tuple[str, bool]], list[str], list[tuple[str, bool, QueueItem]]]:
+        """Categorize items for queue preview.
+
+        Returns:
+            Tuple of (to_add, duplicates, conflicts) where:
+            - to_add: Items that can be added directly
+            - duplicates: Paths already in queue with same operation
+            - conflicts: (path, is_folder, existing_item) for different operation
+        """
+        to_add: list[tuple[str, bool]] = []
+        duplicates: list[str] = []
+        conflicts: list[tuple[str, bool, QueueItem]] = []
+
+        for path, is_folder in items:
+            existing = self._find_existing_queue_item(path)
+            if not existing:
+                to_add.append((path, is_folder))
+            elif existing.operation_type == operation_type:
+                duplicates.append(path)
+            else:
+                conflicts.append((path, is_folder, existing))
+
+        return to_add, duplicates, conflicts
+
+    def _calculate_queue_estimates(self, items: list[tuple[str, bool]]) -> tuple[float | None, float | None]:
+        """Calculate time estimate and potential savings for items.
+
+        Returns:
+            Tuple of (estimated_time_seconds, estimated_savings_percent)
+        """
+        total_time = 0.0
+        total_original_size = 0
+        total_saved_bytes = 0.0
+        has_time_estimates = False
+
+        index = get_history_index()
+
+        for path, is_folder in items:
+            if is_folder:
+                continue  # Skip folders for now, would need to scan
+
+            # Try to get time estimate
+            estimate = estimate_file_time(path)
+            if estimate.confidence != "none":
+                total_time += estimate.best_seconds
+                has_time_estimates = True
+
+            # Try to get savings estimate from history
+            path_hash = compute_path_hash(path)
+            record = index.get(path_hash)
+            if record and record.file_size_bytes:
+                # Use Layer 2 data if available, fall back to Layer 1
+                reduction_pct = record.predicted_size_reduction or record.estimated_reduction_percent
+                if reduction_pct:
+                    total_original_size += record.file_size_bytes
+                    total_saved_bytes += record.file_size_bytes * (reduction_pct / 100)
+
+        # Calculate overall reduction percentage (weighted average)
+        total_savings = None
+        if total_original_size > 0 and total_saved_bytes > 0:
+            total_savings = (total_saved_bytes / total_original_size) * 100
+
+        return (total_time if has_time_estimates else None, total_savings)
+
+    def add_items_to_queue(
+        self, items: list[tuple[str, bool]], operation_type: OperationType, force_preview: bool = False
+    ) -> dict[str, int]:
+        """Add items to queue with appropriate UI feedback.
+
+        This is the main entry point for all queue additions.
+
+        Args:
+            items: List of (path, is_folder) tuples
+            operation_type: OperationType.CONVERT or OperationType.ANALYZE
+            force_preview: If True, always show preview dialog (for "Add All")
+                          If False, only show dialog if there are conflicts
+
+        Returns:
+            Dict with counts: {"added", "duplicate", "conflict_added", "conflict_replaced", "cancelled"}
+        """
+        counts = {"added": 0, "duplicate": 0, "conflict_added": 0, "conflict_replaced": 0, "cancelled": 0}
+
+        if not items:
+            return counts
+
+        # Categorize items
+        to_add, duplicates, conflicts = self._categorize_queue_items(items, operation_type)
+        counts["duplicate"] = len(duplicates)
+
+        # Determine if we need to show the preview dialog
+        show_dialog = force_preview or len(conflicts) > 0
+
+        if show_dialog:
+            # Calculate estimates for preview
+            estimated_time, estimated_savings = self._calculate_queue_estimates(to_add)
+
+            # Build preview data
+            preview_data = QueuePreviewData(
+                to_add=to_add,
+                duplicates=duplicates,
+                conflicts=conflicts,
+                operation_type=operation_type,
+                estimated_time_sec=estimated_time,
+                estimated_savings_percent=estimated_savings,
+            )
+
+            # Show dialog
+            dialog = AddToQueuePreviewDialog(self.root, preview_data)
+            result = dialog.result
+
+            if result["action"] == "cancel":
+                counts["cancelled"] = len(to_add) + len(conflicts)
+                return counts
+
+            conflict_resolution = result["conflict_resolution"]
+        else:
+            # No dialog needed, just add
+            conflict_resolution = "skip"
+
+        # Add the non-conflicting items
+        for path, is_folder in to_add:
+            item = self._create_queue_item(path, is_folder, operation_type)
+            self._queue_items.append(item)
+            counts["added"] += 1
+
+        # Handle conflicts based on resolution choice
+        if conflicts:
+            if conflict_resolution == "keep_both":
+                for path, is_folder, _ in conflicts:
+                    item = self._create_queue_item(path, is_folder, operation_type)
+                    self._queue_items.append(item)
+                    counts["conflict_added"] += 1
+            elif conflict_resolution == "replace":
+                for path, is_folder, existing in conflicts:
+                    new_item = self._create_queue_item(path, is_folder, operation_type)
+                    idx = self._queue_items.index(existing)
+                    self._queue_items[idx] = new_item
+                    counts["conflict_replaced"] += 1
+            # else: skip - conflicts are not added
+
+        # Save and refresh if anything was added or modified
+        if counts["added"] > 0 or counts["conflict_added"] > 0 or counts["conflict_replaced"] > 0:
+            self.save_queue_to_config()
+            self.refresh_queue_tree()
+            self.sync_queue_tags_to_analysis_tree()
+
+        return counts
+
+    def add_to_queue(self, path: str, is_folder: bool, operation_type: OperationType = OperationType.CONVERT) -> str:
+        """Add a single item to the queue (convenience wrapper).
+
+        For selective adds without conflicts, this is silent.
+        For conflicts, shows the preview dialog.
+
+        Returns:
+            "added", "duplicate", "conflict_added", "conflict_replaced", or "cancelled"
+        """
+        result = self.add_items_to_queue([(path, is_folder)], operation_type, force_preview=False)
+
+        if result["added"] > 0:
+            return "added"
+        if result["duplicate"] > 0:
+            return "duplicate"
+        if result["conflict_added"] > 0:
+            return "conflict_added"
+        if result["conflict_replaced"] > 0:
+            return "conflict_replaced"
+        return "cancelled"
 
     def on_remove_from_queue(self):
         """Remove selected items from queue."""
@@ -906,26 +1051,19 @@ class VideoConverterGUI:
         if not selected:
             return
 
-        # Build reverse map (tree_item_id -> queue_item_id)
-        reverse_map = {tree_id: queue_id for queue_id, tree_id in self._queue_tree_map.items()}
-
-        # Collect queue items to remove
+        # Collect queue items to remove using O(1) lookups
         items_to_remove = []
         for tree_id in selected:
-            queue_id = reverse_map.get(tree_id)
-            if queue_id:
-                # Find the queue item with this ID
-                for item in self._queue_items:
-                    if item.id == queue_id:
-                        items_to_remove.append(item)
-                        break
+            item = self.get_queue_item_for_tree_item(tree_id)
+            if item:
+                items_to_remove.append(item)
 
         # Remove from queue
         for item in items_to_remove:
             self._queue_items.remove(item)
 
-        self._save_queue_to_config()
-        self._refresh_queue_tree()
+        self.save_queue_to_config()
+        self.refresh_queue_tree()
         self.sync_queue_tags_to_analysis_tree()
 
     def on_clear_queue(self):
@@ -934,43 +1072,55 @@ class VideoConverterGUI:
             return
         if messagebox.askyesno("Clear Queue", "Remove all items from the queue?"):
             self._queue_items.clear()
-            self._save_queue_to_config()
-            self._refresh_queue_tree()
+            self.save_queue_to_config()
+            self.refresh_queue_tree()
             self.sync_queue_tags_to_analysis_tree()
 
     def on_queue_selection_changed(self):
         """Handle selection change in queue tree."""
         selected = self.queue_tree.selection()
         if not selected:
-            self.queue_properties_frame.grid_remove()
+            # Disable controls and show placeholder when nothing selected
+            self.item_mode_combo.config(state="disabled")
+            self.item_suffix_entry.config(state="disabled")
+            self.item_folder_entry.config(state="disabled")
+            self.item_folder_browse_button.config(state="disabled")
+            self.item_output_mode.set("")
+            self.item_suffix.set("")
+            self.item_output_folder.set("")
+            self.item_source_label.config(text="Select an item to configure")
             return
-
-        # Show properties for first selected item
-        self.queue_properties_frame.grid()
 
         # Get the queue item for the selected tree item
-        tree_id = selected[0]
-        reverse_map = {tree_id: queue_id for queue_id, tree_id in self._queue_tree_map.items()}
-        queue_id = reverse_map.get(tree_id)
-
-        if not queue_id:
-            return
-
-        # Find the queue item
-        queue_item = None
-        for item in self._queue_items:
-            if item.id == queue_id:
-                queue_item = item
-                break
-
+        queue_item = self.get_queue_item_for_tree_item(selected[0])
         if not queue_item:
             return
 
+        # Check if this is an ANALYZE-only operation
+        is_analyze = queue_item.operation_type == OperationType.ANALYZE
+
         # Update properties panel with selected item's values
-        self.item_output_mode.set(queue_item.output_mode.value)
-        self.item_suffix.set(queue_item.output_suffix or self.default_suffix.get())
-        self.item_output_folder.set(queue_item.output_folder or self.default_output_folder.get())
-        self.item_source_label.config(text=queue_item.source_path)
+        if is_analyze:
+            # Disable output-related fields for ANALYZE operations (no output file produced)
+            self.item_output_mode.set("—")
+            self.item_suffix.set("")
+            self.item_output_folder.set("")
+            self.item_source_label.config(text=f"{queue_item.source_path} (Analysis only - no output file)")
+            # Disable the widgets
+            self.item_mode_combo.config(state="disabled")
+            self.item_suffix_entry.config(state="disabled")
+            self.item_folder_entry.config(state="disabled")
+            self.item_folder_browse_button.config(state="disabled")
+        else:
+            # Enable and populate for CONVERT operations
+            self.item_mode_combo.config(state="readonly")
+            self.item_suffix_entry.config(state="normal")
+            self.item_folder_entry.config(state="normal")
+            self.item_folder_browse_button.config(state="normal")
+            self.item_output_mode.set(queue_item.output_mode.value)
+            self.item_suffix.set(queue_item.output_suffix or self.default_suffix.get())
+            self.item_output_folder.set(queue_item.output_folder or self.default_output_folder.get())
+            self.item_source_label.config(text=queue_item.source_path)
 
     def on_item_output_mode_changed(self):
         """Handle output mode change for selected item."""
@@ -978,20 +1128,11 @@ class VideoConverterGUI:
         if not selected:
             return
 
-        tree_id = selected[0]
-        reverse_map = {tree_id: queue_id for queue_id, tree_id in self._queue_tree_map.items()}
-        queue_id = reverse_map.get(tree_id)
-
-        if not queue_id:
-            return
-
-        # Find and update the queue item
-        for item in self._queue_items:
-            if item.id == queue_id:
-                item.output_mode = OutputMode(self.item_output_mode.get())
-                self._save_queue_to_config()
-                self._refresh_queue_tree()
-                break
+        queue_item = self.get_queue_item_for_tree_item(selected[0])
+        if queue_item:
+            queue_item.output_mode = OutputMode(self.item_output_mode.get())
+            self.save_queue_to_config()
+            self.refresh_queue_tree()
 
     def on_item_suffix_changed(self):
         """Handle suffix change for selected item."""
@@ -999,20 +1140,11 @@ class VideoConverterGUI:
         if not selected:
             return
 
-        tree_id = selected[0]
-        reverse_map = {tree_id: queue_id for queue_id, tree_id in self._queue_tree_map.items()}
-        queue_id = reverse_map.get(tree_id)
-
-        if not queue_id:
-            return
-
-        # Find and update the queue item
-        for item in self._queue_items:
-            if item.id == queue_id:
-                item.output_suffix = self.item_suffix.get()
-                self._save_queue_to_config()
-                self._refresh_queue_tree()
-                break
+        queue_item = self.get_queue_item_for_tree_item(selected[0])
+        if queue_item:
+            queue_item.output_suffix = self.item_suffix.get()
+            self.save_queue_to_config()
+            self.refresh_queue_tree()
 
     def on_browse_item_output_folder(self):
         """Browse for item-specific output folder."""
@@ -1027,63 +1159,104 @@ class VideoConverterGUI:
         if not selected:
             return
 
-        tree_id = selected[0]
-        reverse_map = {tree_id: queue_id for queue_id, tree_id in self._queue_tree_map.items()}
-        queue_id = reverse_map.get(tree_id)
+        queue_item = self.get_queue_item_for_tree_item(selected[0])
+        if queue_item:
+            queue_item.output_folder = folder
+            self.save_queue_to_config()
+            self.refresh_queue_tree()
 
-        if not queue_id:
-            return
-
-        for item in self._queue_items:
-            if item.id == queue_id:
-                item.output_folder = folder
-                self._save_queue_to_config()
-                self._refresh_queue_tree()
-                break
-
-    def _refresh_queue_tree(self):
+    def refresh_queue_tree(self):
         """Refresh the queue tree view from _queue_items."""
         # Clear existing items
         for item in self.queue_tree.get_children():
             self.queue_tree.delete(item)
         self._queue_tree_map.clear()
+        self._tree_queue_map.clear()
+        self._queue_items_by_id = {item.id: item for item in self._queue_items}
 
-        # Add each queue item
-        for queue_item in self._queue_items:
+        index = get_history_index()
+
+        # Add each queue item with order number
+        for order, queue_item in enumerate(self._queue_items, start=1):
+            # Get history record for metadata
+            path_hash = compute_path_hash(queue_item.source_path)
+            record = index.get(path_hash)
+
+            # Determine operation display based on operation type and Layer 2 data
+            if queue_item.operation_type == OperationType.ANALYZE:
+                operation_display = "Analyze"
+            elif queue_item.operation_type == OperationType.CONVERT:
+                # Check if file has Layer 2 data (CRF search results)
+                has_layer2 = record and record.best_crf is not None and record.best_vmaf_achieved is not None
+                operation_display = "Convert" if has_layer2 else "Analyze+Convert"
+            else:
+                operation_display = "Unknown"
+
             # Format output mode display
-            if queue_item.output_mode == OutputMode.REPLACE:
+            if queue_item.operation_type == OperationType.ANALYZE:
+                output_display = "—"
+            elif queue_item.output_mode == OutputMode.REPLACE:
                 output_display = "Replace"
             elif queue_item.output_mode == OutputMode.SUFFIX:
                 suffix = queue_item.output_suffix or self.default_suffix.get()
-                output_display = f"{suffix} suffix"
+                output_display = f"{suffix}"
             else:
                 folder_name = os.path.basename(queue_item.output_folder or self.default_output_folder.get() or "")
                 output_display = f"→ {folder_name}/" if folder_name else "Separate"
 
-            # Format status
-            status_display = queue_item.status.capitalize()
-
-            # Format progress
-            if queue_item.is_folder and queue_item.total_files > 0:
-                progress_display = f"{queue_item.processed_files}/{queue_item.total_files}"
+            # Format size
+            if record and record.file_size_bytes:
+                size_display = format_file_size(record.file_size_bytes)
+            elif os.path.isfile(queue_item.source_path):
+                try:
+                    size_display = format_file_size(os.path.getsize(queue_item.source_path))
+                except OSError:
+                    size_display = "—"
             else:
-                progress_display = "—"
+                size_display = "—"  # Folders show dash until scanned
 
-            # Insert item
+            # Format estimated time
+            est_time_display = "—"  # TODO: Could use estimation.py in future
+
+            # Format status (now includes progress info)
+            status_display = queue_item.format_status_display()
+            if queue_item.status == QueueItemStatus.CONVERTING and queue_item.total_files > 0:
+                status_display = f"Converting ({queue_item.processed_files}/{queue_item.total_files})"
+
+            # Insert item with order number prefix
             icon = "📁" if queue_item.is_folder else "🎬"
             prefix = "▶ " if queue_item.is_folder else ""
             name = os.path.basename(queue_item.source_path)
 
             item_id = self.queue_tree.insert(
-                "", "end",
-                text=f"{prefix}{icon} {name}",
-                values=(output_display, status_display, progress_display)
+                "",
+                "end",
+                text=f"{order}. {prefix}{icon} {name}",
+                values=(size_display, est_time_display, operation_display, output_display, status_display),
             )
             self._queue_tree_map[queue_item.id] = item_id
+            self._tree_queue_map[item_id] = queue_item.id
 
-        # Update total
+        # Update total row
         total_items = len(self._queue_items)
-        self.queue_total_tree.item("total", values=("", f"{total_items} items", "—"))
+        self.queue_total_tree.item("total", values=("", "", "", "", f"{total_items} items"))
+
+    def sync_queue_order_from_tree(self):
+        """Sync _queue_items order from the tree view after drag-drop reordering."""
+        # Rebuild _queue_items in tree order using O(1) lookups
+        new_order = []
+        for tree_id in self.queue_tree.get_children():
+            queue_id = self._tree_queue_map.get(tree_id)
+            if queue_id:
+                item = self._queue_items_by_id.get(queue_id)
+                if item:
+                    new_order.append(item)
+
+        if len(new_order) == len(self._queue_items):
+            self._queue_items = new_order
+            self.save_queue_to_config()
+            # Refresh to update order numbers
+            self.refresh_queue_tree()
 
     # --- Analysis Tab Handlers ---
 
@@ -1108,7 +1281,7 @@ class VideoConverterGUI:
             # Clear tree if no valid folder
             for item in self.analysis_tree.get_children():
                 self.analysis_tree.delete(item)
-            self.analysis_status_label.config(text="Select an input folder to analyze")
+            self._update_add_all_buttons_state()
             return
 
         # Get selected extensions
@@ -1126,7 +1299,7 @@ class VideoConverterGUI:
             # Clear tree if no extensions selected
             for item in self.analysis_tree.get_children():
                 self.analysis_tree.delete(item)
-            self.analysis_status_label.config(text="Select at least one file extension")
+            self._update_add_all_buttons_state()
             return
 
         # Clear tree and start background scan
@@ -1134,10 +1307,7 @@ class VideoConverterGUI:
             self.analysis_tree.delete(item)
         self._tree_item_map.clear()
         self._update_total_row(0, 0, 0, 0, 0, 0, 0.0)  # Reset total row
-        self.analysis_status_label.config(text="Scanning...")
-
-        # Enable stop button
-        self.stop_analyze_button.config(state="normal")
+        self._update_add_all_buttons_state()  # Disable while scanning
 
         # Cancel any existing scan
         if self._scan_stop_event:
@@ -1226,7 +1396,7 @@ class VideoConverterGUI:
 
                     # Check cache (use tolerance for mtime due to float precision in JSON)
                     record = index.lookup_file(file_path)
-                    if record and record.file_size_bytes == file_size and abs(record.file_mtime - file_mtime) < 1.0:
+                    if record and record.file_size_bytes == file_size and mtimes_match(record.file_mtime, file_mtime):
                         # Cache hit - use cached values
                         if record.status == FileStatus.CONVERTED:
                             savings_str = "Done"
@@ -1254,7 +1424,7 @@ class VideoConverterGUI:
                     file_display_data.append((filename, file_path, size_str, savings_str, time_str, eff_str, tag))
 
                 # Prepare UI update
-                is_root = (dirpath == root_folder)
+                is_root = dirpath == root_folder
                 folder_name = os.path.basename(dirpath) if not is_root else None
 
                 # Use event to wait for UI update to complete
@@ -1277,9 +1447,11 @@ class VideoConverterGUI:
                             folder_id = ""
                             for filename, file_path, size_str, savings_str, time_str, eff_str, tag in fdata:
                                 item_id = self.analysis_tree.insert(
-                                    "", "end", text=f"🎬 {filename}",
+                                    "",
+                                    "end",
+                                    text=f"🎬 {filename}",
                                     values=(size_str, savings_str, time_str, eff_str),
-                                    tags=(tag,) if tag else ()
+                                    tags=(tag,) if tag else (),
                                 )
                                 self._tree_item_map[file_path] = item_id
                                 file_count += 1
@@ -1291,9 +1463,11 @@ class VideoConverterGUI:
                             folder_count += 1
                             for filename, file_path, size_str, savings_str, time_str, eff_str, tag in fdata:
                                 item_id = self.analysis_tree.insert(
-                                    folder_id, "end", text=f"🎬 {filename}",
+                                    folder_id,
+                                    "end",
+                                    text=f"🎬 {filename}",
                                     values=(size_str, savings_str, time_str, eff_str),
-                                    tags=(tag,) if tag else ()
+                                    tags=(tag,) if tag else (),
                                 )
                                 self._tree_item_map[file_path] = item_id
                                 file_count += 1
@@ -1310,68 +1484,25 @@ class VideoConverterGUI:
                 # Store folder ID for children to use
                 folder_tree_ids[dirpath] = new_folder_id[0]
 
-                # Update status periodically
-                if folder_count % 5 == 0 or not queue:
-                    update_ui_safely(
-                        self.root,
-                        lambda fc=file_count, dc=folder_count: self.analysis_status_label.config(
-                            text=f"Found {fc} files in {dc} folders..."
-                        ),
-                    )
-
             # Final status
             if stop_event.is_set():
                 self._finish_incremental_scan(stopped=True)
                 return
 
-            if file_count == 0:
-                update_ui_safely(
-                    self.root,
-                    lambda: (
-                        self.analysis_status_label.config(text="No video files found"),
-                        self._finish_incremental_scan(stopped=False),
-                    ),
-                )
-            else:
-                update_ui_safely(
-                    self.root,
-                    lambda fc=file_count, dc=folder_count: (
-                        self.analysis_status_label.config(text=f"Found {fc} files in {dc} folders"),
-                        self._finish_incremental_scan(stopped=False),
-                    ),
-                )
+            update_ui_safely(self.root, lambda: self._finish_incremental_scan(stopped=False))
 
         except PermissionError:
             logger.exception("Permission denied during scan")
             if not stop_event.is_set():
-                update_ui_safely(
-                    self.root,
-                    lambda: (
-                        self.analysis_status_label.config(text="Error: Permission denied"),
-                        self._finish_incremental_scan(stopped=False),
-                    ),
-                )
-        except OSError as e:
+                update_ui_safely(self.root, lambda: self._finish_incremental_scan(stopped=False))
+        except OSError:
             logger.exception("OS error during scan")
             if not stop_event.is_set():
-                msg = e.strerror or "Scanning failed"
-                update_ui_safely(
-                    self.root,
-                    lambda m=msg: (
-                        self.analysis_status_label.config(text=f"Error: {m}"),
-                        self._finish_incremental_scan(stopped=False),
-                    ),
-                )
+                update_ui_safely(self.root, lambda: self._finish_incremental_scan(stopped=False))
         except Exception:
             logger.exception("Error during incremental scan")
             if not stop_event.is_set():
-                update_ui_safely(
-                    self.root,
-                    lambda: (
-                        self.analysis_status_label.config(text="Error scanning folder"),
-                        self._finish_incremental_scan(stopped=False),
-                    ),
-                )
+                update_ui_safely(self.root, lambda: self._finish_incremental_scan(stopped=False))
 
     def _prune_empty_folders(self) -> int:
         """Remove folders with no children from the tree (runs on UI thread).
@@ -1410,10 +1541,7 @@ class VideoConverterGUI:
 
     def _finish_incremental_scan(self, stopped: bool):
         """Clean up after incremental scan completes (runs on UI thread)."""
-        self.stop_analyze_button.config(state="disabled")
-        if stopped:
-            self.analysis_status_label.config(text="Scan stopped")
-        else:
+        if not stopped:
             # Prune empty folders after scan completes
             self._prune_empty_folders()
 
@@ -1422,6 +1550,9 @@ class VideoConverterGUI:
 
         # Sync queue tags to show which files are in the conversion queue
         self.sync_queue_tags_to_analysis_tree()
+
+        # Enable Add All buttons if there are files
+        self._update_add_all_buttons_state()
 
     def on_analyze_folders(self):
         """Run ffprobe analysis on files already in the tree.
@@ -1440,16 +1571,17 @@ class VideoConverterGUI:
 
         if not file_paths:
             messagebox.showinfo(
-                "No Files",
-                "No files to analyze. Select a folder with video files and wait for the scan to complete.",
+                "No Files", "No files to analyze. Select a folder with video files and wait for the scan to complete."
             )
             return
 
-        # Disable button immediately to prevent double-clicks
+        # Disable buttons immediately to prevent double-clicks
         self.analyze_button.config(state="disabled")
-        self.stop_analyze_button.config(state="normal")
+        self.add_all_analyze_button.config(state="disabled")
+        self.add_all_convert_button.config(state="disabled")
 
         input_folder = self.input_folder.get()
+        anonymize = self.anonymize_history.get()
         logger.info(f"Starting ffprobe analysis of {len(file_paths)} files in: {input_folder}")
 
         # Cancel any pending auto-refresh timer
@@ -1463,18 +1595,15 @@ class VideoConverterGUI:
         if self._scan_stop_event:
             self._scan_stop_event.set()
 
-        # Show analyzing status
-        self.analysis_status_label.config(text=f"Analyzing {len(file_paths)} files...")
-        self.analysis_progress["value"] = 0
-
         # Run ffprobe analysis in background thread
+        # Pass input_folder and anonymize as parameters (captured on main thread)
         self.analysis_stop_event = threading.Event()
         self.analysis_thread = threading.Thread(
-            target=self._run_ffprobe_analysis, args=(file_paths, output_folder), daemon=True
+            target=self._run_ffprobe_analysis, args=(file_paths, output_folder, input_folder, anonymize), daemon=True
         )
         self.analysis_thread.start()
 
-    def _run_ffprobe_analysis(self, file_paths: list[str], output_folder: str):
+    def _run_ffprobe_analysis(self, file_paths: list[str], output_folder: str, input_folder: str, anonymize: bool):
         """Run ffprobe analysis on files in parallel.
 
         This analyzes files already in the tree using ffprobe to get metadata
@@ -1487,9 +1616,9 @@ class VideoConverterGUI:
         Args:
             file_paths: List of file paths to analyze.
             output_folder: Output folder for checking if files are already converted.
+            input_folder: Input folder path (captured from main thread).
+            anonymize: Whether to anonymize history (captured from main thread).
         """
-        input_folder = self.input_folder.get()
-        anonymize = self.anonymize_history.get()
         index = get_history_index()
         root_path = Path(input_folder).resolve()
         output_path = Path(output_folder).resolve()
@@ -1514,7 +1643,7 @@ class VideoConverterGUI:
             try:
                 stat = os.stat(file_path)
                 cached = index.lookup_file(file_path)
-                if cached and cached.file_size_bytes == stat.st_size and cached.file_mtime == stat.st_mtime:
+                if cached and cached.file_size_bytes == stat.st_size and mtimes_match(cached.file_mtime, stat.st_mtime):
                     return file_path, True  # Cache hit - no ffprobe needed
             except OSError:
                 pass  # Let _analyze_file handle the error
@@ -1545,38 +1674,19 @@ class VideoConverterGUI:
 
                 # Collect completed files for batch UI update
                 completed_paths: list[str] = []
-                last_filename = ""
 
                 for future in done:
                     file_path, was_cached = future.result()
                     files_completed += 1
                     if was_cached:
                         cache_hits += 1
-                    # Use the result path if available, otherwise fall back to the original path
-                    result_path = file_path if file_path else futures[future]
-                    last_filename = os.path.basename(result_path)
                     if file_path:
                         completed_paths.append(file_path)
 
                 # Single batched UI update for all completed files in this round
-                if completed_paths or done:
-                    progress = (files_completed / total_files) * 100
-
-                    # Capture snapshot of values for the callback
+                if completed_paths:
                     paths_snapshot = list(completed_paths)
-                    pct, name = progress, last_filename
-                    done_count, total_count, cached_count = files_completed, total_files, cache_hits
-
-                    # Use factory function to capture by value
-                    def make_callback(paths, pct, name, done_count, total_count, cached_count):
-                        def callback():
-                            self._batch_update_tree_rows(paths)
-                            self._update_analysis_progress_with_cache(pct, name, done_count, total_count, cached_count)
-
-                        return callback
-
-                    cb = make_callback(paths_snapshot, pct, name, done_count, total_count, cached_count)
-                    update_ui_safely(self.root, cb)
+                    update_ui_safely(self.root, lambda paths=paths_snapshot: self._batch_update_tree_rows(paths))
 
                 # Update totals and save less frequently (every batch or 5% progress)
                 batch_interval = TREE_UPDATE_BATCH_SIZE
@@ -1596,17 +1706,6 @@ class VideoConverterGUI:
 
         # Analysis complete
         update_ui_safely(self.root, self._on_ffprobe_complete)
-
-    def _update_analysis_progress_with_cache(
-        self, progress: float, filename: str, processed: int, total: int, cache_hits: int
-    ):
-        """Update analysis progress bar and label with cache info (called on main thread)."""
-        self.analysis_progress["value"] = progress
-        if cache_hits > 0:
-            prefix = f"Analyzing ({processed}/{total}, {cache_hits} cached): "
-        else:
-            prefix = f"Analyzing ({processed}/{total}): "
-        self.analysis_status_label.config(text=_format_status_text(prefix, filename))
 
     def _batch_update_tree_rows(self, file_paths: list[str]) -> None:
         """Update multiple tree rows efficiently without per-file folder updates.
@@ -1684,319 +1783,53 @@ class VideoConverterGUI:
     def _on_ffprobe_complete(self):
         """Handle ffprobe analysis completion (called on main thread)."""
         self.analyze_button.config(state="normal")
-        self.stop_analyze_button.config(state="disabled")
-        self.analysis_progress["value"] = 100
 
-        # Update total row and get convertible count for status message
-        convertible = self._update_total_from_tree()
-
-        self.analysis_status_label.config(text=f"Analysis complete: {convertible} files ready for conversion")
-
-        # Enable quality button if files are selected
-        self.update_quality_button_state()
-
-    def _update_analysis_progress(self, progress: float, filename: str, processed: int, total: int):
-        """Update analysis progress bar and label (called on main thread)."""
-        self.analysis_progress["value"] = progress
-        prefix = f"Analyzing ({processed}/{total}): "
-        self.analysis_status_label.config(text=_format_status_text(prefix, filename))
-
-    def on_stop_analysis(self):
-        """Stop the current analysis scan."""
-        logger.info("Stopping analysis...")
-        if self._scan_stop_event:
-            self._scan_stop_event.set()
-        if self.analysis_stop_event:
-            self.analysis_stop_event.set()
-        if self.quality_analysis_stop_event:
-            self.quality_analysis_stop_event.set()
-        self.analysis_status_label.config(text="Stopping analysis...")
-        self.stop_analyze_button.config(state="disabled")
-
-    def on_analyze_quality(self):
-        """Run CRF search on selected files from the analysis tree."""
-        # Get selected items from tree
-        selected_items = self.analysis_tree.selection()
-        if not selected_items:
-            messagebox.showwarning("No Selection", "Please select files to analyze from the tree.")
-            return
-
-        # Filter to only file items (not folders)
-        file_items = []
-        for item_id in selected_items:
-            # Check if it's a file (has a parent) or folder (no parent or root)
-            parent = self.analysis_tree.parent(item_id)
-            if parent:  # It's a file (has a folder parent)
-                file_items.append(item_id)
-
-        if not file_items:
-            messagebox.showwarning("No Files", "Please select individual files, not folders.")
-            return
-
-        # Build reverse map for efficient lookup (O(n) once instead of O(n²))
-        item_to_path = {item_id: path for path, item_id in self._tree_item_map.items()}
-
-        # Use reverse map to get file paths from selected items
-        selected_paths = []
-        for item_id in file_items:
-            file_path = item_to_path.get(item_id)
-            if file_path:
-                selected_paths.append(file_path)
-
-        if not selected_paths:
-            messagebox.showerror("Error", "Could not determine file paths from selection.")
-            return
-
-        # Filter to only files that need conversion (SCANNED status in history index)
-        index = get_history_index()
-        convertible_paths = []
-        for path in selected_paths:
-            record = index.lookup_file(path)
-            if record and record.status == FileStatus.SCANNED:
-                convertible_paths.append(path)
-
-        if not convertible_paths:
-            messagebox.showinfo(
-                "No Convertible Files",
-                "The selected files are not eligible for conversion.\n"
-                "Only files with 'needs_conversion' status can be analyzed.",
-            )
-            return
-
-        logger.info(f"Starting quality analysis for {len(convertible_paths)} files")
-        self.analysis_status_label.config(text=f"Analyzing quality for {len(convertible_paths)} files...")
-        self.analyze_button.config(state="disabled")
-        self.analyze_quality_button.config(state="disabled")
-        self.stop_analyze_button.config(state="normal")
-        self.analysis_progress["value"] = 0
-
-        # Create stop event and start quality analysis thread
-        self.quality_analysis_stop_event = threading.Event()
-        self.quality_analysis_thread = threading.Thread(
-            target=self._run_quality_analysis_thread, args=(convertible_paths,), daemon=True
-        )
-        self.quality_analysis_thread.start()
-
-    def _run_quality_analysis_thread(self, file_paths: list[str]):
-        """Run CRF search on multiple files in a background thread."""
-        wrapper = AbAv1Wrapper()
-        index = get_history_index()
-        total_files = len(file_paths)
-
-        for i, file_path in enumerate(file_paths, start=1):
-            if self.quality_analysis_stop_event and self.quality_analysis_stop_event.is_set():
-                logger.info("Quality analysis cancelled by user")
-                index.save()  # Save progress before returning
-                update_ui_safely(self.root, lambda: self._on_quality_analysis_complete(stopped=True))
-                return
-
-            filename = os.path.basename(file_path)
-            logger.info(f"Running CRF search on file {i}/{total_files}: {filename}")
-
-            # Update progress
-            progress = ((i - 1) / total_files) * 100
-            update_ui_safely(
-                self.root,
-                lambda p=progress, n=filename, idx=i, t=total_files: self._update_quality_analysis_progress(
-                    p, n, idx, t
-                ),
-            )
-
-            try:
-                # Capture loop variables for progress callback
-                current_file_index = i
-                current_filename = filename
-
-                # Run CRF search
-                def make_progress_callback(file_idx: int, fname: str):
-                    """Create a progress callback with bound loop variables."""
-
-                    def progress_callback(quality_progress: float, message: str):
-                        # Update sub-progress within current file
-                        overall_progress = ((file_idx - 1) / total_files) * 100 + (quality_progress / total_files)
-                        prefix = f"File {file_idx}/{total_files}: "
-                        status_text = _format_status_text(prefix, f"{fname} - {message}")
-                        update_ui_safely(
-                            self.root,
-                            lambda p=overall_progress, txt=status_text: (
-                                self.analysis_status_label.config(text=txt),
-                                self.analysis_progress.__setitem__("value", p),
-                            ),
-                        )
-
-                    return progress_callback
-
-                progress_cb = make_progress_callback(current_file_index, current_filename)
-
-                result = wrapper.crf_search(
-                    input_path=file_path,
-                    vmaf_target=DEFAULT_VMAF_TARGET,
-                    preset=DEFAULT_ENCODING_PRESET,
-                    progress_callback=progress_cb,
-                    stop_event=self.quality_analysis_stop_event,
-                )
-
-                # Update the history index with Layer 2 results
-                path_hash = compute_path_hash(file_path)
-                record = index.get(path_hash)
-
-                if record:
-                    # Update with CRF search results (vmaf_target_used may be lower than requested due to fallback)
-                    record.vmaf_target_when_analyzed = result["vmaf_target_used"]
-                    record.preset_when_analyzed = DEFAULT_ENCODING_PRESET
-                    record.best_crf = result["best_crf"]
-                    record.best_vmaf_achieved = result["best_vmaf"]
-                    record.predicted_output_size = result.get("predicted_output_size")
-                    record.predicted_size_reduction = result.get("predicted_size_reduction")
-
-                    # Update timestamp
-                    record.last_updated = datetime.datetime.now().isoformat(sep=" ", timespec="seconds")
-
-                    # Save to index (per-file save - CRF search is slow, don't lose work)
-                    index.upsert(record)
-                    index.save()
-
-                    # Update tree display for this file
-                    update_ui_safely(
-                        self.root, lambda fp=file_path, r=result: self._update_tree_with_quality_result(fp, r)
-                    )
-
-                fallback_note = " (fallback)" if result.get("used_fallback") else ""
-                logger.info(
-                    f"Quality analysis complete for {filename}: "
-                    f"CRF={result['best_crf']}, VMAF={result['best_vmaf']:.2f}, "
-                    f"Target={result['vmaf_target_used']}{fallback_note}"
-                )
-
-            except ConversionNotWorthwhileError:
-                # File can't achieve even minimum VMAF - mark as not worthwhile
-                logger.info(f"File not worth converting: {filename}")
-                path_hash = compute_path_hash(file_path)
-                record = index.get(path_hash)
-
-                if record:
-                    record.status = FileStatus.NOT_WORTHWHILE
-                    record.vmaf_target_attempted = DEFAULT_VMAF_TARGET
-                    record.min_vmaf_attempted = MIN_VMAF_FALLBACK_TARGET
-                    record.skip_reason = f"Could not achieve VMAF {MIN_VMAF_FALLBACK_TARGET}"
-                    record.last_updated = datetime.datetime.now().isoformat(sep=" ", timespec="seconds")
-                    index.upsert(record)
-                    index.save()
-
-                    # Update tree to show "not worthwhile"
-                    update_ui_safely(
-                        self.root, lambda fp=file_path: self._update_tree_not_worthwhile(fp)
-                    )
-
-            except Exception as e:
-                logger.exception(f"Error during quality analysis of {filename}")
-                update_ui_safely(
-                    self.root,
-                    lambda n=filename, err=str(e): messagebox.showerror(
-                        "Quality Analysis Error", f"Error analyzing {n}:\n{err}"
-                    ),
-                )
-
-        # Save index after all files are processed
-        index.save()
-
-        # Analysis complete
-        update_ui_safely(self.root, lambda: self._on_quality_analysis_complete(stopped=False))
-
-    def _update_quality_analysis_progress(self, progress: float, filename: str, processed: int, total: int):
-        """Update quality analysis progress bar and label (called on main thread)."""
-        self.analysis_progress["value"] = progress
-        prefix = f"Quality analysis ({processed}/{total}): "
-        self.analysis_status_label.config(text=_format_status_text(prefix, filename))
-
-    def _update_tree_with_quality_result(self, file_path: str, result: dict):
-        """Update tree item with Layer 2 results (called on main thread)."""
-        # Use _tree_item_map to find tree item directly
-        item_id = self._tree_item_map.get(file_path)
-        if not item_id:
-            return
-
-        # Get file data from history index
-        index = get_history_index()
-        record = index.lookup_file(file_path)
-        if not record:
-            return
-
-        # Get file size for display
-        size_str = format_file_size(record.file_size_bytes) if record.file_size_bytes else "—"
-
-        # Calculate savings from Layer 2 prediction
-        savings_str = "—"
-        predicted_savings = 0
-        if result.get("predicted_size_reduction") and record.file_size_bytes:
-            predicted_savings = int(record.file_size_bytes * result["predicted_size_reduction"] / 100)
-            savings_str = format_file_size(predicted_savings)
-
-        # Get time estimate
-        file_time = estimate_file_time(
-            codec=record.video_codec, duration=record.duration_sec, size=record.file_size_bytes
-        ).best_seconds
-        time_str = self._format_compact_time(file_time)
-        eff_str = self._format_efficiency(predicted_savings, file_time)
-
-        # Update tree display - add asterisk if fallback was used
-        if result.get("used_fallback"):
-            savings_str = f"{savings_str}*"
-        self.analysis_tree.item(item_id, values=(size_str, savings_str, time_str, eff_str))
-
-        # Update parent folder aggregates to reflect new Layer 2 data
-        parent_id = self.analysis_tree.parent(item_id)
-        if parent_id:
-            self._update_folder_aggregates(parent_id)
-
-    def _update_tree_not_worthwhile(self, file_path: str):
-        """Update tree item to show file is not worth converting (called on main thread)."""
-        item_id = self._tree_item_map.get(file_path)
-        if not item_id:
-            return
-
-        # Get file size from existing values (preserve it)
-        current_values = self.analysis_tree.item(item_id, "values")
-        size_str = current_values[0] if current_values else "—"
-
-        # Show "Skip" in savings column with skip tag for coloring
-        self.analysis_tree.item(item_id, values=(size_str, "Skip", "—", "—"), tags=("skip",))
-
-        parent_id = self.analysis_tree.parent(item_id)
-        if parent_id:
-            self._update_folder_aggregates(parent_id)
-
-    def _on_quality_analysis_complete(self, stopped: bool):
-        """Handle quality analysis completion (called on main thread)."""
-        self.analyze_button.config(state="normal")
-        self.analyze_quality_button.config(state="normal")
-        self.stop_analyze_button.config(state="disabled")
-        self.analysis_progress["value"] = 100
-
-        if stopped:
-            self.analysis_status_label.config(text="Quality analysis stopped by user")
-        else:
-            self.analysis_status_label.config(text="Quality analysis complete")
-
+        # Update total row
         self._update_total_from_tree()
 
-        # Re-enable quality button based on selection
-        self.update_quality_button_state()
+        # Enable Add All buttons
+        self._update_add_all_buttons_state()
 
-    def update_quality_button_state(self):
-        """Enable/disable the Analyze Quality button based on tree selection."""
-        selected_items = self.analysis_tree.selection()
-        # Enable if at least one file is selected (files have no children, folders do)
-        has_files = False
-        for item_id in selected_items:
-            if not self.analysis_tree.get_children(item_id):
-                has_files = True
-                break
+    def _update_add_all_buttons_state(self):
+        """Enable/disable the Add All buttons based on whether there are files in the tree."""
+        has_files = bool(self._tree_item_map)
+        state = "normal" if has_files else "disabled"
+        self.add_all_analyze_button.config(state=state)
+        self.add_all_convert_button.config(state=state)
 
-        if has_files:
-            self.analyze_quality_button.config(state="normal")
-        else:
-            self.analyze_quality_button.config(state="disabled")
+    def on_add_all_analyze(self):
+        """Add all discovered files to the queue for CRF analysis."""
+        file_paths = list(self._tree_item_map.keys())
+        if not file_paths:
+            messagebox.showinfo("No Files", "No files to add. Run a scan first.")
+            return
+
+        # Build items list (all files, not folders)
+        items = [(path, False) for path in file_paths]
+
+        # Use preview dialog for bulk operations
+        result = self.add_items_to_queue(items, OperationType.ANALYZE, force_preview=True)
+
+        total_added = result["added"] + result["conflict_added"] + result["conflict_replaced"]
+        if total_added > 0:
+            self.tab_control.select(self.convert_tab)
+
+    def on_add_all_convert(self):
+        """Add all discovered files to the queue for conversion."""
+        file_paths = list(self._tree_item_map.keys())
+        if not file_paths:
+            messagebox.showinfo("No Files", "No files to add. Run a scan first.")
+            return
+
+        # Build items list (all files, not folders)
+        items = [(path, False) for path in file_paths]
+
+        # Use preview dialog for bulk operations
+        result = self.add_items_to_queue(items, OperationType.CONVERT, force_preview=True)
+
+        total_added = result["added"] + result["conflict_added"] + result["conflict_replaced"]
+        if total_added > 0:
+            self.tab_control.select(self.convert_tab)
 
     def get_file_path_for_tree_item(self, item_id: str) -> str | None:
         """Look up the file path for a given tree item ID.
@@ -2125,9 +1958,7 @@ class VideoConverterGUI:
             eff_str = "—"
 
         # Update tree item
-        self.analysis_tree.item(
-            item_id, values=(size_str, savings_str, time_str, eff_str), tags=(tag,) if tag else ()
-        )
+        self.analysis_tree.item(item_id, values=(size_str, savings_str, time_str, eff_str), tags=(tag,) if tag else ())
 
         # Update parent folder aggregates
         parent_id = self.analysis_tree.parent(item_id)
@@ -2499,13 +2330,7 @@ class VideoConverterGUI:
             unit = parts[1].upper()
 
             # Convert to bytes
-            multipliers = {
-                "B": 1,
-                "KB": 1024,
-                "MB": 1024**2,
-                "GB": 1024**3,
-                "TB": 1024**4,
-            }
+            multipliers = {"B": 1, "KB": 1024, "MB": 1024**2, "GB": 1024**3, "TB": 1024**4}
             return value * multipliers.get(unit, 1)
         except (ValueError, KeyError):
             return float("inf")

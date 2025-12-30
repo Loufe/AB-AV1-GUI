@@ -14,6 +14,25 @@ from src.models import FileRecord
 
 logger = logging.getLogger(__name__)
 
+# Tolerance for mtime comparison (1 second handles JSON float precision loss)
+MTIME_TOLERANCE = 1.0
+
+
+def mtimes_match(mtime1: float, mtime2: float) -> bool:
+    """Compare two modification times with tolerance for JSON precision loss.
+
+    File mtimes are floats that can lose precision when serialized to JSON.
+    This function compares them with a tolerance of 1 second.
+
+    Args:
+        mtime1: First modification time.
+        mtime2: Second modification time.
+
+    Returns:
+        True if mtimes are within tolerance, False otherwise.
+    """
+    return abs(mtime1 - mtime2) < MTIME_TOLERANCE
+
 
 def is_file_unchanged(record: FileRecord, file_path: str) -> bool:
     """Check if a file's size and mtime match the cached record.
@@ -32,20 +51,13 @@ def is_file_unchanged(record: FileRecord, file_path: str) -> bool:
 
     try:
         stat_info = os.stat(file_path)
-        return (
-            record.file_size_bytes == stat_info.st_size
-            and record.file_mtime == stat_info.st_mtime
-        )
+        return record.file_size_bytes == stat_info.st_size and mtimes_match(record.file_mtime, stat_info.st_mtime)
     except OSError as e:
         logger.warning(f"Could not stat file for cache validation: {e}")
         return False
 
 
-def can_reuse_crf(
-    record: FileRecord,
-    desired_vmaf: int,
-    desired_preset: int,
-) -> bool:
+def can_reuse_crf(record: FileRecord, desired_vmaf: int, desired_preset: int) -> bool:
     """Check if cached CRF can be reused for conversion.
 
     Cache is valid when:
@@ -73,22 +85,15 @@ def can_reuse_crf(
 
     # Preset must match exactly - different presets give different quality at same CRF
     if record.preset_when_analyzed != desired_preset:
-        logger.debug(
-            f"Cache invalid: preset mismatch (cached={record.preset_when_analyzed}, "
-            f"desired={desired_preset})"
-        )
+        logger.debug(f"Cache invalid: preset mismatch (cached={record.preset_when_analyzed}, desired={desired_preset})")
         return False
 
     # If cached VMAF >= desired, the cached CRF will achieve at least the desired quality
     if record.vmaf_target_when_analyzed >= desired_vmaf:
         logger.debug(
-            f"Cache valid: VMAF {record.vmaf_target_when_analyzed} >= desired {desired_vmaf}, "
-            f"CRF={record.best_crf}"
+            f"Cache valid: VMAF {record.vmaf_target_when_analyzed} >= desired {desired_vmaf}, CRF={record.best_crf}"
         )
         return True
 
-    logger.debug(
-        f"Cache invalid: VMAF mismatch (cached={record.vmaf_target_when_analyzed}, "
-        f"desired={desired_vmaf})"
-    )
+    logger.debug(f"Cache invalid: VMAF mismatch (cached={record.vmaf_target_when_analyzed}, desired={desired_vmaf})")
     return False

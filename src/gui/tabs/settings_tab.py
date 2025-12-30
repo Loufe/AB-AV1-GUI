@@ -8,6 +8,7 @@ from tkinter import ttk
 
 from src.ab_av1.checker import get_ab_av1_version
 from src.gui.base import ToolTip
+from src.hardware_accel import get_available_hw_decoders
 from src.utils import check_ffmpeg_availability, parse_ffmpeg_version
 from src.vendor_manager import get_ab_av1_path, is_using_vendor_ffmpeg
 
@@ -17,35 +18,30 @@ logger = logging.getLogger(__name__)
 def create_settings_tab(gui):
     """Create the settings tab"""
     settings_frame = ttk.Frame(gui.settings_tab)
-    settings_frame.pack(fill="both", expand=True, padx=10, pady=10)
+    settings_frame.pack(fill="both", expand=True, padx=10, pady=5)
     settings_frame.columnconfigure(0, weight=1)  # Allow LabelFrames to expand horizontally
 
-    # --- General Settings ---
-    general_frame = ttk.LabelFrame(settings_frame, text="General")
-    general_frame.grid(row=0, column=0, sticky="ew", padx=5, pady=(10, 10))
-    general_frame.columnconfigure(0, weight=1)  # Allow expansion
+    # --- Output Settings (includes overwrite option) ---
+    output_frame = ttk.LabelFrame(settings_frame, text="Output Settings")
+    output_frame.grid(row=0, column=0, sticky="ew", padx=5, pady=(5, 5))
+    output_frame.columnconfigure(1, weight=1)
 
-    # Overwrite option
+    # Overwrite option (moved from General)
     overwrite_check = ttk.Checkbutton(
-        general_frame, text="Overwrite output file if it already exists", variable=gui.overwrite
+        output_frame, text="Overwrite output file if it already exists", variable=gui.overwrite
     )
-    overwrite_check.grid(row=0, column=0, sticky="w", pady=(5, 10), padx=10)
+    overwrite_check.grid(row=0, column=0, columnspan=3, sticky="w", pady=(5, 3), padx=10)
     ToolTip(
         overwrite_check,
         "If checked, existing files in the output folder with the same name will be replaced.\n"
         "If unchecked, files that already exist in the output folder will be skipped.",
     )
 
-    # --- Output Defaults ---
-    output_frame = ttk.LabelFrame(settings_frame, text="Output Defaults")
-    output_frame.grid(row=1, column=0, sticky="ew", padx=5, pady=(0, 10))
-    output_frame.columnconfigure(1, weight=1)
-
     # Default Output Mode dropdown
-    ttk.Label(output_frame, text="Default Output Mode:").grid(row=0, column=0, sticky="w", padx=10, pady=(10, 5))
+    ttk.Label(output_frame, text="Default Output Mode:").grid(row=1, column=0, sticky="w", padx=10, pady=3)
     mode_combo = ttk.Combobox(output_frame, textvariable=gui.default_output_mode, width=18, state="readonly")
     mode_combo["values"] = ("replace", "suffix", "separate_folder")
-    mode_combo.grid(row=0, column=1, sticky="w", padx=5, pady=(10, 5))
+    mode_combo.grid(row=1, column=1, sticky="w", padx=5, pady=3)
     ToolTip(
         mode_combo,
         "Replace: Delete original after conversion\n"
@@ -54,31 +50,31 @@ def create_settings_tab(gui):
     )
 
     # Default Suffix entry
-    ttk.Label(output_frame, text="Default Suffix:").grid(row=1, column=0, sticky="w", padx=10, pady=5)
+    ttk.Label(output_frame, text="Default Suffix:").grid(row=2, column=0, sticky="w", padx=10, pady=3)
     suffix_entry = ttk.Entry(output_frame, textvariable=gui.default_suffix, width=15)
-    suffix_entry.grid(row=1, column=1, sticky="w", padx=5, pady=5)
+    suffix_entry.grid(row=2, column=1, sticky="w", padx=5, pady=3)
     ToolTip(suffix_entry, "Suffix added before .mkv extension\nExample: '_av1' creates 'video_av1.mkv'")
 
     # Default Output Folder (for separate_folder mode)
-    ttk.Label(output_frame, text="Default Output Folder:").grid(row=2, column=0, sticky="w", padx=10, pady=(5, 10))
+    ttk.Label(output_frame, text="Default Output Folder:").grid(row=3, column=0, sticky="w", padx=10, pady=(3, 5))
     folder_entry = ttk.Entry(output_frame, textvariable=gui.default_output_folder)
-    folder_entry.grid(row=2, column=1, sticky="ew", padx=5, pady=(5, 10))
-    ttk.Button(
-        output_frame, text="Browse...", command=gui.on_browse_default_output_folder
-    ).grid(row=2, column=2, padx=(0, 10), pady=(5, 10))
+    folder_entry.grid(row=3, column=1, sticky="ew", padx=5, pady=(3, 5))
+    ttk.Button(output_frame, text="Browse...", command=gui.on_browse_default_output_folder).grid(
+        row=3, column=2, padx=(0, 10), pady=(3, 5)
+    )
 
-    # --- File Processing Settings ---
-    processing_frame = ttk.LabelFrame(settings_frame, text="File Processing")
-    processing_frame.grid(row=2, column=0, sticky="ew", padx=5, pady=(0, 10))
+    # --- Processing Options (File Processing + Hardware Acceleration) ---
+    processing_frame = ttk.LabelFrame(settings_frame, text="Processing Options")
+    processing_frame.grid(row=1, column=0, sticky="ew", padx=5, pady=(0, 5))
 
     # File extensions label
     ttk.Label(processing_frame, text="File Extensions to Process:", style="Header.TLabel").grid(
-        row=0, column=0, sticky="w", padx=10, pady=(10, 5)
+        row=0, column=0, sticky="w", padx=10, pady=(5, 3)
     )
 
     # File extensions checkboxes
     ext_frame = ttk.Frame(processing_frame)
-    ext_frame.grid(row=1, column=0, sticky="w", padx=10, pady=(0, 10))
+    ext_frame.grid(row=1, column=0, sticky="w", padx=10, pady=(0, 5))
 
     mp4_check = ttk.Checkbutton(ext_frame, text="MP4", variable=gui.ext_mp4, style="ExtButton.TCheckbutton")
     mp4_check.pack(side="left", padx=(0, 10))
@@ -98,16 +94,14 @@ def create_settings_tab(gui):
 
     # Audio conversion settings label
     ttk.Label(processing_frame, text="Audio Settings:", style="Header.TLabel").grid(
-        row=2, column=0, sticky="w", padx=10, pady=(10, 5)
+        row=2, column=0, sticky="w", padx=10, pady=(5, 3)
     )
 
     # Audio conversion frame
     audio_frame = ttk.Frame(processing_frame)
-    audio_frame.grid(row=3, column=0, sticky="w", padx=10, pady=(0, 15))
+    audio_frame.grid(row=3, column=0, sticky="w", padx=10, pady=(0, 5))
 
-    audio_check = ttk.Checkbutton(
-        audio_frame, text="Convert non-AAC/Opus audio to", variable=gui.convert_audio
-    )  # Clarified text
+    audio_check = ttk.Checkbutton(audio_frame, text="Convert non-AAC/Opus audio to", variable=gui.convert_audio)
     audio_check.pack(side="left", padx=(0, 5))
     ToolTip(
         audio_check,
@@ -115,22 +109,21 @@ def create_settings_tab(gui):
         "If disabled, original audio tracks are copied without re-encoding.",
     )
 
-    audio_combo = ttk.Combobox(audio_frame, textvariable=gui.audio_codec, width=10, state="readonly")  # Readonly state
+    audio_combo = ttk.Combobox(audio_frame, textvariable=gui.audio_codec, width=10, state="readonly")
     audio_combo["values"] = ("opus", "aac")
     audio_combo.pack(side="left")
     ToolTip(
         audio_combo, "Select audio codec for re-encoding. Opus offers better compression. AAC is widely compatible."
     )
 
-    # --- Hardware Acceleration Settings ---
-    hw_accel_frame = ttk.LabelFrame(settings_frame, text="Hardware Acceleration")
-    hw_accel_frame.grid(row=3, column=0, sticky="ew", padx=5, pady=(0, 10))
+    # Hardware decoding (moved from separate Hardware Acceleration frame)
+    hw_decode_row = ttk.Frame(processing_frame)
+    hw_decode_row.grid(row=4, column=0, sticky="w", padx=10, pady=(5, 5))
 
-    # Hardware decoding checkbox
     hw_decode_check = ttk.Checkbutton(
-        hw_accel_frame, text="Use hardware-accelerated decoding", variable=gui.hw_decode_enabled
+        hw_decode_row, text="Use hardware-accelerated decoding", variable=gui.hw_decode_enabled
     )
-    hw_decode_check.grid(row=0, column=0, sticky="w", padx=10, pady=(10, 5))
+    hw_decode_check.pack(side="left")
     ToolTip(
         hw_decode_check,
         "Enable NVIDIA CUVID or Intel QSV hardware decoding for faster source video decoding.\n"
@@ -138,45 +131,34 @@ def create_settings_tab(gui):
         "If unavailable, falls back to software decoding automatically.",
     )
 
-    # Detected decoders label
-    from src.hardware_accel import get_available_hw_decoders
-
+    # Inline status indicator
     detected_decoders = get_available_hw_decoders()
     if detected_decoders:
-        decoder_list = ", ".join(sorted(detected_decoders))
-        detected_text = f"Detected: {decoder_list}"
-        detected_color = "#008000"  # Green
+        status_text = f"({len(detected_decoders)} available)"
+        status_color = "#008000"  # Green
     else:
-        detected_text = "No hardware decoders found"
-        detected_color = "#808080"  # Gray
+        status_text = "(none detected)"
+        status_color = "#808080"  # Gray
 
-    detected_label = ttk.Label(hw_accel_frame, text=detected_text, foreground=detected_color)
-    detected_label.grid(row=1, column=0, sticky="w", padx=10, pady=(0, 10))
-    ToolTip(
-        detected_label,
-        "Hardware decoders available in your FFmpeg installation.\n"
-        "Supported: h264_cuvid, hevc_cuvid, vp9_cuvid, av1_cuvid (NVIDIA)\n"
-        "           h264_qsv, hevc_qsv, vp9_qsv, av1_qsv (Intel QSV)",
-    )
+    status_label = ttk.Label(hw_decode_row, text=status_text, foreground=status_color)
+    status_label.pack(side="left", padx=(10, 0))
 
     # --- Logging & History Settings ---
     log_hist_frame = ttk.LabelFrame(settings_frame, text="Logging & History")
-    log_hist_frame.grid(row=4, column=0, sticky="ew", padx=5, pady=(0, 10))
+    log_hist_frame.grid(row=2, column=0, sticky="ew", padx=5, pady=(0, 5))
     log_hist_frame.columnconfigure(1, weight=1)  # Make entry expand
 
     # Log folder setting
-    ttk.Label(log_hist_frame, text="Log Folder:").grid(row=0, column=0, sticky="w", padx=(10, 5), pady=(10, 5))
+    ttk.Label(log_hist_frame, text="Log Folder:").grid(row=0, column=0, sticky="w", padx=(10, 5), pady=(5, 3))
     log_entry = ttk.Entry(log_hist_frame, textvariable=gui.log_folder)
-    log_entry.grid(row=0, column=1, sticky="ew", padx=5, pady=(10, 5))
-    # Use the method reference from the main GUI instance
+    log_entry.grid(row=0, column=1, sticky="ew", padx=5, pady=(5, 3))
     log_browse_btn = ttk.Button(log_hist_frame, text="Browse...", command=gui.on_browse_log_folder)
-    log_browse_btn.grid(row=0, column=2, sticky="e", padx=(0, 10), pady=(10, 5))
+    log_browse_btn.grid(row=0, column=2, sticky="e", padx=(0, 10), pady=(5, 3))
 
     # Log actions frame
     log_actions_frame = ttk.Frame(log_hist_frame)
-    log_actions_frame.grid(row=1, column=0, columnspan=3, sticky="w", padx=10, pady=(0, 5))
+    log_actions_frame.grid(row=1, column=0, columnspan=3, sticky="w", padx=10, pady=(0, 3))
 
-    # Use the method reference from the main GUI instance
     log_open_btn = ttk.Button(log_actions_frame, text="Open Log Folder", command=gui.on_open_log_folder)
     log_open_btn.pack(side="left", padx=(0, 10))
     ToolTip(log_open_btn, "Open the folder containing the application log files.")
@@ -195,9 +177,8 @@ def create_settings_tab(gui):
 
     # History actions frame
     history_actions_frame = ttk.Frame(log_hist_frame)
-    history_actions_frame.grid(row=2, column=0, columnspan=3, sticky="w", padx=10, pady=(5, 10))
+    history_actions_frame.grid(row=2, column=0, columnspan=3, sticky="w", padx=10, pady=(3, 5))
 
-    # Use the method reference from the main GUI instance
     history_open_btn = ttk.Button(history_actions_frame, text="Open History File", command=gui.on_open_history_file)
     history_open_btn.pack(side="left", padx=(0, 10))
     ToolTip(history_open_btn, "Open the conversion_history_v2.json file (if it exists).")
@@ -220,7 +201,7 @@ def create_settings_tab(gui):
 
     # --- Version Info ---
     version_frame = ttk.LabelFrame(settings_frame, text="Version Info")
-    version_frame.grid(row=5, column=0, sticky="ew", padx=5, pady=(0, 10))
+    version_frame.grid(row=3, column=0, sticky="ew", padx=5, pady=(0, 5))
 
     # Get local ab-av1 version
     local_version = get_ab_av1_version() or "Not found"
@@ -228,7 +209,7 @@ def create_settings_tab(gui):
 
     # ab-av1 version row
     ab_av1_frame = ttk.Frame(version_frame)
-    ab_av1_frame.grid(row=0, column=0, sticky="w", padx=10, pady=(10, 10))
+    ab_av1_frame.grid(row=0, column=0, sticky="w", padx=10, pady=(5, 3))
     gui.ab_av1_frame = ab_av1_frame  # Store reference for dynamic button creation
 
     ttk.Label(ab_av1_frame, text="ab-av1 Version:").pack(side="left", padx=(0, 5))
@@ -241,21 +222,17 @@ def create_settings_tab(gui):
         gui.ab_av1_download_btn.pack(side="left", padx=(0, 5))
         ToolTip(
             gui.ab_av1_download_btn,
-            "Download the latest ab-av1 from GitHub.\n"
-            "This will download ~3 MB and install to vendor/ab-av1/.",
+            "Download the latest ab-av1 from GitHub.\nThis will download ~3 MB and install to vendor/ab-av1/.",
         )
         gui.ab_av1_check_btn = None
     else:
         # Installed - show Check for Updates button only (Update button created if needed)
         gui.ab_av1_download_btn = None
-        gui.ab_av1_check_btn = ttk.Button(
-            ab_av1_frame, text="Check for Updates", command=gui.on_check_ab_av1_updates
-        )
+        gui.ab_av1_check_btn = ttk.Button(ab_av1_frame, text="Check for Updates", command=gui.on_check_ab_av1_updates)
         gui.ab_av1_check_btn.pack(side="left", padx=(0, 10))
         ToolTip(
             gui.ab_av1_check_btn,
-            "Check GitHub for the latest ab-av1 release.\n"
-            "This will make a network request to api.github.com.",
+            "Check GitHub for the latest ab-av1 release.\nThis will make a network request to api.github.com.",
         )
 
     # Label to show update check result (initially empty)
@@ -264,7 +241,7 @@ def create_settings_tab(gui):
 
     # FFmpeg version row
     ffmpeg_frame = ttk.Frame(version_frame)
-    ffmpeg_frame.grid(row=1, column=0, sticky="w", padx=10, pady=(0, 10))
+    ffmpeg_frame.grid(row=1, column=0, sticky="w", padx=10, pady=(3, 5))
     gui.ffmpeg_frame = ffmpeg_frame  # Store reference for dynamic button creation
 
     # Get FFmpeg version info

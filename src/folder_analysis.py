@@ -22,6 +22,7 @@ from pathlib import Path
 from statistics import mean
 from typing import Generator
 
+from src.cache_helpers import mtimes_match
 from src.config import DEFAULT_REDUCTION_ESTIMATE_PERCENT, MIN_RESOLUTION_HEIGHT, MIN_RESOLUTION_WIDTH
 from src.history_index import HistoryIndex, compute_path_hash
 from src.models import FileRecord, FileStatus
@@ -290,7 +291,7 @@ def _analyze_file(
 
     # Check cache
     cached = index.get(path_hash)
-    if cached and cached.file_size_bytes == file_size and cached.file_mtime == file_mtime:
+    if cached and cached.file_size_bytes == file_size and mtimes_match(cached.file_mtime, file_mtime):
         # Cache hit - use cached data
         return _record_to_result(file_path, cached, index)
 

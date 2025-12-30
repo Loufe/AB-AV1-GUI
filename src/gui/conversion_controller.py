@@ -49,7 +49,7 @@ from src.gui.gui_updates import (
     update_total_elapsed_time,
     update_total_remaining_time,
 )
-from src.models import OutputMode, QueueConversionConfig
+from src.models import OutputMode, QueueConversionConfig, QueueItemStatus
 
 # Import from utils
 from src.utils import (
@@ -127,30 +127,36 @@ def create_queue_status_callback(gui):
         A callback function that updates queue tree rows
     """
 
-    def queue_status_callback(queue_item_id: str, status: str, processed: int, total: int):
+    def queue_status_callback(queue_item_id: str, status: QueueItemStatus, processed: int, total: int):
         """Update queue tree with item status."""
 
         def update():
-            # Update queue item data
-            for item in gui.get_queue_items():
-                if item.id == queue_item_id:
-                    item.status = status
-                    item.processed_files = processed
-                    item.total_files = total
-                    break
+            # Update queue item data using O(1) lookup
+            queue_item = gui.get_queue_item_by_id(queue_item_id)
+            if queue_item:
+                queue_item.status = status
+                queue_item.processed_files = processed
+                queue_item.total_files = total
 
             # Update tree row if it exists
             tree_id = gui.get_queue_tree_id(queue_item_id)
             if tree_id:
                 try:
-                    progress_display = f"{processed}/{total}" if total > 0 else "—"
-                    gui.queue_tree.set(tree_id, "status", status.capitalize())
-                    gui.queue_tree.set(tree_id, "progress", progress_display)
+                    # Format status (includes progress for converting status)
+                    if queue_item:
+                        if status == QueueItemStatus.CONVERTING and queue_item.total_files > 0:
+                            status_display = f"Converting ({queue_item.processed_files}/{queue_item.total_files})"
+                        else:
+                            status_display = queue_item.format_status_display()
+                    else:
+                        status_display = status.value.capitalize()
+
+                    gui.queue_tree.set(tree_id, "status", status_display)
                 except Exception:
                     logger.debug(f"Could not update tree row for {queue_item_id}")
 
             # Sync analysis tree queue tags when queue item completes
-            if status == "completed":
+            if status == QueueItemStatus.COMPLETED:
                 gui.sync_queue_tags_to_analysis_tree()
 
         update_ui_safely(gui.root, update)
@@ -183,7 +189,7 @@ def create_get_next_pending_item_callback(gui):
                 claimed_item = None
 
                 for item in gui.get_queue_items():
-                    if item.status == "pending":
+                    if item.status == QueueItemStatus.PENDING:
                         if claimed_item is None:
                             claimed_item = item
                         else:
@@ -191,7 +197,7 @@ def create_get_next_pending_item_callback(gui):
 
                 # Only set status AFTER successful iteration
                 if claimed_item is not None:
-                    claimed_item.status = "converting"
+                    claimed_item.status = QueueItemStatus.CONVERTING
 
                 result[0] = (claimed_item, pending_count)
             except Exception:
@@ -242,7 +248,7 @@ def start_conversion(gui) -> None:
         return
 
     # Filter to pending items only
-    pending_items = [item for item in gui.get_queue_items() if item.status == "pending"]
+    pending_items = [item for item in gui.get_queue_items() if item.status == QueueItemStatus.PENDING]
     if not pending_items:
         messagebox.showinfo("Info", "All queue items have already been processed.\nClear the queue or add new items.")
         return
@@ -513,7 +519,7 @@ def restore_ui_after_stop(gui) -> None:
         gui.root.after_cancel(gui.session.elapsed_timer_id)
         gui.session.elapsed_timer_id = None
 
-    update_ui_safely(gui.root, lambda: gui.status_label.config(text="Conversion force stopped"))
+    update_ui_safely(gui.root, lambda: gui.status_label.config(text="Processing force stopped"))
     update_ui_safely(gui.root, reset_current_file_details, gui)
     update_ui_safely(gui.root, lambda: gui.start_button.config(state="normal"))
     update_ui_safely(gui.root, lambda: gui.stop_button.config(state="disabled"))
@@ -533,7 +539,7 @@ def force_stop_conversion(gui, confirm: bool = True) -> None:
 
     if confirm and not messagebox.askyesno(
         "Confirm Force Stop",
-        "This will immediately terminate the current conversion.\n"
+        "This will immediately terminate the current process.\n"
         "The current file will be incomplete.\n\n"
         "Are you sure you want to force stop?",
     ):
@@ -722,12 +728,12 @@ def format_skip_details(skipped_files: list, skipped_low_res_files: list) -> str
     return msg
 
 
-def conversion_complete(gui, final_message="Conversion complete"):
-    """Handle conversion completion or stopping, update UI, show summary.
+def conversion_complete(gui, final_message="Queue complete"):
+    """Handle queue completion or stopping, update UI, show summary.
 
     Args:
         gui: The main GUI instance for updating UI elements.
-        final_message: Message to display in the UI and logs (e.g., "Complete", "Stopped").
+        final_message: Message to display in the UI and logs (e.g., "Queue complete", "Stopped").
     """
     logger.info(f"--- {final_message} ---")
     s = gui.session  # Shorthand for session state
@@ -798,6 +804,6 @@ def conversion_complete(gui, final_message="Conversion complete"):
 
         # Show appropriate message box
         if s.error_count > 0:
-            messagebox.showwarning("Conversion Summary", summary_msg)
+            messagebox.showwarning("Queue Summary", summary_msg)
         else:
-            messagebox.showinfo("Conversion Summary", summary_msg)
+            messagebox.showinfo("Queue Summary", summary_msg)

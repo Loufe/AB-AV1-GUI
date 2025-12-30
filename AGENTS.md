@@ -31,7 +31,7 @@ src/
 ├── convert.py                 # Entry point
 ├── main.py                    # App initialization, Tkinter setup
 ├── config.py                  # Constants (VMAF targets, presets)
-├── models.py                  # Dataclasses (ProgressEvent, ConversionConfig, FileRecord, etc.)
+├── models.py                  # Dataclasses (ProgressEvent, ConversionConfig, FileRecord, QueueItem, OperationType, etc.)
 ├── estimation.py              # Time estimation from history
 ├── utils.py                   # Logging, formatting, ffprobe, privacy helpers
 ├── video_conversion.py        # Single-file conversion logic
@@ -52,8 +52,14 @@ src/
     ├── callback_handlers.py   # Event handlers (progress, completed, error, etc.)
     ├── gui_updates.py         # Thread-safe UI updates
     ├── gui_actions.py         # User interaction handlers
-    └── tabs/                  # Tab implementations
-        └── analysis_tab.py    # Analysis tab UI definition
+    ├── tabs/                  # Tab implementations
+    │   ├── analysis_tab.py    # Analysis tab UI definition
+    │   ├── convert_tab.py     # Convert tab with queue and progress
+    │   ├── settings_tab.py    # Settings tab
+    │   └── statistics_tab.py  # Statistics/history tab
+    └── widgets/               # Reusable UI components
+        ├── operation_dropdown.py   # In-cell operation dropdown for queue
+        └── add_to_queue_dialog.py  # Preview dialog for queue additions
 
 tools/
 └── hash_lookup.py             # Reverse lookup for anonymized file hashes
@@ -77,32 +83,74 @@ If target VMAF (default 95) is unattainable, decrements by 1 down to minimum (90
 - **Analysis threads**: `ThreadPoolExecutor` with 4-8 parallel ffprobe workers
 - **GUI updates**: All UI changes via `utils.update_ui_safely()` → `root.after()`
 
-### Analysis Tab (Three-Phase Model)
+### Analysis Tab (Four-Level Model)
 
 The Analysis tab allows users to preview conversion estimates before committing to encoding.
+Levels are defined in `AnalysisLevel` enum (`src/models.py`) and can be queried via `FileRecord.get_analysis_level()`.
 
 ```
-Phase 1: Incremental Scan (on tab open / folder change)
+Level 0 - DISCOVERED: Folder Scan (on tab open / folder change)
   └── os.scandir() BFS traversal → populates tree with folder/file names
   └── No ffprobe, instant feedback, values show "—"
 
-Phase 2: Metadata Analysis (on "Analyze" button click)
+Level 1 - SCANNED: Basic Scan (on "Basic Scan" button click)
   └── Parallel ffprobe via ThreadPoolExecutor (4-8 workers, 30s timeout)
   └── Updates tree rows with estimated savings/time as results arrive
   └── Uses HistoryIndex cache to skip already-analyzed files
+  └── Estimates shown with "~" prefix (e.g., "~1.2 GB")
 
-Phase 3: Quality Analysis (on "Analyze Quality" button click)
+Level 2 - ANALYZED: Analyze (via queue with ANALYZE operation type)
   └── ab-av1 crf-search on selected files (~1 min/file)
   └── Provides precise CRF and predicted output size
+  └── Results shown without "~" prefix (accurate predictions)
   └── Optional - for users who want accurate predictions before encoding
+
+Level 3 - CONVERTED: Convert (via queue processing)
+  └── Full SVT-AV1 encoding with optimal CRF
+  └── Produces actual output file
 ```
 
 **Key components**:
 - `folder_analysis.py`: `scan_folder_fast()`, `_analyze_file()`, file classification
 - `history_index.py`: Thread-safe `HistoryIndex` with O(1) lookups by path hash
-- `main_window.py`: `_run_analysis_thread()`, `_run_quality_analysis_thread()`
+- `main_window.py`: `_run_ffprobe_analysis()`, `on_add_all_analyze()`, `on_add_all_convert()`
 
 **Cache behavior**: Files are cached in `HistoryIndex` by path hash. Cache is validated by file size + mtime. Cached metadata skips ffprobe on subsequent scans.
+
+### Queue System with Operation Types
+
+The queue supports two operation types via `OperationType` enum:
+
+| Operation | What it does | Output |
+|-----------|--------------|--------|
+| `CONVERT` | Full encoding (includes CRF search if needed) | Video file |
+| `ANALYZE` | CRF search only | Updates history (no file) |
+
+**Queue display logic** (Operation column):
+- `ANALYZE` type → shows "Analyze"
+- `CONVERT` type + has Layer 2 data → shows "Convert"
+- `CONVERT` type + no Layer 2 data → shows "Analyze+Convert"
+
+**Analysis tab toolbar**:
+- "Basic Scan" → runs ffprobe on discovered files
+- "Add All: Analyze" → adds all files to queue with ANALYZE operation
+- "Add All: Convert" → adds all files to queue with CONVERT operation
+
+**Context menu options** (Analysis tab):
+- "Add to Queue: Convert" / "Add to Queue: Analyze" for individual files/folders
+
+**Context menu options** (Queue tab):
+- "Open File" / "Open in Explorer" for files/folders
+- Operation options: directly change between "Analyze + Convert", "Convert", "Analyze Only"
+- "Remove" to remove from queue
+
+**Properties panel behavior**:
+- CONVERT items: Show output mode, suffix, folder settings
+- ANALYZE items: Disable output settings (no output file produced)
+
+**Worker branching** (`sequential_conversion_worker`):
+- CONVERT: Calls `process_video()` (existing flow)
+- ANALYZE: Calls `wrapper.crf_search()`, updates history with Layer 2 data
 
 ### Callback Flow
 

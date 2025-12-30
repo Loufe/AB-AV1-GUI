@@ -14,11 +14,57 @@ import os
 import threading
 from typing import Optional
 
-from src.config import HISTORY_FILE_V2, RESOLUTION_TOLERANCE_PERCENT
+from src.config import HISTORY_FILE_V2, MAX_CRF_VALUE, MAX_VMAF_VALUE, RESOLUTION_TOLERANCE_PERCENT
 from src.models import FileRecord, FileStatus
 from src.utils import _compute_hash, _normalize_path, get_script_directory
 
 logger = logging.getLogger(__name__)
+
+
+def _validate_record(record: FileRecord) -> bool:
+    """Validate that a FileRecord has sensible field values.
+
+    Args:
+        record: The FileRecord to validate.
+
+    Returns:
+        True if all fields are valid, False otherwise.
+    """
+    # Validate file_size_bytes (required field)
+    if record.file_size_bytes < 0:
+        logger.warning(f"Invalid file_size_bytes ({record.file_size_bytes}) for record {record.path_hash}")
+        return False
+
+    # Validate optional numeric fields
+    if record.duration_sec is not None and record.duration_sec < 0:
+        logger.warning(f"Invalid duration_sec ({record.duration_sec}) for record {record.path_hash}")
+        return False
+
+    if record.best_crf is not None and not (0 <= record.best_crf <= MAX_CRF_VALUE):
+        logger.warning(f"Invalid best_crf ({record.best_crf}) for record {record.path_hash}")
+        return False
+
+    if record.best_vmaf_achieved is not None and not (0 <= record.best_vmaf_achieved <= MAX_VMAF_VALUE):
+        logger.warning(f"Invalid best_vmaf_achieved ({record.best_vmaf_achieved}) for record {record.path_hash}")
+        return False
+
+    if record.predicted_size_reduction is not None and not (
+        0 <= record.predicted_size_reduction <= 100  # noqa: PLR2004
+    ):
+        logger.warning(
+            f"Invalid predicted_size_reduction ({record.predicted_size_reduction}) for record {record.path_hash}"
+        )
+        return False
+
+    if record.width is not None and record.width <= 0:
+        logger.warning(f"Invalid width ({record.width}) for record {record.path_hash}")
+        return False
+
+    if record.height is not None and record.height <= 0:
+        logger.warning(f"Invalid height ({record.height}) for record {record.path_hash}")
+        return False
+
+    return True
 
 
 def compute_path_hash(file_path: str) -> str:
@@ -224,6 +270,10 @@ class HistoryIndex:
                     if "status" in record_dict:
                         record_dict["status"] = FileStatus(record_dict["status"])
                     record = FileRecord(**record_dict)
+                    # Validate record fields
+                    if not _validate_record(record):
+                        logger.warning(f"Skipping record with invalid field values: {record.path_hash}")
+                        continue
                     self._records[record.path_hash] = record
                 except (TypeError, ValueError) as e:
                     logger.warning(f"Skipping invalid record: {e}")
