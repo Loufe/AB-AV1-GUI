@@ -8,10 +8,10 @@ This tab allows users to:
 """
 
 import os
-import tkinter as tk
 from tkinter import ttk
 
 from src.gui.base import ToolTip, TreeviewRowTooltip, open_in_explorer, reveal_in_explorer
+from src.gui.tree_utils import create_styled_context_menu, setup_click_expand_collapse, setup_expand_collapse_icons
 from src.models import OperationType
 
 
@@ -92,39 +92,9 @@ def create_analysis_tab(gui):
     gui.analysis_tree.grid(row=0, column=0, sticky="nsew")
     scroll_y.grid(row=0, column=1, sticky="ns")
 
-    # Click anywhere on a folder row to expand/collapse (not just the +/- button)
-    def _on_tree_click(event):
-        item_id = gui.analysis_tree.identify_row(event.y)
-        if item_id and gui.analysis_tree.get_children(item_id):  # Has children = folder
-            # Set focus so TreeviewOpen/Close event handlers work correctly
-            gui.analysis_tree.focus(item_id)
-            gui.analysis_tree.item(item_id, open=not gui.analysis_tree.item(item_id, "open"))
-
-    gui.analysis_tree.bind("<Button-1>", _on_tree_click, add="+")
-
-    # Handle native expand/collapse indicator clicks (focus is set correctly for these)
-    def _on_tree_open(event):
-        item_id = gui.analysis_tree.focus()
-        if item_id:
-            text = gui.analysis_tree.item(item_id, "text")
-            if text.startswith("▶"):
-                gui.analysis_tree.item(item_id, text=text.replace("▶", "▼", 1))
-
-    def _on_tree_close(event):
-        item_id = gui.analysis_tree.focus()
-        if item_id:
-            text = gui.analysis_tree.item(item_id, "text")
-            if text.startswith("▼"):
-                gui.analysis_tree.item(item_id, text=text.replace("▼", "▶", 1))
-
-    gui.analysis_tree.bind("<<TreeviewOpen>>", _on_tree_open)
-    gui.analysis_tree.bind("<<TreeviewClose>>", _on_tree_close)
-
-    def _create_context_menu() -> tk.Menu:
-        """Create a fresh context menu with consistent styling."""
-        return tk.Menu(
-            gui.analysis_tree, tearoff=0, background="#ffffff", activebackground="#0078d4", activeforeground="#ffffff"
-        )
+    # Set up expand/collapse behavior using shared utilities
+    setup_click_expand_collapse(gui.analysis_tree)
+    setup_expand_collapse_icons(gui.analysis_tree)
 
     def _get_folder_path_from_tree_item(item_id: str) -> str:
         """Reconstruct folder path from tree hierarchy."""
@@ -172,7 +142,7 @@ def create_analysis_tab(gui):
             selected_items = (item_id,)
 
         # Create fresh menu each time (fixes Windows shadow rendering issues)
-        menu = _create_context_menu()
+        menu = create_styled_context_menu(gui.analysis_tree)
 
         # Multi-selection: show batch actions
         if len(selected_items) > 1:

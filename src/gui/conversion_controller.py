@@ -126,17 +126,25 @@ def create_queue_status_callback(gui):
     Returns:
         A callback function that updates queue tree rows
     """
+    # Status tag mapping for file rows
+    file_status_tags = {
+        QueueItemStatus.PENDING: "file_pending",
+        QueueItemStatus.CONVERTING: "file_converting",
+        QueueItemStatus.COMPLETED: "file_done",
+        QueueItemStatus.STOPPED: "file_skipped",
+        QueueItemStatus.ERROR: "file_error",
+    }
 
     def queue_status_callback(queue_item_id: str, status: QueueItemStatus, processed: int, total: int):
-        """Update queue tree with item status."""
+        """Update queue tree with item status.
+
+        Note: Worker thread has already updated queue_item fields before calling this.
+        This callback is READ-ONLY - it formats and displays the worker's updates.
+        """
 
         def update():
-            # Update queue item data using O(1) lookup
+            # Lookup queue item for display (READ-ONLY - worker already updated fields)
             queue_item = gui.get_queue_item_by_id(queue_item_id)
-            if queue_item:
-                queue_item.status = status
-                queue_item.processed_files = processed
-                queue_item.total_files = total
 
             # Update tree row if it exists
             tree_id = gui.get_queue_tree_id(queue_item_id)
@@ -144,8 +152,8 @@ def create_queue_status_callback(gui):
                 try:
                     # Format status (includes progress for converting status)
                     if queue_item:
-                        if status == QueueItemStatus.CONVERTING and queue_item.total_files > 0:
-                            status_display = f"Converting ({queue_item.processed_files}/{queue_item.total_files})"
+                        if status == QueueItemStatus.CONVERTING and total > 0:
+                            status_display = f"Converting ({processed}/{total})"
                         else:
                             status_display = queue_item.format_status_display()
                     else:
@@ -154,6 +162,31 @@ def create_queue_status_callback(gui):
                     gui.queue_tree.set(tree_id, "status", status_display)
                 except Exception:
                     logger.debug(f"Could not update tree row for {queue_item_id}")
+
+            # Update nested file rows for folder items
+            if queue_item and queue_item.is_folder and queue_item.files:
+                for file_item in queue_item.files:
+                    file_tree_id = gui.get_file_tree_id(file_item.path)
+                    if file_tree_id:
+                        try:
+                            # Format file status text
+                            if file_item.status == QueueItemStatus.COMPLETED:
+                                file_status = "Done"
+                            elif file_item.status == QueueItemStatus.CONVERTING:
+                                file_status = "Converting..."
+                            elif file_item.status == QueueItemStatus.ERROR:
+                                file_status = file_item.error_message or "Error"
+                            elif file_item.status == QueueItemStatus.STOPPED:
+                                file_status = "Stopped"
+                            else:
+                                file_status = ""
+
+                            gui.queue_tree.set(file_tree_id, "status", file_status)
+                            gui.queue_tree.item(
+                                file_tree_id, tags=(file_status_tags.get(file_item.status, "file_pending"),)
+                            )
+                        except Exception:
+                            logger.debug(f"Could not update file tree row for {file_item.path}")
 
             # Sync analysis tree queue tags when queue item completes
             if status == QueueItemStatus.COMPLETED:
@@ -584,6 +617,12 @@ def force_stop_conversion(gui, confirm: bool = True) -> None:
     # Clean up temporary files
     if input_path_killed and gui.output_folder.get():
         cleanup_temp_file(input_path_killed, gui.output_folder.get(), gui.input_folder.get())
+
+    # Mark all CONVERTING items as STOPPED
+    for item in gui.get_queue_items():
+        if item.status == QueueItemStatus.CONVERTING:
+            item.status = QueueItemStatus.STOPPED
+    gui.save_queue_to_config()
 
     # Restore UI and system state
     restore_ui_after_stop(gui)

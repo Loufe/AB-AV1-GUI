@@ -11,7 +11,6 @@ import threading
 import time
 
 # GUI-related imports (for type hinting gui object, not direct use of widgets here)
-from pathlib import Path
 from typing import Callable  # Import Callable
 
 # Project imports
@@ -25,29 +24,125 @@ from src.utils import anonymize_filename, format_file_size, get_video_info, upda
 from src.video_conversion import calculate_output_path, process_video
 
 # Import functions/modules from the engine package
-from .scanner import scan_video_needs_conversion
+from .scanner import find_video_files, scan_video_needs_conversion
 
 logger = logging.getLogger(__name__)
 
+# THREAD SAFETY NOTE:
+# This worker runs in a dedicated thread and directly mutates QueueItem attributes.
+# This is safe because:
+# 1. Python's GIL protects simple attribute assignments (int, str, enum)
+# 2. Only ONE worker thread processes the queue sequentially
+# 3. GUI thread reads these fields infrequently via callbacks scheduled with update_ui_safely()
+# 4. Stale reads cause harmless UI lag (<100ms), not data corruption
+# 5. The queue_status_callback is read-only and does NOT write back to queue_item
+#
+# DO NOT add locks here - they would serialize with Tkinter's event loop and cause deadlocks.
+# DO NOT use update_ui_safely() for every mutation - 100+ callbacks per file would tank performance.
 
-def _find_video_files(folder_path: str, extensions: list[str]) -> list[str]:
-    """Find all video files in a folder matching the given extensions.
 
-    Args:
-        folder_path: Path to folder to scan
-        extensions: List of file extensions to match (e.g., ["mp4", "mkv"])
+def _update_file_status(queue_item, file_index: int, status: QueueItemStatus, error_msg: str | None = None) -> None:
+    """Update the status of a file within a folder queue item."""
+    if queue_item.is_folder and file_index < len(queue_item.files):
+        queue_item.files[file_index].status = status
+        if error_msg:
+            queue_item.files[file_index].error_message = error_msg
 
-    Returns:
-        Sorted list of absolute file paths
+
+def _create_file_record(
+    file_path: str,
+    anonymize_history: bool | None,
+    status: FileStatus,
+    original_size: int,
+    input_duration: float | None,
+    input_vcodec: str,
+    input_acodec: str,
+    input_width: int | None,
+    input_height: int | None,
+    # Status-specific optional fields
+    output_path: str | None = None,
+    output_size: int | None = None,
+    elapsed_time: float | None = None,
+    final_crf: int | None = None,
+    final_vmaf: float | None = None,
+    vmaf_target: int | None = None,
+    output_acodec: str | None = None,
+    predicted_output_size: int | None = None,
+    predicted_size_reduction: float | None = None,
+    vmaf_target_attempted: int | None = None,
+    min_vmaf_attempted: int | None = None,
+    skip_reason: str | None = None,
+) -> FileRecord:
+    """Create a FileRecord with common setup and status-specific fields.
+
+    Handles path hashing, timestamp generation, mtime extraction, and anonymization.
+    Populates common fields and accepts status-specific fields as parameters.
     """
-    files = set()
-    folder = Path(folder_path)
-    for ext in extensions:
-        for pattern in [f"*.{ext.lower()}", f"*.{ext.upper()}"]:
-            for file_path in folder.rglob(pattern):
-                if file_path.is_file():
-                    files.add(str(file_path.resolve()))
-    return sorted(files)
+    # Common setup
+    path_hash = compute_path_hash(file_path)
+    now = datetime.datetime.now().isoformat(sep=" ", timespec="seconds")
+
+    try:
+        file_mtime = os.path.getmtime(file_path)
+    except OSError:
+        file_mtime = 0.0
+
+    # Handle path anonymization (treat None as False)
+    should_anonymize = anonymize_history or False
+    original_path_for_record = None if should_anonymize else file_path
+    output_path_str = None
+    if output_path:
+        output_path_str = anonymize_filename(output_path) if should_anonymize else output_path
+
+    # Calculate reduction percent for CONVERTED status
+    reduction_pct = None
+    if status == FileStatus.CONVERTED and original_size and output_size and original_size > 0:
+        reduction_pct = round(100 - (output_size / original_size * 100), 1)
+
+    return FileRecord(
+        path_hash=path_hash,
+        original_path=original_path_for_record,
+        status=status,
+        file_size_bytes=original_size,
+        file_mtime=file_mtime,
+        duration_sec=round(input_duration, 1) if input_duration else None,
+        video_codec=input_vcodec.lower() if input_vcodec != "?" else None,
+        audio_codec=input_acodec.lower() if input_acodec != "?" else None,
+        width=input_width,
+        height=input_height,
+        # SCANNED status fields
+        vmaf_target_when_analyzed=vmaf_target if status == FileStatus.SCANNED else (
+            DEFAULT_VMAF_TARGET if status == FileStatus.NOT_WORTHWHILE else None
+        ),
+        preset_when_analyzed=DEFAULT_ENCODING_PRESET,
+        best_crf=final_crf if status == FileStatus.SCANNED else None,
+        best_vmaf_achieved=round(final_vmaf, 2) if final_vmaf is not None and status == FileStatus.SCANNED else None,
+        predicted_output_size=predicted_output_size,
+        predicted_size_reduction=round(predicted_size_reduction, 1) if predicted_size_reduction is not None else None,
+        # NOT_WORTHWHILE status fields
+        vmaf_target_attempted=vmaf_target_attempted,
+        min_vmaf_attempted=min_vmaf_attempted,
+        skip_reason=skip_reason,
+        # CONVERTED status fields
+        output_path=output_path_str,
+        output_size_bytes=output_size,
+        reduction_percent=reduction_pct,
+        conversion_time_sec=round(elapsed_time, 1) if elapsed_time else None,
+        final_crf=final_crf if status == FileStatus.CONVERTED else None,
+        final_vmaf=round(final_vmaf, 2) if final_vmaf is not None and status == FileStatus.CONVERTED else None,
+        vmaf_target_used=vmaf_target if status == FileStatus.CONVERTED else None,
+        output_audio_codec=output_acodec.lower() if output_acodec and output_acodec != "?" else None,
+        # Timestamps
+        first_seen=now,
+        last_updated=now,
+    )
+
+
+def _save_file_record(record: FileRecord) -> None:
+    """Save a FileRecord to the history index."""
+    index = get_history_index()
+    index.upsert(record)
+    index.save()
 
 
 def sequential_conversion_worker(
@@ -177,7 +272,7 @@ def sequential_conversion_worker(
         # Get files for this item
         try:
             if queue_item.is_folder:
-                files = _find_video_files(queue_item.source_path, extensions)
+                files = find_video_files(queue_item.source_path, extensions)
             else:
                 files = [queue_item.source_path]
 
@@ -193,16 +288,31 @@ def sequential_conversion_worker(
             )
             continue
 
+        # Handle empty folders
+        if queue_item.total_files == 0:
+            logger.info(f"Queue item {queue_item.source_path} has no eligible video files")
+            queue_item.status = QueueItemStatus.COMPLETED
+            queue_status_callback(queue_item.id, QueueItemStatus.COMPLETED, 0, 0)
+            items_completed += 1
+            continue
+
         # Update queue status to converting with file count
         queue_status_callback(queue_item.id, QueueItemStatus.CONVERTING, 0, queue_item.total_files)
 
         # Process each file in this queue item
-        for file_path in files:
+        for file_index, file_path in enumerate(files):
             if stop_event.is_set():
                 logger.info("Conversion interrupted by user stop request.")
+                # Mark remaining files as stopped
+                for remaining_file in queue_item.files[file_index:]:
+                    remaining_file.status = QueueItemStatus.STOPPED
                 break
 
             global_file_index += 1
+
+            # Update current file index and file status
+            queue_item.current_file_index = file_index
+            _update_file_status(queue_item, file_index, QueueItemStatus.CONVERTING)
 
             # Store current file path for estimation
             update_ui_safely(gui.root, lambda vp=file_path: setattr(gui.session, "current_file_path", vp))
@@ -243,6 +353,7 @@ def sequential_conversion_worker(
                     queue_item.processed_files += 1
                     queue_item.files_failed += 1
                     queue_item.last_error = error_msg
+                    _update_file_status(queue_item, file_index, QueueItemStatus.ERROR, error_msg)
                     queue_status_callback(
                         queue_item.id, QueueItemStatus.CONVERTING, queue_item.processed_files, queue_item.total_files
                     )
@@ -264,6 +375,7 @@ def sequential_conversion_worker(
                     queue_item.processed_files += 1
                     queue_item.files_failed += 1
                     queue_item.last_error = error_msg
+                    _update_file_status(queue_item, file_index, QueueItemStatus.ERROR, error_msg)
                     queue_status_callback(
                         queue_item.id, QueueItemStatus.CONVERTING, queue_item.processed_files, queue_item.total_files
                     )
@@ -284,6 +396,7 @@ def sequential_conversion_worker(
                     queue_item.processed_files += 1
                     queue_item.files_failed += 1
                     queue_item.last_error = error_msg
+                    _update_file_status(queue_item, file_index, QueueItemStatus.ERROR, error_msg)
                     queue_status_callback(
                         queue_item.id, QueueItemStatus.CONVERTING, queue_item.processed_files, queue_item.total_files
                     )
@@ -305,6 +418,7 @@ def sequential_conversion_worker(
 
                 queue_item.processed_files += 1
                 queue_item.files_skipped += 1
+                _update_file_status(queue_item, file_index, QueueItemStatus.COMPLETED)
                 queue_status_callback(
                     queue_item.id, QueueItemStatus.CONVERTING, queue_item.processed_files, queue_item.total_files
                 )
@@ -421,42 +535,15 @@ def sequential_conversion_worker(
                         predicted_size_reduction = crf_result.get("predicted_size_reduction")
 
                         # Update history index with Layer 2 data
-                        anonymize_hist = anonymize_history_value[0]
-                        path_hash = compute_path_hash(file_path)
-                        now = datetime.datetime.now().isoformat(sep=" ", timespec="seconds")
-
-                        try:
-                            file_mtime = os.path.getmtime(file_path)
-                        except OSError:
-                            file_mtime = 0.0
-
-                        original_path_for_record = None if anonymize_hist else file_path
-
-                        record = FileRecord(
-                            path_hash=path_hash,
-                            original_path=original_path_for_record,
-                            status=FileStatus.SCANNED,  # SCANNED, not CONVERTED
-                            file_size_bytes=original_size,
-                            file_mtime=file_mtime,
-                            duration_sec=round(input_duration, 1) if input_duration else None,
-                            video_codec=input_vcodec.lower() if input_vcodec != "?" else None,
-                            audio_codec=input_acodec.lower() if input_acodec != "?" else None,
-                            width=input_width,
-                            height=input_height,
-                            vmaf_target_when_analyzed=final_vmaf_target,
-                            preset_when_analyzed=DEFAULT_ENCODING_PRESET,
-                            best_crf=final_crf,
-                            best_vmaf_achieved=round(final_vmaf, 2) if final_vmaf is not None else None,
+                        record = _create_file_record(
+                            file_path, anonymize_history_value[0], FileStatus.SCANNED,
+                            original_size, input_duration, input_vcodec, input_acodec,
+                            input_width, input_height,
+                            final_crf=final_crf, final_vmaf=final_vmaf, vmaf_target=final_vmaf_target,
                             predicted_output_size=predicted_output_size,
-                            predicted_size_reduction=round(predicted_size_reduction, 1)
-                            if predicted_size_reduction is not None
-                            else None,
-                            first_seen=now,
-                            last_updated=now,
+                            predicted_size_reduction=predicted_size_reduction,
                         )
-                        index = get_history_index()
-                        index.upsert(record)
-                        index.save()
+                        _save_file_record(record)
 
                         # Report completion via callback
                         file_event_callback(
@@ -471,6 +558,7 @@ def sequential_conversion_worker(
                         )
                         process_successful = True
                         queue_item.files_succeeded += 1
+                        _update_file_status(queue_item, file_index, QueueItemStatus.COMPLETED)
                         logger.info(f"Analysis complete for {anonymized_name}: CRF {final_crf}, VMAF {final_vmaf:.2f}")
 
                     except ConversionNotWorthwhileError as e:
@@ -478,41 +566,18 @@ def sequential_conversion_worker(
                         logger.warning(f"Analysis showed conversion not worthwhile for {anonymized_name}: {e}")
                         file_event_callback(filename, "skipped", str(e))
                         queue_item.files_skipped += 1
+                        _update_file_status(queue_item, file_index, QueueItemStatus.COMPLETED)
 
                         # Record NOT_WORTHWHILE to history
-                        anonymize_hist = anonymize_history_value[0]
-                        path_hash = compute_path_hash(file_path)
-                        now = datetime.datetime.now().isoformat(sep=" ", timespec="seconds")
-
-                        try:
-                            file_mtime = os.path.getmtime(file_path)
-                        except OSError:
-                            file_mtime = 0.0
-
-                        original_path_for_record = None if anonymize_hist else file_path
-
-                        record = FileRecord(
-                            path_hash=path_hash,
-                            original_path=original_path_for_record,
-                            status=FileStatus.NOT_WORTHWHILE,
-                            file_size_bytes=original_size,
-                            file_mtime=file_mtime,
-                            duration_sec=round(input_duration, 1) if input_duration else None,
-                            video_codec=input_vcodec.lower() if input_vcodec != "?" else None,
-                            audio_codec=input_acodec.lower() if input_acodec != "?" else None,
-                            width=input_width,
-                            height=input_height,
-                            vmaf_target_when_analyzed=DEFAULT_VMAF_TARGET,
-                            preset_when_analyzed=DEFAULT_ENCODING_PRESET,
+                        record = _create_file_record(
+                            file_path, anonymize_history_value[0], FileStatus.NOT_WORTHWHILE,
+                            original_size, input_duration, input_vcodec, input_acodec,
+                            input_width, input_height,
                             vmaf_target_attempted=DEFAULT_VMAF_TARGET,
                             min_vmaf_attempted=MIN_VMAF_FALLBACK_TARGET,
                             skip_reason=str(e),
-                            first_seen=now,
-                            last_updated=now,
                         )
-                        index = get_history_index()
-                        index.upsert(record)
-                        index.save()
+                        _save_file_record(record)
 
                         process_successful = False
 
@@ -564,6 +629,7 @@ def sequential_conversion_worker(
                 process_successful = False
                 queue_item.files_failed += 1
                 queue_item.last_error = error_msg
+                _update_file_status(queue_item, file_index, QueueItemStatus.ERROR, error_msg)
                 update_ui_safely(gui.root, lambda: setattr(gui.session, "last_output_size", None))
                 update_ui_safely(gui.root, lambda: setattr(gui.session, "last_elapsed_time", None))
 
@@ -584,6 +650,7 @@ def sequential_conversion_worker(
                 # Track successful file outcome
                 if queue_item.operation_type == OperationType.CONVERT:
                     queue_item.files_succeeded += 1
+                    _update_file_status(queue_item, file_index, QueueItemStatus.COMPLETED)
                 # Note: For ANALYZE operations, files_succeeded is incremented earlier
                 # Note: The "completed" callback is already dispatched by the wrapper (ab_av1/wrapper.py)
                 # before returning, so we don't call it again here to avoid double-counting statistics.
@@ -601,91 +668,33 @@ def sequential_conversion_worker(
                     update_ui_safely(gui.root, update_totals_from_worker)
 
                 try:  # Record to History Index
-                    anonymize_hist = anonymize_history_value[0]
-                    path_hash = compute_path_hash(file_path)
-                    now = datetime.datetime.now().isoformat(sep=" ", timespec="seconds")
-
-                    # Get file mtime for cache validation
-                    try:
-                        file_mtime = os.path.getmtime(file_path)
-                    except OSError:
-                        file_mtime = 0.0
-
-                    # Prepare paths based on anonymization setting
-                    original_path = None if anonymize_hist else file_path
-                    output_path_str = None
-                    if output_file_path:
-                        output_path_str = anonymize_filename(output_file_path) if anonymize_hist else output_file_path
-
-                    record = FileRecord(
-                        path_hash=path_hash,
-                        original_path=original_path,
-                        status=FileStatus.CONVERTED,
-                        file_size_bytes=original_size,
-                        file_mtime=file_mtime,
-                        duration_sec=round(input_duration, 1) if input_duration else None,
-                        video_codec=input_vcodec.lower() if input_vcodec != "?" else None,
-                        audio_codec=input_acodec.lower() if input_acodec != "?" else None,
-                        width=input_width,
-                        height=input_height,
-                        output_path=output_path_str,
-                        output_size_bytes=output_size,
-                        reduction_percent=round(100 - (output_size / original_size * 100), 1)
-                        if original_size and output_size and original_size > 0
-                        else None,
-                        conversion_time_sec=round(elapsed_time_file, 1) if elapsed_time_file else None,
-                        final_crf=final_crf,
-                        final_vmaf=round(final_vmaf, 2) if final_vmaf is not None else None,
-                        vmaf_target_used=final_vmaf_target if final_vmaf_target is not None else DEFAULT_VMAF_TARGET,
-                        preset_when_analyzed=DEFAULT_ENCODING_PRESET,
-                        output_audio_codec=output_acodec.lower() if output_acodec != "?" else None,
-                        first_seen=now,
-                        last_updated=now,
+                    record = _create_file_record(
+                        file_path, anonymize_history_value[0], FileStatus.CONVERTED,
+                        original_size, input_duration, input_vcodec, input_acodec,
+                        input_width, input_height,
+                        output_path=output_file_path, output_size=output_size,
+                        elapsed_time=elapsed_time_file,
+                        final_crf=final_crf, final_vmaf=final_vmaf,
+                        vmaf_target=final_vmaf_target if final_vmaf_target is not None else DEFAULT_VMAF_TARGET,
+                        output_acodec=output_acodec,
                     )
-                    index = get_history_index()
-                    index.upsert(record)
-                    index.save()
+                    _save_file_record(record)
                 except Exception:
                     logger.exception(f"Failed to record history for {anonymized_name}")
             # Check if this was a NOT_WORTHWHILE skip and record to history
             elif gui.session.last_skip_reason:
                 queue_item.files_skipped += 1
+                _update_file_status(queue_item, file_index, QueueItemStatus.COMPLETED)
                 try:  # Record NOT_WORTHWHILE to History Index
-                    anonymize_hist = anonymize_history_value[0]
-                    path_hash = compute_path_hash(file_path)
-                    now = datetime.datetime.now().isoformat(sep=" ", timespec="seconds")
-
-                    # Get file mtime for cache validation
-                    try:
-                        file_mtime = os.path.getmtime(file_path)
-                    except OSError:
-                        file_mtime = 0.0
-
-                    # Prepare path based on anonymization setting
-                    original_path = None if anonymize_hist else file_path
-
-                    record = FileRecord(
-                        path_hash=path_hash,
-                        original_path=original_path,
-                        status=FileStatus.NOT_WORTHWHILE,
-                        file_size_bytes=original_size,
-                        file_mtime=file_mtime,
-                        duration_sec=round(input_duration, 1) if input_duration else None,
-                        video_codec=input_vcodec.lower() if input_vcodec != "?" else None,
-                        audio_codec=input_acodec.lower() if input_acodec != "?" else None,
-                        width=input_width,
-                        height=input_height,
-                        vmaf_target_when_analyzed=DEFAULT_VMAF_TARGET,
-                        preset_when_analyzed=DEFAULT_ENCODING_PRESET,
+                    record = _create_file_record(
+                        file_path, anonymize_history_value[0], FileStatus.NOT_WORTHWHILE,
+                        original_size, input_duration, input_vcodec, input_acodec,
+                        input_width, input_height,
                         vmaf_target_attempted=DEFAULT_VMAF_TARGET,
                         min_vmaf_attempted=gui.session.last_min_vmaf_attempted,
                         skip_reason=gui.session.last_skip_reason,
-                        first_seen=now,
-                        last_updated=now,
                     )
-                    index = get_history_index()
-                    index.upsert(record)
-                    index.save()
+                    _save_file_record(record)
                     logger.info(f"Recorded NOT_WORTHWHILE status to history for {anonymized_name}")
 
                     # Clear the stored skip data
@@ -697,8 +706,10 @@ def sequential_conversion_worker(
                 # process_video returned None due to error (not a NOT_WORTHWHILE skip)
                 # The error was already reported via callback, but we need to track it in queue item
                 queue_item.files_failed += 1
+                error_msg = queue_item.last_error or "Processing failed (see logs for details)"
                 if not queue_item.last_error:
-                    queue_item.last_error = "Processing failed (see logs for details)"
+                    queue_item.last_error = error_msg
+                _update_file_status(queue_item, file_index, QueueItemStatus.ERROR, error_msg)
 
             # Note: Original file deletion (for REPLACE mode) is handled by process_video()
 

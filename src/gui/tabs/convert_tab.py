@@ -14,6 +14,7 @@ from tkinter import ttk
 
 from src.config import DEFAULT_VMAF_TARGET
 from src.gui.base import ToolTip, open_in_explorer, reveal_in_explorer
+from src.gui.tree_utils import create_styled_context_menu, setup_expand_collapse_icons
 from src.gui.widgets.operation_dropdown import (
     OPERATION_DISPLAY_TO_ENUM,
     OPERATION_OPTIONS_WITH_LAYER2,
@@ -130,6 +131,13 @@ def create_convert_tab(gui):
     gui.queue_tree.grid(row=0, column=0, sticky="nsew")
     scroll_y.grid(row=0, column=1, sticky="ns")
 
+    # File status tags for nested file items
+    gui.queue_tree.tag_configure("file_pending", foreground="#666666")
+    gui.queue_tree.tag_configure("file_converting", foreground="#1565C0")
+    gui.queue_tree.tag_configure("file_done", foreground="#2E7D32")
+    gui.queue_tree.tag_configure("file_skipped", foreground="#C65D00")
+    gui.queue_tree.tag_configure("file_error", foreground="#C62828")
+
     # Initialize operation dropdown manager for in-cell editing
     operation_dropdown = OperationDropdownManager(gui)
 
@@ -173,33 +181,11 @@ def create_convert_tab(gui):
     gui.queue_tree.bind("<B1-Motion>", _on_drag_motion, add="+")
     gui.queue_tree.bind("<ButtonRelease-1>", _on_drag_end, add="+")
 
-    # Expand/collapse icon updates
-    def _on_tree_open(event):
-        item_id = gui.queue_tree.focus()
-        if item_id:
-            text = gui.queue_tree.item(item_id, "text")
-            if text.startswith("▶"):
-                gui.queue_tree.item(item_id, text=text.replace("▶", "▼", 1))
-
-    def _on_tree_close(event):
-        item_id = gui.queue_tree.focus()
-        if item_id:
-            text = gui.queue_tree.item(item_id, "text")
-            if text.startswith("▼"):
-                gui.queue_tree.item(item_id, text=text.replace("▼", "▶", 1))
-
-    gui.queue_tree.bind("<<TreeviewOpen>>", _on_tree_open)
-    gui.queue_tree.bind("<<TreeviewClose>>", _on_tree_close)
+    # Set up expand/collapse icon updates using shared utility
+    setup_expand_collapse_icons(gui.queue_tree)
 
     # Selection change updates properties panel
     gui.queue_tree.bind("<<TreeviewSelect>>", lambda e: gui.on_queue_selection_changed())
-
-    # Context menu for queue items
-    def _create_context_menu() -> tk.Menu:
-        """Create a fresh context menu with consistent styling."""
-        return tk.Menu(
-            gui.queue_tree, tearoff=0, background="#ffffff", activebackground="#0078d4", activeforeground="#ffffff"
-        )
 
     def _on_operation_change_from_menu(queue_item, selected_display: str) -> None:
         """Handle operation change from context menu submenu."""
@@ -230,6 +216,16 @@ def create_convert_tab(gui):
         if not item_id:
             return
 
+        # Check if this is a nested file row (not a queue item)
+        file_path = gui.get_file_path_for_queue_tree_item(item_id)
+        if file_path:
+            menu = create_styled_context_menu(gui.queue_tree)
+            menu.add_command(label="Open File", command=lambda p=file_path: open_in_explorer(p))
+            menu.add_command(label="Show in Explorer", command=lambda p=file_path: reveal_in_explorer(p))
+            menu.update_idletasks()
+            menu.tk_popup(event.x_root, event.y_root)
+            return
+
         # Preserve multi-selection if right-clicking within existing selection
         current_selection = gui.queue_tree.selection()
         if item_id in current_selection and len(current_selection) > 1:
@@ -238,7 +234,7 @@ def create_convert_tab(gui):
             gui.queue_tree.selection_set(item_id)
             selected_items = (item_id,)
 
-        menu = _create_context_menu()
+        menu = create_styled_context_menu(gui.queue_tree)
 
         # Multi-selection: show batch actions only
         if len(selected_items) > 1:
@@ -299,6 +295,12 @@ def create_convert_tab(gui):
         item_id = gui.queue_tree.identify_row(event.y)
         if not item_id:
             return
+        # Check for nested file row first
+        file_path = gui.get_file_path_for_queue_tree_item(item_id)
+        if file_path:
+            open_in_explorer(file_path)
+            return
+        # Otherwise check for queue item
         source_path = gui.get_queue_source_path_for_tree_item(item_id)
         if source_path:
             open_in_explorer(source_path)

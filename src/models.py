@@ -97,6 +97,16 @@ class QueueItemStatus(str, Enum):
 
 
 @dataclass
+class QueueFileItem:
+    """Individual file within a folder QueueItem."""
+
+    path: str
+    status: QueueItemStatus = QueueItemStatus.PENDING
+    size_bytes: int = 0
+    error_message: str | None = None
+
+
+@dataclass
 class QueueItem:
     """A file or folder in the conversion queue."""
 
@@ -119,6 +129,10 @@ class QueueItem:
     files_failed: int = 0  # Files that encountered errors
     last_error: str | None = None  # Most recent error message for display
 
+    # File-level tracking (for folders)
+    files: list[QueueFileItem] = field(default_factory=list)
+    current_file_index: int = -1
+
     def to_dict(self) -> dict:
         """Convert to dictionary for JSON serialization."""
         return {
@@ -136,11 +150,26 @@ class QueueItem:
             "files_skipped": self.files_skipped,
             "files_failed": self.files_failed,
             "last_error": self.last_error,
+            "files": [
+                {"path": f.path, "status": f.status.value, "size_bytes": f.size_bytes, "error_message": f.error_message}
+                for f in self.files
+            ],
+            "current_file_index": self.current_file_index,
         }
 
     @classmethod
     def from_dict(cls, data: dict) -> "QueueItem":
         """Create from dictionary (JSON deserialization)."""
+        files_data = data.get("files", [])
+        files = [
+            QueueFileItem(
+                path=f["path"],
+                status=QueueItemStatus(f.get("status", "pending")),
+                size_bytes=f.get("size_bytes", 0),
+                error_message=f.get("error_message"),
+            )
+            for f in files_data
+        ]
         return cls(
             id=data["id"],
             source_path=data["source_path"],
@@ -156,6 +185,8 @@ class QueueItem:
             files_skipped=data.get("files_skipped", 0),
             files_failed=data.get("files_failed", 0),
             last_error=data.get("last_error"),
+            files=files,
+            current_file_index=data.get("current_file_index", -1),
         )
 
     def format_status_display(self) -> str:

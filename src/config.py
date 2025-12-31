@@ -43,6 +43,9 @@ DEFAULT_OUTPUT_MODE = "replace"  # "replace", "suffix", "separate_folder"
 DEFAULT_SUFFIX = "_av1"
 OUTPUT_MODE_OPTIONS = ("replace", "suffix", "separate_folder")
 
+# --- Tree Display Formatting ---
+EFFICIENCY_DECIMAL_THRESHOLD = 10  # Show GB/hr without decimals above this value
+
 # --- Hardware Decoder Settings ---
 # Hardware decoder mapping (source codec -> preferred decoders in priority order)
 HW_DECODER_MAP: dict[str, list[str]] = {

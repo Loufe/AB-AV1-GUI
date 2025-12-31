@@ -12,10 +12,7 @@ import shutil
 import sys
 import threading
 import tkinter as tk
-import uuid
 import webbrowser
-from collections import deque
-from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, wait
 from pathlib import Path
 from tkinter import filedialog, messagebox, ttk
 from typing import TYPE_CHECKING
@@ -24,10 +21,8 @@ if TYPE_CHECKING:
     from src.gui.charts import BarChart, LineGraph, PieChart
 
 from src.ab_av1.checker import check_ab_av1_latest_github, get_ab_av1_version
-from src.cache_helpers import mtimes_match
-from src.config import MIN_FILES_FOR_PERCENT_UPDATES, TREE_UPDATE_BATCH_SIZE
 from src.estimation import estimate_file_time
-from src.folder_analysis import _analyze_file
+from src.gui import analysis_scanner, queue_manager, tree_state_manager
 from src.gui.conversion_controller import force_stop_conversion, start_conversion, stop_conversion
 from src.gui.dialogs import FFmpegDownloadDialog
 from src.gui.gui_actions import (
@@ -44,7 +39,13 @@ from src.gui.tabs.analysis_tab import create_analysis_tab
 from src.gui.tabs.convert_tab import create_convert_tab
 from src.gui.tabs.settings_tab import create_settings_tab
 from src.gui.tabs.statistics_tab import create_statistics_tab
-from src.gui.widgets.add_to_queue_dialog import AddToQueuePreviewDialog, QueuePreviewData
+from src.gui.tree_formatters import (
+    format_compact_time,
+    format_efficiency,
+    parse_efficiency_to_value,
+    parse_size_to_bytes,
+    parse_time_to_seconds,
+)
 from src.history_index import compute_path_hash, get_history_index
 from src.models import ConversionSessionState, FileStatus, OperationType, OutputMode, QueueItem, QueueItemStatus
 
@@ -59,14 +60,10 @@ from src.utils import (
     scrub_history_paths,
     scrub_log_files,
     setup_logging,
-    update_ui_safely,
 )
 from src.vendor_manager import download_ab_av1, download_ffmpeg
 
 logger = logging.getLogger(__name__)
-
-# Efficiency formatting threshold (GB/hr)
-_EFFICIENCY_DECIMAL_THRESHOLD = 10  # Show without decimals above this value
 
 
 # Place config file next to script/executable
@@ -380,6 +377,9 @@ class VideoConverterGUI:
         self._queue_tree_map: dict[str, str] = {}  # queue_item.id -> tree_item_id
         self._queue_items_by_id: dict[str, QueueItem] = {item.id: item for item in self._queue_items}
         self._tree_queue_map: dict[str, str] = {}  # tree_item_id -> queue_item.id (reverse)
+        # File-level tree mappings (for nested files under folder items)
+        self._queue_file_tree_map: dict[str, str] = {}  # file_path -> tree_item_id
+        self._tree_file_map: dict[str, tuple[str, str]] = {}  # tree_item_id -> (queue_item_id, file_path)
 
         # Analysis state
         self.analysis_stop_event: threading.Event | None = None
@@ -401,9 +401,22 @@ class VideoConverterGUI:
         """Return the list of queue items."""
         return self._queue_items
 
+    def get_tree_item_map(self) -> dict[str, str]:
+        """Return the analysis tree item map (file_path -> tree_item_id)."""
+        return self._tree_item_map
+
     def get_queue_tree_id(self, queue_item_id: str) -> str | None:
         """Return the tree item ID for a queue item, or None if not found."""
         return self._queue_tree_map.get(queue_item_id)
+
+    def get_file_tree_id(self, file_path: str) -> str | None:
+        """Return the tree item ID for a file within a folder queue item, or None if not found."""
+        return self._queue_file_tree_map.get(file_path)
+
+    def get_file_path_for_queue_tree_item(self, tree_id: str) -> str | None:
+        """Return the file path for a nested file tree item, or None if not a file row."""
+        file_info = self._tree_file_map.get(tree_id)
+        return file_info[1] if file_info else None
 
     def get_queue_source_path_for_tree_item(self, tree_id: str) -> str | None:
         """Return the source path for a queue tree item, or None if not found."""
@@ -801,26 +814,7 @@ class VideoConverterGUI:
         threading.Thread(target=download_thread, daemon=True).start()
 
     def _load_queue_from_config(self) -> list[QueueItem]:
-        """Load queue items from config, filtering out completed/invalid entries."""
-        raw_items = self.config.get("queue_items", [])
-        items = []
-        for data in raw_items:
-            try:
-                item = QueueItem.from_dict(data)
-                # Reset interrupted items (CONVERTING, STOPPED) to PENDING for retry
-                if item.status in (QueueItemStatus.CONVERTING, QueueItemStatus.STOPPED):
-                    item.status = QueueItemStatus.PENDING
-                    # Reset outcome counters for retry
-                    item.files_succeeded = 0
-                    item.files_skipped = 0
-                    item.files_failed = 0
-                    item.last_error = None
-                # Only restore PENDING items if file exists (skip completed/error items)
-                if item.status == QueueItemStatus.PENDING and os.path.exists(item.source_path):
-                    items.append(item)
-            except (KeyError, ValueError):
-                continue  # Skip invalid entries
-        return items
+        return queue_manager.load_queue_from_config(self)
 
     def save_queue_to_config(self):
         """Save current queue state (called on add/remove/modify)."""
@@ -854,174 +848,26 @@ class VideoConverterGUI:
             self.add_to_queue(f, is_folder=False)
 
     def _find_existing_queue_item(self, path: str) -> QueueItem | None:
-        """Find an existing queue item by path."""
-        for item in self._queue_items:
-            if item.source_path == path:
-                return item
-        return None
+        return queue_manager.find_existing_queue_item(self, path)
+
+    def _get_selected_extensions(self) -> list[str]:
+        return queue_manager.get_selected_extensions(self)
 
     def _create_queue_item(self, path: str, is_folder: bool, operation_type: OperationType) -> QueueItem:
-        """Create a new QueueItem with default settings."""
-        default_mode = self.default_output_mode.get()
-        return QueueItem(
-            id=str(uuid.uuid4()),
-            source_path=path,
-            is_folder=is_folder,
-            output_mode=OutputMode(default_mode),
-            output_suffix=self.default_suffix.get() if default_mode == "suffix" else None,
-            output_folder=self.default_output_folder.get() if default_mode == "separate_folder" else None,
-            operation_type=operation_type,
-        )
+        return queue_manager.create_queue_item(self, path, is_folder, operation_type)
 
     def _categorize_queue_items(
         self, items: list[tuple[str, bool]], operation_type: OperationType
     ) -> tuple[list[tuple[str, bool]], list[str], list[tuple[str, bool, QueueItem]]]:
-        """Categorize items for queue preview.
-
-        Returns:
-            Tuple of (to_add, duplicates, conflicts) where:
-            - to_add: Items that can be added directly
-            - duplicates: Paths already in queue with same operation
-            - conflicts: (path, is_folder, existing_item) for different operation
-        """
-        to_add: list[tuple[str, bool]] = []
-        duplicates: list[str] = []
-        conflicts: list[tuple[str, bool, QueueItem]] = []
-
-        for path, is_folder in items:
-            existing = self._find_existing_queue_item(path)
-            if not existing:
-                to_add.append((path, is_folder))
-            elif existing.operation_type == operation_type:
-                duplicates.append(path)
-            else:
-                conflicts.append((path, is_folder, existing))
-
-        return to_add, duplicates, conflicts
+        return queue_manager.categorize_queue_items(self, items, operation_type)
 
     def _calculate_queue_estimates(self, items: list[tuple[str, bool]]) -> tuple[float | None, float | None]:
-        """Calculate time estimate and potential savings for items.
-
-        Returns:
-            Tuple of (estimated_time_seconds, estimated_savings_percent)
-        """
-        total_time = 0.0
-        total_original_size = 0
-        total_saved_bytes = 0.0
-        has_time_estimates = False
-
-        index = get_history_index()
-
-        for path, is_folder in items:
-            if is_folder:
-                continue  # Skip folders for now, would need to scan
-
-            # Try to get time estimate
-            estimate = estimate_file_time(path)
-            if estimate.confidence != "none":
-                total_time += estimate.best_seconds
-                has_time_estimates = True
-
-            # Try to get savings estimate from history
-            path_hash = compute_path_hash(path)
-            record = index.get(path_hash)
-            if record and record.file_size_bytes:
-                # Use Layer 2 data if available, fall back to Layer 1
-                reduction_pct = record.predicted_size_reduction or record.estimated_reduction_percent
-                if reduction_pct:
-                    total_original_size += record.file_size_bytes
-                    total_saved_bytes += record.file_size_bytes * (reduction_pct / 100)
-
-        # Calculate overall reduction percentage (weighted average)
-        total_savings = None
-        if total_original_size > 0 and total_saved_bytes > 0:
-            total_savings = (total_saved_bytes / total_original_size) * 100
-
-        return (total_time if has_time_estimates else None, total_savings)
+        return queue_manager.calculate_queue_estimates(self, items)
 
     def add_items_to_queue(
         self, items: list[tuple[str, bool]], operation_type: OperationType, force_preview: bool = False
     ) -> dict[str, int]:
-        """Add items to queue with appropriate UI feedback.
-
-        This is the main entry point for all queue additions.
-
-        Args:
-            items: List of (path, is_folder) tuples
-            operation_type: OperationType.CONVERT or OperationType.ANALYZE
-            force_preview: If True, always show preview dialog (for "Add All")
-                          If False, only show dialog if there are conflicts
-
-        Returns:
-            Dict with counts: {"added", "duplicate", "conflict_added", "conflict_replaced", "cancelled"}
-        """
-        counts = {"added": 0, "duplicate": 0, "conflict_added": 0, "conflict_replaced": 0, "cancelled": 0}
-
-        if not items:
-            return counts
-
-        # Categorize items
-        to_add, duplicates, conflicts = self._categorize_queue_items(items, operation_type)
-        counts["duplicate"] = len(duplicates)
-
-        # Determine if we need to show the preview dialog
-        show_dialog = force_preview or len(conflicts) > 0
-
-        if show_dialog:
-            # Calculate estimates for preview
-            estimated_time, estimated_savings = self._calculate_queue_estimates(to_add)
-
-            # Build preview data
-            preview_data = QueuePreviewData(
-                to_add=to_add,
-                duplicates=duplicates,
-                conflicts=conflicts,
-                operation_type=operation_type,
-                estimated_time_sec=estimated_time,
-                estimated_savings_percent=estimated_savings,
-            )
-
-            # Show dialog
-            dialog = AddToQueuePreviewDialog(self.root, preview_data)
-            result = dialog.result
-
-            if result["action"] == "cancel":
-                counts["cancelled"] = len(to_add) + len(conflicts)
-                return counts
-
-            conflict_resolution = result["conflict_resolution"]
-        else:
-            # No dialog needed, just add
-            conflict_resolution = "skip"
-
-        # Add the non-conflicting items
-        for path, is_folder in to_add:
-            item = self._create_queue_item(path, is_folder, operation_type)
-            self._queue_items.append(item)
-            counts["added"] += 1
-
-        # Handle conflicts based on resolution choice
-        if conflicts:
-            if conflict_resolution == "keep_both":
-                for path, is_folder, _ in conflicts:
-                    item = self._create_queue_item(path, is_folder, operation_type)
-                    self._queue_items.append(item)
-                    counts["conflict_added"] += 1
-            elif conflict_resolution == "replace":
-                for path, is_folder, existing in conflicts:
-                    new_item = self._create_queue_item(path, is_folder, operation_type)
-                    idx = self._queue_items.index(existing)
-                    self._queue_items[idx] = new_item
-                    counts["conflict_replaced"] += 1
-            # else: skip - conflicts are not added
-
-        # Save and refresh if anything was added or modified
-        if counts["added"] > 0 or counts["conflict_added"] > 0 or counts["conflict_replaced"] > 0:
-            self.save_queue_to_config()
-            self.refresh_queue_tree()
-            self.sync_queue_tags_to_analysis_tree()
-
-        return counts
+        return queue_manager.add_items_to_queue(self, items, operation_type, force_preview)
 
     def add_to_queue(self, path: str, is_folder: bool, operation_type: OperationType = OperationType.CONVERT) -> str:
         """Add a single item to the queue (convenience wrapper).
@@ -1172,6 +1018,8 @@ class VideoConverterGUI:
             self.queue_tree.delete(item)
         self._queue_tree_map.clear()
         self._tree_queue_map.clear()
+        self._queue_file_tree_map.clear()
+        self._tree_file_map.clear()
         self._queue_items_by_id = {item.id: item for item in self._queue_items}
 
         index = get_history_index()
@@ -1204,8 +1052,11 @@ class VideoConverterGUI:
                 folder_name = os.path.basename(queue_item.output_folder or self.default_output_folder.get() or "")
                 output_display = f"→ {folder_name}/" if folder_name else "Separate"
 
-            # Format size
-            if record and record.file_size_bytes:
+            # Format size - for folders, sum file sizes
+            if queue_item.is_folder and queue_item.files:
+                total_size = sum(f.size_bytes for f in queue_item.files)
+                size_display = format_file_size(total_size) if total_size > 0 else "—"
+            elif record and record.file_size_bytes:
                 size_display = format_file_size(record.file_size_bytes)
             elif os.path.isfile(queue_item.source_path):
                 try:
@@ -1213,7 +1064,7 @@ class VideoConverterGUI:
                 except OSError:
                     size_display = "—"
             else:
-                size_display = "—"  # Folders show dash until scanned
+                size_display = "—"
 
             # Format estimated time
             est_time_display = "—"  # TODO: Could use estimation.py in future
@@ -1237,9 +1088,51 @@ class VideoConverterGUI:
             self._queue_tree_map[queue_item.id] = item_id
             self._tree_queue_map[item_id] = queue_item.id
 
+            # Insert nested file rows for folder items
+            if queue_item.is_folder and queue_item.files:
+                for file_item in queue_item.files:
+                    file_name = os.path.basename(file_item.path)
+                    file_size = format_file_size(file_item.size_bytes) if file_item.size_bytes > 0 else "—"
+
+                    # Determine status tag based on file status
+                    status_tag_map = {
+                        QueueItemStatus.PENDING: "file_pending",
+                        QueueItemStatus.CONVERTING: "file_converting",
+                        QueueItemStatus.COMPLETED: "file_done",
+                        QueueItemStatus.STOPPED: "file_skipped",
+                        QueueItemStatus.ERROR: "file_error",
+                    }
+                    file_tag = status_tag_map.get(file_item.status, "file_pending")
+
+                    # Format file status display
+                    if file_item.status == QueueItemStatus.COMPLETED:
+                        file_status = "Done"
+                    elif file_item.status == QueueItemStatus.CONVERTING:
+                        file_status = "Converting..."
+                    elif file_item.status == QueueItemStatus.ERROR:
+                        file_status = file_item.error_message or "Error"
+                    elif file_item.status == QueueItemStatus.STOPPED:
+                        file_status = "Stopped"
+                    else:
+                        file_status = ""  # Pending files show no status
+
+                    file_tree_id = self.queue_tree.insert(
+                        item_id,
+                        "end",
+                        text=f"    🎬 {file_name}",
+                        values=(file_size, "", "", "", file_status),
+                        tags=(file_tag,),
+                    )
+                    self._queue_file_tree_map[file_item.path] = file_tree_id
+                    self._tree_file_map[file_tree_id] = (queue_item.id, file_item.path)
+
         # Update total row
         total_items = len(self._queue_items)
-        self.queue_total_tree.item("total", values=("", "", "", "", f"{total_items} items"))
+        total_files = sum(len(item.files) if item.is_folder else 1 for item in self._queue_items)
+        if total_files != total_items:
+            self.queue_total_tree.item("total", values=("", "", "", "", f"{total_items} items ({total_files} files)"))
+        else:
+            self.queue_total_tree.item("total", values=("", "", "", "", f"{total_items} items"))
 
     def sync_queue_order_from_tree(self):
         """Sync _queue_items order from the tree view after drag-drop reordering."""
@@ -1320,189 +1213,8 @@ class VideoConverterGUI:
         ).start()
 
     def _incremental_scan_thread(self, folder: str, extensions: list[str], stop_event: threading.Event):
-        """Scan folder and populate tree incrementally from background thread.
-
-        Uses breadth-first traversal - shows all top-level folders first,
-        then their children, etc. This gives immediate visual feedback.
-
-        Also checks HistoryIndex cache - if a file was previously analyzed,
-        displays cached values immediately instead of "—".
-        """
-        root_folder = str(Path(folder).resolve())
-        ext_set = {f".{ext.lower()}" for ext in extensions}
-        file_count = 0
-        folder_count = 0
-        index = get_history_index()
-
-        def scan_directory(dirpath: str) -> tuple[list[str], list[tuple[str, int, float]]]:
-            """Scan a directory for subdirs and video files with stats.
-
-            Returns:
-                (subdirs, file_infos) where file_infos is list of (filename, size, mtime)
-            """
-            subdirs = []
-            file_infos = []
-            try:
-                with os.scandir(dirpath) as entries:
-                    for entry in entries:
-                        if stop_event.is_set():
-                            return [], []
-                        if entry.is_dir(follow_symlinks=False):
-                            subdirs.append(entry.path)
-                        elif entry.is_file() and os.path.splitext(entry.name)[1].lower() in ext_set:
-                            try:
-                                stat = entry.stat()
-                                file_infos.append((entry.name, stat.st_size, stat.st_mtime))
-                            except OSError:
-                                file_infos.append((entry.name, 0, 0))
-            except (PermissionError, OSError):
-                pass
-            return sorted(subdirs, key=str.lower), sorted(file_infos, key=lambda x: x[0].lower())
-
-        try:
-            # BFS queue: (dirpath, parent_dirpath or None for root)
-            queue: deque[tuple[str, str | None]] = deque()
-            queue.append((root_folder, None))
-
-            # Track folder tree IDs - populated by UI callbacks
-            folder_tree_ids: dict[str, str] = {}
-            folder_tree_ids[root_folder] = ""  # Root maps to tree root
-
-            while queue and not stop_event.is_set():
-                dirpath, parent_dirpath = queue.popleft()
-
-                # Scan directory in background thread
-                subdirs, file_infos = scan_directory(dirpath)
-                if stop_event.is_set():
-                    break
-
-                # Get parent tree ID
-                parent_tree_id = folder_tree_ids.get(parent_dirpath or root_folder, "")
-
-                # Queue subdirectories for BFS
-                for subdir in subdirs:
-                    queue.append((subdir, dirpath))
-
-                # Pre-compute cached values for each file (in background thread)
-                # This avoids doing index lookups on the UI thread
-                file_display_data = []
-                for filename, file_size, file_mtime in file_infos:
-                    file_path = os.path.join(dirpath, filename)
-                    size_str = format_file_size(file_size)
-                    savings_str = "—"
-                    time_str = "—"
-                    eff_str = "—"
-                    tag = ""  # No tag by default
-
-                    # Check cache (use tolerance for mtime due to float precision in JSON)
-                    record = index.lookup_file(file_path)
-                    if record and record.file_size_bytes == file_size and mtimes_match(record.file_mtime, file_mtime):
-                        # Cache hit - use cached values
-                        if record.status == FileStatus.CONVERTED:
-                            savings_str = "Done"
-                            time_str = "—"
-                            tag = "done"
-                        elif record.status == FileStatus.NOT_WORTHWHILE:
-                            savings_str = "Skip"
-                            time_str = "—"
-                            tag = "skip"
-                        else:
-                            # Use Layer 2 data if available, otherwise fall back to Layer 1 estimate
-                            has_layer2 = record.predicted_size_reduction is not None
-                            reduction_percent = record.predicted_size_reduction or record.estimated_reduction_percent
-                            if reduction_percent and record.file_size_bytes:
-                                est_savings = int(record.file_size_bytes * reduction_percent / 100)
-                                savings_str = format_file_size(est_savings)
-                                if not has_layer2:
-                                    savings_str = f"~{savings_str}"
-                                file_time = estimate_file_time(
-                                    codec=record.video_codec, duration=record.duration_sec, size=record.file_size_bytes
-                                ).best_seconds
-                                time_str = self._format_compact_time(file_time) if file_time > 0 else "—"
-                                eff_str = self._format_efficiency(est_savings, file_time)
-
-                    file_display_data.append((filename, file_path, size_str, savings_str, time_str, eff_str, tag))
-
-                # Prepare UI update
-                is_root = dirpath == root_folder
-                folder_name = os.path.basename(dirpath) if not is_root else None
-
-                # Use event to wait for UI update to complete
-                done_event = threading.Event()
-                new_folder_id: list[str] = [""]  # Mutable container to get result back
-
-                def add_to_tree(
-                    dp=dirpath,
-                    pid=parent_tree_id,
-                    fname=folder_name,
-                    fdata=file_display_data,
-                    is_rt=is_root,
-                    result=new_folder_id,
-                    done=done_event,
-                ):
-                    nonlocal file_count, folder_count
-                    try:
-                        if is_rt:
-                            # Root folder: add files at tree root, no folder node
-                            folder_id = ""
-                            for filename, file_path, size_str, savings_str, time_str, eff_str, tag in fdata:
-                                item_id = self.analysis_tree.insert(
-                                    "",
-                                    "end",
-                                    text=f"🎬 {filename}",
-                                    values=(size_str, savings_str, time_str, eff_str),
-                                    tags=(tag,) if tag else (),
-                                )
-                                self._tree_item_map[file_path] = item_id
-                                file_count += 1
-                        else:
-                            # Non-root: create folder node and add files
-                            folder_id = self.analysis_tree.insert(
-                                pid, "end", text=f"▶ 📁 {fname}", values=("—", "—", "—", "—"), open=False
-                            )
-                            folder_count += 1
-                            for filename, file_path, size_str, savings_str, time_str, eff_str, tag in fdata:
-                                item_id = self.analysis_tree.insert(
-                                    folder_id,
-                                    "end",
-                                    text=f"🎬 {filename}",
-                                    values=(size_str, savings_str, time_str, eff_str),
-                                    tags=(tag,) if tag else (),
-                                )
-                                self._tree_item_map[file_path] = item_id
-                                file_count += 1
-                            # Update folder aggregate from its files
-                            if fdata:
-                                self._update_folder_aggregates(folder_id)
-                        result[0] = folder_id
-                    finally:
-                        done.set()
-
-                update_ui_safely(self.root, add_to_tree)
-                done_event.wait(timeout=5.0)  # Wait for UI thread
-
-                # Store folder ID for children to use
-                folder_tree_ids[dirpath] = new_folder_id[0]
-
-            # Final status
-            if stop_event.is_set():
-                self._finish_incremental_scan(stopped=True)
-                return
-
-            update_ui_safely(self.root, lambda: self._finish_incremental_scan(stopped=False))
-
-        except PermissionError:
-            logger.exception("Permission denied during scan")
-            if not stop_event.is_set():
-                update_ui_safely(self.root, lambda: self._finish_incremental_scan(stopped=False))
-        except OSError:
-            logger.exception("OS error during scan")
-            if not stop_event.is_set():
-                update_ui_safely(self.root, lambda: self._finish_incremental_scan(stopped=False))
-        except Exception:
-            logger.exception("Error during incremental scan")
-            if not stop_event.is_set():
-                update_ui_safely(self.root, lambda: self._finish_incremental_scan(stopped=False))
+        """Delegate to extracted analysis_scanner module."""
+        analysis_scanner.incremental_scan_thread(self, folder, extensions, stop_event)
 
     def _prune_empty_folders(self) -> int:
         """Remove folders with no children from the tree (runs on UI thread).
@@ -1539,14 +1251,14 @@ class VideoConverterGUI:
 
         return total_removed
 
-    def _finish_incremental_scan(self, stopped: bool):
+    def finish_incremental_scan(self, stopped: bool):
         """Clean up after incremental scan completes (runs on UI thread)."""
         if not stopped:
             # Prune empty folders after scan completes
             self._prune_empty_folders()
 
         # Update total row with any cached data
-        self._update_total_from_tree()
+        self.update_total_from_tree()
 
         # Sync queue tags to show which files are in the conversion queue
         self.sync_queue_tags_to_analysis_tree()
@@ -1604,110 +1316,10 @@ class VideoConverterGUI:
         self.analysis_thread.start()
 
     def _run_ffprobe_analysis(self, file_paths: list[str], output_folder: str, input_folder: str, anonymize: bool):
-        """Run ffprobe analysis on files in parallel.
+        """Delegate to extracted analysis_scanner module."""
+        analysis_scanner.run_ffprobe_analysis(self, file_paths, output_folder, input_folder, anonymize)
 
-        This analyzes files already in the tree using ffprobe to get metadata
-        and estimate potential savings. Updates tree rows as results come in.
-
-        Files with valid cache entries return quickly (no ffprobe needed).
-        Cache checking is done inside each parallel worker, so there's no
-        blocking pre-filter step.
-
-        Args:
-            file_paths: List of file paths to analyze.
-            output_folder: Output folder for checking if files are already converted.
-            input_folder: Input folder path (captured from main thread).
-            anonymize: Whether to anonymize history (captured from main thread).
-        """
-        index = get_history_index()
-        root_path = Path(input_folder).resolve()
-        output_path = Path(output_folder).resolve()
-
-        total_files = len(file_paths)
-        files_completed = 0
-        cache_hits = 0
-        max_workers = min(8, max(4, total_files // 10 + 1))
-
-        def analyze_one_file(file_path: str) -> tuple[str | None, bool]:
-            """Analyze a single file (runs in thread pool).
-
-            Checks cache first - if valid, skips ffprobe.
-
-            Returns:
-                Tuple of (file_path or None, was_cache_hit).
-            """
-            if self.analysis_stop_event and self.analysis_stop_event.is_set():
-                return None, False
-
-            # Check cache first - if valid, skip ffprobe
-            try:
-                stat = os.stat(file_path)
-                cached = index.lookup_file(file_path)
-                if cached and cached.file_size_bytes == stat.st_size and mtimes_match(cached.file_mtime, stat.st_mtime):
-                    return file_path, True  # Cache hit - no ffprobe needed
-            except OSError:
-                pass  # Let _analyze_file handle the error
-
-            # Cache miss - run full analysis with ffprobe
-            try:
-                _analyze_file(file_path, root_path, output_path, index, anonymize)
-                return file_path, False
-            except Exception:
-                logger.exception(f"Error analyzing {os.path.basename(file_path)}")
-                return None, False
-
-        with ThreadPoolExecutor(max_workers=max_workers) as executor:
-            futures = {executor.submit(analyze_one_file, fp): fp for fp in file_paths}
-            pending = set(futures.keys())
-
-            while pending:
-                # Check stop event before waiting for futures
-                if self.analysis_stop_event and self.analysis_stop_event.is_set():
-                    logger.info("Analysis interrupted by user")
-                    executor.shutdown(wait=True, cancel_futures=True)
-                    index.save()
-                    update_ui_safely(self.root, self._on_ffprobe_complete)
-                    return
-
-                # Wait for futures with timeout to allow periodic stop checks
-                done, pending = wait(pending, timeout=0.5, return_when=FIRST_COMPLETED)
-
-                # Collect completed files for batch UI update
-                completed_paths: list[str] = []
-
-                for future in done:
-                    file_path, was_cached = future.result()
-                    files_completed += 1
-                    if was_cached:
-                        cache_hits += 1
-                    if file_path:
-                        completed_paths.append(file_path)
-
-                # Single batched UI update for all completed files in this round
-                if completed_paths:
-                    paths_snapshot = list(completed_paths)
-                    update_ui_safely(self.root, lambda paths=paths_snapshot: self._batch_update_tree_rows(paths))
-
-                # Update totals and save less frequently (every batch or 5% progress)
-                batch_interval = TREE_UPDATE_BATCH_SIZE
-                pct_interval = max(1, total_files // 20)  # 5% increments
-                if files_completed % batch_interval == 0 or (
-                    total_files > MIN_FILES_FOR_PERCENT_UPDATES and files_completed % pct_interval == 0
-                ):
-                    update_ui_safely(self.root, self._update_total_from_tree)
-                    index.save()
-
-        # Save index after all files processed (handles remainder)
-        index.save()
-
-        # Log cache efficiency
-        if cache_hits > 0:
-            logger.info(f"Analysis complete: {cache_hits}/{total_files} from cache")
-
-        # Analysis complete
-        update_ui_safely(self.root, self._on_ffprobe_complete)
-
-    def _batch_update_tree_rows(self, file_paths: list[str]) -> None:
+    def batch_update_tree_rows(self, file_paths: list[str]) -> None:
         """Update multiple tree rows efficiently without per-file folder updates.
 
         Updates file rows and collects affected folders, then updates folder
@@ -1746,8 +1358,8 @@ class VideoConverterGUI:
                 file_time = estimate_file_time(
                     codec=record.video_codec, duration=record.duration_sec, size=record.file_size_bytes
                 ).best_seconds
-                time_str = self._format_compact_time(file_time) if file_time > 0 else "—"
-                eff_str = self._format_efficiency(file_savings, file_time)
+                time_str = format_compact_time(file_time) if file_time > 0 else "—"
+                eff_str = format_efficiency(file_savings, file_time)
             elif record.status == FileStatus.CONVERTED:
                 savings_str = "Done"
                 time_str = "—"
@@ -1778,14 +1390,14 @@ class VideoConverterGUI:
         if affected_folders:
             item_to_path = {item_id: path for path, item_id in self._tree_item_map.items()}
             for folder_id in affected_folders:
-                self._update_folder_aggregates(folder_id, item_to_path)
+                self.update_folder_aggregates(folder_id, item_to_path)
 
-    def _on_ffprobe_complete(self):
+    def on_ffprobe_complete(self):
         """Handle ffprobe analysis completion (called on main thread)."""
         self.analyze_button.config(state="normal")
 
         # Update total row
-        self._update_total_from_tree()
+        self.update_total_from_tree()
 
         # Enable Add All buttons
         self._update_add_all_buttons_state()
@@ -1939,8 +1551,8 @@ class VideoConverterGUI:
             file_time = estimate_file_time(
                 codec=record.video_codec, duration=record.duration_sec, size=record.file_size_bytes
             ).best_seconds
-            time_str = self._format_compact_time(file_time) if file_time > 0 else "—"
-            eff_str = self._format_efficiency(file_savings, file_time)
+            time_str = format_compact_time(file_time) if file_time > 0 else "—"
+            eff_str = format_efficiency(file_savings, file_time)
         elif record.status == FileStatus.CONVERTED:
             savings_str = "Done"
             time_str = "—"
@@ -1963,204 +1575,16 @@ class VideoConverterGUI:
         # Update parent folder aggregates
         parent_id = self.analysis_tree.parent(item_id)
         if parent_id:
-            self._update_folder_aggregates(parent_id)
+            self.update_folder_aggregates(parent_id)
 
-    def _update_folder_aggregates(self, folder_id: str, item_to_path: dict[str, str] | None = None):
-        """Recalculate and update folder aggregate values from history index.
-
-        Args:
-            folder_id: The tree item ID of the folder to update.
-            item_to_path: Optional pre-built reverse map of item_id -> file_path.
-                         If not provided, builds one (slower for batch updates).
-        """
-        if item_to_path is None:
-            item_to_path = {item_id: path for path, item_id in self._tree_item_map.items()}
-
-        # Get all children (files)
-        children = self.analysis_tree.get_children(folder_id)
-
-        # Sum up size, savings and time from all files using history index
-        total_size = 0
-        total_savings = 0
-        total_time = 0
-        any_estimate = False  # Track if any file lacks CRF search (layer 2) data
-
-        index = get_history_index()
-
-        for child_id in children:
-            file_path = item_to_path.get(child_id)
-            if not file_path:
-                continue
-
-            # Look up file data from history index
-            record = index.lookup_file(file_path)
-            if not record:
-                continue
-
-            # Sum size for all files
-            if record.file_size_bytes:
-                total_size += record.file_size_bytes
-
-            # Check if file needs conversion and has estimates
-            # Use Layer 2 data if available, otherwise fall back to Layer 1 estimate
-            reduction_percent = record.predicted_size_reduction or record.estimated_reduction_percent
-            if record.status == FileStatus.SCANNED and reduction_percent:
-                # Track if this file only has ffprobe-level analysis (no CRF search)
-                if record.predicted_size_reduction is None:
-                    any_estimate = True
-
-                # Calculate savings from reduction percentage
-                if record.file_size_bytes:
-                    file_savings = int(record.file_size_bytes * reduction_percent / 100)
-                    total_savings += file_savings
-
-                # Get time estimate
-                file_time = estimate_file_time(
-                    codec=record.video_codec, duration=record.duration_sec, size=record.file_size_bytes
-                ).best_seconds
-                total_time += file_time
-
-        # Update folder display (efficiency = aggregate savings / aggregate time)
-        size_str = format_file_size(total_size) if total_size > 0 else "—"
-        savings_str = format_file_size(total_savings) if total_savings > 0 else "—"
-        if any_estimate and savings_str != "—":
-            savings_str = f"~{savings_str}"
-        time_str = self._format_compact_time(total_time) if total_time > 0 else "—"
-        eff_str = self._format_efficiency(total_savings, total_time)
-        self.analysis_tree.item(folder_id, values=(size_str, savings_str, time_str, eff_str))
-
-    def _format_compact_time(self, seconds: float) -> str:
-        """Format time in a compact way for the analysis tree.
-
-        Args:
-            seconds: Time in seconds
-
-        Returns:
-            Formatted string like "2h 15m", "45m", "12m"
-        """
-        if seconds <= 0:
-            return "—"
-
-        hours = int(seconds // 3600)
-        minutes = int((seconds % 3600) // 60)
-
-        if hours > 0:
-            return f"{hours}h {minutes}m"
-        if minutes > 0:
-            return f"{minutes}m"
-        return "< 1m"
-
-    def _format_efficiency(self, savings_bytes: int, time_seconds: float) -> str:
-        """Format efficiency (savings per time) for display.
-
-        Args:
-            savings_bytes: Estimated savings in bytes
-            time_seconds: Estimated conversion time in seconds
-
-        Returns:
-            Formatted string like "2.5 GB/h", "12 GB/h", or "—"
-        """
-        if savings_bytes <= 0 or time_seconds <= 0:
-            return "—"
-
-        # Calculate GB saved per hour
-        gb_per_hr = (savings_bytes / 1_073_741_824) / (time_seconds / 3600)
-
-        # No decimals for >= 10 GB/h
-        if gb_per_hr >= _EFFICIENCY_DECIMAL_THRESHOLD:
-            return f"{gb_per_hr:.0f} GB/h"
-
-        # Show one decimal for smaller values
-        return f"{gb_per_hr:.1f} GB/h"
+    def update_folder_aggregates(self, folder_id: str, item_to_path: dict[str, str] | None = None):
+        return tree_state_manager.update_folder_aggregates(self, folder_id, item_to_path)
 
     def _get_queued_file_paths(self) -> set[str]:
-        """Get set of all file paths currently in the conversion queue.
-
-        For folder queue items, finds all video files under that folder
-        that are in the analysis tree. For file queue items, returns the path directly.
-
-        Returns:
-            Set of file paths that are in pending/converting queue items.
-        """
-        queued_paths: set[str] = set()
-
-        for item in self._queue_items:
-            if item.status not in ("pending", "converting"):
-                continue
-
-            if item.is_folder:
-                # Find all files in _tree_item_map that are under this folder
-                folder_prefix = item.source_path + os.sep
-                for file_path in self._tree_item_map:
-                    if file_path.startswith(folder_prefix) or file_path == item.source_path:
-                        queued_paths.add(file_path)
-            else:
-                # Single file
-                queued_paths.add(item.source_path)
-
-        return queued_paths
+        return tree_state_manager.get_queued_file_paths(self)
 
     def sync_queue_tags_to_analysis_tree(self):
-        """Synchronize queue status to analysis tree item tags.
-
-        Applies 'in_queue' tag to files in the queue, 'partial_queue' to folders
-        with some (but not all) files queued, and removes queue tags from items
-        no longer in queue.
-        """
-        if not hasattr(self, "analysis_tree") or not self._tree_item_map:
-            return
-
-        queued_paths = self._get_queued_file_paths()
-
-        # Track which folders need updating and their child stats
-        folder_stats: dict[str, tuple[int, int]] = {}  # folder_id -> (queued_count, total_count)
-
-        # Update file tags
-        for file_path, item_id in self._tree_item_map.items():
-            try:
-                if not self.analysis_tree.exists(item_id):
-                    continue
-
-                current_tags = list(self.analysis_tree.item(item_id, "tags") or ())
-
-                # Remove existing queue tags
-                current_tags = [t for t in current_tags if t not in ("in_queue", "partial_queue")]
-
-                # Add queue tag if file is in queue
-                is_queued = file_path in queued_paths
-                if is_queued:
-                    current_tags.append("in_queue")
-
-                self.analysis_tree.item(item_id, tags=tuple(current_tags))
-
-                # Track parent folder stats
-                parent_id = self.analysis_tree.parent(item_id)
-                if parent_id:
-                    queued, total = folder_stats.get(parent_id, (0, 0))
-                    folder_stats[parent_id] = (queued + (1 if is_queued else 0), total + 1)
-
-            except tk.TclError:
-                continue
-
-        # Update folder tags based on child stats
-        for folder_id, (queued_count, total_count) in folder_stats.items():
-            try:
-                if not self.analysis_tree.exists(folder_id):
-                    continue
-
-                current_tags = list(self.analysis_tree.item(folder_id, "tags") or ())
-                current_tags = [t for t in current_tags if t not in ("in_queue", "partial_queue")]
-
-                if queued_count == total_count and total_count > 0:
-                    # All children queued
-                    current_tags.append("in_queue")
-                elif queued_count > 0:
-                    # Some children queued
-                    current_tags.append("partial_queue")
-
-                self.analysis_tree.item(folder_id, tags=tuple(current_tags))
-            except tk.TclError:
-                continue
+        return tree_state_manager.sync_queue_tags_to_analysis_tree(self)
 
     def update_analysis_tree_for_completed_file(self, file_path: str, status: str):
         """Update analysis tree entry when a file completes conversion.
@@ -2202,7 +1626,7 @@ class VideoConverterGUI:
             # Update parent folder aggregates
             parent_id = self.analysis_tree.parent(item_id)
             if parent_id:
-                self._update_folder_aggregates(parent_id)
+                self.update_folder_aggregates(parent_id)
 
             # Sync queue tags since this file is no longer "in queue" effectively
             self.sync_queue_tags_to_analysis_tree()
@@ -2248,13 +1672,13 @@ class VideoConverterGUI:
         savings_str = format_file_size(total_savings) if total_savings > 0 else "—"
         if any_estimate and savings_str != "—":
             savings_str = f"~{savings_str}"
-        time_str = self._format_compact_time(total_time) if total_time > 0 else "—"
-        eff_str = self._format_efficiency(total_savings, total_time)
+        time_str = format_compact_time(total_time) if total_time > 0 else "—"
+        eff_str = format_efficiency(total_savings, total_time)
 
         # Update the total row
         self.analysis_total_tree.item("total", text=name_text, values=(size_str, savings_str, time_str, eff_str))
 
-    def _update_total_from_tree(self) -> int:
+    def update_total_from_tree(self) -> int:
         """Compute and update totals from files in the tree using history index.
 
         Iterates through all files in _tree_item_map, looks up their records
@@ -2304,90 +1728,6 @@ class VideoConverterGUI:
         )
         return convertible
 
-    def _parse_size_to_bytes(self, size_str: str) -> float:
-        """Parse formatted size string to bytes for sorting.
-
-        Args:
-            size_str: Formatted size like "~1.2 GB", "500 MB", or "—"
-
-        Returns:
-            Size in bytes, or float('inf') for "—"
-        """
-        if size_str == "—":
-            return float("inf")
-
-        # Remove ~ prefix if present
-        size_str = size_str.lstrip("~").strip()
-
-        # Parse value and unit
-        parts = size_str.split()
-        expected_parts = 2
-        if len(parts) != expected_parts:
-            return float("inf")
-
-        try:
-            value = float(parts[0])
-            unit = parts[1].upper()
-
-            # Convert to bytes
-            multipliers = {"B": 1, "KB": 1024, "MB": 1024**2, "GB": 1024**3, "TB": 1024**4}
-            return value * multipliers.get(unit, 1)
-        except (ValueError, KeyError):
-            return float("inf")
-
-    def _parse_time_to_seconds(self, time_str: str) -> float:
-        """Parse formatted time string to seconds for sorting.
-
-        Args:
-            time_str: Formatted time like "2h 15m", "45m", or "—"
-
-        Returns:
-            Time in seconds, or float('inf') for "—"
-        """
-        if time_str in {"—", "< 1m"}:
-            return float("inf") if time_str == "—" else 30  # Treat "< 1m" as 30 seconds
-
-        total_seconds = 0.0
-        # Parse patterns like "2h 15m" or "45m"
-        parts = time_str.split()
-        for part in parts:
-            try:
-                if part.endswith("h"):
-                    total_seconds += float(part[:-1]) * 3600
-                elif part.endswith("m"):
-                    total_seconds += float(part[:-1]) * 60
-            except ValueError:
-                continue
-
-        return total_seconds if total_seconds > 0 else float("inf")
-
-    def _parse_efficiency_to_value(self, eff_str: str) -> float:
-        """Parse formatted efficiency string to numeric value for sorting.
-
-        Args:
-            eff_str: Formatted efficiency like "2.5 GB/h", "12 GB/h", or "—"
-
-        Returns:
-            Efficiency in GB/hr, or float('-inf') for "—" (sorts last when descending)
-        """
-        if eff_str == "—":
-            return float("-inf")  # Sort "—" last when sorting by efficiency (descending)
-
-        try:
-            parts = eff_str.split()
-            expected_parts = 2
-            if len(parts) != expected_parts:
-                return float("-inf")
-
-            value = float(parts[0])
-            unit = parts[1]
-
-            if unit == "GB/h":
-                return value
-            return float("-inf")
-        except (ValueError, IndexError):
-            return float("-inf")
-
     def sort_analysis_tree(self, col: str):
         """Sort the analysis tree by the specified column.
 
@@ -2426,28 +1766,28 @@ class VideoConverterGUI:
                 # Sort by file size (values[0])
                 values = self.analysis_tree.item(item_id, "values")
                 if values and len(values) >= 1:
-                    size_bytes = self._parse_size_to_bytes(values[0])
+                    size_bytes = parse_size_to_bytes(values[0])
                     return (is_file, size_bytes)
                 return (is_file, float("inf"))
             if col == "savings":
                 # Sort by estimated savings (values[1])
                 values = self.analysis_tree.item(item_id, "values")
                 if values and len(values) >= 2:  # noqa: PLR2004 - column index bounds check
-                    size_bytes = self._parse_size_to_bytes(values[1])
+                    size_bytes = parse_size_to_bytes(values[1])
                     return (is_file, size_bytes)
                 return (is_file, float("inf"))
             if col == "time":
                 # Sort by estimated time (values[2])
                 values = self.analysis_tree.item(item_id, "values")
                 if values and len(values) >= 3:  # noqa: PLR2004 - column index bounds check
-                    time_seconds = self._parse_time_to_seconds(values[2])
+                    time_seconds = parse_time_to_seconds(values[2])
                     return (is_file, time_seconds)
                 return (is_file, float("inf"))
             if col == "efficiency":
                 # Sort by efficiency (values[3], higher is better, so negate for default ascending sort)
                 values = self.analysis_tree.item(item_id, "values")
                 if values and len(values) >= 4:  # noqa: PLR2004 - column index bounds check
-                    eff_value = self._parse_efficiency_to_value(values[3])
+                    eff_value = parse_efficiency_to_value(values[3])
                     # Negate so higher efficiency sorts first in ascending order
                     return (is_file, -eff_value)
                 return (is_file, float("inf"))

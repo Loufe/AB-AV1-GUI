@@ -1,9 +1,10 @@
 # src/conversion_engine/scanner.py
 """
-Contains the function to scan video files and determine if conversion is needed.
+Contains functions to scan video files and determine if conversion is needed.
 """
 
 import logging
+import os
 from pathlib import Path
 from typing import Any
 
@@ -13,6 +14,32 @@ from src.config import MIN_RESOLUTION_HEIGHT, MIN_RESOLUTION_WIDTH  # Import res
 from src.utils import anonymize_filename, get_video_info  # No GUI needed here
 
 logger = logging.getLogger(__name__)
+
+
+def find_video_files(folder_path: str, extensions: list[str]) -> list[str]:
+    """Find all video files in a folder matching the given extensions.
+
+    Uses single-pass os.walk() with case-insensitive extension matching.
+
+    Args:
+        folder_path: Path to folder to scan
+        extensions: List of file extensions to match (e.g., ["mp4", "mkv"])
+
+    Returns:
+        Sorted list of absolute file paths
+    """
+    # Build set of lowercase extensions for fast lookup
+    ext_set = {ext.lower() for ext in extensions}
+
+    files = []
+    for dirpath, _dirnames, filenames in os.walk(folder_path):
+        for filename in filenames:
+            # Case-insensitive extension check
+            ext = filename.rsplit(".", 1)[-1].lower() if "." in filename else ""
+            if ext in ext_set:
+                files.append(os.path.join(dirpath, filename))
+
+    return sorted(files)
 
 
 def scan_video_needs_conversion(
