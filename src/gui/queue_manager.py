@@ -8,11 +8,12 @@ These functions handle queue item creation, categorization, and addition logic.
 import os
 import uuid
 
+from src.config import MIN_RESOLUTION_HEIGHT, MIN_RESOLUTION_WIDTH
 from src.conversion_engine.scanner import find_video_files
 from src.estimation import estimate_file_time
 from src.gui.widgets.add_to_queue_dialog import AddToQueuePreviewDialog, QueuePreviewData
 from src.history_index import compute_path_hash, get_history_index
-from src.models import OperationType, OutputMode, QueueFileItem, QueueItem, QueueItemStatus
+from src.models import FileStatus, OperationType, OutputMode, QueueFileItem, QueueItem, QueueItemStatus
 
 
 def load_queue_from_config(gui) -> list[QueueItem]:
@@ -93,29 +94,78 @@ def create_queue_item(gui, path: str, is_folder: bool, operation_type: Operation
 
 def categorize_queue_items(
     gui, items: list[tuple[str, bool]], operation_type: OperationType
-) -> tuple[list[tuple[str, bool]], list[str], list[tuple[str, bool, QueueItem]]]:
+) -> tuple[list[tuple[str, bool]], list[str], list[tuple[str, bool, QueueItem]], list[tuple[str, str]]]:
     """Categorize items for queue preview.
 
+    Filters out individual files that shouldn't be added based on their history status:
+    - Already converted (CONVERTED status)
+    - Not worth converting (NOT_WORTHWHILE status)
+    - Already AV1 codec (for CONVERT operations)
+    - Below minimum resolution
+
+    Note: Folders are added without filtering; individual files within folders
+    are filtered during processing by the conversion worker.
+
     Returns:
-        Tuple of (to_add, duplicates, conflicts) where:
-        - to_add: Items that can be added directly
+        Tuple of (to_add, duplicates, conflicts, skipped) where:
+        - to_add: Items that can be added directly (files passing filters + all folders)
         - duplicates: Paths already in queue with same operation
         - conflicts: (path, is_folder, existing_item) for different operation
+        - skipped: (path, reason) for individual files filtered out
     """
     to_add: list[tuple[str, bool]] = []
     duplicates: list[str] = []
     conflicts: list[tuple[str, bool, QueueItem]] = []
+    skipped: list[tuple[str, str]] = []
+
+    index = get_history_index()
 
     for path, is_folder in items:
+        # Check for existing queue item first
         existing = find_existing_queue_item(gui, path)
-        if not existing:
-            to_add.append((path, is_folder))
-        elif existing.operation_type == operation_type:
-            duplicates.append(path)
-        else:
-            conflicts.append((path, is_folder, existing))
+        if existing:
+            if existing.operation_type == operation_type:
+                duplicates.append(path)
+            else:
+                conflicts.append((path, is_folder, existing))
+            continue
 
-    return to_add, duplicates, conflicts
+        # For folders, add without filtering (individual files will be filtered at processing time)
+        if is_folder:
+            to_add.append((path, is_folder))
+            continue
+
+        # Check history for file-level filtering
+        record = index.lookup_file(path)
+        if record:
+            # Already converted - skip
+            if record.status == FileStatus.CONVERTED:
+                skipped.append((path, "already converted"))
+                continue
+
+            # Not worth converting - skip
+            if record.status == FileStatus.NOT_WORTHWHILE:
+                skipped.append((path, "not worth converting"))
+                continue
+
+            # Already AV1 codec - skip for CONVERT operations
+            if operation_type == OperationType.CONVERT and record.video_codec == "av1":
+                skipped.append((path, "already AV1"))
+                continue
+
+            # Below minimum resolution - skip
+            if (
+                record.width
+                and record.height
+                and (record.width < MIN_RESOLUTION_WIDTH or record.height < MIN_RESOLUTION_HEIGHT)
+            ):
+                skipped.append((path, "below minimum resolution"))
+                continue
+
+        # Passed all filters - can be added
+        to_add.append((path, is_folder))
+
+    return to_add, duplicates, conflicts, skipped
 
 
 def calculate_queue_estimates(gui, items: list[tuple[str, bool]]) -> tuple[float | None, float | None]:
@@ -173,19 +223,20 @@ def add_items_to_queue(
                       If False, only show dialog if there are conflicts
 
     Returns:
-        Dict with counts: {"added", "duplicate", "conflict_added", "conflict_replaced", "cancelled"}
+        Dict with counts: {"added", "duplicate", "conflict_added", "conflict_replaced", "cancelled", "skipped"}
     """
-    counts = {"added": 0, "duplicate": 0, "conflict_added": 0, "conflict_replaced": 0, "cancelled": 0}
+    counts = {"added": 0, "duplicate": 0, "conflict_added": 0, "conflict_replaced": 0, "cancelled": 0, "skipped": 0}
 
     if not items:
         return counts
 
-    # Categorize items
-    to_add, duplicates, conflicts = categorize_queue_items(gui, items, operation_type)
+    # Categorize items (includes filtering)
+    to_add, duplicates, conflicts, skipped = categorize_queue_items(gui, items, operation_type)
     counts["duplicate"] = len(duplicates)
+    counts["skipped"] = len(skipped)
 
     # Determine if we need to show the preview dialog
-    show_dialog = force_preview or len(conflicts) > 0
+    show_dialog = force_preview or len(conflicts) > 0 or len(skipped) > 0
 
     if show_dialog:
         # Calculate estimates for preview
@@ -196,6 +247,7 @@ def add_items_to_queue(
             to_add=to_add,
             duplicates=duplicates,
             conflicts=conflicts,
+            skipped=skipped,
             operation_type=operation_type,
             estimated_time_sec=estimated_time,
             estimated_savings_percent=estimated_savings,

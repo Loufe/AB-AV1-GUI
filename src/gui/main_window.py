@@ -858,7 +858,7 @@ class VideoConverterGUI:
 
     def _categorize_queue_items(
         self, items: list[tuple[str, bool]], operation_type: OperationType
-    ) -> tuple[list[tuple[str, bool]], list[str], list[tuple[str, bool, QueueItem]]]:
+    ) -> tuple[list[tuple[str, bool]], list[str], list[tuple[str, bool, QueueItem]], list[tuple[str, str]]]:
         return queue_manager.categorize_queue_items(self, items, operation_type)
 
     def _calculate_queue_estimates(self, items: list[tuple[str, bool]]) -> tuple[float | None, float | None]:
@@ -1067,7 +1067,30 @@ class VideoConverterGUI:
                 size_display = "—"
 
             # Format estimated time
-            est_time_display = "—"  # TODO: Could use estimation.py in future
+            if queue_item.is_folder and queue_item.files:
+                # Sum estimates for all files in folder
+                total_seconds = 0.0
+                for file_item in queue_item.files:
+                    file_estimate = estimate_file_time(file_item.path)
+                    if file_estimate.confidence != "none" and file_estimate.best_seconds > 0:
+                        total_seconds += file_estimate.best_seconds
+                est_time_display = format_compact_time(total_seconds) if total_seconds > 0 else "—"
+            elif record:
+                # Use record data for single file estimate
+                file_estimate = estimate_file_time(
+                    codec=record.video_codec, duration=record.duration_sec, size=record.file_size_bytes
+                )
+                if file_estimate.confidence != "none" and file_estimate.best_seconds > 0:
+                    est_time_display = format_compact_time(file_estimate.best_seconds)
+                else:
+                    est_time_display = "—"
+            else:
+                # Try path-based estimate as fallback
+                file_estimate = estimate_file_time(queue_item.source_path)
+                if file_estimate.confidence != "none" and file_estimate.best_seconds > 0:
+                    est_time_display = format_compact_time(file_estimate.best_seconds)
+                else:
+                    est_time_display = "—"
 
             # Format status (now includes progress info)
             status_display = queue_item.format_status_display()

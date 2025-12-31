@@ -20,6 +20,7 @@ class QueuePreviewData:
     to_add: list[tuple[str, bool]] = field(default_factory=list)  # (path, is_folder)
     duplicates: list[str] = field(default_factory=list)  # Already in queue (same op)
     conflicts: list[tuple[str, bool, QueueItem]] = field(default_factory=list)  # (path, is_folder, existing_item)
+    skipped: list[tuple[str, str]] = field(default_factory=list)  # (path, reason) - filtered out
     operation_type: OperationType = OperationType.CONVERT
     estimated_time_sec: float | None = None
     estimated_savings_percent: float | None = None
@@ -27,7 +28,7 @@ class QueuePreviewData:
     @property
     def total_items(self) -> int:
         """Total number of items being considered."""
-        return len(self.to_add) + len(self.duplicates) + len(self.conflicts)
+        return len(self.to_add) + len(self.duplicates) + len(self.conflicts) + len(self.skipped)
 
     @property
     def has_conflicts(self) -> bool:
@@ -112,6 +113,16 @@ class AddToQueuePreviewDialog(tk.Toplevel):
         if data.duplicates:
             dup_text = f"{len(data.duplicates)} already in queue (will skip)"
             ttk.Label(summary_frame, text=dup_text, foreground="gray").pack(anchor="w")
+
+        # Skipped (filtered out)
+        if data.skipped:
+            # Group by reason for cleaner display, sorted for consistent ordering
+            reason_counts: dict[str, int] = {}
+            for _, reason in data.skipped:
+                reason_counts[reason] = reason_counts.get(reason, 0) + 1
+            for reason, count in sorted(reason_counts.items()):
+                skip_text = f"{count} {reason} (will skip)"
+                ttk.Label(summary_frame, text=skip_text, foreground="gray").pack(anchor="w")
 
         # Conflicts
         if data.conflicts:

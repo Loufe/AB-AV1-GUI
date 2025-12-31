@@ -151,7 +151,7 @@ def create_convert_tab(gui):
         item_id = gui.queue_tree.identify_row(event.y)
         col_id = gui.queue_tree.identify_column(event.x)
         if item_id and col_id == "#0" and gui.queue_tree.get_children(item_id):
-            gui.queue_tree.focus(item_id)
+            # Don't call focus() - it resets the anchor used for shift-click selection
             gui.queue_tree.item(item_id, open=not gui.queue_tree.item(item_id, "open"))
         return None
 

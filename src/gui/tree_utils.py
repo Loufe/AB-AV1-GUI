@@ -39,7 +39,7 @@ def setup_click_expand_collapse(tree: ttk.Treeview) -> None:
     def _on_tree_click(event):
         item_id = tree.identify_row(event.y)
         if item_id and tree.get_children(item_id):  # Has children = folder
-            tree.focus(item_id)
+            # Don't call tree.focus() - it resets the anchor used for shift-click selection
             tree.item(item_id, open=not tree.item(item_id, "open"))
 
     tree.bind("<Button-1>", _on_tree_click, add="+")

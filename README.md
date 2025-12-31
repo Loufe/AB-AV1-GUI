@@ -1,51 +1,45 @@
-# AV1 Video Converter
+# A Python AB-AV1 GUI
 
-This application provides a simple graphical interface (GUI) for converting your video files to the modern, high-efficiency AV1 codec. It uses the excellent [ab-av1](https://github.com/alexheretic/ab-av1) tool to automatically optimize encoding settings based on visual quality ([VMAF](https://github.com/Netflix/vmaf)), making high-quality AV1 conversion accessible without needing complex command-line knowledge.
+A lean, cross-platform [Tkinter](https://docs.python.org/3/library/tkinter.html)-based GUI for intelligently reducing the footprint of your video library by converting to [AV1](https://aomedia.org/av1/), with some bells & whistles.
 
-## Key Features
+## Premise
 
-- **Automatic Quality Control (VMAF):** Instead of guessing bitrates, the converter targets a specific visual quality level (VMAF score, default 95) ensuring consistent results across different videos.
-- **Batch Conversion:** Automatically finds and converts supported video files (`.mp4`, `.mkv`, `.avi`, `.wmv`) within your chosen input folder and its subdirectories.
-- **Progress Tracking:** Monitor the overall batch progress and see details for the currently converting file, including quality detection and encoding phases, plus estimated time remaining.
+The AV1 video codec offers incredible gains for most video types vs standard [x264](https://www.videolan.org/developers/x264.html) and [x265](https://www.videolan.org/developers/x265.html) encoded files. However, letting [FFmpeg](https://ffmpeg.org/) rip through a project without tweaking parameters on a per-video basis produces terrible results. 
 
-## Requirements
+This tool mainly acts as a wrapper for the incredible cli tool [ab-av1](https://github.com/alexheretic/ab-av1), which randomly samples each video with varying parameters, efficiently discovering the right parameters to achieve maximum filesize reduction for your configured visual fidelity score (defaults to 95%). Ab-av1's magic is using the [VMAF](https://github.com/Netflix/vmaf) algorithm from Netflix for analyzing visual fidelity based on metrics which mirror human perception rather than statistical similarity. The tool then runs the conversion for the set parameters with FFmpeg.
 
-- **Python 3.8+** with Tkinter (included in standard installations).
-- **FFmpeg:** Must be installed and available in your system's PATH. Requires a version with `libsvtav1` (SVT-AV1 encoder) support. You can download builds from [ffmpeg.org](https://ffmpeg.org/download.html) or [Gyan.dev](https://www.gyan.dev/ffmpeg/builds/) (Windows).
-- **ab-av1:** [Download the latest release](https://github.com/alexheretic/ab-av1/releases) and place in `src/` directory.
+## Features
 
-  > [!WARNING]
-  > A version may be bundled for convenience, but for security and compatibility, always download the official release yourself.
+- **VMAF-based quality targeting:** targets visual quality (_default: **95**_) instead of guessing bitrates
+- **Queue-based workflow:** add files or folders, preview estimates, process sequentially
+- **Private, secure, safe:** no pip packages, no telemetry, optional anonymization of history/logs
 
-## Installation & Setup
+## Usage
 
-1.  **Install Dependencies:** Ensure you have Python and FFmpeg installed (and FFmpeg is in your system's PATH).
-2.  **Get ab-av1:** Download the executable for your platform and place it in the `src/` directory.
-3.  **Run the Application:**
-    ```bash
-    python -m src.convert
-    ```
-    On Windows, you can also double-click `convert.bat`.
+- Install [Python](https://www.python.org/) 3.8+ ([Ensure your install includes Tkinter](https://stackoverflow.com/questions/76105218/why-does-tkinter-or-turtle-seem-to-be-missing-or-broken-shouldnt-it-be-part), included by default on Windows and MacOS).
+- **Optional:** [FFmpeg](https://ffmpeg.org/) with libsvtav1 and [ab-av1](https://github.com/alexheretic/ab-av1/releases) may be pre-installed system-wide and available in PATH. Or download portable binaries in-app.
 
-## Operation
 
-Point the application at an input folder and it will recursively scan for video files, processing them one at a time. Files are automatically skipped if they:
-- Are already AV1-encoded
-- Fall below the resolution threshold (default 720p)
-- Already have a converted output file (unless overwrite is enabled)
-- Cannot achieve the target VMAF quality
+On Windows, double-click `convert.bat`. On Linux/macOS, run `./convert.sh`.
 
-Output files mirror the input folder structure, or go to a flat output directory if specified.
+The app will prompt to download FFmpeg and ab-av1 if not found.
 
-## Privacy
+## Notes
 
-**Zero telemetry.** The application never contacts external servers. Even version checks require you to manually click a button—nothing happens automatically.
+- Tested on Windows. Designed for cross-platform but Linux/macOS are untested.
+- **Media servers**: Be thoughtful about support for AV1 decoding in devices you want to watch video on. Old phones, PCs, streamers, and smart TVs may not support it, adding a high computational burden for transcoding on the server.
 
-Optional path anonymization (Settings tab) replaces file paths in logs and conversion history with BLAKE2b hashes. If you need to trace a hash back to the original file, use `tools/hash_lookup.py`.
-
-## Third-Party Software
-
-This application downloads and uses:
+### Third-Party Software
 
 - [FFmpeg](https://ffmpeg.org/) (LGPL 2.1+) — video encoding
-- [ab-av1](https://github.com/alexheretic/ab-av1) (MIT) — VMAF-targeted quality optimization
+- [ab-av1](https://github.com/alexheretic/ab-av1) (MIT) — VMAF optimization
+
+### License
+
+GPL-3.0 — see [LICENSE](LICENSE)
+
+## Contributing & AI Disclosure
+
+This tool has been developed with AI assistance under human guidance and code review.
+
+Any contributions are welcome, but please note adding new dependencies is discouraged, and PRs should have already passed linting (ruff) and type checking (ty) without hacky exceptions.
