@@ -8,23 +8,18 @@ import json  # For settings persistence
 import logging
 import multiprocessing
 import os  # Added import
-import shutil
 import sys
 import threading
 import tkinter as tk
-import webbrowser
-from pathlib import Path
 from tkinter import filedialog, messagebox, ttk
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
     from src.gui.charts import BarChart, LineGraph, PieChart
 
-from src.ab_av1.checker import check_ab_av1_latest_github, get_ab_av1_version
 from src.estimation import estimate_file_time
-from src.gui import analysis_scanner, queue_manager, tree_state_manager
+from src.gui import analysis_scanner, dependency_manager, queue_manager, tree_state_manager
 from src.gui.conversion_controller import force_stop_conversion, start_conversion, stop_conversion
-from src.gui.dialogs import FFmpegDownloadDialog
 from src.gui.gui_actions import (
     browse_input_folder,
     browse_log_folder,
@@ -40,28 +35,17 @@ from src.gui.tabs.convert_tab import create_convert_tab
 from src.gui.tabs.settings_tab import create_settings_tab
 from src.gui.tabs.statistics_tab import create_statistics_tab
 from src.gui.tree_formatters import (
+    clear_sort_state,
     format_compact_time,
     format_efficiency,
-    parse_efficiency_to_value,
-    parse_size_to_bytes,
-    parse_time_to_seconds,
+    sort_analysis_tree,
+    update_sort_indicators,
 )
 from src.history_index import compute_path_hash, get_history_index
 from src.models import ConversionSessionState, FileStatus, OperationType, OutputMode, QueueItem, QueueItemStatus
 
 # Import setup_logging only needed here now - Replace 'convert_app' with 'src'
-from src.utils import (
-    check_ffmpeg_availability,
-    check_ffmpeg_latest_btbn,
-    check_ffmpeg_latest_gyan,
-    format_file_size,
-    get_script_directory,
-    parse_ffmpeg_version,
-    scrub_history_paths,
-    scrub_log_files,
-    setup_logging,
-)
-from src.vendor_manager import download_ab_av1, download_ffmpeg
+from src.utils import format_file_size, get_script_directory, scrub_history_paths, scrub_log_files, setup_logging
 
 logger = logging.getLogger(__name__)
 
@@ -115,6 +99,7 @@ class VideoConverterGUI:
     add_all_convert_button: ttk.Button
     analysis_tree: ttk.Treeview
     analysis_total_tree: ttk.Treeview
+    analysis_scan_overlay: tk.Frame
 
     # Settings tab widgets (created in create_settings_tab)
     ab_av1_frame: ttk.Frame
@@ -387,6 +372,7 @@ class VideoConverterGUI:
         self._tree_item_map: dict[str, str] = {}  # Map file_path -> tree_item_id for updates
         self._refresh_timer_id: str | None = None  # Debounce timer for auto-refresh
         self._scan_stop_event: threading.Event | None = None  # Stop event for background scan
+        self._scanning: bool = False  # True while background scan is running
         self._sort_col: str | None = None  # Current sort column
         self._sort_reverse: bool = False  # Current sort direction
 
@@ -593,225 +579,19 @@ class VideoConverterGUI:
 
     def on_check_ab_av1_updates(self):
         """Check GitHub for the latest ab-av1 version and update the label."""
-        # Disable check button immediately
-        if self.ab_av1_check_btn:
-            self.ab_av1_check_btn.config(state="disabled")
-
-        # Reset label state
-        self._reset_update_label()
-        self.ab_av1_update_label.config(text="Checking...", foreground="gray")
-        self.root.update_idletasks()
-
-        local_version = get_ab_av1_version()
-        latest_version, _release_url, message = check_ab_av1_latest_github()
-
-        # Check button stays disabled permanently after use
-
-        if latest_version is None:
-            self.ab_av1_update_label.config(text=message, foreground="red")
-            return
-
-        if local_version is None:
-            self.ab_av1_update_label.config(text=f"Latest: {latest_version}", foreground="gray")
-            return
-
-        # Compare versions
-        if local_version == latest_version:
-            self.ab_av1_update_label.config(text=f"Up to date ({latest_version})", foreground="green")
-        else:
-            # Update available - create Update button dynamically
-            self.ab_av1_update_label.config(text=f"Update available: {latest_version}", foreground="blue")
-
-            # Create Update button if it doesn't exist
-            if not hasattr(self, "ab_av1_update_btn") or self.ab_av1_update_btn is None:
-                self.ab_av1_update_btn = ttk.Button(self.ab_av1_frame, text="Update", command=self.on_download_ab_av1)
-                self.ab_av1_update_btn.pack(side="left", padx=(5, 0))
-
-    def _reset_update_label(self):
-        """Reset the update label to non-clickable state."""
-        self.ab_av1_update_label.config(cursor="", font=("TkDefaultFont", 9))
-        self.ab_av1_update_label.unbind("<Button-1>")
+        dependency_manager.check_ab_av1_updates(self)
 
     def on_check_ffmpeg_updates(self):
         """Check GitHub for the latest FFmpeg version and update the label."""
-        if not self.ffmpeg_update_label or not self.ffmpeg_source:
-            return
-
-        # Disable check button immediately
-        if self.ffmpeg_check_btn:
-            self.ffmpeg_check_btn.config(state="disabled")
-
-        # Reset label state
-        self._reset_ffmpeg_update_label()
-        self.ffmpeg_update_label.config(text="Checking...", foreground="gray")
-        self.root.update_idletasks()
-
-        # Get local version
-        _, _, version_string, _ = check_ffmpeg_availability()
-        local_version, _, _ = parse_ffmpeg_version(version_string)
-
-        # Check GitHub based on detected source
-        if self.ffmpeg_source == "gyan.dev":
-            latest_version, release_url, message = check_ffmpeg_latest_gyan()
-        elif self.ffmpeg_source == "BtbN":
-            latest_version, release_url, message = check_ffmpeg_latest_btbn()
-        else:
-            self.ffmpeg_update_label.config(text="Unknown source", foreground="red")
-            # Check button stays disabled permanently after use
-            return
-
-        # Check button stays disabled permanently after use
-
-        if latest_version is None:
-            self.ffmpeg_update_label.config(text=message, foreground="red")
-            return
-
-        # For BtbN, we can't compare versions (date-based tags), so just show latest and link
-        if self.ffmpeg_source == "BtbN":
-            # Extract display date from tag like "autobuild-2025-12-18-12-50" -> "2025-12-18"
-            if "autobuild" in latest_version:
-                display_tag = latest_version.replace("autobuild-", "").rsplit("-", 2)[0]
-            else:
-                display_tag = latest_version
-            self.ffmpeg_update_label.config(
-                text=f"Latest: {display_tag}", foreground="blue", cursor="hand2", font=("TkDefaultFont", 9, "underline")
-            )
-            if release_url:
-                self.ffmpeg_update_label.bind("<Button-1>", lambda e: webbrowser.open(release_url))
-            return
-
-        # For gyan.dev, we can compare semantic versions
-        if local_version is None:
-            self.ffmpeg_update_label.config(text=f"Latest: {latest_version}", foreground="gray")
-            return
-
-        if local_version == latest_version:
-            self.ffmpeg_update_label.config(text=f"Up to date ({latest_version})", foreground="green")
-        else:
-            # Update available - create Update button dynamically
-            self.ffmpeg_update_label.config(text=f"Update available: {latest_version}", foreground="blue")
-
-            # Create Update button if it doesn't exist
-            if not hasattr(self, "ffmpeg_update_btn") or self.ffmpeg_update_btn is None:
-                self.ffmpeg_update_btn = ttk.Button(self.ffmpeg_frame, text="Update", command=self.on_download_ffmpeg)
-                self.ffmpeg_update_btn.pack(side="left", padx=(5, 0))
-
-    def _reset_ffmpeg_update_label(self):
-        """Reset the FFmpeg update label to non-clickable state."""
-        if self.ffmpeg_update_label:
-            self.ffmpeg_update_label.config(cursor="", font=("TkDefaultFont", 9))
-            self.ffmpeg_update_label.unbind("<Button-1>")
+        dependency_manager.check_ffmpeg_updates(self)
 
     def on_download_ab_av1(self):
         """Download ab-av1 from GitHub in a background thread."""
-        # Disable button and show progress
-        if self.ab_av1_download_btn:
-            self.ab_av1_download_btn.config(state="disabled")
-        if hasattr(self, "ab_av1_update_btn") and self.ab_av1_update_btn:
-            self.ab_av1_update_btn.config(state="disabled")
-        self.ab_av1_update_label.config(text="Downloading...", foreground="gray")
-        self.root.update_idletasks()
-
-        def download_thread():
-            def progress_callback(downloaded, total):
-                if total > 0:
-                    pct = int(downloaded * 100 / total)
-                    self.root.after(0, lambda: self.ab_av1_update_label.config(text=f"Downloading... {pct}%"))
-
-            success, message = download_ab_av1(progress_callback)
-
-            def update_ui():
-                if success:
-                    # Update version label
-                    new_version = get_ab_av1_version() or "Installed"
-                    self.ab_av1_version_label.config(text=new_version)
-                    self.ab_av1_update_label.config(text="Download complete!", foreground="green")
-
-                    # Destroy the Update button if it exists (user is now up to date)
-                    if hasattr(self, "ab_av1_update_btn") and self.ab_av1_update_btn:
-                        self.ab_av1_update_btn.destroy()
-                        self.ab_av1_update_btn = None
-
-                    # Re-enable download button if it exists
-                    if self.ab_av1_download_btn:
-                        self.ab_av1_download_btn.config(state="normal")
-                else:
-                    self.ab_av1_update_label.config(text=message, foreground="red")
-                    # Re-enable buttons on failure
-                    if self.ab_av1_download_btn:
-                        self.ab_av1_download_btn.config(state="normal")
-                    if hasattr(self, "ab_av1_update_btn") and self.ab_av1_update_btn:
-                        self.ab_av1_update_btn.config(state="normal")
-
-            self.root.after(0, update_ui)
-
-        threading.Thread(target=download_thread, daemon=True).start()
+        dependency_manager.download_ab_av1_update(self)
 
     def on_download_ffmpeg(self):
         """Download FFmpeg to vendor folder. Shows dialog if system FFmpeg exists."""
-        # Check for existing system FFmpeg
-        existing_ffmpeg = shutil.which("ffmpeg")
-
-        # If system FFmpeg exists, show informational dialog
-        if existing_ffmpeg:
-            existing_dir = Path(existing_ffmpeg).parent
-            dialog = FFmpegDownloadDialog(self.root, existing_dir)
-            if not dialog.show():
-                return  # User cancelled
-
-        # Disable button and show progress
-        if self.ffmpeg_download_btn:
-            self.ffmpeg_download_btn.config(state="disabled")
-        if hasattr(self, "ffmpeg_update_btn") and self.ffmpeg_update_btn:
-            self.ffmpeg_update_btn.config(state="disabled")
-        if self.ffmpeg_update_label:
-            self.ffmpeg_update_label.config(text="Downloading...", foreground="gray")
-        self.root.update_idletasks()
-
-        def download_thread():
-            def progress_callback(downloaded, total):
-                if total > 0:
-                    mb_downloaded = downloaded / (1024 * 1024)
-                    mb_total = total / (1024 * 1024)
-                    text = f"Downloading... {mb_downloaded:.0f}/{mb_total:.0f} MB"
-                    label = self.ffmpeg_update_label
-                    if label:
-                        self.root.after(0, lambda t=text, lbl=label: lbl.config(text=t))
-
-            success, message = download_ffmpeg(progress_callback)
-
-            def update_ui():
-                if success:
-                    # Update version label
-                    _, _, version_string, _ = check_ffmpeg_availability()
-                    version, _, _ = parse_ffmpeg_version(version_string)
-                    display = f"{version} (vendor)" if version else "Installed"
-                    self.ffmpeg_version_label.config(text=display)
-                    if self.ffmpeg_update_label:
-                        self.ffmpeg_update_label.config(text="Download complete!", foreground="green")
-                    # Update ffmpeg_source to gyan.dev
-                    self.ffmpeg_source = "gyan.dev"
-
-                    # Destroy the Update button if it exists (user is now up to date)
-                    if hasattr(self, "ffmpeg_update_btn") and self.ffmpeg_update_btn:
-                        self.ffmpeg_update_btn.destroy()
-                        self.ffmpeg_update_btn = None
-
-                    # Re-enable download button if it exists
-                    if self.ffmpeg_download_btn:
-                        self.ffmpeg_download_btn.config(state="normal")
-                else:
-                    if self.ffmpeg_update_label:
-                        self.ffmpeg_update_label.config(text=message, foreground="red")
-                    # Re-enable buttons on failure
-                    if self.ffmpeg_download_btn:
-                        self.ffmpeg_download_btn.config(state="normal")
-                    if hasattr(self, "ffmpeg_update_btn") and self.ffmpeg_update_btn:
-                        self.ffmpeg_update_btn.config(state="normal")
-
-            self.root.after(0, update_ui)
-
-        threading.Thread(target=download_thread, daemon=True).start()
+        dependency_manager.download_ffmpeg_update(self)
 
     def _load_queue_from_config(self) -> list[QueueItem]:
         return queue_manager.load_queue_from_config(self)
@@ -907,6 +687,7 @@ class VideoConverterGUI:
         # Remove from queue
         for item in items_to_remove:
             self._queue_items.remove(item)
+            self._queue_items_by_id.pop(item.id, None)
 
         self.save_queue_to_config()
         self.refresh_queue_tree()
@@ -914,10 +695,14 @@ class VideoConverterGUI:
 
     def on_clear_queue(self):
         """Clear all items from queue."""
+        if self.session.running:
+            messagebox.showwarning("Queue Running", "Cannot clear queue while conversion is running.")
+            return
         if not self._queue_items:
             return
         if messagebox.askyesno("Clear Queue", "Remove all items from the queue?"):
             self._queue_items.clear()
+            self._queue_items_by_id.clear()
             self.save_queue_to_config()
             self.refresh_queue_tree()
             self.sync_queue_tags_to_analysis_tree()
@@ -1022,6 +807,9 @@ class VideoConverterGUI:
         self._tree_file_map.clear()
         self._queue_items_by_id = {item.id: item for item in self._queue_items}
 
+        # Check if stop has been requested (pending items won't run)
+        stopping = self.session.running and self.stop_event is not None and self.stop_event.is_set()
+
         index = get_history_index()
 
         # Add each queue item with order number
@@ -1093,9 +881,23 @@ class VideoConverterGUI:
                     est_time_display = "—"
 
             # Format status (now includes progress info)
-            status_display = queue_item.format_status_display()
-            if queue_item.status == QueueItemStatus.CONVERTING and queue_item.total_files > 0:
-                status_display = f"Converting ({queue_item.processed_files}/{queue_item.total_files})"
+            # Determine status tag based on queue item status
+            status_tag_map = {
+                QueueItemStatus.PENDING: "file_pending",
+                QueueItemStatus.CONVERTING: "file_converting",
+                QueueItemStatus.COMPLETED: "file_done",
+                QueueItemStatus.STOPPED: "file_skipped",
+                QueueItemStatus.ERROR: "file_error",
+            }
+            # Check if this pending item won't run due to stop request
+            if stopping and queue_item.status == QueueItemStatus.PENDING:
+                status_display = "Will skip"
+                item_tag = "file_skipped"
+            else:
+                status_display = queue_item.format_status_display()
+                if queue_item.status == QueueItemStatus.CONVERTING and queue_item.total_files > 0:
+                    status_display = f"Converting ({queue_item.processed_files}/{queue_item.total_files})"
+                item_tag = status_tag_map.get(queue_item.status)
 
             # Insert item with order number prefix
             icon = "📁" if queue_item.is_folder else "🎬"
@@ -1107,6 +909,7 @@ class VideoConverterGUI:
                 "end",
                 text=f"{order}. {prefix}{icon} {name}",
                 values=(size_display, est_time_display, operation_display, output_display, status_display),
+                tags=(item_tag,) if item_tag else (),
             )
             self._queue_tree_map[queue_item.id] = item_id
             self._tree_queue_map[item_id] = queue_item.id
@@ -1116,6 +919,13 @@ class VideoConverterGUI:
                 for file_item in queue_item.files:
                     file_name = os.path.basename(file_item.path)
                     file_size = format_file_size(file_item.size_bytes) if file_item.size_bytes > 0 else "—"
+
+                    # Calculate estimated time for this file
+                    file_time_estimate = estimate_file_time(file_item.path)
+                    if file_time_estimate.confidence != "none" and file_time_estimate.best_seconds > 0:
+                        file_est_time = format_compact_time(file_time_estimate.best_seconds)
+                    else:
+                        file_est_time = "—"
 
                     # Determine status tag based on file status
                     status_tag_map = {
@@ -1139,11 +949,16 @@ class VideoConverterGUI:
                     else:
                         file_status = ""  # Pending files show no status
 
+                    # Override for pending files that won't run due to stop request
+                    if stopping and file_item.status == QueueItemStatus.PENDING:
+                        file_tag = "file_skipped"
+                        file_status = "Will skip"
+
                     file_tree_id = self.queue_tree.insert(
                         item_id,
                         "end",
                         text=f"    🎬 {file_name}",
-                        values=(file_size, "", "", "", file_status),
+                        values=(file_size, file_est_time, "", "", file_status),
                         tags=(file_tag,),
                     )
                     self._queue_file_tree_map[file_item.path] = file_tree_id
@@ -1152,10 +967,31 @@ class VideoConverterGUI:
         # Update total row
         total_items = len(self._queue_items)
         total_files = sum(len(item.files) if item.is_folder else 1 for item in self._queue_items)
+        # Calculate total estimated time
+        total_est_seconds = 0.0
+        for queue_item in self._queue_items:
+            if queue_item.is_folder and queue_item.files:
+                for file_item in queue_item.files:
+                    file_estimate = estimate_file_time(file_item.path)
+                    if file_estimate.confidence != "none" and file_estimate.best_seconds > 0:
+                        total_est_seconds += file_estimate.best_seconds
+            else:
+                path_hash = compute_path_hash(queue_item.source_path)
+                record = index.get(path_hash)
+                if record:
+                    file_estimate = estimate_file_time(
+                        codec=record.video_codec, duration=record.duration_sec, size=record.file_size_bytes
+                    )
+                else:
+                    file_estimate = estimate_file_time(queue_item.source_path)
+                if file_estimate.confidence != "none" and file_estimate.best_seconds > 0:
+                    total_est_seconds += file_estimate.best_seconds
+        total_est_time_display = format_compact_time(total_est_seconds) if total_est_seconds > 0 else "—"
         if total_files != total_items:
-            self.queue_total_tree.item("total", values=("", "", "", "", f"{total_items} items ({total_files} files)"))
+            status_text = f"{total_items} items ({total_files} files)"
+            self.queue_total_tree.item("total", values=("", total_est_time_display, "", "", status_text))
         else:
-            self.queue_total_tree.item("total", values=("", "", "", "", f"{total_items} items"))
+            self.queue_total_tree.item("total", values=("", total_est_time_display, "", "", f"{total_items} items"))
 
     def sync_queue_order_from_tree(self):
         """Sync _queue_items order from the tree view after drag-drop reordering."""
@@ -1194,9 +1030,7 @@ class VideoConverterGUI:
 
         folder = self.input_folder.get()
         if not folder or not os.path.isdir(folder):
-            # Clear tree if no valid folder
-            for item in self.analysis_tree.get_children():
-                self.analysis_tree.delete(item)
+            self._clear_analysis_tree()
             self._update_add_all_buttons_state()
             return
 
@@ -1212,18 +1046,19 @@ class VideoConverterGUI:
             extensions.append("wmv")
 
         if not extensions:
-            # Clear tree if no extensions selected
-            for item in self.analysis_tree.get_children():
-                self.analysis_tree.delete(item)
+            self._clear_analysis_tree()
             self._update_add_all_buttons_state()
             return
 
         # Clear tree and start background scan
-        for item in self.analysis_tree.get_children():
-            self.analysis_tree.delete(item)
-        self._tree_item_map.clear()
-        self._update_total_row(0, 0, 0, 0, 0, 0, 0.0)  # Reset total row
+        self._clear_analysis_tree()
+        self._scanning = True
+        self.analysis_total_tree.item("total", text="Scanning...", values=("—", "—", "—", "—"))
         self._update_add_all_buttons_state()  # Disable while scanning
+
+        # Show scanning overlay (lift ensures it's above the tree)
+        self.analysis_scan_overlay.place(relx=0, rely=0, relwidth=1, relheight=1)
+        self.analysis_scan_overlay.lift()
 
         # Cancel any existing scan
         if self._scan_stop_event:
@@ -1276,6 +1111,11 @@ class VideoConverterGUI:
 
     def finish_incremental_scan(self, stopped: bool):
         """Clean up after incremental scan completes (runs on UI thread)."""
+        self._scanning = False
+
+        # Hide scanning overlay
+        self.analysis_scan_overlay.place_forget()
+
         if not stopped:
             # Prune empty folders after scan completes
             self._prune_empty_folders()
@@ -1352,68 +1192,7 @@ class VideoConverterGUI:
         Args:
             file_paths: List of file paths to update.
         """
-        if not file_paths:
-            return
-
-        index = get_history_index()
-        affected_folders: set[str] = set()
-
-        for file_path in file_paths:
-            item_id = self._tree_item_map.get(file_path)
-            if not item_id:
-                continue
-
-            record = index.lookup_file(file_path)
-            if not record:
-                continue
-
-            # Calculate display values
-            size_str = format_file_size(record.file_size_bytes) if record.file_size_bytes else "—"
-            tag = ""
-            # Use Layer 2 data if available, otherwise fall back to Layer 1 estimate
-            has_layer2 = record.predicted_size_reduction is not None
-            reduction_percent = record.predicted_size_reduction or record.estimated_reduction_percent
-            if record.status == FileStatus.SCANNED and reduction_percent and record.file_size_bytes:
-                file_savings = int(record.file_size_bytes * reduction_percent / 100)
-                savings_str = format_file_size(file_savings)
-                if not has_layer2:
-                    savings_str = f"~{savings_str}"
-                file_time = estimate_file_time(
-                    codec=record.video_codec, duration=record.duration_sec, size=record.file_size_bytes
-                ).best_seconds
-                time_str = format_compact_time(file_time) if file_time > 0 else "—"
-                eff_str = format_efficiency(file_savings, file_time)
-            elif record.status == FileStatus.CONVERTED:
-                savings_str = "Done"
-                time_str = "—"
-                eff_str = "—"
-                tag = "done"
-            elif record.status == FileStatus.NOT_WORTHWHILE:
-                savings_str = "Skip"
-                time_str = "—"
-                eff_str = "—"
-                tag = "skip"
-            else:
-                savings_str = "—"
-                time_str = "—"
-                eff_str = "—"
-
-            # Update tree item
-            self.analysis_tree.item(
-                item_id, values=(size_str, savings_str, time_str, eff_str), tags=(tag,) if tag else ()
-            )
-
-            # Track parent folder for batch aggregate update
-            parent_id = self.analysis_tree.parent(item_id)
-            if parent_id:
-                affected_folders.add(parent_id)
-
-        # Update folder aggregates once for all affected folders
-        # Pre-build reverse map once for all folder updates
-        if affected_folders:
-            item_to_path = {item_id: path for path, item_id in self._tree_item_map.items()}
-            for folder_id in affected_folders:
-                self.update_folder_aggregates(folder_id, item_to_path)
+        tree_state_manager.batch_update_tree_rows(self, file_paths)
 
     def on_ffprobe_complete(self):
         """Handle ffprobe analysis completion (called on main thread)."""
@@ -1425,6 +1204,10 @@ class VideoConverterGUI:
         # Enable Add All buttons
         self._update_add_all_buttons_state()
 
+        # Apply default sort by efficiency (highest first) if user hasn't sorted yet
+        if self._sort_col is None:
+            self.sort_analysis_tree("efficiency", descending=True)
+
     def _update_add_all_buttons_state(self):
         """Enable/disable the Add All buttons based on whether there are files in the tree."""
         has_files = bool(self._tree_item_map)
@@ -1432,8 +1215,8 @@ class VideoConverterGUI:
         self.add_all_analyze_button.config(state=state)
         self.add_all_convert_button.config(state=state)
 
-    def on_add_all_analyze(self):
-        """Add all discovered files to the queue for CRF analysis."""
+    def _add_all_to_queue(self, operation_type: OperationType):
+        """Add all discovered files to the queue with the specified operation type."""
         file_paths = list(self._tree_item_map.keys())
         if not file_paths:
             messagebox.showinfo("No Files", "No files to add. Run a scan first.")
@@ -1443,28 +1226,19 @@ class VideoConverterGUI:
         items = [(path, False) for path in file_paths]
 
         # Use preview dialog for bulk operations
-        result = self.add_items_to_queue(items, OperationType.ANALYZE, force_preview=True)
+        result = self.add_items_to_queue(items, operation_type, force_preview=True)
 
         total_added = result["added"] + result["conflict_added"] + result["conflict_replaced"]
         if total_added > 0:
             self.tab_control.select(self.convert_tab)
+
+    def on_add_all_analyze(self):
+        """Add all discovered files to the queue for CRF analysis."""
+        self._add_all_to_queue(OperationType.ANALYZE)
 
     def on_add_all_convert(self):
         """Add all discovered files to the queue for conversion."""
-        file_paths = list(self._tree_item_map.keys())
-        if not file_paths:
-            messagebox.showinfo("No Files", "No files to add. Run a scan first.")
-            return
-
-        # Build items list (all files, not folders)
-        items = [(path, False) for path in file_paths]
-
-        # Use preview dialog for bulk operations
-        result = self.add_items_to_queue(items, OperationType.CONVERT, force_preview=True)
-
-        total_added = result["added"] + result["conflict_added"] + result["conflict_replaced"]
-        if total_added > 0:
-            self.tab_control.select(self.convert_tab)
+        self._add_all_to_queue(OperationType.CONVERT)
 
     def get_file_path_for_tree_item(self, item_id: str) -> str | None:
         """Look up the file path for a given tree item ID.
@@ -1535,7 +1309,7 @@ class VideoConverterGUI:
             # Layer 1 only (ffprobe estimate)
             if record.estimated_from_similar and record.estimated_from_similar > 0:
                 return f"Estimate based on {record.estimated_from_similar} similar file(s)"
-            return "Estimate based on typical reduction"
+            return None  # No tooltip for generic estimates
 
         return "Not yet analyzed. Click Analyze to scan."
 
@@ -1545,60 +1319,7 @@ class VideoConverterGUI:
         Args:
             file_path: Path to the file that was analyzed.
         """
-        # Find the tree item by file_path
-        item_id = self._tree_item_map.get(file_path)
-        if not item_id:
-            return
-
-        # Get file data from history index
-        index = get_history_index()
-        record = index.lookup_file(file_path)
-
-        if not record:
-            return
-
-        has_layer2 = record.predicted_size_reduction is not None
-        # Use Layer 2 data if available, otherwise fall back to Layer 1 estimate
-        reduction_percent = record.predicted_size_reduction or record.estimated_reduction_percent
-
-        # Calculate display values based on record status
-        size_str = format_file_size(record.file_size_bytes) if record.file_size_bytes else "—"
-        tag = ""
-        if record.status == FileStatus.SCANNED and reduction_percent and record.file_size_bytes:
-            # File needs conversion - show estimates
-            file_savings = int(record.file_size_bytes * reduction_percent / 100)
-            savings_str = format_file_size(file_savings)
-            if not has_layer2:
-                savings_str = f"~{savings_str}"
-
-            file_time = estimate_file_time(
-                codec=record.video_codec, duration=record.duration_sec, size=record.file_size_bytes
-            ).best_seconds
-            time_str = format_compact_time(file_time) if file_time > 0 else "—"
-            eff_str = format_efficiency(file_savings, file_time)
-        elif record.status == FileStatus.CONVERTED:
-            savings_str = "Done"
-            time_str = "—"
-            eff_str = "—"
-            tag = "done"
-        elif record.status == FileStatus.NOT_WORTHWHILE:
-            savings_str = "Skip"
-            time_str = "—"
-            eff_str = "—"
-            tag = "skip"
-        else:
-            # No data yet
-            savings_str = "—"
-            time_str = "—"
-            eff_str = "—"
-
-        # Update tree item
-        self.analysis_tree.item(item_id, values=(size_str, savings_str, time_str, eff_str), tags=(tag,) if tag else ())
-
-        # Update parent folder aggregates
-        parent_id = self.analysis_tree.parent(item_id)
-        if parent_id:
-            self.update_folder_aggregates(parent_id)
+        tree_state_manager.update_tree_row(self, file_path)
 
     def update_folder_aggregates(self, folder_id: str, item_to_path: dict[str, str] | None = None):
         return tree_state_manager.update_folder_aggregates(self, folder_id, item_to_path)
@@ -1629,7 +1350,7 @@ class VideoConverterGUI:
 
             # Get current tags and remove queue-related ones
             current_tags = list(self.analysis_tree.item(item_id, "tags") or ())
-            current_tags = [t for t in current_tags if t not in ("in_queue", "partial_queue", "done", "skip")]
+            current_tags = [t for t in current_tags if t not in ("in_queue", "partial_queue", "done", "skip", "av1")]
 
             # Add the completion status tag
             current_tags.append(status)
@@ -1646,10 +1367,11 @@ class VideoConverterGUI:
             self.analysis_tree.set(item_id, "time", "—")
             self.analysis_tree.set(item_id, "efficiency", "—")
 
-            # Update parent folder aggregates
+            # Update all ancestor folder aggregates
             parent_id = self.analysis_tree.parent(item_id)
-            if parent_id:
+            while parent_id:
                 self.update_folder_aggregates(parent_id)
+                parent_id = self.analysis_tree.parent(parent_id)
 
             # Sync queue tags since this file is no longer "in queue" effectively
             self.sync_queue_tags_to_analysis_tree()
@@ -1696,6 +1418,8 @@ class VideoConverterGUI:
         if any_estimate and savings_str != "—":
             savings_str = f"~{savings_str}"
         time_str = format_compact_time(total_time) if total_time > 0 else "—"
+        if any_estimate and time_str != "—":
+            time_str = f"~{time_str}"
         eff_str = format_efficiency(total_savings, total_time)
 
         # Update the total row
@@ -1751,90 +1475,30 @@ class VideoConverterGUI:
         )
         return convertible
 
-    def sort_analysis_tree(self, col: str):
+    def sort_analysis_tree(self, col: str, descending: bool | None = None):
         """Sort the analysis tree by the specified column.
 
         Sorting is done within each parent (preserves hierarchy).
         Folders sort before files when sorting by Name.
-        Toggle direction on repeated clicks.
+        Toggle direction on repeated clicks (when descending is None).
 
         Args:
-            col: Column to sort by ("#0" for Name, "savings", "time", or "efficiency")
+            col: Column to sort by ("#0", "size", "savings", "time", or "efficiency")
+            descending: If specified, force this direction. If None, toggle on repeat click.
         """
-        # Toggle direction if same column clicked
-        if self._sort_col == col:
-            self._sort_reverse = not self._sort_reverse
-        else:
-            self._sort_col = col
-            self._sort_reverse = False
+        sort_analysis_tree(self, col, descending)
 
-        def get_sort_key(item_id: str) -> tuple:
-            """Get sort key for an item.
+    def _update_sort_indicators(self):
+        """Update column headers to show sort direction indicator."""
+        update_sort_indicators(self)
 
-            Returns tuple: (is_file, sort_value)
-            - Folders always sort before files (is_file=False for folders)
-            - Sort value depends on column
-            """
-            # Check if item is a file (has parent) or folder (no parent or root)
-            parent = self.analysis_tree.parent(item_id)
-            is_file = bool(parent)
+    def _clear_sort_state(self):
+        """Clear sort state and reset column headers."""
+        clear_sort_state(self)
 
-            if col == "#0":
-                # Sort by name
-                text = self.analysis_tree.item(item_id, "text")
-                # Remove arrows, icons, and leading spaces
-                name = text.replace("▶", "").replace("▼", "").replace("📁", "").replace("🎬", "").strip()
-                return (is_file, name.lower())
-            if col == "size":
-                # Sort by file size (values[0])
-                values = self.analysis_tree.item(item_id, "values")
-                if values and len(values) >= 1:
-                    size_bytes = parse_size_to_bytes(values[0])
-                    return (is_file, size_bytes)
-                return (is_file, float("inf"))
-            if col == "savings":
-                # Sort by estimated savings (values[1])
-                values = self.analysis_tree.item(item_id, "values")
-                if values and len(values) >= 2:  # noqa: PLR2004 - column index bounds check
-                    size_bytes = parse_size_to_bytes(values[1])
-                    return (is_file, size_bytes)
-                return (is_file, float("inf"))
-            if col == "time":
-                # Sort by estimated time (values[2])
-                values = self.analysis_tree.item(item_id, "values")
-                if values and len(values) >= 3:  # noqa: PLR2004 - column index bounds check
-                    time_seconds = parse_time_to_seconds(values[2])
-                    return (is_file, time_seconds)
-                return (is_file, float("inf"))
-            if col == "efficiency":
-                # Sort by efficiency (values[3], higher is better, so negate for default ascending sort)
-                values = self.analysis_tree.item(item_id, "values")
-                if values and len(values) >= 4:  # noqa: PLR2004 - column index bounds check
-                    eff_value = parse_efficiency_to_value(values[3])
-                    # Negate so higher efficiency sorts first in ascending order
-                    return (is_file, -eff_value)
-                return (is_file, float("inf"))
-            return (is_file, "")
-
-        def sort_children(parent_id: str):
-            """Sort children of a parent node recursively."""
-            children = list(self.analysis_tree.get_children(parent_id))
-            if not children:
-                return
-
-            # Sort children
-            children_sorted = sorted(children, key=get_sort_key, reverse=self._sort_reverse)
-
-            # Reorder in tree
-            for index, item_id in enumerate(children_sorted):
-                self.analysis_tree.move(item_id, parent_id, index)
-
-            # Recursively sort children of each child (for folders)
-            for child_id in children_sorted:
-                if self.analysis_tree.get_children(child_id):  # Has children (is a folder)
-                    sort_children(child_id)
-
-        # Sort root level items and their children recursively
-        sort_children("")
-
-        logger.debug(f"Sorted analysis tree by {col}, reverse={self._sort_reverse}")
+    def _clear_analysis_tree(self):
+        """Clear analysis tree, item map, and sort state."""
+        for item in self.analysis_tree.get_children():
+            self.analysis_tree.delete(item)
+        self._tree_item_map.clear()
+        self._clear_sort_state()

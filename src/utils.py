@@ -567,6 +567,11 @@ def get_video_info(video_path: str, timeout: int = 30) -> dict[str, Any] | None:
     Returns:
         Dictionary containing video metadata or None if analysis failed
     """
+    # Guard against directories being passed (corrupted state)
+    if not os.path.isfile(video_path):
+        logger.warning(f"get_video_info called with non-file path: {anonymize_filename(video_path)}")
+        return None
+
     ffprobe_path = get_ffprobe_path()
     if not ffprobe_path:
         logger.error("ffprobe not found")

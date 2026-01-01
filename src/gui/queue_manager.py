@@ -31,6 +31,10 @@ def load_queue_from_config(gui) -> list[QueueItem]:
                 item.files_skipped = 0
                 item.files_failed = 0
                 item.last_error = None
+                # Reset nested file statuses to PENDING as well
+                for file_item in item.files:
+                    file_item.status = QueueItemStatus.PENDING
+                    file_item.error_message = None
             # Only restore PENDING items if file exists (skip completed/error items)
             if item.status == QueueItemStatus.PENDING and os.path.exists(item.source_path):
                 items.append(item)
@@ -65,19 +69,45 @@ def create_queue_item(gui, path: str, is_folder: bool, operation_type: Operation
     """Create a new QueueItem with default settings.
 
     For folder items, populates the files list by scanning for video files.
+    Files are filtered based on history status (already converted, not worthwhile, etc.).
     """
     default_mode = gui.default_output_mode.get()
 
-    # For folders, scan and populate the files list
+    # For folders, scan and populate the files list with filtering
     files: list[QueueFileItem] = []
     if is_folder:
         extensions = get_selected_extensions(gui)
         if extensions:
             file_paths = find_video_files(path, extensions)
-            files = [
-                QueueFileItem(path=fp, size_bytes=os.path.getsize(fp) if os.path.isfile(fp) else 0)
-                for fp in file_paths
-            ]
+            index = get_history_index()
+
+            for fp in file_paths:
+                # Apply same filtering as categorize_queue_items for individual files
+                record = index.lookup_file(fp)
+                if record:
+                    # Already converted - skip
+                    if record.status == FileStatus.CONVERTED:
+                        continue
+                    # Not worth converting - skip
+                    if record.status == FileStatus.NOT_WORTHWHILE:
+                        continue
+                    # Already AV1 codec - skip for CONVERT operations
+                    if operation_type == OperationType.CONVERT and record.video_codec == "av1":
+                        continue
+                    # Below minimum resolution - skip
+                    if (
+                        record.width
+                        and record.height
+                        and (record.width < MIN_RESOLUTION_WIDTH or record.height < MIN_RESOLUTION_HEIGHT)
+                    ):
+                        continue
+
+                # Passed all filters - add to files list
+                try:
+                    size = os.path.getsize(fp) if os.path.isfile(fp) else 0
+                except OSError:
+                    size = 0
+                files.append(QueueFileItem(path=fp, size_bytes=size))
 
     return QueueItem(
         id=str(uuid.uuid4()),
@@ -103,8 +133,8 @@ def categorize_queue_items(
     - Already AV1 codec (for CONVERT operations)
     - Below minimum resolution
 
-    Note: Folders are added without filtering; individual files within folders
-    are filtered during processing by the conversion worker.
+    Note: Folders are added here without individual file filtering, but create_queue_item()
+    applies the same filters when populating the folder's files list.
 
     Returns:
         Tuple of (to_add, duplicates, conflicts, skipped) where:

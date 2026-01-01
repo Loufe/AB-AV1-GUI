@@ -160,6 +160,10 @@ def create_queue_status_callback(gui):
                         status_display = status.value.capitalize()
 
                     gui.queue_tree.set(tree_id, "status", status_display)
+
+                    # Update root queue item tags to match status
+                    tag = file_status_tags.get(status, "file_pending")
+                    gui.queue_tree.item(tree_id, tags=(tag,))
                 except Exception:
                     logger.debug(f"Could not update tree row for {queue_item_id}")
 
@@ -341,6 +345,10 @@ def start_conversion(gui) -> None:
     gui.start_button.config(state="disabled")
     gui.stop_button.config(state="normal")
     gui.force_stop_button.config(state="normal")
+    gui.add_folder_button.config(state="disabled")
+    gui.add_files_button.config(state="disabled")
+    gui.remove_queue_button.config(state="disabled")
+    gui.clear_queue_button.config(state="disabled")
 
     # Initialize conversion state
     gui.session.running = True
@@ -427,6 +435,7 @@ def stop_conversion(gui) -> None:
         logger.info("Graceful stop requested (Stop After Current File). Signalling worker thread.")
         gui.stop_event.set()
         gui.stop_button.config(state="disabled")  # Disable button once stop is requested
+        gui.refresh_queue_tree()  # Show "Will skip" for pending items
     elif not gui.session.running:
         logger.info("Stop requested but conversion is not currently running.")
     elif gui.stop_event and gui.stop_event.is_set():
@@ -557,6 +566,10 @@ def restore_ui_after_stop(gui) -> None:
     update_ui_safely(gui.root, lambda: gui.start_button.config(state="normal"))
     update_ui_safely(gui.root, lambda: gui.stop_button.config(state="disabled"))
     update_ui_safely(gui.root, lambda: gui.force_stop_button.config(state="disabled"))
+    update_ui_safely(gui.root, lambda: gui.add_folder_button.config(state="normal"))
+    update_ui_safely(gui.root, lambda: gui.add_files_button.config(state="normal"))
+    update_ui_safely(gui.root, lambda: gui.remove_queue_button.config(state="normal"))
+    update_ui_safely(gui.root, lambda: gui.clear_queue_button.config(state="normal"))
 
 
 def force_stop_conversion(gui, confirm: bool = True) -> None:
@@ -813,10 +826,17 @@ def conversion_complete(gui, final_message="Queue complete"):
         logger.info("System sleep prevention disabled.")
         s.sleep_prevention_active = False
 
+    # Refresh queue tree to update estimates (e.g., after ANALYZE operations complete)
+    gui.refresh_queue_tree()
+
     # Reset button states
     gui.start_button.config(state="normal")
     gui.stop_button.config(state="disabled")
     gui.force_stop_button.config(state="disabled")
+    gui.add_folder_button.config(state="normal")
+    gui.add_files_button.config(state="normal")
+    gui.remove_queue_button.config(state="normal")
+    gui.clear_queue_button.config(state="normal")
 
     # Final state reset
     s.running = False

@@ -8,9 +8,11 @@ This tab allows users to:
 """
 
 import os
+import tkinter as tk
 from tkinter import ttk
 
-from src.gui.base import ToolTip, TreeviewRowTooltip, open_in_explorer, reveal_in_explorer
+from src.config import ANALYSIS_TREE_HEADINGS
+from src.gui.base import ToolTip, TreeviewHeaderTooltip, TreeviewRowTooltip, open_in_explorer, reveal_in_explorer
 from src.gui.tree_utils import create_styled_context_menu, setup_click_expand_collapse, setup_expand_collapse_icons
 from src.models import OperationType
 
@@ -63,15 +65,9 @@ def create_analysis_tab(gui):
         tree_container, columns=columns, show="tree headings", selectmode="extended", style="Analysis.Treeview"
     )
 
-    gui.analysis_tree.heading("#0", text="Name", anchor="w", command=lambda: gui.sort_analysis_tree("#0"))
-    gui.analysis_tree.heading("size", text="Size", anchor="e", command=lambda: gui.sort_analysis_tree("size"))
-    gui.analysis_tree.heading(
-        "savings", text="Est. Savings", anchor="e", command=lambda: gui.sort_analysis_tree("savings")
-    )
-    gui.analysis_tree.heading("time", text="Est. Time", anchor="e", command=lambda: gui.sort_analysis_tree("time"))
-    gui.analysis_tree.heading(
-        "efficiency", text="Efficiency", anchor="e", command=lambda: gui.sort_analysis_tree("efficiency")
-    )
+    for col, text in ANALYSIS_TREE_HEADINGS.items():
+        anchor = "w" if col == "#0" else "e"
+        gui.analysis_tree.heading(col, text=text, anchor=anchor, command=lambda c=col: gui.sort_analysis_tree(c))
 
     # Name column stretches to fill space, data columns are fixed
     gui.analysis_tree.column("#0", width=300, minwidth=150, stretch=True)
@@ -83,6 +79,7 @@ def create_analysis_tab(gui):
     # Configure tags for status coloring (subtle, professional colors)
     gui.analysis_tree.tag_configure("done", foreground="#2E7D32")  # Dark green
     gui.analysis_tree.tag_configure("skip", foreground="#C65D00")  # Muted amber
+    gui.analysis_tree.tag_configure("av1", foreground="#888888")  # Gray - already AV1, no action needed
     gui.analysis_tree.tag_configure("in_queue", foreground="#1565C0")  # Dark blue - queued file/folder
     gui.analysis_tree.tag_configure("partial_queue", foreground="#64B5F6")  # Light blue - folder with some queued
 
@@ -91,6 +88,18 @@ def create_analysis_tab(gui):
 
     gui.analysis_tree.grid(row=0, column=0, sticky="nsew")
     scroll_y.grid(row=0, column=1, sticky="ns")
+
+    # Scanning overlay - shown during folder discovery
+    # Use tk.Frame for background color support
+    gui.analysis_scan_overlay = tk.Frame(tree_container, bg="#f0f0f0")
+    overlay_label = tk.Label(
+        gui.analysis_scan_overlay,
+        text="Scanning folder...",
+        font=("TkDefaultFont", 11),
+        bg="#f0f0f0",
+        fg="#666666",
+    )
+    overlay_label.place(relx=0.5, rely=0.5, anchor="center")
 
     # Set up expand/collapse behavior using shared utilities
     setup_click_expand_collapse(gui.analysis_tree)
@@ -220,6 +229,17 @@ def create_analysis_tab(gui):
 
     # Set up row tooltips for file status explanations
     TreeviewRowTooltip(gui.analysis_tree, gui.get_analysis_tree_tooltip)
+
+    # Set up column header tooltips
+    TreeviewHeaderTooltip(gui.analysis_tree, {
+        "savings": (
+            "Estimated space saved after conversion.\n"
+            "'~' prefix = estimate from similar files.\n"
+            "No prefix = precise prediction from CRF analysis."
+        ),
+        "time": "Estimated conversion time based on\nfile duration, codec, and past conversions.",
+        "efficiency": "GB saved per hour of conversion time.\nHigher = more space savings for your time.",
+    })
 
     # --- Row 2: Fixed total row (non-scrolling, always visible) ---
     # Use a separate single-row Treeview with matching columns for perfect alignment

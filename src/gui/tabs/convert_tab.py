@@ -13,7 +13,7 @@ import tkinter as tk
 from tkinter import ttk
 
 from src.config import DEFAULT_VMAF_TARGET
-from src.gui.base import ToolTip, open_in_explorer, reveal_in_explorer
+from src.gui.base import ToolTip, TreeviewHeaderTooltip, open_in_explorer, reveal_in_explorer
 from src.gui.tree_utils import create_styled_context_menu, setup_expand_collapse_icons
 from src.gui.widgets.operation_dropdown import (
     OPERATION_DISPLAY_TO_ENUM,
@@ -109,7 +109,9 @@ def create_convert_tab(gui):
     tree_container.rowconfigure(0, weight=1)
 
     columns = ("size", "est_time", "operation", "output", "status")
-    gui.queue_tree = ttk.Treeview(tree_container, columns=columns, show="tree headings", selectmode="extended")
+    gui.queue_tree = ttk.Treeview(
+        tree_container, columns=columns, show="tree headings", selectmode="extended", style="Analysis.Treeview"
+    )
 
     gui.queue_tree.heading("#0", text="#  Name", anchor="w")
     gui.queue_tree.heading("size", text="Size", anchor="e")
@@ -137,6 +139,12 @@ def create_convert_tab(gui):
     gui.queue_tree.tag_configure("file_done", foreground="#2E7D32")
     gui.queue_tree.tag_configure("file_skipped", foreground="#C65D00")
     gui.queue_tree.tag_configure("file_error", foreground="#C62828")
+
+    # Set up column header tooltips
+    TreeviewHeaderTooltip(gui.queue_tree, {
+        "operation": "Analyze = find optimal quality settings only.\nConvert = full encoding (analyzes if needed).",
+        "output": "Where converted file will be saved.\nReplace / Suffix (_av1) / Separate folder.",
+    })
 
     # Initialize operation dropdown manager for in-cell editing
     operation_dropdown = OperationDropdownManager(gui)

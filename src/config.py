@@ -46,6 +46,15 @@ OUTPUT_MODE_OPTIONS = ("replace", "suffix", "separate_folder")
 # --- Tree Display Formatting ---
 EFFICIENCY_DECIMAL_THRESHOLD = 10  # Show GB/hr without decimals above this value
 
+# Analysis tree column headings (base text without sort indicators)
+ANALYSIS_TREE_HEADINGS: dict[str, str] = {
+    "#0": "Name",
+    "size": "Size",
+    "savings": "Est. Savings",
+    "time": "Est. Time",
+    "efficiency": "Efficiency",
+}
+
 # --- Hardware Decoder Settings ---
 # Hardware decoder mapping (source codec -> preferred decoders in priority order)
 HW_DECODER_MAP: dict[str, list[str]] = {

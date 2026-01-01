@@ -377,6 +377,7 @@ class AbAv1Wrapper:
                         time.sleep(0.2)
                         process.kill()
                     except Exception as e:
+                        # DEBUG appropriate: secondary cleanup failure; main error already logged above
                         logger.debug(f"Error terminating process: {e}")
 
                 # Prepare output for error reporting

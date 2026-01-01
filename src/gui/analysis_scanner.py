@@ -124,7 +124,13 @@ def incremental_scan_thread(gui, folder: str, extensions: list[str], stop_event:
                                 codec=record.video_codec, duration=record.duration_sec, size=record.file_size_bytes
                             ).best_seconds
                             time_str = format_compact_time(file_time) if file_time > 0 else "—"
+                            if not has_layer2 and time_str != "—":
+                                time_str = f"~{time_str}"
                             eff_str = format_efficiency(est_savings, file_time)
+                        elif record.video_codec and record.video_codec.lower() == "av1":
+                            # Already AV1 - show subtle indicator
+                            savings_str = "AV1"
+                            tag = "av1"
 
                 file_display_data.append((filename, file_path, size_str, savings_str, time_str, eff_str, tag))
 
@@ -191,7 +197,7 @@ def incremental_scan_thread(gui, folder: str, extensions: list[str], stop_event:
 
         # Final status
         if stop_event.is_set():
-            gui.finish_incremental_scan(stopped=True)
+            update_ui_safely(gui.root, lambda: gui.finish_incremental_scan(stopped=True))
             return
 
         update_ui_safely(gui.root, lambda: gui.finish_incremental_scan(stopped=False))

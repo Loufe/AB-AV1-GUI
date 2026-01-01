@@ -47,6 +47,8 @@ def _update_file_status(queue_item, file_index: int, status: QueueItemStatus, er
         queue_item.files[file_index].status = status
         if error_msg:
             queue_item.files[file_index].error_message = error_msg
+    elif queue_item.is_folder:
+        logger.warning(f"File index {file_index} out of range for queue item with {len(queue_item.files)} files")
 
 
 def _create_file_record(
@@ -111,9 +113,9 @@ def _create_file_record(
         width=input_width,
         height=input_height,
         # SCANNED status fields
-        vmaf_target_when_analyzed=vmaf_target if status == FileStatus.SCANNED else (
-            DEFAULT_VMAF_TARGET if status == FileStatus.NOT_WORTHWHILE else None
-        ),
+        vmaf_target_when_analyzed=vmaf_target
+        if status == FileStatus.SCANNED
+        else (DEFAULT_VMAF_TARGET if status == FileStatus.NOT_WORTHWHILE else None),
         preset_when_analyzed=DEFAULT_ENCODING_PRESET,
         best_crf=final_crf if status == FileStatus.SCANNED else None,
         best_vmaf_achieved=round(final_vmaf, 2) if final_vmaf is not None and status == FileStatus.SCANNED else None,
@@ -268,6 +270,10 @@ def sequential_conversion_worker(
 
         logger.info(f"Processing queue item {items_completed + 1}/{items_total}: {queue_item.source_path}")
         queue_item.processed_files = 0
+        # Reset outcome counters for fresh processing
+        queue_item.files_succeeded = 0
+        queue_item.files_skipped = 0
+        queue_item.files_failed = 0
 
         # Get files for this item
         try:
@@ -536,10 +542,18 @@ def sequential_conversion_worker(
 
                         # Update history index with Layer 2 data
                         record = _create_file_record(
-                            file_path, anonymize_history_value[0], FileStatus.SCANNED,
-                            original_size, input_duration, input_vcodec, input_acodec,
-                            input_width, input_height,
-                            final_crf=final_crf, final_vmaf=final_vmaf, vmaf_target=final_vmaf_target,
+                            file_path,
+                            anonymize_history_value[0],
+                            FileStatus.SCANNED,
+                            original_size,
+                            input_duration,
+                            input_vcodec,
+                            input_acodec,
+                            input_width,
+                            input_height,
+                            final_crf=final_crf,
+                            final_vmaf=final_vmaf,
+                            vmaf_target=final_vmaf_target,
                             predicted_output_size=predicted_output_size,
                             predicted_size_reduction=predicted_size_reduction,
                         )
@@ -570,9 +584,15 @@ def sequential_conversion_worker(
 
                         # Record NOT_WORTHWHILE to history
                         record = _create_file_record(
-                            file_path, anonymize_history_value[0], FileStatus.NOT_WORTHWHILE,
-                            original_size, input_duration, input_vcodec, input_acodec,
-                            input_width, input_height,
+                            file_path,
+                            anonymize_history_value[0],
+                            FileStatus.NOT_WORTHWHILE,
+                            original_size,
+                            input_duration,
+                            input_vcodec,
+                            input_acodec,
+                            input_width,
+                            input_height,
                             vmaf_target_attempted=DEFAULT_VMAF_TARGET,
                             min_vmaf_attempted=MIN_VMAF_FALLBACK_TARGET,
                             skip_reason=str(e),
@@ -669,12 +689,20 @@ def sequential_conversion_worker(
 
                 try:  # Record to History Index
                     record = _create_file_record(
-                        file_path, anonymize_history_value[0], FileStatus.CONVERTED,
-                        original_size, input_duration, input_vcodec, input_acodec,
-                        input_width, input_height,
-                        output_path=output_file_path, output_size=output_size,
+                        file_path,
+                        anonymize_history_value[0],
+                        FileStatus.CONVERTED,
+                        original_size,
+                        input_duration,
+                        input_vcodec,
+                        input_acodec,
+                        input_width,
+                        input_height,
+                        output_path=output_file_path,
+                        output_size=output_size,
                         elapsed_time=elapsed_time_file,
-                        final_crf=final_crf, final_vmaf=final_vmaf,
+                        final_crf=final_crf,
+                        final_vmaf=final_vmaf,
                         vmaf_target=final_vmaf_target if final_vmaf_target is not None else DEFAULT_VMAF_TARGET,
                         output_acodec=output_acodec,
                     )
@@ -687,9 +715,15 @@ def sequential_conversion_worker(
                 _update_file_status(queue_item, file_index, QueueItemStatus.COMPLETED)
                 try:  # Record NOT_WORTHWHILE to History Index
                     record = _create_file_record(
-                        file_path, anonymize_history_value[0], FileStatus.NOT_WORTHWHILE,
-                        original_size, input_duration, input_vcodec, input_acodec,
-                        input_width, input_height,
+                        file_path,
+                        anonymize_history_value[0],
+                        FileStatus.NOT_WORTHWHILE,
+                        original_size,
+                        input_duration,
+                        input_vcodec,
+                        input_acodec,
+                        input_width,
+                        input_height,
                         vmaf_target_attempted=DEFAULT_VMAF_TARGET,
                         min_vmaf_attempted=gui.session.last_min_vmaf_attempted,
                         skip_reason=gui.session.last_skip_reason,

@@ -93,61 +93,40 @@ class ToolTip:
             self.tooltip = None
 
 
-class TreeviewRowTooltip:
-    """Dynamic tooltip for Treeview rows.
+class _TreeviewTooltipBase:
+    """Base class for Treeview tooltips with common display logic."""
 
-    Shows tooltips based on the row being hovered. The tooltip content is
-    determined by a callback function that receives the item ID and returns
-    the tooltip text (or None to show no tooltip).
-
-    Usage:
-        def get_tooltip(item_id: str) -> str | None:
-            # Return tooltip text based on row data
-            values = tree.item(item_id, "values")
-            if values[0] == "Done":
-                return "This file has been converted"
-            return None
-
-        TreeviewRowTooltip(tree, get_tooltip)
-    """
-
-    # Delay before showing tooltip (ms)
     SHOW_DELAY = 500
-    # Offset from cursor
     OFFSET_X = 15
     OFFSET_Y = 15
 
-    def __init__(self, treeview: ttk.Treeview, get_tooltip_text: Callable[[str], str | None]):
-        """Initialize the treeview tooltip.
-
-        Args:
-            treeview: The Treeview widget to add tooltips to.
-            get_tooltip_text: Callback that takes an item ID and returns tooltip
-                text, or None if no tooltip should be shown for that item.
-        """
+    def __init__(self, treeview: ttk.Treeview):
         self.treeview = treeview
-        self.get_tooltip_text = get_tooltip_text
         self.tooltip: tk.Toplevel | None = None
-        self.current_item: str | None = None
+        self.current_target: str | None = None
         self.after_id: str | None = None
 
-        # Bind events
         self.treeview.bind("<Motion>", self._on_motion, add="+")
         self.treeview.bind("<Leave>", self._on_leave, add="+")
 
+    def _identify_target(self, event) -> str | None:
+        """Identify what the mouse is over. Override in subclasses."""
+        raise NotImplementedError
+
+    def _get_tooltip_text(self, target: str) -> str | None:
+        """Get tooltip text for target. Override in subclasses."""
+        raise NotImplementedError
+
     def _on_motion(self, event):
         """Handle mouse motion over the treeview."""
-        # Identify which row the mouse is over
-        item_id = self.treeview.identify_row(event.y)
+        target = self._identify_target(event)
 
-        # If we moved to a different item (or no item), hide current tooltip
-        if item_id != self.current_item:
+        if target != self.current_target:
             self._cancel_pending()
             self._hide_tooltip()
-            self.current_item = item_id
+            self.current_target = target
 
-            # Schedule showing tooltip for new item
-            if item_id:
+            if target and self._get_tooltip_text(target):
                 self.after_id = self.treeview.after(
                     self.SHOW_DELAY, lambda: self._show_tooltip(event.x_root, event.y_root)
                 )
@@ -156,7 +135,7 @@ class TreeviewRowTooltip:
         """Handle mouse leaving the treeview."""
         self._cancel_pending()
         self._hide_tooltip()
-        self.current_item = None
+        self.current_target = None
 
     def _cancel_pending(self):
         """Cancel any pending tooltip show."""
@@ -168,21 +147,17 @@ class TreeviewRowTooltip:
         """Show the tooltip at the given position."""
         self.after_id = None
 
-        if not self.current_item:
+        if not self.current_target:
             return
 
-        # Get tooltip text from callback
-        text = self.get_tooltip_text(self.current_item)
+        text = self._get_tooltip_text(self.current_target)
         if not text:
             return
 
-        # Create tooltip window
         self.tooltip = tk.Toplevel(self.treeview)
         self.tooltip.wm_overrideredirect(True)
         self.tooltip.wm_geometry(f"+{x + self.OFFSET_X}+{y + self.OFFSET_Y}")
         self.tooltip.configure(background="lightyellow")
-
-        # Prevent tooltip from stealing focus
         self.tooltip.wm_attributes("-topmost", True)
 
         label = tk.Label(
@@ -203,3 +178,59 @@ class TreeviewRowTooltip:
         if self.tooltip:
             self.tooltip.destroy()
             self.tooltip = None
+
+
+class TreeviewRowTooltip(_TreeviewTooltipBase):
+    """Dynamic tooltip for Treeview rows.
+
+    Usage:
+        def get_tooltip(item_id: str) -> str | None:
+            values = tree.item(item_id, "values")
+            return "Done" if values[0] == "Done" else None
+
+        TreeviewRowTooltip(tree, get_tooltip)
+    """
+
+    def __init__(self, treeview: ttk.Treeview, get_tooltip_text: Callable[[str], str | None]):
+        super().__init__(treeview)
+        self._get_text_callback = get_tooltip_text
+
+    def _identify_target(self, event) -> str | None:
+        return self.treeview.identify_row(event.y) or None
+
+    def _get_tooltip_text(self, target: str) -> str | None:
+        return self._get_text_callback(target)
+
+
+class TreeviewHeaderTooltip(_TreeviewTooltipBase):
+    """Tooltip for Treeview column headers.
+
+    Usage:
+        TreeviewHeaderTooltip(tree, {
+            "efficiency": "GB saved per hour of conversion time",
+        })
+    """
+
+    SHOW_DELAY = 400
+
+    def __init__(self, treeview: ttk.Treeview, column_tooltips: dict[str, str]):
+        super().__init__(treeview)
+        self.column_tooltips = column_tooltips
+
+    def _identify_target(self, event) -> str | None:
+        if self.treeview.identify_region(event.x, event.y) != "heading":
+            return None
+
+        column = self.treeview.identify_column(event.x)
+        if column == "#0":
+            return "#0"
+
+        try:
+            col_index = int(column[1:]) - 1
+            columns = self.treeview["columns"]
+            return columns[col_index] if col_index < len(columns) else None
+        except (ValueError, IndexError):
+            return None
+
+    def _get_tooltip_text(self, target: str) -> str | None:
+        return self.column_tooltips.get(target)

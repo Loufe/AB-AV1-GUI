@@ -240,29 +240,38 @@ def estimate_processing_speed_from_history() -> float:
     return statistics.median(speeds) if speeds else 0
 
 
-def estimate_current_file_eta(gui: Any) -> float:
+def estimate_current_file_eta(
+    running: bool,
+    last_eta_seconds: float | None,
+    last_eta_timestamp: float | None,
+    encoding_progress: float,
+    encoding_start_time: float | None,
+) -> float:
     """Estimate time remaining for the current file being processed.
 
     Args:
-        gui: The main GUI instance with conversion state
+        running: Whether conversion is currently running
+        last_eta_seconds: Last stored ETA from ab-av1 in seconds
+        last_eta_timestamp: Timestamp when last_eta_seconds was updated
+        encoding_progress: Current encoding progress (0-100)
+        encoding_start_time: Timestamp when encoding phase started
 
     Returns:
         Estimated seconds remaining for current file, or 0 if not processing
     """
-    if not gui.session.running:
+    if not running:
         return 0
 
     # Check for stored AB-AV1 ETA first (most accurate)
-    if gui.session.last_eta_seconds is not None and gui.session.last_eta_timestamp is not None:
-        elapsed_since_update = time.time() - gui.session.last_eta_timestamp
-        return max(0, gui.session.last_eta_seconds - elapsed_since_update)
+    if last_eta_seconds is not None and last_eta_timestamp is not None:
+        elapsed_since_update = time.time() - last_eta_timestamp
+        return max(0, last_eta_seconds - elapsed_since_update)
 
     # Fallback to calculation based on progress
-    encoding_prog = gui.session.last_encoding_progress
-    if encoding_prog > 0 and gui.session.current_file_encoding_start_time is not None:
-        elapsed_encoding_time = time.time() - gui.session.current_file_encoding_start_time
+    if encoding_progress > 0 and encoding_start_time is not None:
+        elapsed_encoding_time = time.time() - encoding_start_time
         if elapsed_encoding_time > 1:
-            total_encoding_time_est = (elapsed_encoding_time / encoding_prog) * 100
+            total_encoding_time_est = (elapsed_encoding_time / encoding_progress) * 100
             current_eta = total_encoding_time_est - elapsed_encoding_time
             logger.debug(f"Using progress-based ETA: {current_eta}s for current file")
             return max(0, current_eta)
@@ -270,12 +279,15 @@ def estimate_current_file_eta(gui: Any) -> float:
     return 0
 
 
-def estimate_pending_files_eta(gui: Any, pending_files: list) -> float:
+def estimate_pending_files_eta(
+    pending_files: list[str], current_file_path: str | None, current_file_encoding_started: bool
+) -> float:
     """Estimate total time needed for all pending files.
 
     Args:
-        gui: The main GUI instance
         pending_files: List of file paths waiting to be processed
+        current_file_path: Path of file currently being processed (if any)
+        current_file_encoding_started: Whether current file has started encoding phase
 
     Returns:
         Estimated total seconds for all pending files
@@ -284,21 +296,16 @@ def estimate_pending_files_eta(gui: Any, pending_files: list) -> float:
         return 0
 
     total_time = 0
-    current_path = gui.session.current_file_path
 
     # Normalize current path for comparison
-    if current_path:
-        current_path = os.path.normpath(current_path)
-
-    # Check if current file is already being encoded (don't count it twice)
-    current_file_handled = gui.session.current_file_encoding_start_time is not None
+    normalized_current_path = os.path.normpath(current_file_path) if current_file_path else None
 
     for file_path in pending_files:
         # Normalize path for comparison
         normalized_file_path = os.path.normpath(file_path)
 
         # Skip if this is the current file and it's already being encoded
-        if normalized_file_path == current_path and current_file_handled:
+        if normalized_file_path == normalized_current_path and current_file_encoding_started:
             continue
 
         # Estimate time for this file
@@ -310,6 +317,9 @@ def estimate_pending_files_eta(gui: Any, pending_files: list) -> float:
 
 def estimate_remaining_time(gui: Any) -> float:
     """Estimate total remaining time for all queued files.
+
+    This is a GUI-aware wrapper that extracts session state and delegates
+    to the decoupled estimation functions.
 
     Args:
         gui: The main GUI instance
@@ -323,13 +333,22 @@ def estimate_remaining_time(gui: Any) -> float:
     remaining_time = 0
 
     # Add ETA for current file if it's being processed
-    current_file_eta = estimate_current_file_eta(gui)
+    current_file_eta = estimate_current_file_eta(
+        running=gui.session.running,
+        last_eta_seconds=gui.session.last_eta_seconds,
+        last_eta_timestamp=gui.session.last_eta_timestamp,
+        encoding_progress=gui.session.last_encoding_progress,
+        encoding_start_time=gui.session.current_file_encoding_start_time,
+    )
     if current_file_eta > 0:
         remaining_time += current_file_eta
 
     # Add ETA for pending files
-    pending_files = gui.session.pending_files
-    pending_eta = estimate_pending_files_eta(gui, pending_files)
+    pending_eta = estimate_pending_files_eta(
+        pending_files=gui.session.pending_files,
+        current_file_path=gui.session.current_file_path,
+        current_file_encoding_started=gui.session.current_file_encoding_start_time is not None,
+    )
     remaining_time += pending_eta
 
     return remaining_time

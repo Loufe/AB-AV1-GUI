@@ -12,8 +12,167 @@ import tkinter as tk
 from src.estimation import estimate_file_time
 from src.gui.tree_formatters import format_compact_time, format_efficiency
 from src.history_index import get_history_index
-from src.models import FileStatus
+from src.models import FileStatus, QueueItemStatus
 from src.utils import format_file_size
+
+
+def update_tree_row(gui, file_path: str):
+    """Update a single file row with data from history index.
+
+    Args:
+        gui: The VideoConverterGUI instance.
+        file_path: Path to the file that was analyzed.
+    """
+    # Find the tree item by file_path
+    item_id = gui.get_tree_item_map().get(file_path)
+    if not item_id or not gui.analysis_tree.exists(item_id):
+        return
+
+    # Get file data from history index
+    index = get_history_index()
+    record = index.lookup_file(file_path)
+
+    if not record:
+        return
+
+    has_layer2 = record.predicted_size_reduction is not None
+    # Use Layer 2 data if available, otherwise fall back to Layer 1 estimate
+    reduction_percent = record.predicted_size_reduction or record.estimated_reduction_percent
+
+    # Calculate display values based on record status
+    size_str = format_file_size(record.file_size_bytes) if record.file_size_bytes else "—"
+    tag = ""
+    if record.status == FileStatus.SCANNED and reduction_percent and record.file_size_bytes:
+        # File needs conversion - show estimates
+        file_savings = int(record.file_size_bytes * reduction_percent / 100)
+        savings_str = format_file_size(file_savings)
+        if not has_layer2:
+            savings_str = f"~{savings_str}"
+
+        file_time = estimate_file_time(
+            codec=record.video_codec, duration=record.duration_sec, size=record.file_size_bytes
+        ).best_seconds
+        time_str = format_compact_time(file_time) if file_time > 0 else "—"
+        eff_str = format_efficiency(file_savings, file_time)
+    elif record.status == FileStatus.CONVERTED:
+        savings_str = "Done"
+        time_str = "—"
+        eff_str = "—"
+        tag = "done"
+    elif record.status == FileStatus.NOT_WORTHWHILE:
+        savings_str = "Skip"
+        time_str = "—"
+        eff_str = "—"
+        tag = "skip"
+    elif record.video_codec and record.video_codec.lower() == "av1":
+        # Already AV1 - show subtle indicator
+        savings_str = "AV1"
+        time_str = "—"
+        eff_str = "—"
+        tag = "av1"
+    else:
+        # No data yet
+        savings_str = "—"
+        time_str = "—"
+        eff_str = "—"
+
+    # Update tree item - preserve queue tags (in_queue, partial_queue) while updating status tags
+    current_tags = list(gui.analysis_tree.item(item_id, "tags") or ())
+    queue_tags = [t for t in current_tags if t in ("in_queue", "partial_queue")]
+    new_tags = queue_tags + ([tag] if tag else [])
+    gui.analysis_tree.item(item_id, values=(size_str, savings_str, time_str, eff_str), tags=tuple(new_tags))
+
+    # Update all ancestor folder aggregates
+    parent_id = gui.analysis_tree.parent(item_id)
+    while parent_id:
+        update_folder_aggregates(gui, parent_id)
+        parent_id = gui.analysis_tree.parent(parent_id)
+
+
+def batch_update_tree_rows(gui, file_paths: list[str]) -> None:
+    """Update multiple tree rows efficiently without per-file folder updates.
+
+    Updates file rows and collects affected folders, then updates folder
+    aggregates once at the end. Much faster than calling update_tree_row
+    for each file individually.
+
+    Args:
+        gui: The VideoConverterGUI instance.
+        file_paths: List of file paths to update.
+    """
+    if not file_paths:
+        return
+
+    index = get_history_index()
+    affected_folders: set[str] = set()
+
+    for file_path in file_paths:
+        item_id = gui.get_tree_item_map().get(file_path)
+        if not item_id or not gui.analysis_tree.exists(item_id):
+            continue
+
+        record = index.lookup_file(file_path)
+        if not record:
+            continue
+
+        # Calculate display values
+        size_str = format_file_size(record.file_size_bytes) if record.file_size_bytes else "—"
+        tag = ""
+        # Use Layer 2 data if available, otherwise fall back to Layer 1 estimate
+        has_layer2 = record.predicted_size_reduction is not None
+        reduction_percent = record.predicted_size_reduction or record.estimated_reduction_percent
+        if record.status == FileStatus.SCANNED and reduction_percent and record.file_size_bytes:
+            file_savings = int(record.file_size_bytes * reduction_percent / 100)
+            savings_str = format_file_size(file_savings)
+            if not has_layer2:
+                savings_str = f"~{savings_str}"
+            file_time = estimate_file_time(
+                codec=record.video_codec, duration=record.duration_sec, size=record.file_size_bytes
+            ).best_seconds
+            time_str = format_compact_time(file_time) if file_time > 0 else "—"
+            eff_str = format_efficiency(file_savings, file_time)
+        elif record.status == FileStatus.CONVERTED:
+            savings_str = "Done"
+            time_str = "—"
+            eff_str = "—"
+            tag = "done"
+        elif record.status == FileStatus.NOT_WORTHWHILE:
+            savings_str = "Skip"
+            time_str = "—"
+            eff_str = "—"
+            tag = "skip"
+        elif record.video_codec and record.video_codec.lower() == "av1":
+            # Already AV1 - show subtle indicator
+            savings_str = "AV1"
+            time_str = "—"
+            eff_str = "—"
+            tag = "av1"
+        else:
+            savings_str = "—"
+            time_str = "—"
+            eff_str = "—"
+
+        # Update tree item - preserve queue tags (in_queue, partial_queue) while updating status tags
+        current_tags = list(gui.analysis_tree.item(item_id, "tags") or ())
+        # Remove old status tags (done, skip, av1) but keep queue tags
+        queue_tags = [t for t in current_tags if t in ("in_queue", "partial_queue")]
+        new_tags = queue_tags + ([tag] if tag else [])
+        gui.analysis_tree.item(
+            item_id, values=(size_str, savings_str, time_str, eff_str), tags=tuple(new_tags)
+        )
+
+        # Track all ancestor folders for batch aggregate update
+        parent_id = gui.analysis_tree.parent(item_id)
+        while parent_id:
+            affected_folders.add(parent_id)
+            parent_id = gui.analysis_tree.parent(parent_id)
+
+    # Update folder aggregates once for all affected folders
+    # Pre-build reverse map once for all folder updates
+    if affected_folders:
+        item_to_path = {item_id: path for path, item_id in gui.get_tree_item_map().items()}
+        for folder_id in affected_folders:
+            update_folder_aggregates(gui, folder_id, item_to_path)
 
 
 def update_folder_aggregates(gui, folder_id: str, item_to_path: dict[str, str] | None = None):
@@ -97,14 +256,17 @@ def get_queued_file_paths(gui) -> set[str]:
     queued_paths: set[str] = set()
 
     for item in gui.get_queue_items():
-        if item.status not in ("pending", "converting"):
+        if item.status not in (QueueItemStatus.PENDING, QueueItemStatus.CONVERTING):
             continue
 
         if item.is_folder:
             # Find all files in tree_item_map that are under this folder
-            folder_prefix = item.source_path + os.sep
+            # Normalize paths to handle mixed separators on Windows
+            normalized_folder = os.path.normpath(item.source_path)
+            folder_prefix = normalized_folder + os.sep
             for file_path in gui.get_tree_item_map():
-                if file_path.startswith(folder_prefix) or file_path == item.source_path:
+                normalized_file = os.path.normpath(file_path)
+                if normalized_file.startswith(folder_prefix) or normalized_file == normalized_folder:
                     queued_paths.add(file_path)
         else:
             # Single file

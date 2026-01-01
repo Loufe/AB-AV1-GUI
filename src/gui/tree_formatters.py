@@ -5,7 +5,11 @@ Pure functions for formatting data (time, size, efficiency) into compact
 display strings and parsing those strings back for sorting/comparison.
 """
 
-from src.config import EFFICIENCY_DECIMAL_THRESHOLD
+import logging
+
+from src.config import ANALYSIS_TREE_HEADINGS, EFFICIENCY_DECIMAL_THRESHOLD
+
+logger = logging.getLogger(__name__)
 
 
 def format_compact_time(seconds: float) -> str:
@@ -81,7 +85,9 @@ def parse_size_to_bytes(size_str: str) -> float:
 
         # Convert to bytes
         multipliers = {"B": 1, "KB": 1024, "MB": 1024**2, "GB": 1024**3, "TB": 1024**4}
-        return value * multipliers.get(unit, 1)
+        if unit not in multipliers:
+            return float("inf")
+        return value * multipliers[unit]
     except (ValueError, KeyError):
         return float("inf")
 
@@ -139,3 +145,128 @@ def parse_efficiency_to_value(eff_str: str) -> float:
         return float("-inf")
     except (ValueError, IndexError):
         return float("-inf")
+
+
+def sort_analysis_tree(gui, col: str, descending: bool | None = None):
+    """Sort the analysis tree by the specified column.
+
+    Sorting is done within each parent (preserves hierarchy).
+    Folders sort before files when sorting by Name.
+    Toggle direction on repeated clicks (when descending is None).
+
+    Args:
+        gui: The GUI instance (VideoConverterGUI)
+        col: Column to sort by ("#0", "size", "savings", "time", or "efficiency")
+        descending: If specified, force this direction. If None, toggle on repeat click.
+    """
+    if descending is not None:
+        # Programmatic sort with explicit direction
+        gui._sort_col = col  # noqa: SLF001 - accessing GUI internal state
+        gui._sort_reverse = descending  # noqa: SLF001 - accessing GUI internal state
+    elif gui._sort_col == col:  # noqa: SLF001 - accessing GUI internal state
+        # Toggle direction if same column clicked
+        gui._sort_reverse = not gui._sort_reverse  # noqa: SLF001 - accessing GUI internal state
+    else:
+        gui._sort_col = col  # noqa: SLF001 - accessing GUI internal state
+        gui._sort_reverse = False  # noqa: SLF001 - accessing GUI internal state
+
+    def get_sort_key(item_id: str) -> tuple:
+        """Get sort key for an item.
+
+        Returns tuple: (is_file, sort_value)
+        - Folders always sort before files (is_file=False for folders)
+        - Sort value depends on column
+        """
+        # Check if item is a file (has parent) or folder (no parent or root)
+        parent = gui.analysis_tree.parent(item_id)
+        is_file = bool(parent)
+
+        if col == "#0":
+            # Sort by name
+            text = gui.analysis_tree.item(item_id, "text")
+            # Remove arrows, icons, and leading spaces
+            name = text.replace("▶", "").replace("▼", "").replace("📁", "").replace("🎬", "").strip()
+            return (is_file, name.lower())
+        if col == "size":
+            # Sort by file size (values[0])
+            values = gui.analysis_tree.item(item_id, "values")
+            if values and len(values) >= 1:
+                size_bytes = parse_size_to_bytes(values[0])
+                return (is_file, size_bytes)
+            return (is_file, float("inf"))
+        if col == "savings":
+            # Sort by estimated savings (values[1])
+            values = gui.analysis_tree.item(item_id, "values")
+            if values and len(values) >= 2:  # noqa: PLR2004 - column index bounds check
+                size_bytes = parse_size_to_bytes(values[1])
+                return (is_file, size_bytes)
+            return (is_file, float("inf"))
+        if col == "time":
+            # Sort by estimated time (values[2])
+            values = gui.analysis_tree.item(item_id, "values")
+            if values and len(values) >= 3:  # noqa: PLR2004 - column index bounds check
+                time_seconds = parse_time_to_seconds(values[2])
+                return (is_file, time_seconds)
+            return (is_file, float("inf"))
+        if col == "efficiency":
+            # Sort by efficiency (values[3], higher is better, so negate for default ascending sort)
+            values = gui.analysis_tree.item(item_id, "values")
+            if values and len(values) >= 4:  # noqa: PLR2004 - column index bounds check
+                eff_value = parse_efficiency_to_value(values[3])
+                # Negate so higher efficiency sorts first in ascending order
+                return (is_file, -eff_value)
+            return (is_file, float("inf"))
+        return (is_file, "")
+
+    def sort_children(parent_id: str):
+        """Sort children of a parent node recursively."""
+        children = list(gui.analysis_tree.get_children(parent_id))
+        if not children:
+            return
+
+        # Sort children
+        children_sorted = sorted(children, key=get_sort_key, reverse=gui._sort_reverse)  # noqa: SLF001
+
+        # Reorder in tree
+        for index, item_id in enumerate(children_sorted):
+            gui.analysis_tree.move(item_id, parent_id, index)
+
+        # Recursively sort children of each child (for folders)
+        for child_id in children_sorted:
+            if gui.analysis_tree.get_children(child_id):  # Has children (is a folder)
+                sort_children(child_id)
+
+    # Sort root level items and their children recursively
+    sort_children("")
+
+    # Update column headers to show sort indicator
+    update_sort_indicators(gui)
+
+    logger.debug(f"Sorted analysis tree by {col}, reverse={gui._sort_reverse}")  # noqa: SLF001
+
+
+def update_sort_indicators(gui):
+    """Update column headers to show sort direction indicator.
+
+    Args:
+        gui: The GUI instance (VideoConverterGUI)
+    """
+    indicator = " ▼" if gui._sort_reverse else " ▲"  # noqa: SLF001
+
+    for col, base_text in ANALYSIS_TREE_HEADINGS.items():
+        if col == gui._sort_col:  # noqa: SLF001
+            gui.analysis_tree.heading(col, text=base_text + indicator)
+        else:
+            gui.analysis_tree.heading(col, text=base_text)
+
+
+def clear_sort_state(gui):
+    """Clear sort state and reset column headers.
+
+    Args:
+        gui: The GUI instance (VideoConverterGUI)
+    """
+    gui._sort_col = None  # noqa: SLF001
+    gui._sort_reverse = False  # noqa: SLF001
+    for col, base_text in ANALYSIS_TREE_HEADINGS.items():
+        gui.analysis_tree.heading(col, text=base_text)
