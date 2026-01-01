@@ -17,9 +17,13 @@ from typing import Any, Callable
 
 # Project imports
 from src.config import DEFAULT_ENCODING_PRESET, DEFAULT_VMAF_TARGET, MIN_VMAF_FALLBACK_TARGET, VMAF_FALLBACK_STEP
-from src.utils import anonymize_filename, format_file_size, get_video_info, get_windows_subprocess_startupinfo
-from src.vendor_manager import AB_AV1_EXE, FFMPEG_DIR, get_ab_av1_path
+from src.platform_utils import get_windows_subprocess_startupinfo
+from src.privacy import anonymize_filename
+from src.utils import format_file_size, get_video_info
+from src.vendor_manager import AB_AV1_EXE, AB_AV1_EXE_NAME, FFMPEG_DIR, get_ab_av1_path
+from src.video_metadata import extract_video_metadata
 
+from .checker import get_log_interval_for_duration
 from .cleaner import clean_ab_av1_temp_folders
 
 # Import exceptions, cleaner, parser from this package
@@ -39,7 +43,7 @@ logger = logging.getLogger(__name__)
 class AbAv1Wrapper:
     """Wrapper for the ab-av1 tool providing high-level encoding interface.
 
-    This class handles execution of ab-av1.exe, monitors progress via a parser,
+    This class handles execution of ab-av1, monitors progress via a parser,
     and manages VMAF-based encoding with automatic fallback.
     """
 
@@ -47,7 +51,10 @@ class AbAv1Wrapper:
         """Initialize the wrapper, find executable, prepare parser."""
         ab_av1_path = get_ab_av1_path()
         if ab_av1_path is None:
-            error_msg = f"ab-av1.exe not found.\nExpected: {AB_AV1_EXE}\nClick 'Download' in Settings to install it."
+            error_msg = (
+                f"{AB_AV1_EXE_NAME} not found.\nExpected: {AB_AV1_EXE}\n"
+                "Install via 'cargo install ab-av1' or click 'Download' in Settings."
+            )
             logger.error(error_msg)
             raise FileNotFoundError(error_msg)
         self.executable_path = str(ab_av1_path)
@@ -102,7 +109,7 @@ class AbAv1Wrapper:
             if not video_info or "streams" not in video_info:
                 raise InputFileError("Invalid video file", error_type="invalid_video")
 
-            if not any(s.get("codec_type") == "video" for s in video_info.get("streams", [])):
+            if not extract_video_metadata(video_info).has_video:
                 raise InputFileError("No video stream", error_type="no_video_stream")
 
             try:
@@ -205,6 +212,12 @@ class AbAv1Wrapper:
                 cmd.extend(["--enc-input", f"c:v={hw_decoder}"])
                 logger.info(f"Using hardware decoder: {hw_decoder}")
 
+            # Add log interval if supported (for more frequent progress updates)
+            log_interval = get_log_interval_for_duration(total_duration_seconds)
+            if log_interval:
+                cmd.extend(["--log-interval", log_interval])
+                logger.info(f"Using log interval: {log_interval}")
+
             cmd_str = " ".join(cmd)
 
             cmd_for_log = [
@@ -219,6 +232,8 @@ class AbAv1Wrapper:
                 "--min-vmaf",
                 str(current_vmaf_target),
             ]
+            if log_interval:
+                cmd_for_log.extend(["--log-interval", log_interval])
             cmd_str_log = " ".join(cmd_for_log)
             stats["command"] = cmd_str_log
             logger.debug(f"Running: {cmd_str_log}")
@@ -472,9 +487,9 @@ class AbAv1Wrapper:
                 elif re.search(r"out\s+of\s+memory", full_output_text, re.IGNORECASE):
                     error_type = "memory_error"
                     error_details = "Out of memory"
-                elif "ab-av1.exe" in full_output_text and "not recognized" in full_output_text:
+                elif AB_AV1_EXE_NAME in full_output_text and "not recognized" in full_output_text:
                     error_type = "executable_not_found"
-                    error_details = "ab-av1.exe command failed (not found or path issue?)"
+                    error_details = f"{AB_AV1_EXE_NAME} command failed (not found or path issue?)"
                 elif return_code != 0:
                     error_details = f"ab-av1 exited with code {return_code}"
                     logger.info(f"No specific error pattern matched, using generic exit code message: {error_details}")
@@ -687,7 +702,7 @@ class AbAv1Wrapper:
             if not video_info or "streams" not in video_info:
                 raise InputFileError("Invalid video file", error_type="invalid_video")
 
-            if not any(s.get("codec_type") == "video" for s in video_info.get("streams", [])):
+            if not extract_video_metadata(video_info).has_video:
                 raise InputFileError("No video stream", error_type="no_video_stream")
 
             try:
@@ -872,10 +887,19 @@ class AbAv1Wrapper:
                     logger.error(f"Output:\n{full_output_text[-1000:]}")
                     raise AbAv1Error(error_msg, command=cmd_str_log, output=full_output_text, error_type="parse_error")
 
-                # Calculate predicted output size
+                # Calculate predicted output size (accounting for audio which is copied unchanged)
                 predicted_output_size = None
                 if original_size and stats.get("size_reduction"):
-                    predicted_output_size = int(original_size * (1 - stats["size_reduction"] / 100))
+                    # ab-av1's size_reduction is video-only; audio is copied unchanged
+                    meta = extract_video_metadata(video_info)
+                    audio_size_bytes = 0
+                    if meta.duration_sec and meta.total_audio_bitrate_kbps:
+                        audio_size_bytes = int(meta.duration_sec * meta.total_audio_bitrate_kbps * 1000 / 8)
+
+                    # Apply reduction only to video portion
+                    video_size = max(0, original_size - audio_size_bytes)
+                    predicted_video = int(video_size * (1 - stats["size_reduction"] / 100))
+                    predicted_output_size = predicted_video + audio_size_bytes
 
                 # Build result
                 result = {
@@ -985,7 +1009,7 @@ class AbAv1Wrapper:
             if not video_info or "streams" not in video_info:
                 raise InputFileError("Invalid video file", error_type="invalid_video")
 
-            if not any(s.get("codec_type") == "video" for s in video_info.get("streams", [])):
+            if not extract_video_metadata(video_info).has_video:
                 raise InputFileError("No video stream", error_type="no_video_stream")
 
             try:
@@ -1042,6 +1066,12 @@ class AbAv1Wrapper:
         if hw_decoder:
             cmd.extend(["--enc-input", f"c:v={hw_decoder}"])
 
+        # Add log interval if supported (for more frequent progress updates)
+        log_interval = get_log_interval_for_duration(total_duration_seconds)
+        if log_interval:
+            cmd.extend(["--log-interval", log_interval])
+            logger.info(f"Using log interval: {log_interval}")
+
         cmd_str = " ".join(cmd)
 
         cmd_for_log = [
@@ -1056,6 +1086,8 @@ class AbAv1Wrapper:
             "--crf",
             str(crf),
         ]
+        if log_interval:
+            cmd_for_log.extend(["--log-interval", log_interval])
         cmd_str_log = " ".join(cmd_for_log)
         logger.info(f"Running encode with cached CRF: {cmd_str_log}")
 

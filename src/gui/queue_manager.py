@@ -8,7 +8,6 @@ These functions handle queue item creation, categorization, and addition logic.
 import os
 import uuid
 
-from src.config import MIN_RESOLUTION_HEIGHT, MIN_RESOLUTION_WIDTH
 from src.conversion_engine.scanner import find_video_files
 from src.estimation import estimate_file_time
 from src.gui.widgets.add_to_queue_dialog import AddToQueuePreviewDialog, QueuePreviewData
@@ -65,6 +64,39 @@ def get_selected_extensions(gui) -> list[str]:
     return extensions
 
 
+def filter_file_for_queue(
+    file_path: str, operation_type: OperationType, index=None
+) -> tuple[bool, str | None]:
+    """Check if a file should be added to the queue.
+
+    Args:
+        file_path: Path to the video file.
+        operation_type: The operation type (CONVERT or ANALYZE).
+        index: Optional HistoryIndex instance (will get singleton if not provided).
+
+    Returns:
+        Tuple of (should_add, skip_reason) where:
+        - should_add: True if file passes all filters
+        - skip_reason: Reason string if skipped, None if should_add is True
+    """
+    if index is None:
+        index = get_history_index()
+
+    record = index.lookup_file(file_path)
+    if record:
+        # Already converted - skip
+        if record.status == FileStatus.CONVERTED:
+            return False, "already converted"
+        # Not worth converting - skip
+        if record.status == FileStatus.NOT_WORTHWHILE:
+            return False, "not worth converting"
+        # Already AV1 codec - skip for CONVERT operations
+        if operation_type == OperationType.CONVERT and record.video_codec == "av1":
+            return False, "already AV1"
+
+    return True, None
+
+
 def create_queue_item(gui, path: str, is_folder: bool, operation_type: OperationType) -> QueueItem:
     """Create a new QueueItem with default settings.
 
@@ -82,25 +114,9 @@ def create_queue_item(gui, path: str, is_folder: bool, operation_type: Operation
             index = get_history_index()
 
             for fp in file_paths:
-                # Apply same filtering as categorize_queue_items for individual files
-                record = index.lookup_file(fp)
-                if record:
-                    # Already converted - skip
-                    if record.status == FileStatus.CONVERTED:
-                        continue
-                    # Not worth converting - skip
-                    if record.status == FileStatus.NOT_WORTHWHILE:
-                        continue
-                    # Already AV1 codec - skip for CONVERT operations
-                    if operation_type == OperationType.CONVERT and record.video_codec == "av1":
-                        continue
-                    # Below minimum resolution - skip
-                    if (
-                        record.width
-                        and record.height
-                        and (record.width < MIN_RESOLUTION_WIDTH or record.height < MIN_RESOLUTION_HEIGHT)
-                    ):
-                        continue
+                should_add, _ = filter_file_for_queue(fp, operation_type, index)
+                if not should_add:
+                    continue
 
                 # Passed all filters - add to files list
                 try:
@@ -127,21 +143,18 @@ def categorize_queue_items(
 ) -> tuple[list[tuple[str, bool]], list[str], list[tuple[str, bool, QueueItem]], list[tuple[str, str]]]:
     """Categorize items for queue preview.
 
-    Filters out individual files that shouldn't be added based on their history status:
+    Filters out items that shouldn't be added based on their history status:
     - Already converted (CONVERTED status)
     - Not worth converting (NOT_WORTHWHILE status)
     - Already AV1 codec (for CONVERT operations)
-    - Below minimum resolution
-
-    Note: Folders are added here without individual file filtering, but create_queue_item()
-    applies the same filters when populating the folder's files list.
+    - Folders with no convertible files
 
     Returns:
         Tuple of (to_add, duplicates, conflicts, skipped) where:
-        - to_add: Items that can be added directly (files passing filters + all folders)
+        - to_add: Items that can be added directly (files/folders with convertible content)
         - duplicates: Paths already in queue with same operation
         - conflicts: (path, is_folder, existing_item) for different operation
-        - skipped: (path, reason) for individual files filtered out
+        - skipped: (path, reason) for files/folders filtered out
     """
     to_add: list[tuple[str, bool]] = []
     duplicates: list[str] = []
@@ -149,6 +162,7 @@ def categorize_queue_items(
     skipped: list[tuple[str, str]] = []
 
     index = get_history_index()
+    extensions = get_selected_extensions(gui)
 
     for path, is_folder in items:
         # Check for existing queue item first
@@ -160,40 +174,38 @@ def categorize_queue_items(
                 conflicts.append((path, is_folder, existing))
             continue
 
-        # For folders, add without filtering (individual files will be filtered at processing time)
+        # For folders, scan contents and check if any files pass the filter
         if is_folder:
-            to_add.append((path, is_folder))
+            if not extensions:
+                skipped.append((path, "no file extensions selected"))
+                continue
+
+            file_paths = find_video_files(path, extensions)
+            if not file_paths:
+                skipped.append((path, "no video files found"))
+                continue
+
+            # Check each file in the folder
+            convertible_count = 0
+            for fp in file_paths:
+                should_add, reason = filter_file_for_queue(fp, operation_type, index)
+                if should_add:
+                    convertible_count += 1
+                else:
+                    skipped.append((fp, reason or "filtered"))
+
+            if convertible_count == 0:
+                skipped.append((path, "no convertible files (all filtered)"))
+            else:
+                to_add.append((path, is_folder))
             continue
 
-        # Check history for file-level filtering
-        record = index.lookup_file(path)
-        if record:
-            # Already converted - skip
-            if record.status == FileStatus.CONVERTED:
-                skipped.append((path, "already converted"))
-                continue
-
-            # Not worth converting - skip
-            if record.status == FileStatus.NOT_WORTHWHILE:
-                skipped.append((path, "not worth converting"))
-                continue
-
-            # Already AV1 codec - skip for CONVERT operations
-            if operation_type == OperationType.CONVERT and record.video_codec == "av1":
-                skipped.append((path, "already AV1"))
-                continue
-
-            # Below minimum resolution - skip
-            if (
-                record.width
-                and record.height
-                and (record.width < MIN_RESOLUTION_WIDTH or record.height < MIN_RESOLUTION_HEIGHT)
-            ):
-                skipped.append((path, "below minimum resolution"))
-                continue
-
-        # Passed all filters - can be added
-        to_add.append((path, is_folder))
+        # Individual file - use shared filter function
+        should_add, reason = filter_file_for_queue(path, operation_type, index)
+        if should_add:
+            to_add.append((path, is_folder))
+        else:
+            skipped.append((path, reason or "filtered"))
 
     return to_add, duplicates, conflicts, skipped
 
@@ -300,6 +312,9 @@ def add_items_to_queue(
     queue_items = gui.get_queue_items()
     for path, is_folder in to_add:
         item = create_queue_item(gui, path, is_folder, operation_type)
+        # Safety check: don't add folders with no convertible files
+        if is_folder and not item.files:
+            continue
         queue_items.append(item)
         counts["added"] += 1
 
@@ -308,11 +323,17 @@ def add_items_to_queue(
         if conflict_resolution == "keep_both":
             for path, is_folder, _ in conflicts:
                 item = create_queue_item(gui, path, is_folder, operation_type)
+                # Safety check: don't add folders with no convertible files
+                if is_folder and not item.files:
+                    continue
                 queue_items.append(item)
                 counts["conflict_added"] += 1
         elif conflict_resolution == "replace":
             for path, is_folder, existing in conflicts:
                 new_item = create_queue_item(gui, path, is_folder, operation_type)
+                # Safety check: don't replace with empty folder
+                if is_folder and not new_item.files:
+                    continue
                 idx = queue_items.index(existing)
                 queue_items[idx] = new_item
                 counts["conflict_replaced"] += 1

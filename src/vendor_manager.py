@@ -34,13 +34,16 @@ def _get_project_root() -> Path:
 PROJECT_ROOT = _get_project_root()
 VENDOR_DIR = PROJECT_ROOT / "vendor"
 
-# Tool-specific paths
+# Tool-specific paths (platform-aware)
 AB_AV1_DIR = VENDOR_DIR / "ab-av1"
-AB_AV1_EXE = AB_AV1_DIR / "ab-av1.exe"
+AB_AV1_EXE_NAME = "ab-av1.exe" if sys.platform == "win32" else "ab-av1"
+AB_AV1_EXE = AB_AV1_DIR / AB_AV1_EXE_NAME
 
 FFMPEG_DIR = VENDOR_DIR / "ffmpeg"
-FFMPEG_EXE = FFMPEG_DIR / "ffmpeg.exe"
-FFPROBE_EXE = FFMPEG_DIR / "ffprobe.exe"
+FFMPEG_EXE_NAME = "ffmpeg.exe" if sys.platform == "win32" else "ffmpeg"
+FFPROBE_EXE_NAME = "ffprobe.exe" if sys.platform == "win32" else "ffprobe"
+FFMPEG_EXE = FFMPEG_DIR / FFMPEG_EXE_NAME
+FFPROBE_EXE = FFMPEG_DIR / FFPROBE_EXE_NAME
 
 # --- GitHub API Endpoints ---
 
@@ -55,21 +58,31 @@ def ensure_vendor_dir() -> None:
 
 
 def get_ab_av1_path() -> Path | None:
-    """Get path to ab-av1.exe if it exists in vendor directory.
+    """Get path to ab-av1, checking vendor directory first, then system PATH.
 
     Returns:
-        Path to ab-av1.exe or None if not found.
+        Path to ab-av1 executable or None if not found anywhere.
     """
+    # Check vendor directory first
     if AB_AV1_EXE.exists():
         return AB_AV1_EXE
+    # Fall back to system PATH (important for Linux/macOS where ab-av1 is installed via cargo)
+    system_ab_av1 = shutil.which("ab-av1")
+    if system_ab_av1:
+        return Path(system_ab_av1)
     return None
 
 
+def is_using_vendor_ab_av1() -> bool:
+    """Check if we're using the vendor-provided ab-av1 (not system PATH)."""
+    return AB_AV1_EXE.exists()
+
+
 def get_ffmpeg_path() -> Path | None:
-    """Get path to ffmpeg.exe, checking vendor directory first, then system PATH.
+    """Get path to ffmpeg, checking vendor directory first, then system PATH.
 
     Returns:
-        Path to ffmpeg.exe or None if not found anywhere.
+        Path to ffmpeg executable or None if not found anywhere.
     """
     # Check vendor directory first
     if FFMPEG_EXE.exists():
@@ -82,10 +95,10 @@ def get_ffmpeg_path() -> Path | None:
 
 
 def get_ffprobe_path() -> Path | None:
-    """Get path to ffprobe.exe, checking vendor directory first, then system PATH.
+    """Get path to ffprobe, checking vendor directory first, then system PATH.
 
     Returns:
-        Path to ffprobe.exe or None if not found anywhere.
+        Path to ffprobe executable or None if not found anywhere.
     """
     # Check vendor directory first
     if FFPROBE_EXE.exists():

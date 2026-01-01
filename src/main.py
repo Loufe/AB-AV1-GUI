@@ -11,7 +11,7 @@ from tkinter import messagebox
 
 # Project imports needed within main() or for GUI class
 from src.gui.main_window import VideoConverterGUI
-from src.utils import setup_logging
+from src.logging_setup import setup_logging
 
 logger = logging.getLogger(__name__)
 

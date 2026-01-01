@@ -14,6 +14,14 @@ from tkinter import ttk
 from typing import TYPE_CHECKING
 
 from src.ab_av1.checker import check_ab_av1_latest_github, get_ab_av1_version
+from src.gui.constants import (
+    COLOR_STATUS_ERROR,
+    COLOR_STATUS_INFO,
+    COLOR_STATUS_NEUTRAL,
+    COLOR_STATUS_SUCCESS,
+    FONT_SYSTEM_NORMAL,
+    FONT_SYSTEM_UNDERLINE,
+)
 from src.gui.dialogs import FFmpegDownloadDialog
 from src.utils import (
     check_ffmpeg_availability,
@@ -44,7 +52,7 @@ def check_ab_av1_updates(gui: "VideoConverterGUI") -> None:
 
     # Reset label state
     _reset_ab_av1_update_label(gui)
-    gui.ab_av1_update_label.config(text="Checking...", foreground="gray")
+    gui.ab_av1_update_label.config(text="Checking...", foreground=COLOR_STATUS_NEUTRAL)
     gui.root.update_idletasks()
 
     local_version = get_ab_av1_version()
@@ -53,19 +61,19 @@ def check_ab_av1_updates(gui: "VideoConverterGUI") -> None:
     # Check button stays disabled permanently after use
 
     if latest_version is None:
-        gui.ab_av1_update_label.config(text=message, foreground="red")
+        gui.ab_av1_update_label.config(text=message, foreground=COLOR_STATUS_ERROR)
         return
 
     if local_version is None:
-        gui.ab_av1_update_label.config(text=f"Latest: {latest_version}", foreground="gray")
+        gui.ab_av1_update_label.config(text=f"Latest: {latest_version}", foreground=COLOR_STATUS_NEUTRAL)
         return
 
     # Compare versions
     if local_version == latest_version:
-        gui.ab_av1_update_label.config(text=f"Up to date ({latest_version})", foreground="green")
+        gui.ab_av1_update_label.config(text=f"Up to date ({latest_version})", foreground=COLOR_STATUS_SUCCESS)
     else:
         # Update available - create Update button dynamically
-        gui.ab_av1_update_label.config(text=f"Update available: {latest_version}", foreground="blue")
+        gui.ab_av1_update_label.config(text=f"Update available: {latest_version}", foreground=COLOR_STATUS_INFO)
 
         # Create Update button if it doesn't exist
         if gui.ab_av1_update_btn is None:
@@ -77,7 +85,7 @@ def check_ab_av1_updates(gui: "VideoConverterGUI") -> None:
 
 def _reset_ab_av1_update_label(gui: "VideoConverterGUI") -> None:
     """Reset the ab-av1 update label to non-clickable state."""
-    gui.ab_av1_update_label.config(cursor="", font=("TkDefaultFont", 9))
+    gui.ab_av1_update_label.config(cursor="", font=FONT_SYSTEM_NORMAL)
     gui.ab_av1_update_label.unbind("<Button-1>")
 
 
@@ -99,7 +107,7 @@ def check_ffmpeg_updates(gui: "VideoConverterGUI") -> None:
 
     # Reset label state
     _reset_ffmpeg_update_label(gui)
-    gui.ffmpeg_update_label.config(text="Checking...", foreground="gray")
+    gui.ffmpeg_update_label.config(text="Checking...", foreground=COLOR_STATUS_NEUTRAL)
     gui.root.update_idletasks()
 
     # Get local version
@@ -112,14 +120,14 @@ def check_ffmpeg_updates(gui: "VideoConverterGUI") -> None:
     elif gui.ffmpeg_source == "BtbN":
         latest_version, release_url, message = check_ffmpeg_latest_btbn()
     else:
-        gui.ffmpeg_update_label.config(text="Unknown source", foreground="red")
+        gui.ffmpeg_update_label.config(text="Unknown source", foreground=COLOR_STATUS_ERROR)
         # Check button stays disabled permanently after use
         return
 
     # Check button stays disabled permanently after use
 
     if latest_version is None:
-        gui.ffmpeg_update_label.config(text=message, foreground="red")
+        gui.ffmpeg_update_label.config(text=message, foreground=COLOR_STATUS_ERROR)
         return
 
     # For BtbN, we can't compare versions (date-based tags), so just show latest and link
@@ -130,7 +138,7 @@ def check_ffmpeg_updates(gui: "VideoConverterGUI") -> None:
         else:
             display_tag = latest_version
         gui.ffmpeg_update_label.config(
-            text=f"Latest: {display_tag}", foreground="blue", cursor="hand2", font=("TkDefaultFont", 9, "underline")
+            text=f"Latest: {display_tag}", foreground=COLOR_STATUS_INFO, cursor="hand2", font=FONT_SYSTEM_UNDERLINE
         )
         if release_url:
             gui.ffmpeg_update_label.bind("<Button-1>", lambda e: webbrowser.open(release_url))
@@ -138,14 +146,14 @@ def check_ffmpeg_updates(gui: "VideoConverterGUI") -> None:
 
     # For gyan.dev, we can compare semantic versions
     if local_version is None:
-        gui.ffmpeg_update_label.config(text=f"Latest: {latest_version}", foreground="gray")
+        gui.ffmpeg_update_label.config(text=f"Latest: {latest_version}", foreground=COLOR_STATUS_NEUTRAL)
         return
 
     if local_version == latest_version:
-        gui.ffmpeg_update_label.config(text=f"Up to date ({latest_version})", foreground="green")
+        gui.ffmpeg_update_label.config(text=f"Up to date ({latest_version})", foreground=COLOR_STATUS_SUCCESS)
     else:
         # Update available - create Update button dynamically
-        gui.ffmpeg_update_label.config(text=f"Update available: {latest_version}", foreground="blue")
+        gui.ffmpeg_update_label.config(text=f"Update available: {latest_version}", foreground=COLOR_STATUS_INFO)
 
         # Create Update button if it doesn't exist
         if gui.ffmpeg_update_btn is None:
@@ -158,7 +166,7 @@ def check_ffmpeg_updates(gui: "VideoConverterGUI") -> None:
 def _reset_ffmpeg_update_label(gui: "VideoConverterGUI") -> None:
     """Reset the FFmpeg update label to non-clickable state."""
     if gui.ffmpeg_update_label:
-        gui.ffmpeg_update_label.config(cursor="", font=("TkDefaultFont", 9))
+        gui.ffmpeg_update_label.config(cursor="", font=FONT_SYSTEM_NORMAL)
         gui.ffmpeg_update_label.unbind("<Button-1>")
 
 
@@ -176,7 +184,7 @@ def download_ab_av1_update(gui: "VideoConverterGUI") -> None:
         gui.ab_av1_download_btn.config(state="disabled")
     if gui.ab_av1_update_btn:
         gui.ab_av1_update_btn.config(state="disabled")
-    gui.ab_av1_update_label.config(text="Downloading...", foreground="gray")
+    gui.ab_av1_update_label.config(text="Downloading...", foreground=COLOR_STATUS_NEUTRAL)
     gui.root.update_idletasks()
 
     def download_thread():
@@ -192,7 +200,7 @@ def download_ab_av1_update(gui: "VideoConverterGUI") -> None:
                 # Update version label
                 new_version = get_ab_av1_version() or "Installed"
                 gui.ab_av1_version_label.config(text=new_version)
-                gui.ab_av1_update_label.config(text="Download complete!", foreground="green")
+                gui.ab_av1_update_label.config(text="Download complete!", foreground=COLOR_STATUS_SUCCESS)
 
                 # Destroy the Update button if it exists (user is now up to date)
                 if gui.ab_av1_update_btn:
@@ -203,7 +211,7 @@ def download_ab_av1_update(gui: "VideoConverterGUI") -> None:
                 if gui.ab_av1_download_btn:
                     gui.ab_av1_download_btn.config(state="normal")
             else:
-                gui.ab_av1_update_label.config(text=message, foreground="red")
+                gui.ab_av1_update_label.config(text=message, foreground=COLOR_STATUS_ERROR)
                 # Re-enable buttons on failure
                 if gui.ab_av1_download_btn:
                     gui.ab_av1_download_btn.config(state="normal")
@@ -240,7 +248,7 @@ def download_ffmpeg_update(gui: "VideoConverterGUI") -> None:
     if gui.ffmpeg_update_btn:
         gui.ffmpeg_update_btn.config(state="disabled")
     if gui.ffmpeg_update_label:
-        gui.ffmpeg_update_label.config(text="Downloading...", foreground="gray")
+        gui.ffmpeg_update_label.config(text="Downloading...", foreground=COLOR_STATUS_NEUTRAL)
     gui.root.update_idletasks()
 
     def download_thread():
@@ -263,7 +271,7 @@ def download_ffmpeg_update(gui: "VideoConverterGUI") -> None:
                 display = f"{version} (vendor)" if version else "Installed"
                 gui.ffmpeg_version_label.config(text=display)
                 if gui.ffmpeg_update_label:
-                    gui.ffmpeg_update_label.config(text="Download complete!", foreground="green")
+                    gui.ffmpeg_update_label.config(text="Download complete!", foreground=COLOR_STATUS_SUCCESS)
                 # Update ffmpeg_source to gyan.dev
                 gui.ffmpeg_source = "gyan.dev"
 
@@ -277,7 +285,7 @@ def download_ffmpeg_update(gui: "VideoConverterGUI") -> None:
                     gui.ffmpeg_download_btn.config(state="normal")
             else:
                 if gui.ffmpeg_update_label:
-                    gui.ffmpeg_update_label.config(text=message, foreground="red")
+                    gui.ffmpeg_update_label.config(text=message, foreground=COLOR_STATUS_ERROR)
                 # Re-enable buttons on failure
                 if gui.ffmpeg_download_btn:
                     gui.ffmpeg_download_btn.config(state="normal")

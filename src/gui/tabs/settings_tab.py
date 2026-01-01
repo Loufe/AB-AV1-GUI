@@ -8,6 +8,7 @@ from tkinter import ttk
 
 from src.ab_av1.checker import get_ab_av1_version
 from src.gui.base import ToolTip
+from src.gui.constants import COLOR_STATUS_NEUTRAL, COLOR_STATUS_SUCCESS_LIGHT, FONT_SYSTEM_BOLD
 from src.hardware_accel import get_available_hw_decoders
 from src.utils import check_ffmpeg_availability, parse_ffmpeg_version
 from src.vendor_manager import get_ab_av1_path, is_using_vendor_ffmpeg
@@ -135,10 +136,10 @@ def create_settings_tab(gui):
     detected_decoders = get_available_hw_decoders()
     if detected_decoders:
         status_text = f"({len(detected_decoders)} available)"
-        status_color = "#008000"  # Green
+        status_color = COLOR_STATUS_SUCCESS_LIGHT
     else:
         status_text = "(none detected)"
-        status_color = "#808080"  # Gray
+        status_color = COLOR_STATUS_NEUTRAL
 
     status_label = ttk.Label(hw_decode_row, text=status_text, foreground=status_color)
     status_label.pack(side="left", padx=(10, 0))
@@ -213,7 +214,7 @@ def create_settings_tab(gui):
     gui.ab_av1_frame = ab_av1_frame  # Store reference for dynamic button creation
 
     ttk.Label(ab_av1_frame, text="ab-av1 Version:").pack(side="left", padx=(0, 5))
-    gui.ab_av1_version_label = ttk.Label(ab_av1_frame, text=local_version, font=("TkDefaultFont", 9, "bold"))
+    gui.ab_av1_version_label = ttk.Label(ab_av1_frame, text=local_version, font=FONT_SYSTEM_BOLD)
     gui.ab_av1_version_label.pack(side="left", padx=(0, 15))
 
     if not has_ab_av1:
@@ -263,7 +264,7 @@ def create_settings_tab(gui):
             ffmpeg_display += f" ({source_info})"
 
     ttk.Label(ffmpeg_frame, text="FFmpeg Version:").pack(side="left", padx=(0, 5))
-    gui.ffmpeg_version_label = ttk.Label(ffmpeg_frame, text=ffmpeg_display, font=("TkDefaultFont", 9, "bold"))
+    gui.ffmpeg_version_label = ttk.Label(ffmpeg_frame, text=ffmpeg_display, font=FONT_SYSTEM_BOLD)
     gui.ffmpeg_version_label.pack(side="left", padx=(0, 15))
 
     if not ffmpeg_available:

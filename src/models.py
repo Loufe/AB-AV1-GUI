@@ -7,12 +7,10 @@ throughout the conversion pipeline.
 
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import Any, Literal, Optional
-
-from src.config import DEFAULT_VMAF_TARGET
+from typing import Any, Literal
 
 
-@dataclass
+@dataclass(frozen=True)
 class TimeEstimate:
     """Time estimation with confidence level and optional range.
 
@@ -34,6 +32,64 @@ class TimeEstimate:
     best_seconds: float  # Best guess (P50-based or extrapolated)
     confidence: Literal["high", "medium", "low", "none"]
     source: str  # Origin: "similar_file", "codec:h264", "global", "in_progress", "insufficient_data"
+
+
+@dataclass(frozen=True)
+class VideoMetadata:
+    """Extracted metadata from ffprobe video_info dict.
+
+    Consolidates the stream iteration pattern used across 6+ files.
+    All fields are optional since extraction may partially fail.
+
+    Usage:
+        meta = extract_video_metadata(video_info)
+        if not meta.has_video:
+            raise InputFileError("No video stream")
+        print(f"Codec: {meta.video_codec}, Resolution: {meta.width}x{meta.height}")
+    """
+
+    # Core flags
+    has_video: bool = False  # Whether file has at least one video stream
+    has_audio: bool = False  # Whether file has at least one audio stream
+
+    # Video stream info (from first video stream)
+    video_codec: str | None = None  # e.g., "h264", "hevc", "av1"
+    width: int | None = None
+    height: int | None = None
+    fps: float | None = None  # Frames per second
+    profile: str | None = None  # e.g., "High", "Main"
+    pix_fmt: str | None = None  # e.g., "yuv420p"
+
+    # Audio stream info (from first audio stream)
+    audio_codec: str | None = None  # e.g., "aac", "opus"
+    audio_channels: int | None = None
+    audio_sample_rate: int | None = None
+    audio_bitrate_kbps: float | None = None
+
+    # Format-level info
+    duration_sec: float | None = None
+    bitrate_kbps: float | None = None
+    file_size_bytes: int | None = None
+
+    # Stream counts (for multi-stream awareness)
+    video_stream_count: int = 0
+    audio_stream_count: int = 0
+    subtitle_stream_count: int = 0
+
+    # Total audio bitrate across all streams (for size estimation)
+    total_audio_bitrate_kbps: float | None = None
+
+    @property
+    def is_av1(self) -> bool:
+        """Check if video codec is AV1."""
+        return self.video_codec is not None and self.video_codec.lower() == "av1"
+
+    @property
+    def resolution_str(self) -> str | None:
+        """Get resolution as 'WIDTHxHEIGHT' string, or None if unknown."""
+        if self.width is not None and self.height is not None:
+            return f"{self.width}x{self.height}"
+        return None
 
 
 class FileStatus(str, Enum):
@@ -222,8 +278,7 @@ class QueueItem:
 class QueueConversionConfig:
     """Configuration for queue-based batch conversion.
 
-    Unlike ConversionConfig which uses single input/output folders,
-    this holds a list of QueueItems, each with its own output settings.
+    Holds a list of QueueItems, each with its own output settings.
     """
 
     queue_items: list[QueueItem]
@@ -311,7 +366,7 @@ class FileRecord:
         return AnalysisLevel.DISCOVERED
 
 
-@dataclass
+@dataclass(frozen=True)
 class ProgressEvent:
     """Progress update event during video conversion.
 
@@ -327,106 +382,56 @@ class ProgressEvent:
     message: str = ""  # Human-readable status message
 
     # Quality metrics (available during/after CRF search)
-    vmaf: Optional[float] = None  # VMAF score
-    crf: Optional[int] = None  # CRF value
-    vmaf_target_used: Optional[int] = None  # Target VMAF for this attempt
-    used_fallback: Optional[bool] = None  # Whether fallback VMAF was used (unused in progress)
+    vmaf: float | None = None  # VMAF score
+    crf: int | None = None  # CRF value
+    vmaf_target_used: int | None = None  # Target VMAF for this attempt
+    used_fallback: bool | None = None  # Whether fallback VMAF was used (unused in progress)
 
     # Size predictions
-    size_reduction: Optional[float] = None  # Predicted size reduction percentage
-    original_size: Optional[int] = None  # Original file size in bytes
-    output_size: Optional[int] = None  # Estimated/actual output size in bytes
-    is_estimate: Optional[bool] = None  # Whether output_size is an estimate
+    size_reduction: float | None = None  # Predicted size reduction percentage
+    original_size: int | None = None  # Original file size in bytes
+    output_size: int | None = None  # Estimated/actual output size in bytes
+    is_estimate: bool | None = None  # Whether output_size is an estimate
 
     # Encoding phase timing
-    eta_text: Optional[str] = None  # ETA string from ab-av1 (e.g., "5m 30s")
+    eta_text: str | None = None  # ETA string from ab-av1 (e.g., "5m 30s")
 
     # Additional metadata
-    file_size_mb: Optional[float] = None  # File size in MB (for initial file info)
+    file_size_mb: float | None = None  # File size in MB (for initial file info)
 
 
-@dataclass
+@dataclass(frozen=True)
 class FileInfoEvent:
     """Initial file information sent at start of processing."""
 
     file_size_mb: float
 
 
-@dataclass
-class ConversionResult:
-    """Result of a completed video conversion.
-
-    Contains all metadata needed for history recording and statistics.
-    """
-
-    # File paths
-    input_path: str
-    output_path: str
-
-    # Timing
-    elapsed_seconds: float
-
-    # Sizes
-    input_size_bytes: int
-    output_size_bytes: int
-
-    # Quality metrics
-    final_crf: int
-    final_vmaf: float
-    final_vmaf_target: int = DEFAULT_VMAF_TARGET  # Target VMAF used (may differ from default)
-
-    # Calculated metrics (optional, can be computed from other fields)
-    reduction_percent: Optional[float] = None
-
-
-@dataclass
+@dataclass(frozen=True)
 class ErrorInfo:
     """Information about a conversion error."""
 
     message: str
     error_type: str = "unknown"
     details: str = ""
-    stack_trace: Optional[str] = None
+    stack_trace: str | None = None
 
 
-@dataclass
+@dataclass(frozen=True)
 class RetryInfo:
     """Information about a retry attempt with fallback VMAF."""
 
     message: str
-    fallback_vmaf: Optional[int] = None  # The VMAF target being attempted
+    fallback_vmaf: int | None = None  # The VMAF target being attempted
 
 
-@dataclass
+@dataclass(frozen=True)
 class SkippedInfo:
     """Information about a skipped file."""
 
     message: str
-    original_size: Optional[int] = None
-    min_vmaf_attempted: Optional[int] = None
-
-
-@dataclass
-class ConversionConfig:
-    """Configuration for a batch conversion job.
-
-    Consolidates all settings needed by the conversion worker.
-    """
-
-    # Folder paths
-    input_folder: str
-    output_folder: str
-
-    # File selection
-    extensions: list[str]  # e.g., ["mp4", "mkv"]
-
-    # Conversion behavior
-    overwrite: bool
-    delete_original: bool
-
-    # Audio settings
-    convert_audio: bool
-    audio_codec: str  # e.g., "opus", "aac"
+    original_size: int | None = None
+    min_vmaf_attempted: int | None = None
 
 
 @dataclass

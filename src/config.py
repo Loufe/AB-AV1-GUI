@@ -11,6 +11,17 @@ DEFAULT_ENCODING_PRESET = 6  # Corresponds to SVT-AV1 "--preset 6" (Balanced spe
 MIN_VMAF_FALLBACK_TARGET = 90  # Minimum VMAF target to attempt if initial target fails
 VMAF_FALLBACK_STEP = 1  # How much to decrement VMAF target on each fallback attempt
 
+# --- Progress Logging ---
+# Dynamic log interval tiers based on estimated duration (requires ab-av1 with --log-interval support)
+# Format: (max_duration_minutes, log_interval) - uses first matching tier
+# Set to None to disable (falls back to ab-av1's exponential backoff)
+LOG_INTERVAL_TIERS: list[tuple[int | None, str]] = [
+    (30, "5%"),    # < 30 min: every 5% (~20 updates)
+    (120, "2%"),   # 30 min - 2 hr: every 2% (~50 updates)
+    (240, "1%"),   # 2 - 4 hr: every 1% (~100 updates)
+    (None, "1%"),  # > 4 hr: every 1% (~100 updates)
+]
+
 # --- Resolution Settings ---
 MIN_RESOLUTION_WIDTH = 1280  # Minimum width to consider for conversion (720p: 1280x720)
 MIN_RESOLUTION_HEIGHT = 720  # Minimum height to consider for conversion
@@ -49,6 +60,7 @@ EFFICIENCY_DECIMAL_THRESHOLD = 10  # Show GB/hr without decimals above this valu
 # Analysis tree column headings (base text without sort indicators)
 ANALYSIS_TREE_HEADINGS: dict[str, str] = {
     "#0": "Name",
+    "format": "Format",
     "size": "Size",
     "savings": "Est. Savings",
     "time": "Est. Time",

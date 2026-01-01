@@ -11,6 +11,8 @@ import tkinter as tk
 from tkinter import ttk
 from typing import Callable
 
+from src.gui.constants import COLOR_TOOLTIP_BACKGROUND
+
 logger = logging.getLogger(__name__)
 
 
@@ -72,12 +74,12 @@ class ToolTip:
         self.tooltip = tk.Toplevel(self.widget)
         self.tooltip.wm_overrideredirect(True)
         self.tooltip.wm_geometry(f"+{x}+{y}")
-        self.tooltip.configure(background="lightyellow")
+        self.tooltip.configure(background=COLOR_TOOLTIP_BACKGROUND)
 
         label = tk.Label(
             self.tooltip,
             text=self.text,
-            background="lightyellow",
+            background=COLOR_TOOLTIP_BACKGROUND,
             relief="solid",
             borderwidth=1,
             padx=5,
@@ -157,13 +159,13 @@ class _TreeviewTooltipBase:
         self.tooltip = tk.Toplevel(self.treeview)
         self.tooltip.wm_overrideredirect(True)
         self.tooltip.wm_geometry(f"+{x + self.OFFSET_X}+{y + self.OFFSET_Y}")
-        self.tooltip.configure(background="lightyellow")
+        self.tooltip.configure(background=COLOR_TOOLTIP_BACKGROUND)
         self.tooltip.wm_attributes("-topmost", True)
 
         label = tk.Label(
             self.tooltip,
             text=text,
-            background="lightyellow",
+            background=COLOR_TOOLTIP_BACKGROUND,
             relief="solid",
             borderwidth=1,
             padx=6,

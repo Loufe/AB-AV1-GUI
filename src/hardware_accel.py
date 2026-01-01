@@ -11,8 +11,9 @@ import subprocess
 from functools import lru_cache
 
 from src.config import HW_DECODER_MAP
-from src.utils import get_windows_subprocess_startupinfo
+from src.platform_utils import get_windows_subprocess_startupinfo
 from src.vendor_manager import get_ffmpeg_path
+from src.video_metadata import extract_video_metadata
 
 logger = logging.getLogger(__name__)
 
@@ -85,17 +86,8 @@ def get_video_codec_from_info(video_info: dict) -> str | None:
     Returns:
         Codec name (e.g., "h264", "hevc") or None if not found
     """
-    if not video_info:
-        return None
-
-    streams = video_info.get("streams", [])
-    for stream in streams:
-        if stream.get("codec_type") == "video":
-            codec_name = stream.get("codec_name")
-            if codec_name:
-                return codec_name.lower()
-
-    return None
+    meta = extract_video_metadata(video_info)
+    return meta.video_codec.lower() if meta.video_codec else None
 
 
 def get_hw_decoder_for_codec(source_codec: str) -> str | None:

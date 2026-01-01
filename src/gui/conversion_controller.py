@@ -51,16 +51,10 @@ from src.gui.gui_updates import (
 )
 from src.models import OutputMode, QueueConversionConfig, QueueItemStatus
 
-# Import from utils
-from src.utils import (
-    allow_sleep_mode,
-    anonymize_filename,
-    format_file_size,
-    format_time,
-    get_windows_subprocess_startupinfo,
-    prevent_sleep_mode,
-    update_ui_safely,
-)
+# Import from utils and other modules
+from src.platform_utils import allow_sleep_mode, get_windows_subprocess_startupinfo, prevent_sleep_mode
+from src.privacy import anonymize_filename
+from src.utils import format_file_size, format_time, update_ui_safely
 
 # Import the single-file processing function
 

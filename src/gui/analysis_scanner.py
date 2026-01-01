@@ -16,6 +16,7 @@ from src.cache_helpers import mtimes_match
 from src.config import MIN_FILES_FOR_PERCENT_UPDATES, TREE_UPDATE_BATCH_SIZE
 from src.estimation import estimate_file_time
 from src.folder_analysis import _analyze_file
+from src.gui.tree_display import format_stream_display
 from src.gui.tree_formatters import format_compact_time, format_efficiency
 from src.history_index import get_history_index
 from src.models import FileStatus
@@ -93,6 +94,7 @@ def incremental_scan_thread(gui, folder: str, extensions: list[str], stop_event:
             file_display_data = []
             for filename, file_size, file_mtime in file_infos:
                 file_path = os.path.join(dirpath, filename)
+                format_str = "—"  # Unknown until scanned
                 size_str = format_file_size(file_size)
                 savings_str = "—"
                 time_str = "—"
@@ -103,6 +105,7 @@ def incremental_scan_thread(gui, folder: str, extensions: list[str], stop_event:
                 record = index.lookup_file(file_path)
                 if record and record.file_size_bytes == file_size and mtimes_match(record.file_mtime, file_mtime):
                     # Cache hit - use cached values
+                    format_str = format_stream_display(record.video_codec, record.audio_codec)
                     if record.status == FileStatus.CONVERTED:
                         savings_str = "Done"
                         time_str = "—"
@@ -132,7 +135,9 @@ def incremental_scan_thread(gui, folder: str, extensions: list[str], stop_event:
                             savings_str = "AV1"
                             tag = "av1"
 
-                file_display_data.append((filename, file_path, size_str, savings_str, time_str, eff_str, tag))
+                file_display_data.append(
+                    (filename, file_path, format_str, size_str, savings_str, time_str, eff_str, tag)
+                )
 
             # Prepare UI update
             is_root = dirpath == root_folder
@@ -156,12 +161,12 @@ def incremental_scan_thread(gui, folder: str, extensions: list[str], stop_event:
                     if is_rt:
                         # Root folder: add files at tree root, no folder node
                         folder_id = ""
-                        for filename, file_path, size_str, savings_str, time_str, eff_str, tag in fdata:
+                        for filename, file_path, format_str, size_str, savings_str, time_str, eff_str, tag in fdata:
                             item_id = gui.analysis_tree.insert(
                                 "",
                                 "end",
                                 text=f"🎬 {filename}",
-                                values=(size_str, savings_str, time_str, eff_str),
+                                values=(format_str, size_str, savings_str, time_str, eff_str),
                                 tags=(tag,) if tag else (),
                             )
                             gui.get_tree_item_map()[file_path] = item_id
@@ -169,15 +174,15 @@ def incremental_scan_thread(gui, folder: str, extensions: list[str], stop_event:
                     else:
                         # Non-root: create folder node and add files
                         folder_id = gui.analysis_tree.insert(
-                            pid, "end", text=f"▶ 📁 {fname}", values=("—", "—", "—", "—"), open=False
+                            pid, "end", text=f"▶ 📁 {fname}", values=("", "—", "—", "—", "—"), open=False
                         )
                         folder_count += 1
-                        for filename, file_path, size_str, savings_str, time_str, eff_str, tag in fdata:
+                        for filename, file_path, format_str, size_str, savings_str, time_str, eff_str, tag in fdata:
                             item_id = gui.analysis_tree.insert(
                                 folder_id,
                                 "end",
                                 text=f"🎬 {filename}",
-                                values=(size_str, savings_str, time_str, eff_str),
+                                values=(format_str, size_str, savings_str, time_str, eff_str),
                                 tags=(tag,) if tag else (),
                             )
                             gui.get_tree_item_map()[file_path] = item_id

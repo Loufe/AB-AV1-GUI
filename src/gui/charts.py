@@ -10,24 +10,22 @@ import tkinter as tk
 from datetime import date
 from typing import Any
 
-logger = logging.getLogger(__name__)
+from src.gui.constants import (
+    CHART_BAR_COLORS,
+    CHART_LINE_COLOR,
+    CHART_LINE_FILL_COLOR,
+    CHART_PIE_COLORS,
+    CHART_TEXT_AXIS,
+    CHART_TEXT_LEGEND,
+    CHART_TEXT_LEGEND_PCT,
+    CHART_TEXT_NO_DATA,
+    CHART_TEXT_VALUE,
+    FONT_CHART_AXIS,
+    FONT_CHART_LABEL,
+    FONT_CHART_NO_DATA,
+)
 
-# Color palettes
-BAR_COLORS = ["#4e79a7", "#59a14f", "#9c755f", "#f28e2b", "#e15759", "#76b7b2"]
-LINE_COLOR = "#4e79a7"
-LINE_FILL_COLOR = "#d8e2ed"  # Light version of LINE_COLOR for area fill
-PIE_COLORS = [
-    "#4e79a7",
-    "#f28e2b",
-    "#e15759",
-    "#76b7b2",
-    "#59a14f",
-    "#edc948",
-    "#b07aa1",
-    "#ff9da7",
-    "#9c755f",
-    "#bab0ac",
-]
+logger = logging.getLogger(__name__)
 
 
 class BarChart:
@@ -102,7 +100,9 @@ class BarChart:
             # Skip rendering if canvas too small for meaningful display
             if width < 100 or height < 100 or not self.data:  # noqa: PLR2004
                 if not self.data:
-                    self.canvas.create_text(width / 2, height / 2, text="No data", fill="#888", font=("Arial", 10))
+                    self.canvas.create_text(
+                        width / 2, height / 2, text="No data", fill=CHART_TEXT_NO_DATA, font=FONT_CHART_NO_DATA
+                    )
                 return
 
             # Calculate drawing area
@@ -123,16 +123,18 @@ class BarChart:
             max_val = max(values) if values else 1
 
             # Draw Y-axis
-            self.canvas.create_line(chart_left, chart_top, chart_left, chart_bottom, width=1, fill="#666")
+            self.canvas.create_line(chart_left, chart_top, chart_left, chart_bottom, width=1, fill=CHART_TEXT_AXIS)
 
             # Draw Y-axis labels (0 and max)
-            self.canvas.create_text(chart_left - 5, chart_bottom, text="0", anchor="e", font=("Arial", 8), fill="#666")
             self.canvas.create_text(
-                chart_left - 5, chart_top, text=str(max_val), anchor="e", font=("Arial", 8), fill="#666"
+                chart_left - 5, chart_bottom, text="0", anchor="e", font=FONT_CHART_AXIS, fill=CHART_TEXT_AXIS
+            )
+            self.canvas.create_text(
+                chart_left - 5, chart_top, text=str(max_val), anchor="e", font=FONT_CHART_AXIS, fill=CHART_TEXT_AXIS
             )
 
             # Draw X-axis
-            self.canvas.create_line(chart_left, chart_bottom, chart_right, chart_bottom, width=1, fill="#666")
+            self.canvas.create_line(chart_left, chart_bottom, chart_right, chart_bottom, width=1, fill=CHART_TEXT_AXIS)
 
             # Calculate bar dimensions
             num_bars = len(labels)
@@ -151,14 +153,14 @@ class BarChart:
                 if self.color_gradient and num_bars > 1:
                     color = self._gradient_color(i / (num_bars - 1))
                 else:
-                    color = BAR_COLORS[i % len(BAR_COLORS)]
+                    color = CHART_BAR_COLORS[i % len(CHART_BAR_COLORS)]
                 self.canvas.create_rectangle(x1, y1, x2, y2, fill=color, outline="")
 
                 # Value on top of bar
                 if value > 0:
                     label_x = (x1 + x2) / 2
                     self.canvas.create_text(
-                        label_x, y1 - 5, text=str(value), anchor="s", font=("Arial", 8), fill="#444"
+                        label_x, y1 - 5, text=str(value), anchor="s", font=FONT_CHART_AXIS, fill=CHART_TEXT_VALUE
                     )
 
             # X-axis labels
@@ -181,7 +183,7 @@ class BarChart:
                     # Position at the edge between bars
                     x = chart_left + i * total_bar_area + gap / 2
                     self.canvas.create_text(
-                        x, chart_bottom + 5, text=edge_label, anchor="n", font=("Arial", 8), fill="#444"
+                        x, chart_bottom + 5, text=edge_label, anchor="n", font=FONT_CHART_AXIS, fill=CHART_TEXT_VALUE
                     )
             else:
                 # Standard mode: centered labels under each bar
@@ -190,7 +192,7 @@ class BarChart:
                     x2 = x1 + bar_width
                     label_x = (x1 + x2) / 2
                     self.canvas.create_text(
-                        label_x, chart_bottom + 5, text=label, anchor="n", font=("Arial", 8), fill="#444"
+                        label_x, chart_bottom + 5, text=label, anchor="n", font=FONT_CHART_AXIS, fill=CHART_TEXT_VALUE
                     )
 
         except tk.TclError as e:
@@ -241,7 +243,9 @@ class PieChart:
             # Skip rendering if canvas too small for meaningful display
             if width < 100 or height < 100 or not self.data:  # noqa: PLR2004
                 if not self.data:
-                    self.canvas.create_text(width / 2, height / 2, text="No data", fill="#888", font=("Arial", 10))
+                    self.canvas.create_text(
+                        width / 2, height / 2, text="No data", fill=CHART_TEXT_NO_DATA, font=FONT_CHART_NO_DATA
+                    )
                 return
 
             # Calculate pie dimensions
@@ -261,7 +265,9 @@ class PieChart:
             # Calculate total and filter zero values
             total = sum(self.data.values())
             if total == 0:
-                self.canvas.create_text(width / 2, height / 2, text="No data", fill="#888", font=("Arial", 10))
+                self.canvas.create_text(
+                    width / 2, height / 2, text="No data", fill=CHART_TEXT_NO_DATA, font=FONT_CHART_NO_DATA
+                )
                 return
 
             # Draw pie segments - filter out items with zero entries
@@ -270,7 +276,7 @@ class PieChart:
 
             for i, (_label, value) in enumerate(items):
                 extent = (value / total) * 360
-                color = PIE_COLORS[i % len(PIE_COLORS)]
+                color = CHART_PIE_COLORS[i % len(CHART_PIE_COLORS)]
 
                 self.canvas.create_arc(
                     cx - radius,
@@ -295,7 +301,7 @@ class PieChart:
                 if legend_y + i * line_height > height - margin:
                     break  # Stop if legend would overflow
 
-                color = PIE_COLORS[i % len(PIE_COLORS)]
+                color = CHART_PIE_COLORS[i % len(CHART_PIE_COLORS)]
                 pct = (value / total) * 100
 
                 # Color swatch
@@ -315,8 +321,8 @@ class PieChart:
                     legend_y + i * line_height + 7,
                     text=display_label,
                     anchor="w",
-                    font=("Arial", 9),
-                    fill="#444",
+                    font=FONT_CHART_LABEL,
+                    fill=CHART_TEXT_LEGEND,
                 )
                 # Draw percentage in grey after the label
                 label_bbox = self.canvas.bbox(label_id)
@@ -326,8 +332,8 @@ class PieChart:
                         legend_y + i * line_height + 7,
                         text=f"({pct:.0f}%)",
                         anchor="w",
-                        font=("Arial", 9),
-                        fill="#999",
+                        font=FONT_CHART_LABEL,
+                        fill=CHART_TEXT_LEGEND_PCT,
                     )
 
         except tk.TclError as e:
@@ -386,7 +392,9 @@ class LineGraph:
             # Skip rendering if canvas too small for meaningful display
             if width < 100 or height < 80 or not self.data:  # noqa: PLR2004
                 if not self.data:
-                    self.canvas.create_text(width / 2, height / 2, text="No data", fill="#888", font=("Arial", 10))
+                    self.canvas.create_text(
+                        width / 2, height / 2, text="No data", fill=CHART_TEXT_NO_DATA, font=FONT_CHART_NO_DATA
+                    )
                 return
 
             # Calculate drawing area
@@ -406,18 +414,20 @@ class LineGraph:
             max_val = max(values) if values else 1
 
             # Draw axes
-            self.canvas.create_line(chart_left, chart_top, chart_left, chart_bottom, width=1, fill="#666")
-            self.canvas.create_line(chart_left, chart_bottom, chart_right, chart_bottom, width=1, fill="#666")
+            self.canvas.create_line(chart_left, chart_top, chart_left, chart_bottom, width=1, fill=CHART_TEXT_AXIS)
+            self.canvas.create_line(chart_left, chart_bottom, chart_right, chart_bottom, width=1, fill=CHART_TEXT_AXIS)
 
             # Y-axis labels - show decimal for small values, integer for large
-            self.canvas.create_text(chart_left - 5, chart_bottom, text="0", anchor="e", font=("Arial", 8), fill="#666")
+            self.canvas.create_text(
+                chart_left - 5, chart_bottom, text="0", anchor="e", font=FONT_CHART_AXIS, fill=CHART_TEXT_AXIS
+            )
             max_label = f"{max_val:.1f}" if max_val < 100 else f"{max_val:.0f}"  # noqa: PLR2004
             self.canvas.create_text(
-                chart_left - 5, chart_top, text=max_label, anchor="e", font=("Arial", 8), fill="#666"
+                chart_left - 5, chart_top, text=max_label, anchor="e", font=FONT_CHART_AXIS, fill=CHART_TEXT_AXIS
             )
 
             # Draw Y-axis title
-            self.canvas.create_text(15, height / 2, text="GB", anchor="w", font=("Arial", 9), fill="#666")
+            self.canvas.create_text(15, height / 2, text="GB", anchor="w", font=FONT_CHART_LABEL, fill=CHART_TEXT_AXIS)
 
             # Draw grid lines (horizontal)
             for i in range(1, 4):
@@ -431,7 +441,7 @@ class LineGraph:
                 if num_points == 1:
                     x = chart_left + chart_width / 2
                     y = chart_bottom - (self.data[0][1] / max_val) * chart_height if max_val > 0 else chart_bottom
-                    self.canvas.create_oval(x - 4, y - 4, x + 4, y + 4, fill=LINE_COLOR, outline="")
+                    self.canvas.create_oval(x - 4, y - 4, x + 4, y + 4, fill=CHART_LINE_COLOR, outline="")
                 return
 
             # Parse dates for proper time-based x-axis positioning
@@ -474,18 +484,18 @@ class LineGraph:
             area_points = [(chart_left, chart_bottom)]
             area_points.extend(points)
             area_points.append((chart_right, chart_bottom))
-            self.canvas.create_polygon(area_points, fill=LINE_FILL_COLOR, outline="")
+            self.canvas.create_polygon(area_points, fill=CHART_LINE_FILL_COLOR, outline="")
 
             # Draw line
             for i in range(len(points) - 1):
                 x1, y1 = points[i]
                 x2, y2 = points[i + 1]
-                self.canvas.create_line(x1, y1, x2, y2, fill=LINE_COLOR, width=2)
+                self.canvas.create_line(x1, y1, x2, y2, fill=CHART_LINE_COLOR, width=2)
 
             # Draw point markers only when sparse enough to be distinct
             if num_points <= 50:  # noqa: PLR2004
                 for x, y in points:
-                    self.canvas.create_oval(x - 3, y - 3, x + 3, y + 3, fill=LINE_COLOR, outline="white")
+                    self.canvas.create_oval(x - 3, y - 3, x + 3, y + 3, fill=CHART_LINE_COLOR, outline="white")
 
             # X-axis labels (first and last date)
             # Use anchors that extend inward to prevent clipping at edges
@@ -493,10 +503,12 @@ class LineGraph:
                 first_date_label = self.data[0][0]
                 last_date_label = self.data[-1][0]
                 self.canvas.create_text(
-                    chart_left, chart_bottom + 10, text=first_date_label, anchor="nw", font=("Arial", 8), fill="#666"
+                    chart_left, chart_bottom + 10, text=first_date_label,
+                    anchor="nw", font=FONT_CHART_AXIS, fill=CHART_TEXT_AXIS
                 )
                 self.canvas.create_text(
-                    chart_right, chart_bottom + 10, text=last_date_label, anchor="ne", font=("Arial", 8), fill="#666"
+                    chart_right, chart_bottom + 10, text=last_date_label,
+                    anchor="ne", font=FONT_CHART_AXIS, fill=CHART_TEXT_AXIS
                 )
 
         except tk.TclError as e:

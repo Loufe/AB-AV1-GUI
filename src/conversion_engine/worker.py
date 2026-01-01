@@ -20,8 +20,10 @@ from src.config import DEFAULT_ENCODING_PRESET, DEFAULT_VMAF_TARGET, MIN_VMAF_FA
 from src.hardware_accel import get_hw_decoder_for_codec, get_video_codec_from_info
 from src.history_index import compute_path_hash, get_history_index
 from src.models import FileRecord, FileStatus, OperationType, ProgressEvent, QueueConversionConfig, QueueItemStatus
-from src.utils import anonymize_filename, format_file_size, get_video_info, update_ui_safely
+from src.privacy import anonymize_filename
+from src.utils import format_file_size, get_video_info, update_ui_safely
 from src.video_conversion import calculate_output_path, process_video
+from src.video_metadata import extract_video_metadata
 
 # Import functions/modules from the engine package
 from .scanner import find_video_files, scan_video_needs_conversion
@@ -449,25 +451,15 @@ def sequential_conversion_worker(
             # --- Extract Info & Update UI ---
             if video_info:
                 try:
-                    format_info_text = "-"
-                    size_str = "-"
-                    for stream in video_info.get("streams", []):
-                        codec_type = stream.get("codec_type")
-                        if codec_type == "video":
-                            input_vcodec = stream.get("codec_name", "?").upper()
-                            input_width = stream.get("width")
-                            input_height = stream.get("height")
-                        elif codec_type == "audio":
-                            input_acodec = stream.get("codec_name", "?").upper()
+                    meta = extract_video_metadata(video_info)
+                    input_vcodec = (meta.video_codec or "?").upper()
+                    input_acodec = (meta.audio_codec or "?").upper()
+                    input_width = meta.width
+                    input_height = meta.height
+                    input_duration = meta.duration_sec or 0.0
                     format_info_text = f"{input_vcodec} / {input_acodec}"
-                    original_size = video_info.get("file_size", 0)
+                    original_size = meta.file_size_bytes or 0
                     size_str = format_file_size(original_size)
-                    duration_str = video_info.get("format", {}).get("duration", "0")
-                    try:
-                        input_duration = float(duration_str)
-                    except (ValueError, TypeError):
-                        input_duration = 0.0
-                        logger.warning(f"Invalid duration '{duration_str}' for {anonymized_name}")
 
                     update_ui_safely(gui.root, lambda fi=format_info_text: gui.orig_format_label.config(text=fi))
                     update_ui_safely(gui.root, lambda ss=size_str: gui.orig_size_label.config(text=ss))

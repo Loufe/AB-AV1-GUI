@@ -187,32 +187,38 @@ def sort_analysis_tree(gui, col: str, descending: bool | None = None):
             # Remove arrows, icons, and leading spaces
             name = text.replace("▶", "").replace("▼", "").replace("📁", "").replace("🎬", "").strip()
             return (is_file, name.lower())
-        if col == "size":
-            # Sort by file size (values[0])
+        if col == "format":
+            # Sort by format string (values[0])
             values = gui.analysis_tree.item(item_id, "values")
             if values and len(values) >= 1:
-                size_bytes = parse_size_to_bytes(values[0])
-                return (is_file, size_bytes)
-            return (is_file, float("inf"))
-        if col == "savings":
-            # Sort by estimated savings (values[1])
+                return (is_file, values[0].lower() if values[0] else "")
+            return (is_file, "")
+        if col == "size":
+            # Sort by file size (values[1])
             values = gui.analysis_tree.item(item_id, "values")
             if values and len(values) >= 2:  # noqa: PLR2004 - column index bounds check
                 size_bytes = parse_size_to_bytes(values[1])
                 return (is_file, size_bytes)
             return (is_file, float("inf"))
-        if col == "time":
-            # Sort by estimated time (values[2])
+        if col == "savings":
+            # Sort by estimated savings (values[2])
             values = gui.analysis_tree.item(item_id, "values")
             if values and len(values) >= 3:  # noqa: PLR2004 - column index bounds check
-                time_seconds = parse_time_to_seconds(values[2])
+                size_bytes = parse_size_to_bytes(values[2])
+                return (is_file, size_bytes)
+            return (is_file, float("inf"))
+        if col == "time":
+            # Sort by estimated time (values[3])
+            values = gui.analysis_tree.item(item_id, "values")
+            if values and len(values) >= 4:  # noqa: PLR2004 - column index bounds check
+                time_seconds = parse_time_to_seconds(values[3])
                 return (is_file, time_seconds)
             return (is_file, float("inf"))
         if col == "efficiency":
-            # Sort by efficiency (values[3], higher is better, so negate for default ascending sort)
+            # Sort by efficiency (values[4], higher is better, so negate for default ascending sort)
             values = gui.analysis_tree.item(item_id, "values")
-            if values and len(values) >= 4:  # noqa: PLR2004 - column index bounds check
-                eff_value = parse_efficiency_to_value(values[3])
+            if values and len(values) >= 5:  # noqa: PLR2004 - column index bounds check
+                eff_value = parse_efficiency_to_value(values[4])
                 # Negate so higher efficiency sorts first in ascending order
                 return (is_file, -eff_value)
             return (is_file, float("inf"))

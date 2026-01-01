@@ -23,63 +23,16 @@ from statistics import mean
 from typing import Generator
 
 from src.cache_helpers import mtimes_match
-from src.config import DEFAULT_REDUCTION_ESTIMATE_PERCENT, MIN_RESOLUTION_HEIGHT, MIN_RESOLUTION_WIDTH
+from src.config import DEFAULT_REDUCTION_ESTIMATE_PERCENT
 from src.history_index import HistoryIndex, compute_path_hash
 from src.models import FileRecord, FileStatus
 from src.utils import get_video_info
+from src.video_metadata import extract_video_metadata
 
 logger = logging.getLogger(__name__)
 
 
-def _extract_video_metadata(
-    video_info: dict | None,
-) -> tuple[
-    str | None,  # video_codec
-    str | None,  # audio_codec
-    int | None,  # width
-    int | None,  # height
-    float | None,  # bitrate_kbps
-    float | None,  # duration_sec
-]:
-    """Extract video metadata from ffprobe output.
-
-    Args:
-        video_info: Output from get_video_info(), or None if failed.
-
-    Returns:
-        Tuple of (video_codec, audio_codec, width, height, bitrate_kbps, duration_sec).
-        All values can be None if extraction fails.
-    """
-    if not video_info:
-        return None, None, None, None, None, None
-
-    video_codec: str | None = None
-    audio_codec: str | None = None
-    width: int | None = None
-    height: int | None = None
-
-    for stream in video_info.get("streams", []):
-        if stream.get("codec_type") == "video" and video_codec is None:
-            video_codec = stream.get("codec_name")
-            width = stream.get("width")
-            height = stream.get("height")
-        elif stream.get("codec_type") == "audio" and audio_codec is None:
-            audio_codec = stream.get("codec_name")
-
-    fmt = video_info.get("format", {})
-    try:
-        duration = float(fmt.get("duration", 0)) or None
-    except (ValueError, TypeError):
-        duration = None
-    try:
-        bitrate = int(fmt.get("bit_rate", 0)) / 1000 or None
-    except (ValueError, TypeError):
-        bitrate = None
-
-    return video_codec, audio_codec, width, height, bitrate, duration
-
-
-@dataclass
+@dataclass(frozen=True)
 class FileAnalysisResult:
     """Result of analyzing a single file."""
 
@@ -336,10 +289,18 @@ def _analyze_file(
     # Save to index
     index.upsert(record)
 
-    # Calculate estimated savings
+    # Calculate estimated savings (accounting for audio which is copied unchanged)
     est_savings = None
     if est_reduction and file_size:
-        est_savings = int(file_size * est_reduction / 100)
+        # Estimate audio size - not reduced, copied unchanged
+        meta = extract_video_metadata(video_info)
+        audio_size = 0
+        if meta.duration_sec and meta.total_audio_bitrate_kbps:
+            audio_size = int(meta.duration_sec * meta.total_audio_bitrate_kbps * 1000 / 8)
+
+        # Apply reduction only to video portion
+        video_size = max(0, file_size - audio_size)
+        est_savings = int(video_size * est_reduction / 100)
 
     return FileAnalysisResult(
         path=file_path,
@@ -396,7 +357,7 @@ def _create_scanned_record(
     """
     now = datetime.datetime.now().isoformat(sep=" ", timespec="seconds")
 
-    video_codec, audio_codec, width, height, bitrate, duration = _extract_video_metadata(video_info)
+    meta = extract_video_metadata(video_info)
 
     return FileRecord(
         path_hash=path_hash,
@@ -404,12 +365,12 @@ def _create_scanned_record(
         status=FileStatus.SCANNED,
         file_size_bytes=file_size,
         file_mtime=file_mtime,
-        duration_sec=duration,
-        video_codec=video_codec,
-        audio_codec=audio_codec,
-        width=width,
-        height=height,
-        bitrate_kbps=bitrate,
+        duration_sec=meta.duration_sec,
+        video_codec=meta.video_codec,
+        audio_codec=meta.audio_codec,
+        width=meta.width,
+        height=meta.height,
+        bitrate_kbps=meta.bitrate_kbps,
         first_seen=now,
         last_updated=now,
     )
@@ -437,19 +398,19 @@ def _update_existing_record_metadata(
     """
     now = datetime.datetime.now().isoformat(sep=" ", timespec="seconds")
 
-    video_codec, audio_codec, width, height, bitrate, duration = _extract_video_metadata(video_info)
+    meta = extract_video_metadata(video_info)
 
     # Update metadata fields while preserving status and conversion data
     return dataclasses.replace(
         existing,
         file_size_bytes=file_size,
         file_mtime=file_mtime,
-        duration_sec=duration if duration else existing.duration_sec,
-        video_codec=video_codec if video_codec else existing.video_codec,
-        audio_codec=audio_codec if audio_codec else existing.audio_codec,
-        width=width if width else existing.width,
-        height=height if height else existing.height,
-        bitrate_kbps=bitrate if bitrate else existing.bitrate_kbps,
+        duration_sec=meta.duration_sec if meta.duration_sec else existing.duration_sec,
+        video_codec=meta.video_codec if meta.video_codec else existing.video_codec,
+        audio_codec=meta.audio_codec if meta.audio_codec else existing.audio_codec,
+        width=meta.width if meta.width else existing.width,
+        height=meta.height if meta.height else existing.height,
+        bitrate_kbps=meta.bitrate_kbps if meta.bitrate_kbps else existing.bitrate_kbps,
         original_path=existing.original_path or (file_path if not anonymize else None),
         last_updated=now,
         # Preserve first_seen if it exists
@@ -471,25 +432,14 @@ def _check_skip_conditions(record: FileRecord, video_info: dict | None) -> tuple
     if not video_info:
         return "skipped_error", "Cannot read video metadata"
 
-    # No video stream
-    has_video = any(s.get("codec_type") == "video" for s in video_info.get("streams", []))
-    if not has_video:
+    # No video stream (use metadata extraction for consistency)
+    meta = extract_video_metadata(video_info)
+    if not meta.has_video:
         return "skipped_no_video", "No video stream found"
 
     # Already AV1 in MKV
     if record.video_codec and record.video_codec.lower() == "av1":
         return "skipped_already_av1", "Already AV1 codec"
-
-    # Resolution too low
-    if (
-        record.width
-        and record.height
-        and (record.width < MIN_RESOLUTION_WIDTH or record.height < MIN_RESOLUTION_HEIGHT)
-    ):
-        return (
-            "skipped_low_resolution",
-            f"Resolution {record.width}x{record.height} below minimum ({MIN_RESOLUTION_WIDTH}x{MIN_RESOLUTION_HEIGHT})",
-        )
 
     return None, None
 
@@ -531,7 +481,17 @@ def _record_to_result(file_path: str, record: FileRecord, index: HistoryIndex) -
             record.estimated_from_similar = similar_count
             index.upsert(record)
         if est_reduction and record.file_size_bytes:
-            est_savings = int(record.file_size_bytes * est_reduction / 100)
+            # Estimate audio size - not reduced, copied unchanged
+            # For cached records, use rough estimate: audio is ~10% of total bitrate
+            audio_size = 0
+            if record.duration_sec and record.bitrate_kbps:
+                # Assume ~10% of bitrate is audio
+                audio_bitrate_kbps = record.bitrate_kbps * 0.1
+                audio_size = int(record.duration_sec * audio_bitrate_kbps * 1000 / 8)
+
+            # Apply reduction only to video portion
+            video_size = max(0, record.file_size_bytes - audio_size)
+            est_savings = int(video_size * est_reduction / 100)
         detail = f"Est. based on {record.estimated_from_similar or 0} similar files"
 
     return FileAnalysisResult(

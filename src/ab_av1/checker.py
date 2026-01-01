@@ -9,13 +9,17 @@ import subprocess
 import urllib.request
 from urllib.error import URLError
 
-from src.utils import get_windows_subprocess_startupinfo
-from src.vendor_manager import AB_AV1_EXE, get_ab_av1_path
+from src.config import LOG_INTERVAL_TIERS
+from src.platform_utils import get_windows_subprocess_startupinfo
+from src.vendor_manager import AB_AV1_EXE, AB_AV1_EXE_NAME, get_ab_av1_path
 
 logger = logging.getLogger(__name__)
 
 # GitHub API endpoint for ab-av1 releases
 AB_AV1_GITHUB_API = "https://api.github.com/repos/alexheretic/ab-av1/releases/latest"
+
+# Cached result for --log-interval support detection
+_log_interval_support: bool | None = None
 
 
 def check_ab_av1_available() -> tuple:
@@ -33,7 +37,10 @@ def check_ab_av1_available() -> tuple:
         logger.info(f"ab-av1 found: {ab_av1_path}")
         return True, str(ab_av1_path), f"ab-av1 available at {ab_av1_path}"
 
-    error_msg = f"ab-av1.exe not found.\nExpected: {AB_AV1_EXE}\nClick 'Download' to install it."
+    error_msg = (
+        f"{AB_AV1_EXE_NAME} not found.\nExpected: {AB_AV1_EXE}\n"
+        "Install via 'cargo install ab-av1' or click 'Download' in Settings."
+    )
     logger.error(error_msg)
     return False, str(AB_AV1_EXE), error_msg
 
@@ -107,3 +114,80 @@ def check_ab_av1_latest_github() -> tuple[str | None, str | None, str]:
     except Exception as e:
         logger.warning(f"Unexpected error checking GitHub: {e}")
         return None, None, f"Error: {e}"
+
+
+def check_log_interval_support() -> bool:
+    """Check if ab-av1 supports the --log-interval flag.
+
+    Checks by parsing `ab-av1 encode --help` output. Result is cached
+    for the session to avoid repeated subprocess calls.
+
+    Returns:
+        True if --log-interval is supported, False otherwise.
+    """
+    global _log_interval_support  # noqa: PLW0603 - simple module-level cache
+
+    if _log_interval_support is not None:
+        return _log_interval_support
+
+    available, exe_path, _ = check_ab_av1_available()
+    if not available:
+        _log_interval_support = False
+        return False
+
+    try:
+        startupinfo, creationflags = get_windows_subprocess_startupinfo()
+        result = subprocess.run(
+            [exe_path, "encode", "--help"],
+            capture_output=True,
+            text=True,
+            timeout=5,
+            check=False,
+            startupinfo=startupinfo,
+            creationflags=creationflags,
+        )
+        # Check both stdout and stderr for the flag
+        output = result.stdout + result.stderr
+        _log_interval_support = "--log-interval" in output
+        if _log_interval_support:
+            logger.info("ab-av1 supports --log-interval flag")
+        else:
+            logger.debug("ab-av1 does not support --log-interval flag (using exponential backoff)")
+        return _log_interval_support
+    except (subprocess.TimeoutExpired, OSError) as e:
+        logger.warning(f"Failed to check ab-av1 --log-interval support: {e}")
+        _log_interval_support = False
+        return False
+
+
+def get_log_interval_for_duration(duration_seconds: float | None) -> str | None:
+    """Get the appropriate log interval based on estimated duration.
+
+    Uses LOG_INTERVAL_TIERS from config to select the right percentage
+    based on file duration. Returns None if --log-interval is not supported
+    or if tiers are not configured.
+
+    Args:
+        duration_seconds: Estimated duration in seconds, or None if unknown.
+
+    Returns:
+        Log interval string (e.g., "2%") or None if not applicable.
+    """
+    if not LOG_INTERVAL_TIERS:
+        return None
+
+    if not check_log_interval_support():
+        return None
+
+    if duration_seconds is None or duration_seconds <= 0:
+        # Unknown duration - use the last tier (most conservative)
+        return LOG_INTERVAL_TIERS[-1][1]
+
+    duration_minutes = duration_seconds / 60
+
+    for max_minutes, interval in LOG_INTERVAL_TIERS:
+        if max_minutes is None or duration_minutes < max_minutes:
+            return interval
+
+    # Fallback to last tier
+    return LOG_INTERVAL_TIERS[-1][1]

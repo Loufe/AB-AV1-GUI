@@ -1,47 +1,32 @@
 # src/utils.py
 """
 Utility functions for the AV1 Video Converter application.
+
+Note: This module has been split into focused modules:
+- src/platform_utils.py - Windows subprocess handling, power management
+- src/privacy.py - Path anonymization, BLAKE2b hashing
+- src/logging_setup.py - Logging configuration
 """
 
-import ctypes
 import dataclasses
-import datetime
-import hashlib
 import json
 import logging
 import os
-import re  # Need for parse_eta_text
+import re
 import subprocess
-import sys  # Needed for sys.argv access
 import tkinter as tk
 import urllib.request
-from logging.handlers import RotatingFileHandler
 from typing import Any, Callable
 from urllib.error import URLError
 
 from src.config import HISTORY_FILE_V2
+from src.logging_setup import get_script_directory
+from src.platform_utils import get_windows_subprocess_startupinfo
+from src.privacy import PATH_PATTERNS, _anonymize_path_match, anonymize_filename
 from src.vendor_manager import get_ffmpeg_path, get_ffprobe_path
 
 # Logging setup
 logger = logging.getLogger(__name__)
-
-
-# --- Windows Subprocess Helper ---
-
-
-def get_windows_subprocess_startupinfo() -> tuple[Any, int]:
-    """Get Windows subprocess startup info to hide console windows.
-
-    Returns:
-        Tuple of (startupinfo, creationflags). On non-Windows, returns (None, 0).
-    """
-    if sys.platform != "win32":
-        return None, 0
-    startupinfo = subprocess.STARTUPINFO()
-    startupinfo.dwFlags |= subprocess.STARTF_USESHOWWINDOW
-    startupinfo.wShowWindow = subprocess.SW_HIDE
-    creationflags = subprocess.CREATE_NO_WINDOW
-    return startupinfo, creationflags
 
 
 # --- ETA Parsing Function ---
@@ -149,329 +134,9 @@ def format_file_size(size_bytes: int) -> str:
     return f"{size_bytes / (1024**3):.2f} GB"
 
 
-# --- Path Anonymization (BLAKE2b Hash-Based) ---
-
-# Configured folders for special labeling (set via set_anonymization_folders)
-_configured_input_folder: str | None = None
-_configured_output_folder: str | None = None
-
-# Cache for hash lookups (avoids recomputing)
-_path_hash_cache: dict[str, str] = {}
-
-
-def _normalize_path(path: str) -> str:
-    """Normalize a path for consistent hashing across platforms.
-
-    Args:
-        path: File or directory path to normalize
-
-    Returns:
-        Normalized path string suitable for hashing
-    """
-    # Get absolute path and normalize separators
-    normalized = os.path.normpath(os.path.abspath(path))
-    # Lowercase on Windows (case-insensitive filesystem)
-    if sys.platform == "win32":
-        normalized = normalized.lower()
-    # Use forward slashes consistently
-    return normalized.replace("\\", "/")
-
-
-def _compute_hash(value: str, length: int = 12) -> str:
-    """Compute a BLAKE2b hash of a string, truncated for readability.
-
-    Args:
-        value: String to hash
-        length: Number of hex characters to return (default 12)
-
-    Returns:
-        Truncated hex hash string
-    """
-    # Use BLAKE2b with 16-byte digest (32 hex chars), then truncate
-    hash_bytes = hashlib.blake2b(value.encode("utf-8"), digest_size=16).digest()
-    return hash_bytes.hex()[:length]
-
-
-def set_anonymization_folders(input_folder: str | None, output_folder: str | None) -> None:
-    """Set the configured input/output folders for special labeling.
-
-    When these folders appear in paths, they'll be shown as [input_folder]
-    or [output_folder] instead of hashes for readability.
-
-    Args:
-        input_folder: The configured input folder path
-        output_folder: The configured output folder path
-    """
-    global _configured_input_folder, _configured_output_folder  # noqa: PLW0603
-    _configured_input_folder = _normalize_path(input_folder) if input_folder else None
-    _configured_output_folder = _normalize_path(output_folder) if output_folder else None
-
-
-def anonymize_folder(folder_path: str) -> str:
-    """Anonymize a folder path using BLAKE2b hash or special labels.
-
-    Args:
-        folder_path: Full path to the folder
-
-    Returns:
-        Anonymized folder identifier like '[input_folder]' or 'folder_7f3a9c2b1e4d'
-    """
-    if not folder_path:
-        return "[unknown]"
-
-    normalized = _normalize_path(folder_path)
-
-    # Check for configured special folders
-    if _configured_input_folder and normalized == _configured_input_folder:
-        return "[input_folder]"
-    if _configured_output_folder and normalized == _configured_output_folder:
-        return "[output_folder]"
-
-    # Check cache
-    cache_key = f"folder:{normalized}"
-    if cache_key in _path_hash_cache:
-        return _path_hash_cache[cache_key]
-
-    # Compute hash
-    folder_hash = _compute_hash(normalized)
-    result = f"folder_{folder_hash}"
-    _path_hash_cache[cache_key] = result
-    return result
-
-
-def anonymize_file(filename: str) -> str:
-    """Anonymize a filename (basename only) using BLAKE2b hash.
-
-    Args:
-        filename: Just the filename (not full path), e.g., 'video.mp4'
-
-    Returns:
-        Anonymized filename like 'file_7f3a9c2b1e4d.mp4'
-    """
-    if not filename:
-        return "file_unknown"
-
-    # Extract just the basename if a full path was passed
-    basename = os.path.basename(filename)
-
-    # Normalize for consistent hashing
-    normalized = basename.lower() if sys.platform == "win32" else basename
-
-    # Check cache
-    cache_key = f"file:{normalized}"
-    if cache_key in _path_hash_cache:
-        return _path_hash_cache[cache_key]
-
-    # Compute hash and preserve extension
-    name_without_ext, ext = os.path.splitext(normalized)
-    file_hash = _compute_hash(name_without_ext)
-    result = f"file_{file_hash}{ext}"
-    _path_hash_cache[cache_key] = result
-    return result
-
-
-def anonymize_path(file_path: str) -> str:
-    """Anonymize a full file path (folder + filename).
-
-    Args:
-        file_path: Full path to the file
-
-    Returns:
-        Anonymized path like '[input_folder]/file_7f3a9c2b1e4d.mp4'
-    """
-    if not file_path:
-        return "[unknown]/file_unknown"
-
-    folder = os.path.dirname(file_path)
-    filename = os.path.basename(file_path)
-
-    anon_folder = anonymize_folder(folder)
-    anon_file = anonymize_file(filename)
-
-    return f"{anon_folder}/{anon_file}"
-
-
-def anonymize_filename(filename: str) -> str:
-    """Anonymize a file path or filename for privacy.
-
-    Convenience function that dispatches to the appropriate anonymization:
-    - Full paths → anonymize_path() (hashes both folder and filename)
-    - Bare filenames → anonymize_file() (hashes just the filename)
-
-    Args:
-        filename: File path or bare filename to anonymize
-
-    Returns:
-        Anonymized string like '[input_folder]/file_7f3a9c2b1e4d.mp4'
-    """
-    if not filename:
-        return filename
-
-    # If it looks like a full path, anonymize the whole thing
-    if os.path.dirname(filename):
-        return anonymize_path(filename)
-
-    # Just a filename, anonymize it alone
-    return anonymize_file(filename)
-
-
-# Regex patterns for detecting paths and filenames in log messages
-_PATH_PATTERNS = [
-    # Windows drive paths: C:\... or C:/...
-    re.compile(r"[A-Za-z]:[\\\/][^\s\"'<>|*?\n]+"),
-    # UNC paths: \\server\share\...
-    re.compile(r"\\\\[^\s\"'<>|*?\n]+"),
-    # Unix absolute paths with common roots
-    re.compile(r"/(?:home|Users|mnt|media|var|tmp|opt|usr)[^\s\"'<>|*?\n]*"),
-    # Video filenames (may contain spaces, captured after common delimiters)
-    # Matches filenames after: colon, arrow, equals, quotes
-    re.compile(
-        r"(?:(?<=: )|(?<=-> )|(?<== )|(?<=\")|(?<='))[^<>|*?\n\"']+\.(?:mp4|mkv|avi|wmv|mov|webm)", re.IGNORECASE
-    ),
-    # Fallback: video filenames without spaces (catches simple cases)
-    re.compile(r"[^\s\"'<>|*?\n/\\]+\.(?:mp4|mkv|avi|wmv|mov|webm)", re.IGNORECASE),
-]
-
-
-_MAX_EXTENSION_LENGTH = 5  # Maximum reasonable file extension length
-
-
-def _anonymize_path_match(match: re.Match) -> str:
-    """Replacement function for regex path matching."""
-    path = match.group(0)
-    # Determine if it's a file or directory
-    # If it has an extension, treat as file path
-    _, ext = os.path.splitext(path)
-    if ext and len(ext) <= _MAX_EXTENSION_LENGTH:
-        # Check if it's a standalone filename (no directory component)
-        if not os.path.dirname(path):
-            return anonymize_file(path)
-        return anonymize_path(path)
-    return anonymize_folder(path)
-
-
-class PathPrivacyFilter(logging.Filter):
-    """Log filter that anonymizes file paths using BLAKE2b hashes.
-
-    This filter proactively detects path patterns in log messages and
-    replaces them with anonymized versions, rather than relying on
-    pre-registered paths.
-    """
-
-    def filter(self, record: logging.LogRecord) -> bool:
-        if hasattr(record, "msg") and isinstance(record.msg, str):
-            temp_msg = record.msg
-            for pattern in _PATH_PATTERNS:
-                temp_msg = pattern.sub(_anonymize_path_match, temp_msg)
-            record.msg = temp_msg
-        return True
-
-
-# Custom filter to suppress excessive sled::pagecache trace messages
-class SledTraceFilter(logging.Filter):
-    def filter(self, record):
-        return not (
-            hasattr(record, "msg")
-            and isinstance(record.msg, str)
-            and "sled::pagecache" in record.msg
-            and "TRACE" in record.msg
-        )
-
-
-# --- Logging Setup and Utilities ---
-
-
-def get_script_directory() -> str:
-    """Get the directory containing the main script/executable.
-
-    Returns:
-        Absolute path to the directory containing the main script or executable
-    """
-    if getattr(sys, "frozen", False):
-        return os.path.dirname(sys.executable)
-    if "__file__" in globals():
-        script_path = os.path.abspath(__file__)
-        # Navigate up one level from src/utils.py to the script directory
-        return os.path.dirname(os.path.dirname(script_path))
-    if sys.argv and sys.argv[0]:
-        # Fallback using argv[0], might be less reliable depending on how it's run
-        return os.path.dirname(os.path.abspath(sys.argv[0]))
-    # Last resort fallback
-    return os.getcwd()
-
-
-def setup_logging(log_directory: str | None = None, anonymize: bool = True) -> str | None:
-    """Set up logging to file and console. Defaults log dir next to script.
-
-    Args:
-        log_directory: Optional path to log directory. If None, uses 'logs' folder next to script
-        anonymize: Whether to anonymize filenames in logs for privacy
-
-    Returns:
-        The actual log directory path used, or None if setup failed
-    """
-    # (Unchanged from previous version)
-    actual_log_directory_used = None
-    try:
-        if log_directory and os.path.isdir(log_directory):
-            logs_dir = os.path.abspath(log_directory)
-            print(f"Using custom log directory: {logs_dir}")
-        else:
-            script_dir = get_script_directory()
-            logs_dir = os.path.join(script_dir, "logs")
-            logs_dir = os.path.abspath(logs_dir)
-            if log_directory:
-                print(f"Warning: Custom log dir '{log_directory}' invalid. Using default: {logs_dir}")
-            else:
-                print(f"Using default log directory: {logs_dir}")
-        actual_log_directory_used = logs_dir
-        os.makedirs(logs_dir, exist_ok=True)
-    except Exception as e:
-        print(f"ERROR: Cannot create/access log directory '{logs_dir}': {e}", file=sys.stderr)
-        actual_log_directory_used = None
-    log_file = None
-    if actual_log_directory_used:
-        timestamp = datetime.datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
-        log_file = os.path.join(actual_log_directory_used, f"av1_convert_{timestamp}.log")
-    log_formatter = logging.Formatter("%(asctime)s - %(levelname)s - %(message)s")
-    file_handler = None
-    if log_file:
-        try:
-            file_handler = RotatingFileHandler(log_file, maxBytes=10 * 1024 * 1024, backupCount=5, encoding="utf-8")
-            file_handler.setFormatter(log_formatter)
-            file_handler.setLevel(logging.DEBUG)
-            if anonymize:
-                file_handler.addFilter(PathPrivacyFilter())
-            print(f"Log anonymization: {'Enabled' if anonymize else 'Disabled'}")
-        except Exception as e:
-            print(f"ERROR: Cannot create log file handler: {e}", file=sys.stderr)
-            file_handler = None
-    console_handler = logging.StreamHandler()
-    console_handler.setFormatter(log_formatter)
-    console_handler.setLevel(logging.INFO)
-    if anonymize:
-        console_handler.addFilter(PathPrivacyFilter())
-    logger = logging.getLogger()
-    logger.setLevel(logging.DEBUG)
-    for handler in logger.handlers[:]:
-        try:
-            handler.close()
-            logger.removeHandler(handler)
-        except Exception as e:
-            logger.debug(f"Error removing handler: {e}")
-    if file_handler:
-        logger.addHandler(file_handler)
-    logger.addHandler(console_handler)
-
-    # Add the SledTraceFilter to reduce noise from sled::pagecache messages
-    sled_filter = SledTraceFilter()
-    logger.addFilter(sled_filter)
-
-    logger.info(f"Filename anonymization in logs is {'ENABLED' if anonymize else 'DISABLED'}.")
-    return actual_log_directory_used
-
-
 # --- Video and FFmpeg Utilities ---
+
+
 def log_video_properties(video_info: dict, prefix: str = "Input") -> None:
     """Log video file properties including format, codecs, resolution, etc.
 
@@ -530,31 +195,6 @@ def log_video_properties(video_info: dict, prefix: str = "Input") -> None:
                 f"{prefix} Audio - Codec: {codec_name}, Channels: {channels}, "
                 f"Sample Rate: {sample_rate} Hz, Bitrate: {audio_bitrate:.1f} kbps"
             )
-
-
-def log_encoding_parameters(crf: int, preset: str, width: int, height: int, vmaf_target: float) -> None:
-    """Log encoding parameters used for the video conversion.
-
-    Args:
-        crf: Constant Rate Factor value
-        preset: Encoding preset name/value
-        width: Video width in pixels
-        height: Video height in pixels
-        vmaf_target: Target VMAF score for quality
-    """
-    resolution_name = (
-        "4K"
-        if width >= 3840 or height >= 2160  # noqa: PLR2004
-        else "1080p"
-        if width >= 1920 or height >= 1080  # noqa: PLR2004
-        else "720p"
-        if width >= 1280 or height >= 720  # noqa: PLR2004
-        else "SD"
-    )
-    logger.info(
-        f"Encoding Parameters - Res: {resolution_name} ({width}x{height}), CRF: {crf}, "
-        f"Preset: {preset}, VMAF Target: {vmaf_target}"
-    )  # Log actual target used
 
 
 def get_video_info(video_path: str, timeout: int = 30) -> dict[str, Any] | None:
@@ -943,7 +583,7 @@ def scrub_log_files(log_directory: str | None = None) -> tuple[int, int]:
 
             # Apply path anonymization patterns
             scrubbed_content = original_content
-            for pattern in _PATH_PATTERNS:
+            for pattern in PATH_PATTERNS:
                 scrubbed_content = pattern.sub(_anonymize_path_match, scrubbed_content)
 
             # Only write if content changed
@@ -960,47 +600,3 @@ def scrub_log_files(log_directory: str | None = None) -> tuple[int, int]:
         logger.info(f"Scrubbed {modified_count} of {len(log_files)} log files")
 
     return len(log_files), modified_count
-
-
-# --- Power Management Functions ---
-# Windows constants for SetThreadExecutionState
-ES_CONTINUOUS = 0x80000000
-ES_SYSTEM_REQUIRED = 0x00000001
-ES_DISPLAY_REQUIRED = 0x00000002
-
-
-def prevent_sleep_mode() -> bool:
-    """Prevent the system from going to sleep while conversion is running.
-
-    Returns:
-        True if sleep prevention was successfully enabled, False otherwise
-    """
-    if sys.platform != "win32":
-        logger.warning("Sleep prevention only supported on Windows")
-        return False
-
-    try:
-        logger.info("Preventing system sleep during conversion")
-        ctypes.windll.kernel32.SetThreadExecutionState(ES_CONTINUOUS | ES_SYSTEM_REQUIRED)
-        return True
-    except Exception:
-        logger.exception("Failed to prevent system sleep")
-        return False
-
-
-def allow_sleep_mode() -> bool:
-    """Restore normal power management behavior.
-
-    Returns:
-        True if sleep settings were successfully restored, False otherwise
-    """
-    if sys.platform != "win32":
-        return False
-
-    try:
-        logger.info("Restoring normal power management")
-        ctypes.windll.kernel32.SetThreadExecutionState(ES_CONTINUOUS)
-        return True
-    except Exception:
-        logger.exception("Failed to restore normal power management")
-        return False

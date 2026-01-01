@@ -3,6 +3,8 @@
 import tkinter as tk
 from tkinter import ttk
 
+from src.gui.constants import COLOR_MENU_ACTIVE_BG, COLOR_MENU_ACTIVE_FG, COLOR_MENU_BACKGROUND
+
 
 def setup_expand_collapse_icons(tree: ttk.Treeview) -> None:
     """Bind tree events to update folder expand/collapse icons (▶/▼).
@@ -57,7 +59,7 @@ def create_styled_context_menu(parent: tk.Widget) -> tk.Menu:
     return tk.Menu(
         parent,
         tearoff=0,
-        background="#ffffff",
-        activebackground="#0078d4",
-        activeforeground="#ffffff",
+        background=COLOR_MENU_BACKGROUND,
+        activebackground=COLOR_MENU_ACTIVE_BG,
+        activeforeground=COLOR_MENU_ACTIVE_FG,
     )

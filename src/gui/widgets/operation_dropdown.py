@@ -15,6 +15,7 @@ import tkinter as tk
 from tkinter import ttk
 from typing import TYPE_CHECKING, Callable
 
+from src.gui.constants import COLOR_MENU_ACTIVE_BG, COLOR_MENU_ACTIVE_FG, COLOR_MENU_BACKGROUND
 from src.history_index import compute_path_hash, get_history_index
 from src.models import OperationType, QueueItem
 
@@ -225,7 +226,11 @@ def build_operation_submenu(
         The submenu widget
     """
     submenu = tk.Menu(
-        parent_menu, tearoff=0, background="#ffffff", activebackground="#0078d4", activeforeground="#ffffff"
+        parent_menu,
+        tearoff=0,
+        background=COLOR_MENU_BACKGROUND,
+        activebackground=COLOR_MENU_ACTIVE_BG,
+        activeforeground=COLOR_MENU_ACTIVE_FG,
     )
 
     # Determine available options based on Layer 2 data

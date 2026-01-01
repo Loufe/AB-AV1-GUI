@@ -16,7 +16,8 @@ from src.gui.gui_updates import (
 from src.models import ErrorInfo, FileInfoEvent, ProgressEvent, RetryInfo, SkippedInfo
 
 # Project Imports
-from src.utils import anonymize_filename, format_file_size, update_ui_safely
+from src.privacy import anonymize_filename
+from src.utils import format_file_size, update_ui_safely
 
 logger = logging.getLogger(__name__)
 

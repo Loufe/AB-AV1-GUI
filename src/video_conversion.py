@@ -28,14 +28,8 @@ from src.cache_helpers import can_reuse_crf, is_file_unchanged
 from src.config import DEFAULT_ENCODING_PRESET, DEFAULT_VMAF_TARGET, MIN_OUTPUT_FILE_SIZE
 from src.history_index import get_history_index
 from src.models import FileStatus, OutputMode
-from src.utils import (
-    anonymize_filename,
-    format_file_size,
-    format_time,
-    get_video_info,
-    log_conversion_result,
-    log_video_properties,
-)
+from src.privacy import anonymize_filename
+from src.utils import format_file_size, format_time, get_video_info, log_conversion_result, log_video_properties
 
 logger = logging.getLogger(__name__)
 

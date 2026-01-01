@@ -14,6 +14,13 @@ from tkinter import ttk
 
 from src.config import DEFAULT_VMAF_TARGET
 from src.gui.base import ToolTip, TreeviewHeaderTooltip, open_in_explorer, reveal_in_explorer
+from src.gui.constants import (
+    COLOR_STATUS_ERROR,
+    COLOR_STATUS_INFO,
+    COLOR_STATUS_PENDING,
+    COLOR_STATUS_SUCCESS,
+    COLOR_STATUS_WARNING,
+)
 from src.gui.tree_utils import create_styled_context_menu, setup_expand_collapse_icons
 from src.gui.widgets.operation_dropdown import (
     OPERATION_DISPLAY_TO_ENUM,
@@ -108,12 +115,13 @@ def create_convert_tab(gui):
     tree_container.columnconfigure(0, weight=1)
     tree_container.rowconfigure(0, weight=1)
 
-    columns = ("size", "est_time", "operation", "output", "status")
+    columns = ("format", "size", "est_time", "operation", "output", "status")
     gui.queue_tree = ttk.Treeview(
         tree_container, columns=columns, show="tree headings", selectmode="extended", style="Analysis.Treeview"
     )
 
     gui.queue_tree.heading("#0", text="#  Name", anchor="w")
+    gui.queue_tree.heading("format", text="Format", anchor="w")
     gui.queue_tree.heading("size", text="Size", anchor="e")
     gui.queue_tree.heading("est_time", text="Est. Time", anchor="e")
     gui.queue_tree.heading("operation", text="Operation", anchor="w")
@@ -121,6 +129,7 @@ def create_convert_tab(gui):
     gui.queue_tree.heading("status", text="Status", anchor="w")
 
     gui.queue_tree.column("#0", width=250, minwidth=150, stretch=True)
+    gui.queue_tree.column("format", width=120, minwidth=100, stretch=False, anchor="w")
     gui.queue_tree.column("size", width=80, minwidth=60, stretch=False, anchor="e")
     gui.queue_tree.column("est_time", width=80, minwidth=60, stretch=False, anchor="e")
     gui.queue_tree.column("operation", width=110, minwidth=90, stretch=False)
@@ -134,11 +143,11 @@ def create_convert_tab(gui):
     scroll_y.grid(row=0, column=1, sticky="ns")
 
     # File status tags for nested file items
-    gui.queue_tree.tag_configure("file_pending", foreground="#666666")
-    gui.queue_tree.tag_configure("file_converting", foreground="#1565C0")
-    gui.queue_tree.tag_configure("file_done", foreground="#2E7D32")
-    gui.queue_tree.tag_configure("file_skipped", foreground="#C65D00")
-    gui.queue_tree.tag_configure("file_error", foreground="#C62828")
+    gui.queue_tree.tag_configure("file_pending", foreground=COLOR_STATUS_PENDING)
+    gui.queue_tree.tag_configure("file_converting", foreground=COLOR_STATUS_INFO)
+    gui.queue_tree.tag_configure("file_done", foreground=COLOR_STATUS_SUCCESS)
+    gui.queue_tree.tag_configure("file_skipped", foreground=COLOR_STATUS_WARNING)
+    gui.queue_tree.tag_configure("file_error", foreground=COLOR_STATUS_ERROR)
 
     # Set up column header tooltips
     TreeviewHeaderTooltip(gui.queue_tree, {
@@ -322,13 +331,14 @@ def create_convert_tab(gui):
 
     gui.queue_total_tree = ttk.Treeview(total_container, columns=columns, show="tree", height=1, selectmode="none")
     gui.queue_total_tree.column("#0", width=250, minwidth=150, stretch=True)
+    gui.queue_total_tree.column("format", width=120, minwidth=100, stretch=False, anchor="w")
     gui.queue_total_tree.column("size", width=80, minwidth=60, stretch=False, anchor="e")
     gui.queue_total_tree.column("est_time", width=80, minwidth=60, stretch=False, anchor="e")
     gui.queue_total_tree.column("operation", width=110, minwidth=90, stretch=False)
     gui.queue_total_tree.column("output", width=100, minwidth=80, stretch=False)
     gui.queue_total_tree.column("status", width=120, minwidth=100, stretch=False)
 
-    gui.queue_total_tree.insert("", "end", iid="total", text="Total", values=("", "", "", "", "0 items"))
+    gui.queue_total_tree.insert("", "end", iid="total", text="Total", values=("", "", "", "", "", "0 items"))
     gui.queue_total_tree.grid(row=0, column=0, sticky="ew", padx=(0, 17))
 
     gui.queue_total_tree.bind("<Button-1>", lambda e: "break")

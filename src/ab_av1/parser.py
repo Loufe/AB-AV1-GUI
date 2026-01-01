@@ -11,7 +11,7 @@ from typing import Any, Callable
 
 from src.config import SIZE_REDUCTION_CHANGE_THRESHOLD, VMAF_CHANGE_THRESHOLD
 from src.models import ProgressEvent
-from src.utils import anonymize_filename
+from src.privacy import anonymize_filename
 
 logger = logging.getLogger(__name__)
 

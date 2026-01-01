@@ -8,10 +8,10 @@ import os
 from pathlib import Path
 from typing import Any
 
-from src.config import MIN_RESOLUTION_HEIGHT, MIN_RESOLUTION_WIDTH  # Import resolution constants
-
 # Project imports
-from src.utils import anonymize_filename, get_video_info  # No GUI needed here
+from src.privacy import anonymize_filename
+from src.utils import get_video_info
+from src.video_metadata import extract_video_metadata
 
 logger = logging.getLogger(__name__)
 
@@ -101,38 +101,17 @@ def scan_video_needs_conversion(
         return True, reason, None  # Assume conversion needed if analysis fails
 
     try:
-        is_already_av1 = False
-        video_stream_found = False
-        width = 0
-        height = 0
         # Check container from path, not ffprobe (ffprobe 'format_name' can be just 'matroska')
         is_mkv_container = input_video_path.lower().endswith(".mkv")
 
-        for stream in video_info.get("streams", []):
-            if stream.get("codec_type") == "video":
-                video_stream_found = True
-                codec_name = stream.get("codec_name", "").lower()
-                if codec_name == "av1":
-                    is_already_av1 = True
-                # Get resolution from video stream
-                width = stream.get("width", 0)
-                height = stream.get("height", 0)
-                # We get the first video stream and break to avoid multiple streams
-                break
+        meta = extract_video_metadata(video_info)
 
-        if not video_stream_found:
+        if not meta.has_video:
             reason = "No video stream found"
             logger.warning(f"No video stream in {anonymized_input} - skipping.")
             return False, reason, video_info  # Return info even if skipped
 
-        # Check resolution before other checks
-        if width < MIN_RESOLUTION_WIDTH or height < MIN_RESOLUTION_HEIGHT:
-            reason = (
-                f"Below minimum resolution ({width}x{height}) - needs at least "
-                f"{MIN_RESOLUTION_WIDTH}x{MIN_RESOLUTION_HEIGHT}"
-            )
-            logger.info(f"Skipping {anonymized_input} - {reason}")
-            return False, reason, video_info
+        is_already_av1 = meta.is_av1
 
         # Decision Logic:
         # Skip if: Already AV1 AND already in MKV container (regardless of overwrite or in-place)

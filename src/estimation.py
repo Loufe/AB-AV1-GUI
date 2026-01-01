@@ -18,6 +18,7 @@ from src.config import MIN_SAMPLES_FOR_ESTIMATE
 from src.history_index import get_history_index
 from src.models import FileRecord, TimeEstimate
 from src.utils import get_video_info
+from src.video_metadata import extract_video_metadata
 
 logger = logging.getLogger(__name__)
 
@@ -140,18 +141,13 @@ def estimate_file_time(
     if file_path and (codec is None or duration is None or size is None):
         file_info = get_video_info(file_path)
         if file_info:
+            meta = extract_video_metadata(file_info)
             if codec is None:
-                for stream in file_info.get("streams", []):
-                    if stream.get("codec_type") == "video":
-                        codec = stream.get("codec_name")
-                        break
+                codec = meta.video_codec
             if duration is None:
-                try:
-                    duration = float(file_info.get("format", {}).get("duration", 0))
-                except (ValueError, TypeError):
-                    duration = 0
+                duration = meta.duration_sec or 0
             if size is None:
-                size = file_info.get("file_size", 0)
+                size = meta.file_size_bytes or 0
 
     # Validate we have minimum required data
     if not duration or duration <= 0:
@@ -194,50 +190,6 @@ def estimate_file_time(
 
     # Tier 4: Insufficient data
     return TimeEstimate(0, 0, 0, "none", "insufficient_data")
-
-
-def estimate_from_progress(progress_percent: float, elapsed_seconds: float) -> TimeEstimate:
-    """Estimate remaining time from in-progress encoding.
-
-    This is the most accurate estimation method, used during active encoding.
-
-    Args:
-        progress_percent: Current encoding progress (0-100).
-        elapsed_seconds: Time elapsed since encoding started.
-
-    Returns:
-        TimeEstimate with high confidence single value.
-    """
-    if progress_percent <= 0 or elapsed_seconds <= 0:
-        return TimeEstimate(0, 0, 0, "none", "in_progress")
-
-    total_estimated = (elapsed_seconds / progress_percent) * 100
-    remaining = max(0, total_estimated - elapsed_seconds)
-
-    return TimeEstimate(
-        min_seconds=remaining, max_seconds=remaining, best_seconds=remaining, confidence="high", source="in_progress"
-    )
-
-
-def estimate_processing_speed_from_history() -> float:
-    """Calculate median processing speed (bytes/second) from historical data.
-
-    Returns:
-        Median processing speed in bytes/second or 0 if no history.
-    """
-    index = get_history_index()
-    converted_records = index.get_converted_records()
-    if not converted_records:
-        return 0
-
-    speeds = []
-    for record in converted_records:
-        input_size = record.file_size_bytes
-        time_sec = record.conversion_time_sec or 0
-        if input_size > 0 and time_sec > 0:
-            speeds.append(input_size / time_sec)
-
-    return statistics.median(speeds) if speeds else 0
 
 
 def estimate_current_file_eta(

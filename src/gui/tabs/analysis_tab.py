@@ -13,6 +13,16 @@ from tkinter import ttk
 
 from src.config import ANALYSIS_TREE_HEADINGS
 from src.gui.base import ToolTip, TreeviewHeaderTooltip, TreeviewRowTooltip, open_in_explorer, reveal_in_explorer
+from src.gui.constants import (
+    COLOR_BACKGROUND,
+    COLOR_OVERLAY_TEXT,
+    COLOR_STATUS_DISABLED,
+    COLOR_STATUS_INFO,
+    COLOR_STATUS_INFO_LIGHT,
+    COLOR_STATUS_SUCCESS,
+    COLOR_STATUS_WARNING,
+    FONT_SYSTEM_OVERLAY,
+)
 from src.gui.tree_utils import create_styled_context_menu, setup_click_expand_collapse, setup_expand_collapse_icons
 from src.models import OperationType
 
@@ -60,28 +70,29 @@ def create_analysis_tab(gui):
     tree_container.columnconfigure(0, weight=1)
     tree_container.rowconfigure(0, weight=1)
 
-    columns = ("size", "savings", "time", "efficiency")
+    columns = ("format", "size", "savings", "time", "efficiency")
     gui.analysis_tree = ttk.Treeview(
         tree_container, columns=columns, show="tree headings", selectmode="extended", style="Analysis.Treeview"
     )
 
     for col, text in ANALYSIS_TREE_HEADINGS.items():
-        anchor = "w" if col == "#0" else "e"
+        anchor = "w" if col in ("#0", "format") else "e"
         gui.analysis_tree.heading(col, text=text, anchor=anchor, command=lambda c=col: gui.sort_analysis_tree(c))
 
     # Name column stretches to fill space, data columns are fixed
     gui.analysis_tree.column("#0", width=300, minwidth=150, stretch=True)
+    gui.analysis_tree.column("format", width=120, minwidth=100, stretch=False, anchor="w")
     gui.analysis_tree.column("size", width=70, minwidth=70, stretch=False, anchor="e")
     gui.analysis_tree.column("savings", width=90, minwidth=90, stretch=False, anchor="e")
     gui.analysis_tree.column("time", width=90, minwidth=90, stretch=False, anchor="e")
     gui.analysis_tree.column("efficiency", width=80, minwidth=80, stretch=False, anchor="e")
 
     # Configure tags for status coloring (subtle, professional colors)
-    gui.analysis_tree.tag_configure("done", foreground="#2E7D32")  # Dark green
-    gui.analysis_tree.tag_configure("skip", foreground="#C65D00")  # Muted amber
-    gui.analysis_tree.tag_configure("av1", foreground="#888888")  # Gray - already AV1, no action needed
-    gui.analysis_tree.tag_configure("in_queue", foreground="#1565C0")  # Dark blue - queued file/folder
-    gui.analysis_tree.tag_configure("partial_queue", foreground="#64B5F6")  # Light blue - folder with some queued
+    gui.analysis_tree.tag_configure("done", foreground=COLOR_STATUS_SUCCESS)  # Dark green
+    gui.analysis_tree.tag_configure("skip", foreground=COLOR_STATUS_WARNING)  # Muted amber
+    gui.analysis_tree.tag_configure("av1", foreground=COLOR_STATUS_DISABLED)  # Gray - already AV1, no action needed
+    gui.analysis_tree.tag_configure("in_queue", foreground=COLOR_STATUS_INFO)  # Dark blue - queued file/folder
+    gui.analysis_tree.tag_configure("partial_queue", foreground=COLOR_STATUS_INFO_LIGHT)  # Light blue - partial queue
 
     scroll_y = ttk.Scrollbar(tree_container, orient="vertical", command=gui.analysis_tree.yview)
     gui.analysis_tree.configure(yscrollcommand=scroll_y.set)
@@ -91,13 +102,13 @@ def create_analysis_tab(gui):
 
     # Scanning overlay - shown during folder discovery
     # Use tk.Frame for background color support
-    gui.analysis_scan_overlay = tk.Frame(tree_container, bg="#f0f0f0")
+    gui.analysis_scan_overlay = tk.Frame(tree_container, bg=COLOR_BACKGROUND)
     overlay_label = tk.Label(
         gui.analysis_scan_overlay,
         text="Scanning folder...",
-        font=("TkDefaultFont", 11),
-        bg="#f0f0f0",
-        fg="#666666",
+        font=FONT_SYSTEM_OVERLAY,
+        bg=COLOR_BACKGROUND,
+        fg=COLOR_OVERLAY_TEXT,
     )
     overlay_label.place(relx=0.5, rely=0.5, anchor="center")
 
@@ -251,13 +262,14 @@ def create_analysis_tab(gui):
 
     # Match column widths exactly with main tree
     gui.analysis_total_tree.column("#0", width=300, minwidth=150, stretch=True)
+    gui.analysis_total_tree.column("format", width=120, minwidth=100, stretch=False, anchor="w")
     gui.analysis_total_tree.column("size", width=70, minwidth=70, stretch=False, anchor="e")
     gui.analysis_total_tree.column("savings", width=90, minwidth=90, stretch=False, anchor="e")
     gui.analysis_total_tree.column("time", width=90, minwidth=90, stretch=False, anchor="e")
     gui.analysis_total_tree.column("efficiency", width=80, minwidth=80, stretch=False, anchor="e")
 
     # Insert the total row (will be updated dynamically)
-    gui.analysis_total_tree.insert("", "end", iid="total", text="Total", values=("—", "—", "—", "—"))
+    gui.analysis_total_tree.insert("", "end", iid="total", text="Total", values=("", "—", "—", "—", "—"))
 
     # Add padding on right to align with scrollbar in main tree
     gui.analysis_total_tree.grid(row=0, column=0, sticky="ew", padx=(0, 17))

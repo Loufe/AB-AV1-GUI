@@ -26,7 +26,7 @@ The app will prompt to download FFmpeg and ab-av1 if not found.
 
 ## Notes
 
-- Tested on Windows. Designed for cross-platform but Linux/macOS are untested.
+- Tested on Windows. Designed for cross-platform but Linux/macOS are untested. Known limitation: sleep prevention during conversion is Windows-only.
 - **Media servers**: Be thoughtful about support for AV1 decoding in devices you want to watch video on. Old phones, PCs, streamers, and smart TVs may not support it, adding a high computational burden for transcoding on the server.
 
 ### Third-Party Software

@@ -12,11 +12,11 @@ import json
 import logging
 import os
 import threading
-from typing import Optional
 
 from src.config import HISTORY_FILE_V2, MAX_CRF_VALUE, MAX_VMAF_VALUE, RESOLUTION_TOLERANCE_PERCENT
+from src.logging_setup import get_script_directory
 from src.models import FileRecord, FileStatus
-from src.utils import _compute_hash, _normalize_path, get_script_directory
+from src.privacy import compute_hash, normalize_path
 
 logger = logging.getLogger(__name__)
 
@@ -79,8 +79,8 @@ def compute_path_hash(file_path: str) -> str:
     Returns:
         16-character hex hash string.
     """
-    normalized = _normalize_path(file_path)
-    return _compute_hash(normalized, length=16)
+    normalized = normalize_path(file_path)
+    return compute_hash(normalized, length=16)
 
 
 def get_history_v2_path() -> str:
@@ -118,7 +118,7 @@ class HistoryIndex:
         self._dirty = False
         self._converted_cache: list[FileRecord] | None = None
 
-    def get(self, path_hash: str) -> Optional[FileRecord]:
+    def get(self, path_hash: str) -> FileRecord | None:
         """Get a record by its path hash.
 
         Args:
@@ -131,7 +131,7 @@ class HistoryIndex:
             self._ensure_loaded()
             return self._records.get(path_hash)
 
-    def lookup_file(self, file_path: str) -> Optional[FileRecord]:
+    def lookup_file(self, file_path: str) -> FileRecord | None:
         """Look up a record by file path.
 
         Computes the path hash and retrieves the record.
@@ -321,7 +321,7 @@ class HistoryIndex:
 class _IndexHolder:
     """Holds the singleton HistoryIndex instance."""
 
-    instance: Optional[HistoryIndex] = None
+    instance: HistoryIndex | None = None
     lock: threading.Lock = threading.Lock()
 
 

@@ -5,6 +5,8 @@ import tkinter as tk
 from pathlib import Path
 from tkinter import ttk
 
+from src.gui.constants import COLOR_STATUS_ERROR_TEXT, COLOR_STATUS_PENDING, FONT_DIALOG_HEADER, FONT_MONOSPACE
+
 
 class FFmpegDownloadDialog(tk.Toplevel):
     """Informational dialog shown when downloading FFmpeg while a system copy exists.
@@ -44,43 +46,49 @@ class FFmpegDownloadDialog(tk.Toplevel):
         main_frame.pack(fill="both", expand=True)
 
         # Header
-        ttk.Label(main_frame, text="Install Portable FFmpeg", font=("TkDefaultFont", 10, "bold")).pack(
+        ttk.Label(main_frame, text="Install Portable FFmpeg", font=FONT_DIALOG_HEADER).pack(
             anchor="w", pady=(0, 15)
         )
 
         # Existing installation info
         ttk.Label(main_frame, text="System FFmpeg detected at:").pack(anchor="w")
 
-        ttk.Label(main_frame, text=f"    {self.existing_ffmpeg_dir}", foreground="gray").pack(anchor="w", pady=(0, 10))
+        ttk.Label(
+            main_frame, text=f"    {self.existing_ffmpeg_dir}", foreground=COLOR_STATUS_PENDING
+        ).pack(anchor="w", pady=(0, 10))
 
         # What will happen
         ttk.Label(main_frame, text="This will install a portable copy to vendor/ffmpeg/").pack(anchor="w")
 
         ttk.Label(main_frame, text="This app will use the portable copy instead.").pack(anchor="w")
 
-        ttk.Label(main_frame, text="Your system installation will not be modified.", foreground="#c00000").pack(
-            anchor="w", pady=(0, 10)
-        )
+        ttk.Label(
+            main_frame, text="Your system installation will not be modified.", foreground=COLOR_STATUS_ERROR_TEXT
+        ).pack(anchor="w", pady=(0, 10))
 
         # Hint about updating system install
-        ttk.Label(main_frame, text="To update your system FFmpeg, use your package manager:", foreground="gray").pack(
-            anchor="w"
-        )
+        ttk.Label(
+            main_frame,
+            text="To update your system FFmpeg, use your package manager:",
+            foreground=COLOR_STATUS_PENDING,
+        ).pack(anchor="w")
 
         ttk.Label(
             main_frame,
             text="    choco upgrade ffmpeg  /  winget upgrade ffmpeg",
-            foreground="gray",
-            font=("Consolas", 9),
+            foreground=COLOR_STATUS_PENDING,
+            font=FONT_MONOSPACE,
         ).pack(anchor="w")
 
         # Separator
         ttk.Separator(main_frame, orient="horizontal").pack(fill="x", pady=15)
 
         # Download info
-        ttk.Label(main_frame, text="Download: ~100 MB (gyan.dev full build with libsvtav1)", foreground="gray").pack(
-            anchor="w"
-        )
+        ttk.Label(
+            main_frame,
+            text="Download: ~100 MB (gyan.dev full build with libsvtav1)",
+            foreground=COLOR_STATUS_PENDING,
+        ).pack(anchor="w")
 
         # Buttons
         btn_frame = ttk.Frame(main_frame)

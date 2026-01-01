@@ -1,15 +1,18 @@
-# src/gui/tree_state_manager.py
+# src/gui/analysis_tree.py
 """
-Tree state management functions for the analysis tree.
+Analysis tree display and state management.
 
-Extracted from main_window.py to manage tree state synchronization
-and aggregate calculations.
+Handles incremental updates to the analysis tree view, including:
+- Single row updates from history index
+- Batch row updates with folder aggregate recalculation
+- Queue tag synchronization between analysis and queue trees
 """
 
 import os
 import tkinter as tk
 
 from src.estimation import estimate_file_time
+from src.gui.tree_display import format_stream_display, get_analysis_file_tag
 from src.gui.tree_formatters import format_compact_time, format_efficiency
 from src.history_index import get_history_index
 from src.models import FileStatus, QueueItemStatus
@@ -40,8 +43,10 @@ def update_tree_row(gui, file_path: str):
     reduction_percent = record.predicted_size_reduction or record.estimated_reduction_percent
 
     # Calculate display values based on record status
+    format_str = format_stream_display(record.video_codec, record.audio_codec)
     size_str = format_file_size(record.file_size_bytes) if record.file_size_bytes else "—"
-    tag = ""
+    tag = get_analysis_file_tag(record.status, record.video_codec)
+
     if record.status == FileStatus.SCANNED and reduction_percent and record.file_size_bytes:
         # File needs conversion - show estimates
         file_savings = int(record.file_size_bytes * reduction_percent / 100)
@@ -58,18 +63,15 @@ def update_tree_row(gui, file_path: str):
         savings_str = "Done"
         time_str = "—"
         eff_str = "—"
-        tag = "done"
     elif record.status == FileStatus.NOT_WORTHWHILE:
         savings_str = "Skip"
         time_str = "—"
         eff_str = "—"
-        tag = "skip"
     elif record.video_codec and record.video_codec.lower() == "av1":
         # Already AV1 - show subtle indicator
         savings_str = "AV1"
         time_str = "—"
         eff_str = "—"
-        tag = "av1"
     else:
         # No data yet
         savings_str = "—"
@@ -80,7 +82,7 @@ def update_tree_row(gui, file_path: str):
     current_tags = list(gui.analysis_tree.item(item_id, "tags") or ())
     queue_tags = [t for t in current_tags if t in ("in_queue", "partial_queue")]
     new_tags = queue_tags + ([tag] if tag else [])
-    gui.analysis_tree.item(item_id, values=(size_str, savings_str, time_str, eff_str), tags=tuple(new_tags))
+    gui.analysis_tree.item(item_id, values=(format_str, size_str, savings_str, time_str, eff_str), tags=tuple(new_tags))
 
     # Update all ancestor folder aggregates
     parent_id = gui.analysis_tree.parent(item_id)
@@ -116,11 +118,13 @@ def batch_update_tree_rows(gui, file_paths: list[str]) -> None:
             continue
 
         # Calculate display values
+        format_str = format_stream_display(record.video_codec, record.audio_codec)
         size_str = format_file_size(record.file_size_bytes) if record.file_size_bytes else "—"
-        tag = ""
         # Use Layer 2 data if available, otherwise fall back to Layer 1 estimate
         has_layer2 = record.predicted_size_reduction is not None
         reduction_percent = record.predicted_size_reduction or record.estimated_reduction_percent
+        tag = get_analysis_file_tag(record.status, record.video_codec)
+
         if record.status == FileStatus.SCANNED and reduction_percent and record.file_size_bytes:
             file_savings = int(record.file_size_bytes * reduction_percent / 100)
             savings_str = format_file_size(file_savings)
@@ -135,18 +139,15 @@ def batch_update_tree_rows(gui, file_paths: list[str]) -> None:
             savings_str = "Done"
             time_str = "—"
             eff_str = "—"
-            tag = "done"
         elif record.status == FileStatus.NOT_WORTHWHILE:
             savings_str = "Skip"
             time_str = "—"
             eff_str = "—"
-            tag = "skip"
         elif record.video_codec and record.video_codec.lower() == "av1":
             # Already AV1 - show subtle indicator
             savings_str = "AV1"
             time_str = "—"
             eff_str = "—"
-            tag = "av1"
         else:
             savings_str = "—"
             time_str = "—"
@@ -158,7 +159,7 @@ def batch_update_tree_rows(gui, file_paths: list[str]) -> None:
         queue_tags = [t for t in current_tags if t in ("in_queue", "partial_queue")]
         new_tags = queue_tags + ([tag] if tag else [])
         gui.analysis_tree.item(
-            item_id, values=(size_str, savings_str, time_str, eff_str), tags=tuple(new_tags)
+            item_id, values=(format_str, size_str, savings_str, time_str, eff_str), tags=tuple(new_tags)
         )
 
         # Track all ancestor folders for batch aggregate update
@@ -232,13 +233,14 @@ def update_folder_aggregates(gui, folder_id: str, item_to_path: dict[str, str] |
             total_time += file_time
 
     # Update folder display (efficiency = aggregate savings / aggregate time)
+    # Folders show empty format (aggregate of multiple files)
     size_str = format_file_size(total_size) if total_size > 0 else "—"
     savings_str = format_file_size(total_savings) if total_savings > 0 else "—"
     if any_estimate and savings_str != "—":
         savings_str = f"~{savings_str}"
     time_str = format_compact_time(total_time) if total_time > 0 else "—"
     eff_str = format_efficiency(total_savings, total_time)
-    gui.analysis_tree.item(folder_id, values=(size_str, savings_str, time_str, eff_str))
+    gui.analysis_tree.item(folder_id, values=("", size_str, savings_str, time_str, eff_str))
 
 
 def get_queued_file_paths(gui) -> set[str]:
