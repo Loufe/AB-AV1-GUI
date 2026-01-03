@@ -180,27 +180,38 @@ def _format_size_display(queue_item, record) -> str:
 
 def _format_time_estimate(queue_item, record, index) -> str:
     """Format the estimated time column display text."""
+    op_type = queue_item.operation_type
     if queue_item.is_folder and queue_item.files:
-        # Sum estimates for all files in folder
+        # Sum estimates for all files in folder, track lowest confidence
         total_seconds = 0.0
+        lowest_confidence = "high"
+        confidence_order = {"high": 0, "medium": 1, "low": 2, "none": 3}
         for file_item in queue_item.files:
-            file_estimate = estimate_file_time(file_item.path)
+            file_estimate = estimate_file_time(file_item.path, operation_type=op_type)
             if file_estimate.confidence != "none" and file_estimate.best_seconds > 0:
                 total_seconds += file_estimate.best_seconds
-        return format_compact_time(total_seconds) if total_seconds > 0 else "—"
+                if confidence_order.get(file_estimate.confidence, 3) > confidence_order.get(lowest_confidence, 0):
+                    lowest_confidence = file_estimate.confidence
+        if total_seconds > 0:
+            return format_compact_time(total_seconds, confidence=lowest_confidence)
+        return "—"
     if record:
         # Use record data for single file estimate
         file_estimate = estimate_file_time(
-            codec=record.video_codec, duration=record.duration_sec, size=record.file_size_bytes
+            codec=record.video_codec,
+            duration=record.duration_sec,
+            width=record.width,
+            height=record.height,
+            operation_type=op_type,
         )
         if file_estimate.confidence != "none" and file_estimate.best_seconds > 0:
-            return format_compact_time(file_estimate.best_seconds)
+            return format_compact_time(file_estimate.best_seconds, confidence=file_estimate.confidence)
         return "—"
     if not queue_item.is_folder:
         # Try path-based estimate as fallback (only for files, not folders)
-        file_estimate = estimate_file_time(queue_item.source_path)
+        file_estimate = estimate_file_time(queue_item.source_path, operation_type=op_type)
         if file_estimate.confidence != "none" and file_estimate.best_seconds > 0:
-            return format_compact_time(file_estimate.best_seconds)
+            return format_compact_time(file_estimate.best_seconds, confidence=file_estimate.confidence)
         return "—"
     # Folder without files populated - can't estimate
     return "—"
@@ -208,14 +219,17 @@ def _format_time_estimate(queue_item, record, index) -> str:
 
 def _insert_folder_file_rows(gui, queue_item, parent_item_id: str, stopping: bool) -> None:
     """Insert nested file rows for a folder queue item."""
+    op_type = queue_item.operation_type
     for file_item in queue_item.files:
         file_name = os.path.basename(file_item.path)
         file_size = format_file_size(file_item.size_bytes) if file_item.size_bytes > 0 else "—"
 
         # Calculate estimated time for this file
-        file_time_estimate = estimate_file_time(file_item.path)
+        file_time_estimate = estimate_file_time(file_item.path, operation_type=op_type)
         if file_time_estimate.confidence != "none" and file_time_estimate.best_seconds > 0:
-            file_est_time = format_compact_time(file_time_estimate.best_seconds)
+            file_est_time = format_compact_time(
+                file_time_estimate.best_seconds, confidence=file_time_estimate.confidence
+            )
         else:
             file_est_time = "—"
 
@@ -242,29 +256,44 @@ def _update_total_row(gui, index) -> None:
     total_items = len(gui._queue_items)
     total_files = sum(len(item.files) if item.is_folder else 1 for item in gui._queue_items)
 
-    # Calculate total estimated time
+    # Calculate total estimated time, tracking lowest confidence
     total_est_seconds = 0.0
+    lowest_confidence = "high"
+    confidence_order = {"high": 0, "medium": 1, "low": 2, "none": 3}
+
     for queue_item in gui._queue_items:
+        op_type = queue_item.operation_type
         if queue_item.is_folder and queue_item.files:
             for file_item in queue_item.files:
-                file_estimate = estimate_file_time(file_item.path)
+                file_estimate = estimate_file_time(file_item.path, operation_type=op_type)
                 if file_estimate.confidence != "none" and file_estimate.best_seconds > 0:
                     total_est_seconds += file_estimate.best_seconds
+                    if confidence_order.get(file_estimate.confidence, 3) > confidence_order.get(lowest_confidence, 0):
+                        lowest_confidence = file_estimate.confidence
         elif not queue_item.is_folder:
             # Single file item
             path_hash = compute_path_hash(queue_item.source_path)
             record = index.get(path_hash)
             if record:
                 file_estimate = estimate_file_time(
-                    codec=record.video_codec, duration=record.duration_sec, size=record.file_size_bytes
+                    codec=record.video_codec,
+                    duration=record.duration_sec,
+                    width=record.width,
+                    height=record.height,
+                    operation_type=op_type,
                 )
             else:
-                file_estimate = estimate_file_time(queue_item.source_path)
+                file_estimate = estimate_file_time(queue_item.source_path, operation_type=op_type)
             if file_estimate.confidence != "none" and file_estimate.best_seconds > 0:
                 total_est_seconds += file_estimate.best_seconds
+                if confidence_order.get(file_estimate.confidence, 3) > confidence_order.get(lowest_confidence, 0):
+                    lowest_confidence = file_estimate.confidence
         # else: folder without files populated - skip estimation
 
-    total_est_time_display = format_compact_time(total_est_seconds) if total_est_seconds > 0 else "—"
+    if total_est_seconds > 0:
+        total_est_time_display = format_compact_time(total_est_seconds, confidence=lowest_confidence)
+    else:
+        total_est_time_display = "—"
 
     if total_files != total_items:
         status_text = f"{total_items} items ({total_files} files)"

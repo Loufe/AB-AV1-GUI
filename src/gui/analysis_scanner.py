@@ -14,12 +14,9 @@ from pathlib import Path
 
 from src.cache_helpers import mtimes_match
 from src.config import MIN_FILES_FOR_PERCENT_UPDATES, TREE_UPDATE_BATCH_SIZE
-from src.estimation import estimate_file_time
 from src.folder_analysis import _analyze_file
-from src.gui.tree_display import format_stream_display
-from src.gui.tree_formatters import format_compact_time, format_efficiency
+from src.gui.tree_display import compute_analysis_display_values
 from src.history_index import get_history_index
-from src.models import FileStatus
 from src.utils import format_file_size, update_ui_safely
 
 logger = logging.getLogger(__name__)
@@ -28,8 +25,8 @@ logger = logging.getLogger(__name__)
 def incremental_scan_thread(gui, folder: str, extensions: list[str], stop_event: threading.Event):
     """Scan folder and populate tree incrementally from background thread.
 
-    Uses breadth-first traversal - shows all top-level folders first,
-    then their children, etc. This gives immediate visual feedback.
+    Uses depth-first traversal for optimal HDD performance - keeps disk head
+    in the same directory subtree, minimizing seek times.
 
     Also checks HistoryIndex cache - if a file was previously analyzed,
     displays cached values immediately instead of "—".
@@ -66,16 +63,16 @@ def incremental_scan_thread(gui, folder: str, extensions: list[str], stop_event:
         return sorted(subdirs, key=str.lower), sorted(file_infos, key=lambda x: x[0].lower())
 
     try:
-        # BFS queue: (dirpath, parent_dirpath or None for root)
-        queue: deque[tuple[str, str | None]] = deque()
-        queue.append((root_folder, None))
+        # DFS stack: (dirpath, parent_dirpath or None for root)
+        stack: deque[tuple[str, str | None]] = deque()
+        stack.append((root_folder, None))
 
         # Track folder tree IDs - populated by UI callbacks
         folder_tree_ids: dict[str, str] = {}
         folder_tree_ids[root_folder] = ""  # Root maps to tree root
 
-        while queue and not stop_event.is_set():
-            dirpath, parent_dirpath = queue.popleft()
+        while stack and not stop_event.is_set():
+            dirpath, parent_dirpath = stack.pop()
 
             # Scan directory in background thread
             subdirs, file_infos = scan_directory(dirpath)
@@ -85,55 +82,29 @@ def incremental_scan_thread(gui, folder: str, extensions: list[str], stop_event:
             # Get parent tree ID
             parent_tree_id = folder_tree_ids.get(parent_dirpath or root_folder, "")
 
-            # Queue subdirectories for BFS
-            for subdir in subdirs:
-                queue.append((subdir, dirpath))
+            # Push subdirectories for DFS (reversed so alphabetical order pops first)
+            for subdir in reversed(subdirs):
+                stack.append((subdir, dirpath))
 
             # Pre-compute cached values for each file (in background thread)
             # This avoids doing index lookups on the UI thread
             file_display_data = []
             for filename, file_size, file_mtime in file_infos:
                 file_path = os.path.join(dirpath, filename)
-                format_str = "—"  # Unknown until scanned
-                size_str = format_file_size(file_size)
-                savings_str = "—"
-                time_str = "—"
-                eff_str = "—"
-                tag = ""  # No tag by default
 
                 # Check cache (use tolerance for mtime due to float precision in JSON)
                 record = index.lookup_file(file_path)
                 if record and record.file_size_bytes == file_size and mtimes_match(record.file_mtime, file_mtime):
-                    # Cache hit - use cached values
-                    format_str = format_stream_display(record.video_codec, record.audio_codec)
-                    if record.status == FileStatus.CONVERTED:
-                        savings_str = "Done"
-                        time_str = "—"
-                        tag = "done"
-                    elif record.status == FileStatus.NOT_WORTHWHILE:
-                        savings_str = "Skip"
-                        time_str = "—"
-                        tag = "skip"
-                    else:
-                        # Use Layer 2 data if available, otherwise fall back to Layer 1 estimate
-                        has_layer2 = record.predicted_size_reduction is not None
-                        reduction_percent = record.predicted_size_reduction or record.estimated_reduction_percent
-                        if reduction_percent and record.file_size_bytes:
-                            est_savings = int(record.file_size_bytes * reduction_percent / 100)
-                            savings_str = format_file_size(est_savings)
-                            if not has_layer2:
-                                savings_str = f"~{savings_str}"
-                            file_time = estimate_file_time(
-                                codec=record.video_codec, duration=record.duration_sec, size=record.file_size_bytes
-                            ).best_seconds
-                            time_str = format_compact_time(file_time) if file_time > 0 else "—"
-                            if not has_layer2 and time_str != "—":
-                                time_str = f"~{time_str}"
-                            eff_str = format_efficiency(est_savings, file_time)
-                        elif record.video_codec and record.video_codec.lower() == "av1":
-                            # Already AV1 - show subtle indicator
-                            savings_str = "AV1"
-                            tag = "av1"
+                    # Cache hit - use cached display values
+                    format_str, size_str, savings_str, time_str, eff_str, tag = compute_analysis_display_values(record)
+                else:
+                    # No valid cache - show defaults until scanned
+                    format_str = "—"
+                    size_str = format_file_size(file_size)
+                    savings_str = "—"
+                    time_str = "—"
+                    eff_str = "—"
+                    tag = ""
 
                 file_display_data.append(
                     (filename, file_path, format_str, size_str, savings_str, time_str, eff_str, tag)
@@ -190,6 +161,11 @@ def incremental_scan_thread(gui, folder: str, extensions: list[str], stop_event:
                         # Update folder aggregate from its files
                         if fdata:
                             gui.update_folder_aggregates(folder_id)
+
+                    # Update scanning badge with current file count
+                    file_word = "file" if file_count == 1 else "files"
+                    gui.analysis_scan_badge.config(text=f"Scanning... ({file_count} {file_word})")
+
                     result[0] = folder_id
                 finally:
                     done.set()

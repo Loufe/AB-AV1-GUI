@@ -12,7 +12,7 @@ import os
 import tkinter as tk
 
 from src.estimation import estimate_file_time
-from src.gui.tree_display import format_stream_display, get_analysis_file_tag
+from src.gui.tree_display import compute_analysis_display_values
 from src.gui.tree_formatters import format_compact_time, format_efficiency
 from src.history_index import get_history_index
 from src.models import FileStatus, QueueItemStatus
@@ -38,45 +38,8 @@ def update_tree_row(gui, file_path: str):
     if not record:
         return
 
-    has_layer2 = record.predicted_size_reduction is not None
-    # Use Layer 2 data if available, otherwise fall back to Layer 1 estimate
-    reduction_percent = record.predicted_size_reduction or record.estimated_reduction_percent
-
-    # Calculate display values based on record status
-    format_str = format_stream_display(record.video_codec, record.audio_codec)
-    size_str = format_file_size(record.file_size_bytes) if record.file_size_bytes else "—"
-    tag = get_analysis_file_tag(record.status, record.video_codec)
-
-    if record.status == FileStatus.SCANNED and reduction_percent and record.file_size_bytes:
-        # File needs conversion - show estimates
-        file_savings = int(record.file_size_bytes * reduction_percent / 100)
-        savings_str = format_file_size(file_savings)
-        if not has_layer2:
-            savings_str = f"~{savings_str}"
-
-        file_time = estimate_file_time(
-            codec=record.video_codec, duration=record.duration_sec, size=record.file_size_bytes
-        ).best_seconds
-        time_str = format_compact_time(file_time) if file_time > 0 else "—"
-        eff_str = format_efficiency(file_savings, file_time)
-    elif record.status == FileStatus.CONVERTED:
-        savings_str = "Done"
-        time_str = "—"
-        eff_str = "—"
-    elif record.status == FileStatus.NOT_WORTHWHILE:
-        savings_str = "Skip"
-        time_str = "—"
-        eff_str = "—"
-    elif record.video_codec and record.video_codec.lower() == "av1":
-        # Already AV1 - show subtle indicator
-        savings_str = "AV1"
-        time_str = "—"
-        eff_str = "—"
-    else:
-        # No data yet
-        savings_str = "—"
-        time_str = "—"
-        eff_str = "—"
+    # Compute display values from record
+    format_str, size_str, savings_str, time_str, eff_str, tag = compute_analysis_display_values(record)
 
     # Update tree item - preserve queue tags (in_queue, partial_queue) while updating status tags
     current_tags = list(gui.analysis_tree.item(item_id, "tags") or ())
@@ -117,41 +80,8 @@ def batch_update_tree_rows(gui, file_paths: list[str]) -> None:
         if not record:
             continue
 
-        # Calculate display values
-        format_str = format_stream_display(record.video_codec, record.audio_codec)
-        size_str = format_file_size(record.file_size_bytes) if record.file_size_bytes else "—"
-        # Use Layer 2 data if available, otherwise fall back to Layer 1 estimate
-        has_layer2 = record.predicted_size_reduction is not None
-        reduction_percent = record.predicted_size_reduction or record.estimated_reduction_percent
-        tag = get_analysis_file_tag(record.status, record.video_codec)
-
-        if record.status == FileStatus.SCANNED and reduction_percent and record.file_size_bytes:
-            file_savings = int(record.file_size_bytes * reduction_percent / 100)
-            savings_str = format_file_size(file_savings)
-            if not has_layer2:
-                savings_str = f"~{savings_str}"
-            file_time = estimate_file_time(
-                codec=record.video_codec, duration=record.duration_sec, size=record.file_size_bytes
-            ).best_seconds
-            time_str = format_compact_time(file_time) if file_time > 0 else "—"
-            eff_str = format_efficiency(file_savings, file_time)
-        elif record.status == FileStatus.CONVERTED:
-            savings_str = "Done"
-            time_str = "—"
-            eff_str = "—"
-        elif record.status == FileStatus.NOT_WORTHWHILE:
-            savings_str = "Skip"
-            time_str = "—"
-            eff_str = "—"
-        elif record.video_codec and record.video_codec.lower() == "av1":
-            # Already AV1 - show subtle indicator
-            savings_str = "AV1"
-            time_str = "—"
-            eff_str = "—"
-        else:
-            savings_str = "—"
-            time_str = "—"
-            eff_str = "—"
+        # Compute display values from record
+        format_str, size_str, savings_str, time_str, eff_str, tag = compute_analysis_display_values(record)
 
         # Update tree item - preserve queue tags (in_queue, partial_queue) while updating status tags
         current_tags = list(gui.analysis_tree.item(item_id, "tags") or ())
@@ -177,7 +107,10 @@ def batch_update_tree_rows(gui, file_paths: list[str]) -> None:
 
 
 def update_folder_aggregates(gui, folder_id: str, item_to_path: dict[str, str] | None = None):
-    """Recalculate and update folder aggregate values from history index.
+    """Recalculate and update folder aggregate values.
+
+    For direct child files, reads data from history index.
+    For direct child folders (subfolders), reads their cached aggregate values.
 
     Args:
         gui: The VideoConverterGUI instance.
@@ -188,49 +121,60 @@ def update_folder_aggregates(gui, folder_id: str, item_to_path: dict[str, str] |
     if item_to_path is None:
         item_to_path = {item_id: path for path, item_id in gui.get_tree_item_map().items()}
 
-    # Get all children (files)
+    # Get all direct children (files and subfolders)
     children = gui.analysis_tree.get_children(folder_id)
 
-    # Sum up size, savings and time from all files using history index
+    # Sum up size, savings and time from all children
     total_size = 0
     total_savings = 0
-    total_time = 0
-    any_estimate = False  # Track if any file lacks CRF search (layer 2) data
+    total_time = 0.0
+    any_estimate = False  # Track if any descendant lacks CRF search (layer 2) data
 
     index = get_history_index()
 
     for child_id in children:
         file_path = item_to_path.get(child_id)
-        if not file_path:
-            continue
+        if file_path:
+            # Child is a file - look up from history index
+            record = index.lookup_file(file_path)
+            if not record:
+                continue
 
-        # Look up file data from history index
-        record = index.lookup_file(file_path)
-        if not record:
-            continue
-
-        # Sum size for all files
-        if record.file_size_bytes:
-            total_size += record.file_size_bytes
-
-        # Check if file needs conversion and has estimates
-        # Use Layer 2 data if available, otherwise fall back to Layer 1 estimate
-        reduction_percent = record.predicted_size_reduction or record.estimated_reduction_percent
-        if record.status == FileStatus.SCANNED and reduction_percent:
-            # Track if this file only has ffprobe-level analysis (no CRF search)
-            if record.predicted_size_reduction is None:
-                any_estimate = True
-
-            # Calculate savings from reduction percentage
+            # Sum size for all files
             if record.file_size_bytes:
-                file_savings = int(record.file_size_bytes * reduction_percent / 100)
-                total_savings += file_savings
+                total_size += record.file_size_bytes
 
-            # Get time estimate
-            file_time = estimate_file_time(
-                codec=record.video_codec, duration=record.duration_sec, size=record.file_size_bytes
-            ).best_seconds
-            total_time += file_time
+            # Check if file needs conversion and has estimates
+            # Use Layer 2 data if available, otherwise fall back to Layer 1 estimate
+            reduction_percent = record.predicted_size_reduction or record.estimated_reduction_percent
+            if record.status in (FileStatus.SCANNED, FileStatus.ANALYZED) and reduction_percent:
+                # Track if this file only has ffprobe-level analysis (no CRF search)
+                if record.predicted_size_reduction is None:
+                    any_estimate = True
+
+                # Calculate savings from reduction percentage
+                if record.file_size_bytes:
+                    file_savings = int(record.file_size_bytes * reduction_percent / 100)
+                    total_savings += file_savings
+
+                # Get time estimate
+                file_time = estimate_file_time(
+                    codec=record.video_codec,
+                    duration=record.duration_sec,
+                    width=record.width,
+                    height=record.height,
+                ).best_seconds
+                total_time += file_time
+        else:
+            # Child is a subfolder - read its cached aggregates
+            folder_agg = getattr(gui, "folder_aggregates", {}).get(child_id)
+            if folder_agg:
+                child_size, child_savings, child_time, child_any_estimate = folder_agg
+                total_size += child_size
+                total_savings += child_savings
+                total_time += child_time
+                if child_any_estimate:
+                    any_estimate = True
 
     # Update folder display (efficiency = aggregate savings / aggregate time)
     # Folders show empty format (aggregate of multiple files)
@@ -238,9 +182,16 @@ def update_folder_aggregates(gui, folder_id: str, item_to_path: dict[str, str] |
     savings_str = format_file_size(total_savings) if total_savings > 0 else "—"
     if any_estimate and savings_str != "—":
         savings_str = f"~{savings_str}"
-    time_str = format_compact_time(total_time) if total_time > 0 else "—"
+    # Folder time uses "low" confidence if any file is an estimate (aggregated estimates)
+    folder_confidence = "low" if any_estimate else "high"
+    time_str = format_compact_time(total_time, confidence=folder_confidence)
     eff_str = format_efficiency(total_savings, total_time)
     gui.analysis_tree.item(folder_id, values=("", size_str, savings_str, time_str, eff_str))
+
+    # Cache this folder's aggregates for parent folder calculations
+    if not hasattr(gui, "folder_aggregates"):
+        gui.folder_aggregates = {}
+    gui.folder_aggregates[folder_id] = (total_size, total_savings, total_time, any_estimate)
 
 
 def get_queued_file_paths(gui) -> set[str]:

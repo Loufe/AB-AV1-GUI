@@ -256,7 +256,7 @@ def calculate_summary_statistics(records: list[FileRecord]) -> dict[str, Any]:
     total_input = sum(r.file_size_bytes for r in records if r.file_size_bytes)
     total_output = sum(r.output_size_bytes or 0 for r in records)
     total_saved = total_input - total_output
-    total_time_sec = sum(r.conversion_time_sec or 0 for r in records)
+    total_time_sec = sum(r.total_time_sec or 0 for r in records)  # Use property with legacy fallback
 
     reductions = [r.reduction_percent for r in records if r.reduction_percent is not None]
     vmaf_scores = [r.final_vmaf for r in records if r.final_vmaf is not None]

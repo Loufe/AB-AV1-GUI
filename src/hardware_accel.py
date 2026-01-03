@@ -126,11 +126,3 @@ def get_hw_decoder_for_codec(source_codec: str) -> str | None:
     return None
 
 
-def clear_hw_decoder_cache() -> None:
-    """Clear the cached decoder list (for settings refresh).
-
-    Call this when you want to re-detect hardware decoders, for example
-    after the user changes FFmpeg installations or updates drivers.
-    """
-    get_available_hw_decoders.cache_clear()
-    logger.debug("Hardware decoder cache cleared")

@@ -98,7 +98,8 @@ class FileStatus(str, Enum):
     Inherits from str for easy JSON serialization.
     """
 
-    SCANNED = "scanned"  # Metadata only (Level 1 analysis)
+    SCANNED = "scanned"  # Layer 1 - ffprobe metadata only
+    ANALYZED = "analyzed"  # Layer 2 - CRF search complete (has best_crf)
     NOT_WORTHWHILE = "not_worthwhile"  # VMAF analysis showed conversion isn't beneficial
     CONVERTED = "converted"  # Successfully converted
 
@@ -337,7 +338,9 @@ class FileRecord:
     output_path: str | None = None  # Path or hash depending on anonymization
     output_size_bytes: int | None = None
     reduction_percent: float | None = None  # Actual reduction (not estimated)
-    conversion_time_sec: float | None = None
+    conversion_time_sec: float | None = None  # Legacy: combined time (for old records)
+    crf_search_time_sec: float | None = None  # CRF search phase (ANALYZED, CONVERTED, NOT_WORTHWHILE)
+    encoding_time_sec: float | None = None  # Encoding phase (CONVERTED only)
     final_crf: int | None = None
     final_vmaf: float | None = None
     vmaf_target_used: int | None = None
@@ -359,11 +362,21 @@ class FileRecord:
         """
         if self.status == FileStatus.CONVERTED:
             return AnalysisLevel.CONVERTED
+        if self.status == FileStatus.ANALYZED:
+            return AnalysisLevel.ANALYZED
+        # Fallback for old records: check best_crf field (before ANALYZED status existed)
         if self.best_crf is not None and self.best_vmaf_achieved is not None:
             return AnalysisLevel.ANALYZED
         if self.video_codec is not None or self.duration_sec is not None:
             return AnalysisLevel.SCANNED
         return AnalysisLevel.DISCOVERED
+
+    @property
+    def total_time_sec(self) -> float | None:
+        """Total processing time. Uses new fields if available, falls back to legacy."""
+        if self.crf_search_time_sec is not None or self.encoding_time_sec is not None:
+            return (self.crf_search_time_sec or 0) + (self.encoding_time_sec or 0)
+        return self.conversion_time_sec  # Legacy fallback for old records
 
 
 @dataclass(frozen=True)
@@ -398,13 +411,6 @@ class ProgressEvent:
 
     # Additional metadata
     file_size_mb: float | None = None  # File size in MB (for initial file info)
-
-
-@dataclass(frozen=True)
-class FileInfoEvent:
-    """Initial file information sent at start of processing."""
-
-    file_size_mb: float
 
 
 @dataclass(frozen=True)
@@ -460,6 +466,7 @@ class ConversionSessionState:
     error_count: int = 0
     skipped_not_worth_count: int = 0
     skipped_low_resolution_count: int = 0
+    stopped_count: int = 0  # Files skipped due to user stop request
 
     # === Timing ===
     total_start_time: float | None = None

@@ -14,16 +14,18 @@ from tkinter import ttk
 from src.config import ANALYSIS_TREE_HEADINGS
 from src.gui.base import ToolTip, TreeviewHeaderTooltip, TreeviewRowTooltip, open_in_explorer, reveal_in_explorer
 from src.gui.constants import (
-    COLOR_BACKGROUND,
-    COLOR_OVERLAY_TEXT,
+    COLOR_BADGE_BACKGROUND,
+    COLOR_BADGE_TEXT,
     COLOR_STATUS_DISABLED,
     COLOR_STATUS_INFO,
     COLOR_STATUS_INFO_LIGHT,
     COLOR_STATUS_SUCCESS,
     COLOR_STATUS_WARNING,
     FONT_SYSTEM_OVERLAY,
+    SCROLLBAR_WIDTH_PADDING,
+    TOOLTIP_TIME_COLUMN,
 )
-from src.gui.tree_utils import create_styled_context_menu, setup_click_expand_collapse, setup_expand_collapse_icons
+from src.gui.tree_utils import create_styled_context_menu, setup_expand_collapse_icons
 from src.models import OperationType
 
 
@@ -76,8 +78,7 @@ def create_analysis_tab(gui):
     )
 
     for col, text in ANALYSIS_TREE_HEADINGS.items():
-        anchor = "w" if col in ("#0", "format") else "e"
-        gui.analysis_tree.heading(col, text=text, anchor=anchor, command=lambda c=col: gui.sort_analysis_tree(c))
+        gui.analysis_tree.heading(col, text=text, anchor="center", command=lambda c=col: gui.sort_analysis_tree(c))
 
     # Name column stretches to fill space, data columns are fixed
     gui.analysis_tree.column("#0", width=300, minwidth=150, stretch=True)
@@ -100,21 +101,31 @@ def create_analysis_tab(gui):
     gui.analysis_tree.grid(row=0, column=0, sticky="nsew")
     scroll_y.grid(row=0, column=1, sticky="ns")
 
-    # Scanning overlay - shown during folder discovery
-    # Use tk.Frame for background color support
-    gui.analysis_scan_overlay = tk.Frame(tree_container, bg=COLOR_BACKGROUND)
-    overlay_label = tk.Label(
-        gui.analysis_scan_overlay,
+    # Scanning badge - small floating indicator shown during folder discovery
+    # Tree remains visible behind it; interaction blocked via event handlers
+    gui.analysis_scan_badge = tk.Label(
+        tree_container,
         text="Scanning folder...",
         font=FONT_SYSTEM_OVERLAY,
-        bg=COLOR_BACKGROUND,
-        fg=COLOR_OVERLAY_TEXT,
+        bg=COLOR_BADGE_BACKGROUND,
+        fg=COLOR_BADGE_TEXT,
+        padx=16,
+        pady=6,
     )
-    overlay_label.place(relx=0.5, rely=0.5, anchor="center")
 
-    # Set up expand/collapse behavior using shared utilities
-    setup_click_expand_collapse(gui.analysis_tree)
+    # Set up expand/collapse icons (▶/▼ visual updates)
     setup_expand_collapse_icons(gui.analysis_tree)
+
+    # Custom click handler: blocks all interaction during scan, otherwise expands/collapses folders
+    def _on_tree_click(event):
+        if getattr(gui, "_scanning", False):
+            return "break"  # Block all clicks during scan
+        item_id = gui.analysis_tree.identify_row(event.y)
+        if item_id and gui.analysis_tree.get_children(item_id):  # Has children = folder
+            gui.analysis_tree.item(item_id, open=not gui.analysis_tree.item(item_id, "open"))
+        return None
+
+    gui.analysis_tree.bind("<Button-1>", _on_tree_click, add=True)
 
     def _get_folder_path_from_tree_item(item_id: str) -> str:
         """Reconstruct folder path from tree hierarchy."""
@@ -147,6 +158,8 @@ def create_analysis_tab(gui):
             gui.add_items_to_queue(items, operation_type, force_preview=len(items) > 1)
 
     def _show_context_menu(event):
+        if getattr(gui, "_scanning", False):
+            return  # Block interaction during scan
         item_id = gui.analysis_tree.identify_row(event.y)
         if not item_id:
             return
@@ -228,6 +241,8 @@ def create_analysis_tab(gui):
 
     # Double-click opens file/folder in explorer
     def _on_double_click(event):
+        if getattr(gui, "_scanning", False):
+            return  # Block interaction during scan
         item_id = gui.analysis_tree.identify_row(event.y)
         if not item_id:
             return
@@ -248,7 +263,7 @@ def create_analysis_tab(gui):
             "'~' prefix = estimate from similar files.\n"
             "No prefix = precise prediction from CRF analysis."
         ),
-        "time": "Estimated conversion time based on\nfile duration, codec, and past conversions.",
+        "time": TOOLTIP_TIME_COLUMN,
         "efficiency": "GB saved per hour of conversion time.\nHigher = more space savings for your time.",
     })
 
@@ -272,7 +287,7 @@ def create_analysis_tab(gui):
     gui.analysis_total_tree.insert("", "end", iid="total", text="Total", values=("", "—", "—", "—", "—"))
 
     # Add padding on right to align with scrollbar in main tree
-    gui.analysis_total_tree.grid(row=0, column=0, sticky="ew", padx=(0, 17))
+    gui.analysis_total_tree.grid(row=0, column=0, sticky="ew", padx=(0, SCROLLBAR_WIDTH_PADDING))
 
     # Disable interaction with total row
     gui.analysis_total_tree.bind("<Button-1>", lambda e: "break")

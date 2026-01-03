@@ -132,10 +132,19 @@ def create_settings_tab(gui):
         "If unavailable, falls back to software decoding automatically.",
     )
 
-    # Inline status indicator
+    # Inline status indicator - show which acceleration technologies are available
     detected_decoders = get_available_hw_decoders()
-    if detected_decoders:
-        status_text = f"({len(detected_decoders)} available)"
+    has_cuvid = any(d.endswith("_cuvid") for d in detected_decoders)
+    has_qsv = any(d.endswith("_qsv") for d in detected_decoders)
+
+    if has_cuvid and has_qsv:
+        status_text = "(NVIDIA CUVID + Intel QSV)"
+        status_color = COLOR_STATUS_SUCCESS_LIGHT
+    elif has_cuvid:
+        status_text = "(NVIDIA CUVID)"
+        status_color = COLOR_STATUS_SUCCESS_LIGHT
+    elif has_qsv:
+        status_text = "(Intel QSV)"
         status_color = COLOR_STATUS_SUCCESS_LIGHT
     else:
         status_text = "(none detected)"

@@ -120,7 +120,7 @@ def process_video(
     pid_callback: Callable[..., Any] | None = None,
     total_duration_seconds: float = 0.0,
     hw_decoder: str | None = None,
-) -> tuple[str, float, int, int, int | None, float | None, int | None] | None:
+) -> tuple[str, float, int, int, int | None, float | None, int | None, float, float] | None:
     """
     Process a single video file using ab-av1 with hardcoded quality settings.
 
@@ -138,7 +138,7 @@ def process_video(
 
     Returns:
         tuple: (output_path, elapsed_time, input_size, output_size, final_crf, final_vmaf,
-                final_vmaf_target) on success, None otherwise.
+                final_vmaf_target, crf_search_time_sec, encoding_time_sec) on success, None otherwise.
     """
     input_path = Path(video_path).resolve()
     output_path_obj = Path(output_path).resolve()
@@ -321,6 +321,10 @@ def process_video(
                 logger.warning(f"Failed to delete original file {anonymized_input_name}: {e}")
                 # Don't fail the conversion if we can't delete the original
 
+        # Extract timing breakdown from result_stats
+        crf_search_time = result_stats.get("crf_search_time_sec", 0) if result_stats else 0
+        encoding_time = result_stats.get("encoding_time_sec", 0) if result_stats else conversion_elapsed_time
+
         # Return success tuple including stats for history
         return (
             str(output_path_obj),
@@ -330,6 +334,8 @@ def process_video(
             final_crf,
             final_vmaf,
             final_vmaf_target,
+            crf_search_time,
+            encoding_time,
         )
 
     except ConversionNotWorthwhileError as e:

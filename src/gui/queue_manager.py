@@ -9,10 +9,11 @@ import os
 import uuid
 
 from src.conversion_engine.scanner import find_video_files
-from src.estimation import estimate_file_time
+from src.estimation import compute_grouped_encoding_rates, compute_percentiles, get_resolution_bucket
 from src.gui.widgets.add_to_queue_dialog import AddToQueuePreviewDialog, QueuePreviewData
-from src.history_index import compute_path_hash, get_history_index
+from src.history_index import get_history_index
 from src.models import FileStatus, OperationType, OutputMode, QueueFileItem, QueueItem, QueueItemStatus
+from src.privacy import normalize_path
 
 
 def load_queue_from_config(gui) -> list[QueueItem]:
@@ -40,14 +41,6 @@ def load_queue_from_config(gui) -> list[QueueItem]:
         except (KeyError, ValueError):
             continue  # Skip invalid entries
     return items
-
-
-def find_existing_queue_item(gui, path: str) -> QueueItem | None:
-    """Find an existing queue item by path."""
-    for item in gui.get_queue_items():
-        if item.source_path == path:
-            return item
-    return None
 
 
 def get_selected_extensions(gui) -> list[str]:
@@ -90,6 +83,9 @@ def filter_file_for_queue(
         # Not worth converting - skip
         if record.status == FileStatus.NOT_WORTHWHILE:
             return False, "not worth converting"
+        # Already analyzed - skip for ANALYZE operations
+        if operation_type == OperationType.ANALYZE and record.status == FileStatus.ANALYZED:
+            return False, "already analyzed"
         # Already AV1 codec - skip for CONVERT operations
         if operation_type == OperationType.CONVERT and record.video_codec == "av1":
             return False, "already AV1"
@@ -97,33 +93,52 @@ def filter_file_for_queue(
     return True, None
 
 
-def create_queue_item(gui, path: str, is_folder: bool, operation_type: OperationType) -> QueueItem:
+def create_queue_item(
+    gui,
+    path: str,
+    is_folder: bool,
+    operation_type: OperationType,
+    cached_files: list[str] | None = None,
+) -> QueueItem:
     """Create a new QueueItem with default settings.
 
     For folder items, populates the files list by scanning for video files.
     Files are filtered based on history status (already converted, not worthwhile, etc.).
+
+    Args:
+        gui: The GUI instance.
+        path: Path to the file or folder.
+        is_folder: Whether the path is a folder.
+        operation_type: The operation type (CONVERT or ANALYZE).
+        cached_files: Optional pre-scanned and filtered file list for folders (Fix 3).
+                     If provided, skips rescanning the folder.
     """
     default_mode = gui.default_output_mode.get()
 
-    # For folders, scan and populate the files list with filtering
+    # For folders, populate the files list
     files: list[QueueFileItem] = []
     if is_folder:
-        extensions = get_selected_extensions(gui)
-        if extensions:
-            file_paths = find_video_files(path, extensions)
-            index = get_history_index()
+        # Use cached files if available (Fix 3: avoid duplicate scanning)
+        if cached_files is not None:
+            file_paths = cached_files
+        else:
+            # Fallback: scan and filter (for cases where cache isn't available)
+            extensions = get_selected_extensions(gui)
+            file_paths = []
+            if extensions:
+                all_files = find_video_files(path, extensions)
+                index = get_history_index()
+                for fp in all_files:
+                    should_add, _ = filter_file_for_queue(fp, operation_type, index)
+                    if should_add:
+                        file_paths.append(fp)
 
-            for fp in file_paths:
-                should_add, _ = filter_file_for_queue(fp, operation_type, index)
-                if not should_add:
-                    continue
-
-                # Passed all filters - add to files list
-                try:
-                    size = os.path.getsize(fp) if os.path.isfile(fp) else 0
-                except OSError:
-                    size = 0
-                files.append(QueueFileItem(path=fp, size_bytes=size))
+        for fp in file_paths:
+            try:
+                size = os.path.getsize(fp) if os.path.isfile(fp) else 0
+            except OSError:
+                size = 0
+            files.append(QueueFileItem(path=fp, size_bytes=size))
 
     return QueueItem(
         id=str(uuid.uuid4()),
@@ -140,7 +155,13 @@ def create_queue_item(gui, path: str, is_folder: bool, operation_type: Operation
 
 def categorize_queue_items(
     gui, items: list[tuple[str, bool]], operation_type: OperationType
-) -> tuple[list[tuple[str, bool]], list[str], list[tuple[str, bool, QueueItem]], list[tuple[str, str]]]:
+) -> tuple[
+    list[tuple[str, bool]],
+    list[str],
+    list[tuple[str, bool, QueueItem]],
+    list[tuple[str, str]],
+    dict[str, list[str]],
+]:
     """Categorize items for queue preview.
 
     Filters out items that shouldn't be added based on their history status:
@@ -150,23 +171,29 @@ def categorize_queue_items(
     - Folders with no convertible files
 
     Returns:
-        Tuple of (to_add, duplicates, conflicts, skipped) where:
+        Tuple of (to_add, duplicates, conflicts, skipped, folder_files_cache) where:
         - to_add: Items that can be added directly (files/folders with convertible content)
         - duplicates: Paths already in queue with same operation
         - conflicts: (path, is_folder, existing_item) for different operation
         - skipped: (path, reason) for files/folders filtered out
+        - folder_files_cache: {folder_path: [file_paths]} for folders that passed filtering
     """
     to_add: list[tuple[str, bool]] = []
     duplicates: list[str] = []
     conflicts: list[tuple[str, bool, QueueItem]] = []
     skipped: list[tuple[str, str]] = []
+    folder_files_cache: dict[str, list[str]] = {}
 
     index = get_history_index()
     extensions = get_selected_extensions(gui)
 
+    # Build O(1) lookup for existing queue items (Fix 1: avoid O(N*M) linear search)
+    queue_path_map = {normalize_path(item.source_path): item for item in gui.get_queue_items()}
+
     for path, is_folder in items:
-        # Check for existing queue item first
-        existing = find_existing_queue_item(gui, path)
+        # O(1) lookup instead of O(M) linear search
+        normalized_path = normalize_path(path)
+        existing = queue_path_map.get(normalized_path)
         if existing:
             if existing.operation_type == operation_type:
                 duplicates.append(path)
@@ -185,19 +212,21 @@ def categorize_queue_items(
                 skipped.append((path, "no video files found"))
                 continue
 
-            # Check each file in the folder
-            convertible_count = 0
+            # Check each file in the folder and cache convertible files
+            convertible_files: list[str] = []
             for fp in file_paths:
                 should_add, reason = filter_file_for_queue(fp, operation_type, index)
                 if should_add:
-                    convertible_count += 1
+                    convertible_files.append(fp)
                 else:
                     skipped.append((fp, reason or "filtered"))
 
-            if convertible_count == 0:
+            if not convertible_files:
                 skipped.append((path, "no convertible files (all filtered)"))
             else:
                 to_add.append((path, is_folder))
+                # Cache the file list to avoid re-scanning in create_queue_item (Fix 3)
+                folder_files_cache[path] = convertible_files
             continue
 
         # Individual file - use shared filter function
@@ -207,11 +236,20 @@ def categorize_queue_items(
         else:
             skipped.append((path, reason or "filtered"))
 
-    return to_add, duplicates, conflicts, skipped
+    return to_add, duplicates, conflicts, skipped, folder_files_cache
 
 
-def calculate_queue_estimates(gui, items: list[tuple[str, bool]]) -> tuple[float | None, float | None]:
+def calculate_queue_estimates(
+    gui, items: list[tuple[str, bool]], operation_type: OperationType
+) -> tuple[float | None, float | None]:
     """Calculate time estimate and potential savings for items.
+
+    Uses pre-computed encoding rate percentiles grouped by (codec, resolution) for
+    O(C+N) complexity instead of O(N*C) from calling estimate_file_time() per file.
+
+    Args:
+        items: List of (path, is_folder) tuples
+        operation_type: ANALYZE uses crf_search_time only, CONVERT uses full encoding time
 
     Returns:
         Tuple of (estimated_time_seconds, estimated_savings_percent)
@@ -223,21 +261,43 @@ def calculate_queue_estimates(gui, items: list[tuple[str, bool]]) -> tuple[float
 
     index = get_history_index()
 
+    # Pre-compute encoding rates grouped by (codec, resolution) in one O(C) pass
+    # Pass operation_type so ANALYZE uses crf_search_time, CONVERT uses encoding_time
+    grouped_rates = compute_grouped_encoding_rates(operation_type)
+
+    # Pre-compute percentiles per group
+    percentiles_by_group: dict[tuple[str | None, str | None], dict[str, float] | None] = {
+        key: compute_percentiles(rates) for key, rates in grouped_rates.items()
+    }
+    global_percentiles = percentiles_by_group.get((None, None))
+
     for path, is_folder in items:
         if is_folder:
             continue  # Skip folders for now, would need to scan
 
-        # Try to get time estimate
-        estimate = estimate_file_time(path)
-        if estimate.confidence != "none":
-            total_time += estimate.best_seconds
-            has_time_estimates = True
+        # O(1) lookup from history index
+        record = index.lookup_file(path)
+        if not record:
+            continue
 
-        # Try to get savings estimate from history
-        path_hash = compute_path_hash(path)
-        record = index.get(path_hash)
-        if record and record.file_size_bytes:
-            # Use Layer 2 data if available, fall back to Layer 1
+        # Time estimate using pre-computed percentiles (avoids ffprobe and O(C) searches)
+        duration = record.duration_sec
+        if duration and duration > 0:
+            codec = record.video_codec
+            res_bucket = get_resolution_bucket(record.width, record.height)
+
+            # Try (codec, resolution) first, then codec-only, then global
+            stats = (
+                percentiles_by_group.get((codec, res_bucket))
+                or percentiles_by_group.get((codec, None))
+                or global_percentiles
+            )
+            if stats:
+                total_time += duration * stats["p50"]
+                has_time_estimates = True
+
+        # Savings estimate from cached record (already O(1))
+        if record.file_size_bytes:
             reduction_pct = record.predicted_size_reduction or record.estimated_reduction_percent
             if reduction_pct:
                 total_original_size += record.file_size_bytes
@@ -272,8 +332,10 @@ def add_items_to_queue(
     if not items:
         return counts
 
-    # Categorize items (includes filtering)
-    to_add, duplicates, conflicts, skipped = categorize_queue_items(gui, items, operation_type)
+    # Categorize items (includes filtering and caches folder file lists)
+    to_add, duplicates, conflicts, skipped, folder_files_cache = categorize_queue_items(
+        gui, items, operation_type
+    )
     counts["duplicate"] = len(duplicates)
     counts["skipped"] = len(skipped)
 
@@ -281,8 +343,8 @@ def add_items_to_queue(
     show_dialog = force_preview or len(conflicts) > 0 or len(skipped) > 0
 
     if show_dialog:
-        # Calculate estimates for preview
-        estimated_time, estimated_savings = calculate_queue_estimates(gui, to_add)
+        # Calculate estimates for preview (uses operation_type for correct time estimates)
+        estimated_time, estimated_savings = calculate_queue_estimates(gui, to_add, operation_type)
 
         # Build preview data
         preview_data = QueuePreviewData(
@@ -311,7 +373,9 @@ def add_items_to_queue(
     # Add the non-conflicting items
     queue_items = gui.get_queue_items()
     for path, is_folder in to_add:
-        item = create_queue_item(gui, path, is_folder, operation_type)
+        # Use cached file list for folders to avoid re-scanning (Fix 3)
+        cached_files = folder_files_cache.get(path) if is_folder else None
+        item = create_queue_item(gui, path, is_folder, operation_type, cached_files)
         # Safety check: don't add folders with no convertible files
         if is_folder and not item.files:
             continue
@@ -319,6 +383,9 @@ def add_items_to_queue(
         counts["added"] += 1
 
     # Handle conflicts based on resolution choice
+    # Note: Conflicts won't have cached files (they're detected before folder scanning),
+    # so create_queue_item will do the scanning for folder conflicts. This is acceptable
+    # since conflicts are rare (only when same path exists with different operation type).
     if conflicts:
         if conflict_resolution == "keep_both":
             for path, is_folder, _ in conflicts:

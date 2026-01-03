@@ -12,6 +12,7 @@ Manages queue UI interactions including:
 
 from tkinter import filedialog, messagebox
 
+from src.gui.constants import OUTPUT_MODE_DISPLAY_TO_VALUE
 from src.models import OperationType, OutputMode
 
 # =============================================================================
@@ -128,104 +129,54 @@ def on_clear_queue(gui) -> None:
 
 
 # =============================================================================
-# Selection and Properties Panel
-# =============================================================================
-
-
-def on_queue_selection_changed(gui) -> None:
-    """Handle selection change in queue tree.
-
-    Updates the properties panel based on the selected queue item.
-
-    Args:
-        gui: The VideoConverterGUI instance.
-    """
-    selected = gui.queue_tree.selection()
-    if not selected:
-        # Disable controls and show placeholder when nothing selected
-        gui.item_mode_combo.config(state="disabled")
-        gui.item_suffix_entry.config(state="disabled")
-        gui.item_folder_entry.config(state="disabled")
-        gui.item_folder_browse_button.config(state="disabled")
-        gui.item_output_mode.set("")
-        gui.item_suffix.set("")
-        gui.item_output_folder.set("")
-        gui.item_source_label.config(text="Select an item to configure")
-        return
-
-    # Get the queue item for the selected tree item
-    queue_item = gui.get_queue_item_for_tree_item(selected[0])
-    if not queue_item:
-        return
-
-    # Check if this is an ANALYZE-only operation
-    is_analyze = queue_item.operation_type == OperationType.ANALYZE
-
-    # Update properties panel with selected item's values
-    if is_analyze:
-        # Disable output-related fields for ANALYZE operations (no output file produced)
-        gui.item_output_mode.set("—")
-        gui.item_suffix.set("")
-        gui.item_output_folder.set("")
-        gui.item_source_label.config(text=f"{queue_item.source_path} (Analysis only - no output file)")
-        # Disable the widgets
-        gui.item_mode_combo.config(state="disabled")
-        gui.item_suffix_entry.config(state="disabled")
-        gui.item_folder_entry.config(state="disabled")
-        gui.item_folder_browse_button.config(state="disabled")
-    else:
-        # Enable and populate for CONVERT operations
-        gui.item_mode_combo.config(state="readonly")
-        gui.item_suffix_entry.config(state="normal")
-        gui.item_folder_entry.config(state="normal")
-        gui.item_folder_browse_button.config(state="normal")
-        gui.item_output_mode.set(queue_item.output_mode.value)
-        gui.item_suffix.set(queue_item.output_suffix or gui.default_suffix.get())
-        gui.item_output_folder.set(queue_item.output_folder or gui.default_output_folder.get())
-        gui.item_source_label.config(text=queue_item.source_path)
-
-
-# =============================================================================
 # Property Changes
 # =============================================================================
 
 
 def on_item_output_mode_changed(gui) -> None:
-    """Handle output mode change for selected item.
+    """Handle output mode change - applies to all queue items (bulk setting).
 
     Args:
         gui: The VideoConverterGUI instance.
     """
-    selected = gui.queue_tree.selection()
-    if not selected:
+    mode_display = gui.item_output_mode.get()
+    if not mode_display or mode_display == "—":
         return
 
-    queue_item = gui.get_queue_item_for_tree_item(selected[0])
-    if queue_item:
-        queue_item.output_mode = OutputMode(gui.item_output_mode.get())
-        gui.save_queue_to_config()
-        gui.refresh_queue_tree()
+    # Map display string to internal enum value
+    mode_str = OUTPUT_MODE_DISPLAY_TO_VALUE.get(mode_display, mode_display)
+
+    # Update all queue items with the new mode
+    new_mode = OutputMode(mode_str)
+    for queue_item in gui.get_queue_items():
+        if queue_item.operation_type != OperationType.ANALYZE:
+            queue_item.output_mode = new_mode
+
+    gui.save_queue_to_config()
+    gui.refresh_queue_tree()
 
 
 def on_item_suffix_changed(gui) -> None:
-    """Handle suffix change for selected item.
+    """Handle suffix change - applies to all queue items (bulk setting).
 
     Args:
         gui: The VideoConverterGUI instance.
     """
-    selected = gui.queue_tree.selection()
-    if not selected:
+    new_suffix = gui.item_suffix.get()
+    if not new_suffix:
         return
 
-    queue_item = gui.get_queue_item_for_tree_item(selected[0])
-    if queue_item:
-        queue_item.output_suffix = gui.item_suffix.get()
-        gui.save_queue_to_config()
-        gui.refresh_queue_tree()
+    # Update all queue items with the new suffix
+    for queue_item in gui.get_queue_items():
+        if queue_item.operation_type != OperationType.ANALYZE:
+            queue_item.output_suffix = new_suffix
+
+    gui.save_queue_to_config()
+    gui.refresh_queue_tree()
 
 
 def on_browse_item_output_folder(gui) -> None:
-    """Browse for item-specific output folder.
+    """Browse for output folder - applies to all queue items (bulk setting).
 
     Args:
         gui: The VideoConverterGUI instance.
@@ -236,13 +187,10 @@ def on_browse_item_output_folder(gui) -> None:
 
     gui.item_output_folder.set(folder)
 
-    # Update selected item
-    selected = gui.queue_tree.selection()
-    if not selected:
-        return
+    # Update all queue items with the new folder
+    for queue_item in gui.get_queue_items():
+        if queue_item.operation_type != OperationType.ANALYZE:
+            queue_item.output_folder = folder
 
-    queue_item = gui.get_queue_item_for_tree_item(selected[0])
-    if queue_item:
-        queue_item.output_folder = folder
-        gui.save_queue_to_config()
-        gui.refresh_queue_tree()
+    gui.save_queue_to_config()
+    gui.refresh_queue_tree()

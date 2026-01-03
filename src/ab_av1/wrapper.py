@@ -92,6 +92,10 @@ class AbAv1Wrapper:
         preset = DEFAULT_ENCODING_PRESET
         initial_min_vmaf = DEFAULT_VMAF_TARGET
 
+        # Track timing for CRF search vs encoding phases
+        process_start_time = time.time()
+        encoding_phase_start_time: float | None = None
+
         anonymized_input_path = anonymize_filename(input_path)
 
         # --- Input Validation ---
@@ -318,6 +322,10 @@ class AbAv1Wrapper:
 
                         current_output_lines.append(line + "\n")
                         stats = self.parser.parse_line(line, stats)  # Process every line
+
+                        # Detect phase transition to encoding for timing
+                        if encoding_phase_start_time is None and stats.get("phase") == "encoding":
+                            encoding_phase_start_time = time.time()
                 except Exception as loop_err:
                     read_loop_exception = loop_err
                     logger.error(f"Exception in read loop: {loop_err}", exc_info=True)
@@ -587,6 +595,16 @@ class AbAv1Wrapper:
         )
         stats = self.parser.parse_final_output(full_output_text, stats)
 
+        # --- Calculate timing breakdown ---
+        now = time.time()
+        if encoding_phase_start_time is not None:
+            stats["crf_search_time_sec"] = encoding_phase_start_time - process_start_time
+            stats["encoding_time_sec"] = now - encoding_phase_start_time
+        else:
+            # Fallback: couldn't detect phase transition (shouldn't happen normally)
+            stats["crf_search_time_sec"] = now - process_start_time
+            stats["encoding_time_sec"] = 0
+
         # --- Logging Final Stats ---
         if stats.get("crf") is not None:
             logger.info(f"Final CRF: {stats['crf']}")
@@ -687,6 +705,8 @@ class AbAv1Wrapper:
             vmaf_target = DEFAULT_VMAF_TARGET
         if preset is None:
             preset = DEFAULT_ENCODING_PRESET
+
+        crf_search_start_time = time.time()  # Track CRF search duration
 
         initial_vmaf_target = vmaf_target
         anonymized_input_path = anonymize_filename(input_path)
@@ -911,6 +931,7 @@ class AbAv1Wrapper:
                     "original_size": original_size,
                     "used_fallback": current_vmaf_target != initial_vmaf_target,
                     "preset_used": preset,
+                    "crf_search_time_sec": time.time() - crf_search_start_time,
                 }
 
                 logger.info(
@@ -991,6 +1012,8 @@ class AbAv1Wrapper:
 
         if preset is None:
             preset = DEFAULT_ENCODING_PRESET
+
+        encoding_start_time = time.time()  # Track encoding duration (no CRF search)
 
         anonymized_input_path = anonymize_filename(input_path)
 
@@ -1263,6 +1286,10 @@ class AbAv1Wrapper:
         logger.info(f"Encode completed successfully for {anonymized_input_path} (CRF {crf})")
         stats = self.parser.parse_final_output(full_output_text, stats)
         stats["crf"] = crf  # Ensure CRF is set
+
+        # Add timing (no CRF search - using cached CRF)
+        stats["crf_search_time_sec"] = 0  # Skipped CRF search
+        stats["encoding_time_sec"] = time.time() - encoding_start_time
 
         # Calculate actual size reduction
         if stats.get("original_size"):

@@ -15,6 +15,7 @@ import tkinter as tk  # For type hinting if needed
 # Import constant from config
 from src.config import DEFAULT_ENCODING_PRESET, DEFAULT_VMAF_TARGET
 from src.estimation import estimate_remaining_time
+from src.gui.tree_formatters import format_compact_time
 from src.models import ProgressEvent
 
 # Project imports
@@ -286,7 +287,11 @@ def update_elapsed_time(gui, start_time: float) -> None:
     # Update ETA countdown if we're in encoding phase
     update_eta_countdown(gui)
 
-    # Remove direct call to update_total_remaining_time since it's now on its own timer
+    # Update total remaining time (smooth countdown every second)
+    update_total_remaining_time(gui)
+
+    # Update total row with live progress
+    update_total_row_progress(gui)
 
     # Schedule next update
     gui.session.elapsed_timer_id = gui.root.after(1000, lambda: update_elapsed_time(gui, start_time))
@@ -324,6 +329,41 @@ def update_total_remaining_time(gui) -> None:
     except Exception:
         logger.exception("Error updating total remaining time")
         update_ui_safely(gui.root, lambda: gui.total_remaining_label.config(text="Error"))
+
+
+def update_total_row_progress(gui) -> None:
+    """Update the total row with live progress during conversion."""
+    if not gui.session.running:
+        return
+
+    try:
+        # Calculate total files from queue items
+        total_files = sum(len(item.files) if item.is_folder else 1 for item in gui._queue_items)  # noqa: SLF001
+        if total_files == 0:
+            return
+
+        # Get progress counts
+        done = gui.session.processed_files
+
+        # Get remaining time estimate (uses same logic as total_remaining_label)
+        remaining = estimate_remaining_time(gui)
+        if remaining > 0:
+            remaining_str = format_compact_time(remaining, confidence="high")
+        else:
+            remaining_str = "< 1m" if done < total_files else "—"
+
+        # Format progress text
+        progress_text = f"{done}/{total_files} done"
+
+        # Update total row (values order: format, size, est_time, operation, output, status)
+        update_ui_safely(
+            gui.root,
+            lambda r=remaining_str, p=progress_text: gui.queue_total_tree.item(
+                "total", values=("", "", r, "", "", p)
+            ),
+        )
+    except Exception:
+        logger.exception("Error updating total row progress")
 
 
 def update_eta_countdown(gui) -> None:
@@ -368,8 +408,6 @@ def reset_current_file_details(gui) -> None:
     default_vmaf_text = f"{DEFAULT_VMAF_TARGET} (Target)"
     update_ui_safely(gui.root, lambda: gui.current_file_label.config(text="No file processing"))
     update_ui_safely(gui.root, update_progress_bars, gui, 0, 0)  # Use helper
-    update_ui_safely(gui.root, lambda: gui.orig_format_label.config(text="-"))
-    update_ui_safely(gui.root, lambda: gui.orig_size_label.config(text="-"))
     update_ui_safely(gui.root, lambda v=default_vmaf_text: gui.vmaf_label.config(text=v))
     update_ui_safely(gui.root, lambda: gui.elapsed_label.config(text="-"))
     update_ui_safely(gui.root, lambda: gui.eta_label.config(text="-"))

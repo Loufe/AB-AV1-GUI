@@ -13,7 +13,7 @@ from src.gui.gui_updates import (
     update_conversion_statistics,  # update_total_elapsed_time called by update_elapsed_time
     update_progress_bars,
 )
-from src.models import ErrorInfo, FileInfoEvent, ProgressEvent, RetryInfo, SkippedInfo
+from src.models import ErrorInfo, ProgressEvent, RetryInfo, SkippedInfo
 
 # Project Imports
 from src.privacy import anonymize_filename
@@ -37,12 +37,10 @@ def handle_starting(gui, filename) -> None:
 def handle_file_info(gui, filename, info) -> None:
     """Handle initial file information updates (e.g., size)."""
     if info and "file_size_mb" in info:
-        # Construct FileInfoEvent from dict for type safety
-        event = FileInfoEvent(file_size_mb=info.get("file_size_mb", 0.0))
-        size_str = format_file_size(int(event.file_size_mb * (1024**2)))
-        # Update original size label in the UI
-        update_ui_safely(gui.root, lambda ss=size_str: gui.orig_size_label.config(text=ss))
-        logger.debug(f"Updated original size display for {anonymize_filename(filename)} to {size_str}")
+        # Store size in session for efficiency calculations
+        size_bytes = int(info.get("file_size_mb", 0.0) * (1024**2))
+        update_ui_safely(gui.root, lambda s=size_bytes: setattr(gui.session, "last_input_size", s))
+        logger.debug(f"Stored input size for {anonymize_filename(filename)}: {size_bytes} bytes")
 
 
 def handle_progress(gui, filename: str, info: ProgressEvent) -> None:

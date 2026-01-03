@@ -106,6 +106,25 @@ If the target VMAF is unattainable (e.g., source quality too low):
 3. Repeat until `MIN_VMAF_FALLBACK_TARGET` (default: 90) reached
 4. If still failing, skip file as "conversion not worthwhile"
 
+## Queue System
+
+Conversion uses a queue-based architecture rather than direct folder scanning:
+
+1. **Analysis Tab**: Browse folders, run ffprobe scans, preview estimates
+2. **Add to Queue**: Select files/folders and add with operation type
+3. **Queue Processing**: Worker thread processes queue items sequentially
+
+### Operation Types
+
+| Type | Action | Output |
+|------|--------|--------|
+| `CONVERT` | Full encoding (CRF search + encode) | Video file |
+| `ANALYZE` | CRF search only | Updates history cache |
+
+### Queue Item States
+
+`PENDING` → `CONVERTING` → `COMPLETED` / `ERROR` / `STOPPED`
+
 ## Threading Model
 
 ```
@@ -118,44 +137,46 @@ If the target VMAF is unattainable (e.g., source quality too low):
 │  │  - Scheduled callbacks via root.after()           │  │
 │  └───────────────────────────────────────────────────┘  │
 └─────────────────────────────────────────────────────────┘
-                           ▲
-                           │ update_ui_safely()
-                           │ (schedules via root.after)
-                           │
-┌─────────────────────────────────────────────────────────┐
-│                   Worker Thread                         │
-│  ┌───────────────────────────────────────────────────┐  │
-│  │         sequential_conversion_worker()            │  │
-│  │  - File scanning                                  │  │
-│  │  - Conversion orchestration                       │  │
-│  │  - Progress callbacks                             │  │
-│  └───────────────────────────────────────────────────┘  │
-│                         │                               │
-│                         ▼                               │
-│  ┌───────────────────────────────────────────────────┐  │
-│  │              subprocess.Popen                     │  │
-│  │  - ab-av1 execution                               │  │
-│  │  - stdout/stderr piping                           │  │
-│  │  - Line-by-line parsing                           │  │
-│  └───────────────────────────────────────────────────┘  │
-└─────────────────────────────────────────────────────────┘
+              ▲                              ▲
+              │ update_ui_safely()           │ update_ui_safely()
+              │                              │
+┌─────────────────────────────┐  ┌───────────────────────────────┐
+│      Worker Thread          │  │    Analysis Threads           │
+│  ┌───────────────────────┐  │  │  ┌─────────────────────────┐  │
+│  │ sequential_conversion │  │  │  │   ThreadPoolExecutor    │  │
+│  │      _worker()        │  │  │  │   (4-8 workers)         │  │
+│  │  - Queue processing   │  │  │  │  - Parallel ffprobe     │  │
+│  │  - Conversion/analyze │  │  │  │  - Folder scanning      │  │
+│  │  - Progress callbacks │  │  │  │  - Metadata extraction  │  │
+│  └───────────────────────┘  │  │  └─────────────────────────┘  │
+│            │                │  └───────────────────────────────┘
+│            ▼                │
+│  ┌───────────────────────┐  │
+│  │   subprocess.Popen    │  │
+│  │  - ab-av1 execution   │  │
+│  │  - stdout/stderr pipe │  │
+│  │  - Line-by-line parse │  │
+│  └───────────────────────┘  │
+└─────────────────────────────┘
 ```
 
 ## Data Flow
 
 ### Conversion Start
 1. User clicks "Start" → `conversion_controller.start_conversion()`
-2. Validate inputs, disable UI buttons
-3. Enable sleep prevention (`utils.prevent_sleep_mode`)
-4. Launch worker thread
+2. Validate queue has pending items
+3. Enable sleep prevention (`platform_utils.prevent_sleep_mode`)
+4. Launch worker thread with queue configuration
 
 ### Worker Loop
-1. Scan input folder for matching video files
-2. Filter by extension, resolution, existing output
-3. For each file:
-   - Call `video_conversion.process_video()`
+1. Fetch next pending queue item via callback
+2. For folder items: scan for video files matching extensions
+3. For each file in item:
+   - Check resolution, codec, output existence
+   - Call `video_conversion.process_video()` (CONVERT) or `wrapper.crf_search()` (ANALYZE)
    - Dispatch progress via callbacks
    - Update history on completion
+4. Update queue item status (COMPLETED/ERROR)
 
 ### Callback Chain
 ```

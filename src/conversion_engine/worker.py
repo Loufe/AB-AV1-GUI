@@ -16,17 +16,18 @@ from typing import Callable  # Import Callable
 # Project imports
 from src.ab_av1.exceptions import ConversionNotWorthwhileError
 from src.ab_av1.wrapper import AbAv1Wrapper
+from src.cache_helpers import is_file_unchanged
 from src.config import DEFAULT_ENCODING_PRESET, DEFAULT_VMAF_TARGET, MIN_VMAF_FALLBACK_TARGET
 from src.hardware_accel import get_hw_decoder_for_codec, get_video_codec_from_info
 from src.history_index import compute_path_hash, get_history_index
 from src.models import FileRecord, FileStatus, OperationType, ProgressEvent, QueueConversionConfig, QueueItemStatus
 from src.privacy import anonymize_filename
-from src.utils import format_file_size, get_video_info, update_ui_safely
+from src.utils import get_video_info, update_ui_safely
 from src.video_conversion import calculate_output_path, process_video
 from src.video_metadata import extract_video_metadata
 
 # Import functions/modules from the engine package
-from .scanner import find_video_files, scan_video_needs_conversion
+from .scanner import scan_video_needs_conversion
 
 logger = logging.getLogger(__name__)
 
@@ -66,7 +67,8 @@ def _create_file_record(
     # Status-specific optional fields
     output_path: str | None = None,
     output_size: int | None = None,
-    elapsed_time: float | None = None,
+    crf_search_time_sec: float | None = None,
+    encoding_time_sec: float | None = None,
     final_crf: int | None = None,
     final_vmaf: float | None = None,
     vmaf_target: int | None = None,
@@ -114,13 +116,15 @@ def _create_file_record(
         audio_codec=input_acodec.lower() if input_acodec != "?" else None,
         width=input_width,
         height=input_height,
-        # SCANNED status fields
+        # SCANNED/ANALYZED status fields (Layer 1 and Layer 2 analysis)
         vmaf_target_when_analyzed=vmaf_target
-        if status == FileStatus.SCANNED
+        if status in (FileStatus.SCANNED, FileStatus.ANALYZED)
         else (DEFAULT_VMAF_TARGET if status == FileStatus.NOT_WORTHWHILE else None),
         preset_when_analyzed=DEFAULT_ENCODING_PRESET,
-        best_crf=final_crf if status == FileStatus.SCANNED else None,
-        best_vmaf_achieved=round(final_vmaf, 2) if final_vmaf is not None and status == FileStatus.SCANNED else None,
+        best_crf=final_crf if status in (FileStatus.SCANNED, FileStatus.ANALYZED) else None,
+        best_vmaf_achieved=round(final_vmaf, 2)
+        if final_vmaf is not None and status in (FileStatus.SCANNED, FileStatus.ANALYZED)
+        else None,
         predicted_output_size=predicted_output_size,
         predicted_size_reduction=round(predicted_size_reduction, 1) if predicted_size_reduction is not None else None,
         # NOT_WORTHWHILE status fields
@@ -131,7 +135,8 @@ def _create_file_record(
         output_path=output_path_str,
         output_size_bytes=output_size,
         reduction_percent=reduction_pct,
-        conversion_time_sec=round(elapsed_time, 1) if elapsed_time else None,
+        crf_search_time_sec=round(crf_search_time_sec, 1) if crf_search_time_sec else None,
+        encoding_time_sec=round(encoding_time_sec, 1) if encoding_time_sec else None,
         final_crf=final_crf if status == FileStatus.CONVERTED else None,
         final_vmaf=round(final_vmaf, 2) if final_vmaf is not None and status == FileStatus.CONVERTED else None,
         vmaf_target_used=vmaf_target if status == FileStatus.CONVERTED else None,
@@ -203,6 +208,7 @@ def sequential_conversion_worker(
         gui.session.skipped_not_worth_files = []  # Track filenames of skipped files
         gui.session.skipped_low_resolution_count = 0  # Track files skipped due to low resolution
         gui.session.skipped_low_resolution_files = []  # Track filenames of low resolution files
+        gui.session.stopped_count = 0  # Track files skipped due to user stop request
         gui.session.error_details = []  # Track error details for summary
 
     update_ui_safely(gui.root, init_state)
@@ -238,7 +244,6 @@ def sequential_conversion_worker(
         return
 
     # Initialize overall progress tracking
-    update_ui_safely(gui.root, lambda: gui.overall_progress.config(value=0))
     update_ui_safely(gui.root, lambda: setattr(gui.session, "processed_files", 0))
     update_ui_safely(gui.root, lambda: setattr(gui.session, "successful_conversions", 0))
 
@@ -278,12 +283,10 @@ def sequential_conversion_worker(
         queue_item.files_failed = 0
 
         # Get files for this item
+        # For folders, use the pre-filtered files list from queue_item.files
+        # (populated by create_queue_item with filter_file_for_queue applied)
         try:
-            if queue_item.is_folder:
-                files = find_video_files(queue_item.source_path, extensions)
-            else:
-                files = [queue_item.source_path]
-
+            files = [f.path for f in queue_item.files] if queue_item.is_folder else [queue_item.source_path]
             queue_item.total_files = len(files)
             logger.info(f"Queue item has {len(files)} file(s) to process")
         except Exception as e:
@@ -311,9 +314,15 @@ def sequential_conversion_worker(
         for file_index, file_path in enumerate(files):
             if stop_event.is_set():
                 logger.info("Conversion interrupted by user stop request.")
-                # Mark remaining files as stopped
-                for remaining_file in queue_item.files[file_index:]:
+                # Mark remaining files as stopped and track count
+                remaining_files = queue_item.files[file_index:]
+                stopped_file_count = len(remaining_files)
+                for remaining_file in remaining_files:
                     remaining_file.status = QueueItemStatus.STOPPED
+                def increment_stopped_count(n=stopped_file_count):
+                    gui.session.stopped_count += n
+
+                update_ui_safely(gui.root, increment_stopped_count)
                 break
 
             global_file_index += 1
@@ -430,13 +439,6 @@ def sequential_conversion_worker(
                 queue_status_callback(
                     queue_item.id, QueueItemStatus.CONVERTING, queue_item.processed_files, queue_item.total_files
                 )
-
-                # Update overall progress (item-based)
-                total_files = queue_item.total_files
-                file_progress = queue_item.processed_files / total_files if total_files > 0 else 0
-                item_progress = items_completed + file_progress
-                progress_pct = (item_progress / items_total) * 100 if items_total > 0 else 0
-                update_ui_safely(gui.root, lambda pct=progress_pct: gui.overall_progress.config(value=pct))
                 continue
 
             # File needs conversion - proceed with processing
@@ -457,12 +459,8 @@ def sequential_conversion_worker(
                     input_width = meta.width
                     input_height = meta.height
                     input_duration = meta.duration_sec or 0.0
-                    format_info_text = f"{input_vcodec} / {input_acodec}"
                     original_size = meta.file_size_bytes or 0
-                    size_str = format_file_size(original_size)
 
-                    update_ui_safely(gui.root, lambda fi=format_info_text: gui.orig_format_label.config(text=fi))
-                    update_ui_safely(gui.root, lambda ss=size_str: gui.orig_size_label.config(text=ss))
                     update_ui_safely(gui.root, lambda os=original_size: setattr(gui.session, "last_input_size", os))
                     output_acodec = input_acodec  # Default output codec
                 except Exception:
@@ -505,8 +503,68 @@ def sequential_conversion_worker(
             try:
                 if queue_item.operation_type == OperationType.ANALYZE:
                     # ANALYZE operation: Run CRF search only, no encoding
+
+                    # Check for cached status that should skip analysis
+                    index = get_history_index()
+                    cached_record = index.lookup_file(file_path)
+                    if cached_record:
+                        # Skip CONVERTED files - no point analyzing, conversion history is valuable
+                        if cached_record.status == FileStatus.CONVERTED:
+                            if is_file_unchanged(cached_record, file_path):
+                                logger.info(f"Skipping {anonymized_name} - already converted")
+                                file_event_callback(filename, "skipped", "Already converted")
+                                queue_item.files_skipped += 1
+                                _update_file_status(queue_item, file_index, QueueItemStatus.COMPLETED)
+                                queue_item.processed_files += 1
+                                queue_status_callback(
+                                    queue_item.id,
+                                    QueueItemStatus.CONVERTING,
+                                    queue_item.processed_files,
+                                    queue_item.total_files,
+                                )
+                                continue  # Skip to next file
+                            # File changed since conversion - needs re-conversion, not just analysis
+                            logger.info(f"File {anonymized_name} changed since conversion, re-analyzing")
+
+                        # Skip NOT_WORTHWHILE files - already determined conversion isn't beneficial
+                        elif cached_record.status == FileStatus.NOT_WORTHWHILE:
+                            if is_file_unchanged(cached_record, file_path):
+                                logger.info(f"Skipping {anonymized_name} - previously marked not worthwhile")
+                                file_event_callback(
+                                    filename, "skipped", cached_record.skip_reason or "Previously marked not worthwhile"
+                                )
+                                queue_item.files_skipped += 1
+                                _update_file_status(queue_item, file_index, QueueItemStatus.COMPLETED)
+                                queue_item.processed_files += 1
+                                queue_status_callback(
+                                    queue_item.id,
+                                    QueueItemStatus.CONVERTING,
+                                    queue_item.processed_files,
+                                    queue_item.total_files,
+                                )
+                                continue  # Skip to next file
+                            logger.info(f"File {anonymized_name} changed since NOT_WORTHWHILE analysis, re-analyzing")
+
+                        # Skip ANALYZED files - already have Layer 2 data (CRF search complete)
+                        elif cached_record.status == FileStatus.ANALYZED:
+                            if is_file_unchanged(cached_record, file_path):
+                                logger.info(f"Skipping {anonymized_name} - already analyzed")
+                                file_event_callback(filename, "skipped", "Already analyzed")
+                                queue_item.files_skipped += 1
+                                _update_file_status(queue_item, file_index, QueueItemStatus.COMPLETED)
+                                queue_item.processed_files += 1
+                                queue_status_callback(
+                                    queue_item.id,
+                                    QueueItemStatus.CONVERTING,
+                                    queue_item.processed_files,
+                                    queue_item.total_files,
+                                )
+                                continue  # Skip to next file
+                            logger.info(f"File {anonymized_name} changed since analysis, re-analyzing")
+
                     logger.info(f"Running CRF search (analysis only) for {anonymized_name}")
                     wrapper = AbAv1Wrapper()
+                    crf_search_start = time.time()  # Track timing for both success and NOT_WORTHWHILE
 
                     def progress_cb(progress_pct, message, fname=filename):
                         # Report progress as quality detection progress
@@ -531,18 +589,20 @@ def sequential_conversion_worker(
                         final_vmaf_target = crf_result.get("vmaf_target_used")
                         predicted_output_size = crf_result.get("predicted_output_size")
                         predicted_size_reduction = crf_result.get("predicted_size_reduction")
+                        crf_search_time = crf_result.get("crf_search_time_sec")
 
                         # Update history index with Layer 2 data
                         record = _create_file_record(
                             file_path,
                             anonymize_history_value[0],
-                            FileStatus.SCANNED,
+                            FileStatus.ANALYZED,
                             original_size,
                             input_duration,
                             input_vcodec,
                             input_acodec,
                             input_width,
                             input_height,
+                            crf_search_time_sec=crf_search_time,
                             final_crf=final_crf,
                             final_vmaf=final_vmaf,
                             vmaf_target=final_vmaf_target,
@@ -569,12 +629,13 @@ def sequential_conversion_worker(
 
                     except ConversionNotWorthwhileError as e:
                         # CRF search failed at all VMAF targets - record as NOT_WORTHWHILE
+                        crf_search_elapsed = time.time() - crf_search_start
                         logger.warning(f"Analysis showed conversion not worthwhile for {anonymized_name}: {e}")
                         file_event_callback(filename, "skipped", str(e))
                         queue_item.files_skipped += 1
                         _update_file_status(queue_item, file_index, QueueItemStatus.COMPLETED)
 
-                        # Record NOT_WORTHWHILE to history
+                        # Record NOT_WORTHWHILE to history (including time spent)
                         record = _create_file_record(
                             file_path,
                             anonymize_history_value[0],
@@ -585,6 +646,7 @@ def sequential_conversion_worker(
                             input_acodec,
                             input_width,
                             input_height,
+                            crf_search_time_sec=crf_search_elapsed,
                             vmaf_target_attempted=DEFAULT_VMAF_TARGET,
                             min_vmaf_attempted=MIN_VMAF_FALLBACK_TARGET,
                             skip_reason=str(e),
@@ -608,7 +670,7 @@ def sequential_conversion_worker(
                         hw_decoder=hw_decoder,
                     )
                     if result_tuple:
-                        # Unpack potentially extended tuple including stats
+                        # Unpack tuple including timing breakdown
                         (
                             output_file_path,
                             elapsed_time_file,
@@ -617,6 +679,8 @@ def sequential_conversion_worker(
                             final_crf,
                             final_vmaf,
                             final_vmaf_target,
+                            crf_search_time_file,
+                            encoding_time_file,
                         ) = result_tuple
                         process_successful = True
                         update_ui_safely(gui.root, lambda os=output_size: setattr(gui.session, "last_output_size", os))
@@ -679,32 +743,48 @@ def sequential_conversion_worker(
 
                     update_ui_safely(gui.root, update_totals_from_worker)
 
-                try:  # Record to History Index
-                    record = _create_file_record(
-                        file_path,
-                        anonymize_history_value[0],
-                        FileStatus.CONVERTED,
-                        original_size,
-                        input_duration,
-                        input_vcodec,
-                        input_acodec,
-                        input_width,
-                        input_height,
-                        output_path=output_file_path,
-                        output_size=output_size,
-                        elapsed_time=elapsed_time_file,
-                        final_crf=final_crf,
-                        final_vmaf=final_vmaf,
-                        vmaf_target=final_vmaf_target if final_vmaf_target is not None else DEFAULT_VMAF_TARGET,
-                        output_acodec=output_acodec,
-                    )
-                    _save_file_record(record)
-                except Exception:
-                    logger.exception(f"Failed to record history for {anonymized_name}")
+                # Only save CONVERTED record for CONVERT operations
+                # (ANALYZE operations save their ANALYZED record earlier in the flow)
+                if queue_item.operation_type == OperationType.CONVERT:
+                    try:  # Record to History Index
+                        record = _create_file_record(
+                            file_path,
+                            anonymize_history_value[0],
+                            FileStatus.CONVERTED,
+                            original_size,
+                            input_duration,
+                            input_vcodec,
+                            input_acodec,
+                            input_width,
+                            input_height,
+                            output_path=output_file_path,
+                            output_size=output_size,
+                            crf_search_time_sec=crf_search_time_file,
+                            encoding_time_sec=encoding_time_file,
+                            final_crf=final_crf,
+                            final_vmaf=final_vmaf,
+                            vmaf_target=final_vmaf_target if final_vmaf_target is not None else DEFAULT_VMAF_TARGET,
+                            output_acodec=output_acodec,
+                        )
+                        _save_file_record(record)
+                    except Exception:
+                        logger.exception(f"Failed to record history for {anonymized_name}")
             # Check if this was a NOT_WORTHWHILE skip and record to history
             elif gui.session.last_skip_reason:
                 queue_item.files_skipped += 1
                 _update_file_status(queue_item, file_index, QueueItemStatus.COMPLETED)
+
+                # Capture skip data and timing before clearing
+                skip_reason = gui.session.last_skip_reason
+                min_vmaf_attempted = gui.session.last_min_vmaf_attempted
+                # Calculate elapsed time for CRF search attempt (set at line 477)
+                file_start = gui.session.current_file_start_time
+                crf_search_elapsed = time.time() - file_start if file_start else None
+
+                # Clear skip state (safe to do synchronously per THREAD SAFETY NOTE)
+                gui.session.last_skip_reason = None
+                gui.session.last_min_vmaf_attempted = None
+
                 try:  # Record NOT_WORTHWHILE to History Index
                     record = _create_file_record(
                         file_path,
@@ -716,16 +796,13 @@ def sequential_conversion_worker(
                         input_acodec,
                         input_width,
                         input_height,
+                        crf_search_time_sec=crf_search_elapsed,
                         vmaf_target_attempted=DEFAULT_VMAF_TARGET,
-                        min_vmaf_attempted=gui.session.last_min_vmaf_attempted,
-                        skip_reason=gui.session.last_skip_reason,
+                        min_vmaf_attempted=min_vmaf_attempted,
+                        skip_reason=skip_reason,
                     )
                     _save_file_record(record)
                     logger.info(f"Recorded NOT_WORTHWHILE status to history for {anonymized_name}")
-
-                    # Clear the stored skip data
-                    update_ui_safely(gui.root, lambda: setattr(gui.session, "last_skip_reason", None))
-                    update_ui_safely(gui.root, lambda: setattr(gui.session, "last_min_vmaf_attempted", None))
                 except Exception:
                     logger.exception(f"Failed to record NOT_WORTHWHILE history for {anonymized_name}")
             else:
@@ -738,13 +815,6 @@ def sequential_conversion_worker(
                 _update_file_status(queue_item, file_index, QueueItemStatus.ERROR, error_msg)
 
             # Note: Original file deletion (for REPLACE mode) is handled by process_video()
-
-            # --- Update Overall Progress (item-based) ---
-            total_files = queue_item.total_files
-            file_progress = queue_item.processed_files / total_files if total_files > 0 else 0
-            item_progress = items_completed + file_progress
-            progress_pct = (item_progress / items_total) * 100 if items_total > 0 else 0
-            update_ui_safely(gui.root, lambda pct=progress_pct: gui.overall_progress.config(value=pct))
 
             def update_status(ic=items_completed + 1, it=items_total):  # Capture loop variables
                 base_status = f"Item {ic}/{it}"
@@ -779,10 +849,6 @@ def sequential_conversion_worker(
                 queue_item.id, QueueItemStatus.COMPLETED, queue_item.processed_files, queue_item.total_files
             )
         items_completed += 1
-
-        # Update overall progress to reflect completed item
-        overall_progress_percent = (items_completed / items_total) * 100 if items_total > 0 else 100
-        update_ui_safely(gui.root, lambda pct=overall_progress_percent: gui.overall_progress.config(value=pct))
 
     # --- End of Processing Loop ---
     final_status_message = "Queue complete"

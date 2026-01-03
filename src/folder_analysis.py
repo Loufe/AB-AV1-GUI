@@ -251,9 +251,9 @@ def _analyze_file(
     # Cache miss or stale - run ffprobe
     video_info = get_video_info(file_path)
 
-    # Check if we have an existing record with CONVERTED or NOT_WORTHWHILE status
-    # that should be preserved (only update metadata, not overwrite conversion data)
-    if cached and cached.status in (FileStatus.CONVERTED, FileStatus.NOT_WORTHWHILE):
+    # Check if we have an existing record with ANALYZED, CONVERTED, or NOT_WORTHWHILE status
+    # that should be preserved (only update metadata, not overwrite analysis/conversion data)
+    if cached and cached.status in (FileStatus.CONVERTED, FileStatus.NOT_WORTHWHILE, FileStatus.ANALYZED):
         # Update metadata while preserving conversion data
         record = _update_existing_record_metadata(cached, file_size, file_mtime, video_info, anonymize, file_path)
         # Save updated record and return result based on existing status
@@ -462,6 +462,10 @@ def _record_to_result(file_path: str, record: FileRecord, index: HistoryIndex) -
     elif record.status == FileStatus.NOT_WORTHWHILE:
         status = "not_worthwhile"
         detail = record.skip_reason or f"VMAF analysis failed (tried down to {record.min_vmaf_attempted})"
+    elif record.status == FileStatus.ANALYZED:
+        # ANALYZED files need conversion but have accurate predictions (Layer 2 complete)
+        status = "needs_conversion"
+        detail = f"CRF {record.best_crf} → VMAF {record.best_vmaf_achieved:.1f}" if record.best_crf else None
     elif record.skip_reason:
         status = "skipped_other"
         detail = record.skip_reason
@@ -471,28 +475,27 @@ def _record_to_result(file_path: str, record: FileRecord, index: HistoryIndex) -
 
     resolution = f"{record.width}x{record.height}" if record.width and record.height else None
 
-    # Get estimate if needs conversion
-    est_reduction = record.estimated_reduction_percent
-    est_savings = None
+    # Get reduction estimate/prediction based on status
+    reduction = None
+    savings = None
     if status == "needs_conversion":
-        if est_reduction is None:
-            est_reduction, similar_count = _estimate_reduction(record, index)
-            record.estimated_reduction_percent = est_reduction
-            record.estimated_from_similar = similar_count
-            index.upsert(record)
-        if est_reduction and record.file_size_bytes:
-            # Estimate audio size - not reduced, copied unchanged
-            # For cached records, use rough estimate: audio is ~10% of total bitrate
-            audio_size = 0
-            if record.duration_sec and record.bitrate_kbps:
-                # Assume ~10% of bitrate is audio
-                audio_bitrate_kbps = record.bitrate_kbps * 0.1
-                audio_size = int(record.duration_sec * audio_bitrate_kbps * 1000 / 8)
-
-            # Apply reduction only to video portion
-            video_size = max(0, record.file_size_bytes - audio_size)
-            est_savings = int(video_size * est_reduction / 100)
-        detail = f"Est. based on {record.estimated_from_similar or 0} similar files"
+        if record.status == FileStatus.ANALYZED:
+            # ANALYZED: Use accurate prediction from CRF search (no estimation needed)
+            reduction = record.predicted_size_reduction
+            if reduction and record.file_size_bytes:
+                savings = int(record.file_size_bytes * reduction / 100)
+            # detail already set above with CRF/VMAF info
+        else:
+            # SCANNED: Use or calculate estimate based on similar files
+            reduction = record.estimated_reduction_percent
+            if reduction is None:
+                reduction, similar_count = _estimate_reduction(record, index)
+                record.estimated_reduction_percent = reduction
+                record.estimated_from_similar = similar_count
+                index.upsert(record)
+            if reduction and record.file_size_bytes:
+                savings = int(record.file_size_bytes * reduction / 100)
+            detail = f"Est. based on {record.estimated_from_similar or 0} similar files"
 
     return FileAnalysisResult(
         path=file_path,
@@ -502,8 +505,8 @@ def _record_to_result(file_path: str, record: FileRecord, index: HistoryIndex) -
         video_codec=record.video_codec,
         resolution=resolution,
         duration_sec=record.duration_sec,
-        estimated_reduction_percent=est_reduction if status == "needs_conversion" else record.reduction_percent,
-        estimated_savings_bytes=est_savings,
+        estimated_reduction_percent=reduction if status == "needs_conversion" else record.reduction_percent,
+        estimated_savings_bytes=savings,
         status_detail=detail,
     )
 

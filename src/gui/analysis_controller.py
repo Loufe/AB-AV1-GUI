@@ -82,12 +82,13 @@ def refresh_analysis_tree(gui) -> None:
     # Clear tree and start background scan
     clear_analysis_tree(gui)
     gui._scanning = True
-    gui.analysis_total_tree.item("total", text="Scanning...", values=("—", "—", "—", "—"))
+    gui.analysis_total_tree.item("total", text="Scanning...", values=("", "—", "—", "—", "—"))
     update_add_all_buttons_state(gui)  # Disable while scanning
 
-    # Show scanning overlay (lift ensures it's above the tree)
-    gui.analysis_scan_overlay.place(relx=0, rely=0, relwidth=1, relheight=1)
-    gui.analysis_scan_overlay.lift()
+    # Show scanning badge (floating indicator, tree visible behind)
+    gui.analysis_scan_badge.config(text="Scanning folder...")
+    gui.analysis_scan_badge.place(relx=0.5, rely=0.5, anchor="center")
+    gui.analysis_scan_badge.lift()
 
     # Cancel any existing scan
     if gui._scan_stop_event:
@@ -132,6 +133,9 @@ def prune_empty_folders(gui) -> int:
                 text = gui.analysis_tree.item(item_id, "text")
                 if "📁" in text:
                     gui.analysis_tree.delete(item_id)
+                    # Clean up cached folder aggregates
+                    if hasattr(gui, "folder_aggregates"):
+                        gui.folder_aggregates.pop(item_id, None)
                     removed_this_pass += 1
 
         total_removed += removed_this_pass
@@ -148,14 +152,18 @@ def finish_incremental_scan(gui, stopped: bool) -> None:
         gui: The VideoConverterGUI instance.
         stopped: True if scan was stopped early, False if completed normally.
     """
+    if stopped:
+        # Scan was cancelled by a new scan starting - let the new scan handle UI state.
+        # Don't hide badge or modify state, as the new scan has already taken over.
+        return
+
     gui._scanning = False
 
-    # Hide scanning overlay
-    gui.analysis_scan_overlay.place_forget()
+    # Hide scanning badge
+    gui.analysis_scan_badge.place_forget()
 
-    if not stopped:
-        # Prune empty folders after scan completes
-        prune_empty_folders(gui)
+    # Prune empty folders after scan completes
+    prune_empty_folders(gui)
 
     # Update total row with any cached data
     update_total_from_tree(gui)
@@ -374,9 +382,15 @@ def get_analysis_tree_tooltip(gui, item_id: str) -> str | None:
             return f"Skipped: VMAF {record.min_vmaf_attempted} unattainable"
         return "Skipped: Quality target unattainable"
 
-    # FileStatus.SCANNED - check analysis level
-    if record.predicted_size_reduction is not None:
+    if record.status == FileStatus.ANALYZED:
         # Layer 2 complete (CRF search done)
+        lines = ["Ready to convert (CRF search complete)"]
+        if record.best_crf is not None and record.best_vmaf_achieved is not None:
+            lines.append(f"CRF {record.best_crf} → VMAF {record.best_vmaf_achieved:.1f}")
+        return "\n".join(lines)
+
+    # FileStatus.SCANNED - check for Layer 2 data (fallback for old records)
+    if record.predicted_size_reduction is not None:
         lines = ["Ready to convert (CRF search complete)"]
         if record.best_crf is not None and record.best_vmaf_achieved is not None:
             lines.append(f"CRF {record.best_crf} → VMAF {record.best_vmaf_achieved:.1f}")
@@ -491,13 +505,13 @@ def update_total_row(
     savings_str = format_file_size(total_savings) if total_savings > 0 else "—"
     if any_estimate and savings_str != "—":
         savings_str = f"~{savings_str}"
-    time_str = format_compact_time(total_time) if total_time > 0 else "—"
-    if any_estimate and time_str != "—":
-        time_str = f"~{time_str}"
+    # Total row uses "low" confidence if any file is an estimate (aggregated estimates)
+    total_confidence = "low" if any_estimate else "high"
+    time_str = format_compact_time(total_time, confidence=total_confidence)
     eff_str = format_efficiency(total_savings, total_time)
 
-    # Update the total row
-    gui.analysis_total_tree.item("total", text=name_text, values=(size_str, savings_str, time_str, eff_str))
+    # Update the total row (format column is empty for totals)
+    gui.analysis_total_tree.item("total", text=name_text, values=("", size_str, savings_str, time_str, eff_str))
 
 
 def update_total_from_tree(gui) -> int:
@@ -536,7 +550,7 @@ def update_total_from_tree(gui) -> int:
         else:
             # Use Layer 2 data if available, otherwise fall back to Layer 1 estimate
             reduction_percent = record.predicted_size_reduction or record.estimated_reduction_percent
-            if record.status == FileStatus.SCANNED and reduction_percent:
+            if record.status in (FileStatus.SCANNED, FileStatus.ANALYZED) and reduction_percent:
                 convertible += 1
                 # Track if this file only has ffprobe-level analysis (no CRF search)
                 if record.predicted_size_reduction is None:
@@ -544,7 +558,10 @@ def update_total_from_tree(gui) -> int:
                 if record.file_size_bytes:
                     total_savings += int(record.file_size_bytes * reduction_percent / 100)
                 file_time = estimate_file_time(
-                    codec=record.video_codec, duration=record.duration_sec, size=record.file_size_bytes
+                    codec=record.video_codec,
+                    duration=record.duration_sec,
+                    width=record.width,
+                    height=record.height,
                 ).best_seconds
                 total_time += file_time
 
@@ -568,4 +585,6 @@ def clear_analysis_tree(gui) -> None:
     for item in gui.analysis_tree.get_children():
         gui.analysis_tree.delete(item)
     gui._tree_item_map.clear()
+    if hasattr(gui, "folder_aggregates"):
+        gui.folder_aggregates.clear()
     clear_sort_state(gui)

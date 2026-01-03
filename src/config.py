@@ -46,6 +46,7 @@ MIN_FILES_FOR_PERCENT_UPDATES = 20  # Minimum files before using percentage-base
 
 # --- Time Estimation ---
 MIN_SAMPLES_FOR_ESTIMATE = 5  # Minimum conversion history samples needed for estimates
+MIN_SAMPLES_HIGH_CONFIDENCE = 10  # Samples needed for "high" vs "medium" confidence
 DEFAULT_REDUCTION_ESTIMATE_PERCENT = 45.0  # Default file size reduction estimate if no history data
 RESOLUTION_TOLERANCE_PERCENT = 0.2  # Tolerance for resolution matching (20%)
 

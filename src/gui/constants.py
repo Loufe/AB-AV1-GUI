@@ -22,7 +22,7 @@ COLOR_STATUS_ERROR = "#C62828"  # Dark red - errors, failures
 COLOR_STATUS_ERROR_TEXT = "#c00000"  # Red text for warnings/errors in dialogs
 COLOR_STATUS_INFO = "#1565C0"  # Dark blue - converting, queued, update available
 COLOR_STATUS_INFO_LIGHT = "#64B5F6"  # Light blue - partial queue (folder with some queued)
-COLOR_STATUS_PENDING = "#666666"  # Medium gray - pending items, inactive
+COLOR_STATUS_PENDING = "#000000"  # Black - pending items, neutral/default
 COLOR_STATUS_DISABLED = "#888888"  # Gray - already AV1, no action needed
 COLOR_STATUS_NEUTRAL = "#808080"  # Gray - HW decoder not detected, unknown status
 
@@ -39,10 +39,10 @@ COLOR_MENU_ACTIVE_FG = "#ffffff"  # White text on active
 COLOR_TOOLTIP_BACKGROUND = "lightyellow"
 
 # =============================================================================
-# COLORS - Overlay
+# COLORS - Scanning Badge
 # =============================================================================
-COLOR_OVERLAY_BACKGROUND = COLOR_BACKGROUND
-COLOR_OVERLAY_TEXT = "#666666"
+COLOR_BADGE_BACKGROUND = "#505050"  # Dark gray for floating badge
+COLOR_BADGE_TEXT = "#f0f0f0"  # Light text on dark background
 
 # =============================================================================
 # COLORS - Text Colors (foreground parameter)
@@ -115,3 +115,32 @@ FONT_SYSTEM_UNDERLINE = (FONT_FAMILY_SYSTEM, FONT_SIZE_NORMAL, "underline")
 FONT_SYSTEM_OVERLAY = (FONT_FAMILY_SYSTEM, FONT_SIZE_TAB)
 FONT_DIALOG_HEADER = (FONT_FAMILY_SYSTEM, FONT_SIZE_BODY, "bold")
 FONT_MONOSPACE = (FONT_FAMILY_MONOSPACE, FONT_SIZE_NORMAL)
+
+# =============================================================================
+# LAYOUT - Sizing Constants
+# =============================================================================
+# Scrollbar width for aligning total rows with scrollable trees above them.
+# This is approximate and may vary slightly by OS/theme (typically 15-20px on Windows).
+SCROLLBAR_WIDTH_PADDING = 17
+
+# =============================================================================
+# TOOLTIPS - Column Header Tooltips
+# =============================================================================
+TOOLTIP_TIME_COLUMN = (
+    "Estimated conversion time.\n"
+    "No prefix = precise (from CRF analysis or similar file).\n"
+    "'~' prefix = medium confidence (similar file match).\n"
+    "'~~' prefix = low confidence (statistical estimate)."
+)
+
+# =============================================================================
+# OUTPUT MODE - Display Labels
+# =============================================================================
+# Mapping between human-readable display strings and internal enum values.
+# Used by the queue tab's output mode dropdown.
+OUTPUT_MODE_DISPLAY_TO_VALUE = {
+    "Replace Original": "replace",
+    "Add Suffix": "suffix",
+    "Separate Folder": "separate_folder",
+}
+OUTPUT_MODE_VALUE_TO_DISPLAY = {v: k for k, v in OUTPUT_MODE_DISPLAY_TO_VALUE.items()}

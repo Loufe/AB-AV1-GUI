@@ -67,28 +67,16 @@ class VideoConverterGUI:
     start_button: ttk.Button
     stop_button: ttk.Button
     force_stop_button: ttk.Button
-    overall_progress: ttk.Progressbar
     status_label: ttk.Label
     total_elapsed_label: ttk.Label
     total_remaining_label: ttk.Label
     queue_tree: ttk.Treeview
     queue_total_tree: ttk.Treeview
-    queue_properties_frame: ttk.LabelFrame
-    item_output_mode: tk.StringVar
-    item_mode_combo: ttk.Combobox
-    item_suffix: tk.StringVar
-    item_suffix_entry: ttk.Entry
-    item_output_folder: tk.StringVar
-    item_folder_entry: ttk.Entry
-    item_folder_browse_button: ttk.Button
-    item_source_label: ttk.Label
     current_file_label: ttk.Label
     quality_progress: ttk.Progressbar
     quality_percent_label: ttk.Label
     encoding_progress: ttk.Progressbar
     encoding_percent_label: ttk.Label
-    orig_format_label: ttk.Label
-    orig_size_label: ttk.Label
     vmaf_label: ttk.Label
     encoding_settings_label: ttk.Label
     elapsed_label: ttk.Label
@@ -101,7 +89,7 @@ class VideoConverterGUI:
     add_all_convert_button: ttk.Button
     analysis_tree: ttk.Treeview
     analysis_total_tree: ttk.Treeview
-    analysis_scan_overlay: tk.Frame
+    analysis_scan_badge: tk.Label
 
     # Settings tab widgets (created in create_settings_tab)
     ab_av1_frame: ttk.Frame
@@ -299,6 +287,7 @@ class VideoConverterGUI:
         self.style.configure("TLabelframe", background=COLOR_BACKGROUND, padding=5)
         self.style.configure("TLabelframe.Label", font=FONT_BODY_BOLD, background=COLOR_BACKGROUND)
         self.style.configure("TNotebook.Tab", font=FONT_TAB, padding=(10, 4))
+        self.style.configure("Treeview.Heading", font=FONT_BODY_BOLD)
 
         # Add custom style for range text - dark gray color
         self.style.configure("Range.TLabel", font=FONT_BODY, background=COLOR_BACKGROUND, foreground=COLOR_TEXT_MUTED)
@@ -621,23 +610,6 @@ class VideoConverterGUI:
         """Add individual files to the conversion queue."""
         queue_controller.on_add_files_to_queue(self)
 
-    def _find_existing_queue_item(self, path: str) -> QueueItem | None:
-        return queue_manager.find_existing_queue_item(self, path)
-
-    def _get_selected_extensions(self) -> list[str]:
-        return queue_manager.get_selected_extensions(self)
-
-    def _create_queue_item(self, path: str, is_folder: bool, operation_type: OperationType) -> QueueItem:
-        return queue_manager.create_queue_item(self, path, is_folder, operation_type)
-
-    def _categorize_queue_items(
-        self, items: list[tuple[str, bool]], operation_type: OperationType
-    ) -> tuple[list[tuple[str, bool]], list[str], list[tuple[str, bool, QueueItem]], list[tuple[str, str]]]:
-        return queue_manager.categorize_queue_items(self, items, operation_type)
-
-    def _calculate_queue_estimates(self, items: list[tuple[str, bool]]) -> tuple[float | None, float | None]:
-        return queue_manager.calculate_queue_estimates(self, items)
-
     def add_items_to_queue(
         self, items: list[tuple[str, bool]], operation_type: OperationType, force_preview: bool = False
     ) -> dict[str, int]:
@@ -654,10 +626,6 @@ class VideoConverterGUI:
     def on_clear_queue(self):
         """Clear all items from queue."""
         queue_controller.on_clear_queue(self)
-
-    def on_queue_selection_changed(self):
-        """Handle selection change in queue tree."""
-        queue_controller.on_queue_selection_changed(self)
 
     def on_item_output_mode_changed(self):
         """Handle output mode change for selected item."""

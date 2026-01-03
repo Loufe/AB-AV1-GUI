@@ -6,7 +6,10 @@ Provides consistent status formatting and tag mapping for both
 the analysis tree and queue tree, reducing code duplication.
 """
 
-from src.models import FileStatus, QueueItemStatus
+from src.estimation import estimate_file_time
+from src.gui.tree_formatters import format_compact_time, format_efficiency
+from src.models import FileRecord, FileStatus, QueueItemStatus
+from src.utils import format_file_size
 
 # =============================================================================
 # Status Tag Mappings
@@ -22,9 +25,11 @@ QUEUE_STATUS_TAGS: dict[QueueItemStatus, str] = {
 }
 
 # Analysis tree file status → CSS-like tag for styling
+# Note: ANALYZED has no special tag - file still needs conversion (just has known CRF)
 ANALYSIS_STATUS_TAGS: dict[FileStatus, str] = {
     FileStatus.CONVERTED: "done",
     FileStatus.NOT_WORTHWHILE: "skip",
+    FileStatus.ANALYZED: "",  # No special styling - ready to convert
 }
 
 
@@ -131,6 +136,61 @@ def get_analysis_file_tag(status: FileStatus, video_codec: str | None = None) ->
     if video_codec and video_codec.lower() == "av1":
         return "av1"
     return ""
+
+
+def compute_analysis_display_values(
+    record: FileRecord,
+) -> tuple[str, str, str, str, str, str]:
+    """Compute display values for a file record in the analysis tree.
+
+    Centralizes the display logic used by both update_tree_row() and
+    incremental_scan_thread() to avoid duplication.
+
+    Args:
+        record: The FileRecord from history index.
+
+    Returns:
+        Tuple of (format_str, size_str, savings_str, time_str, eff_str, tag).
+    """
+    format_str = format_stream_display(record.video_codec, record.audio_codec)
+    size_str = format_file_size(record.file_size_bytes) if record.file_size_bytes else "—"
+    tag = get_analysis_file_tag(record.status, record.video_codec)
+
+    # Default values
+    savings_str = "—"
+    time_str = "—"
+    eff_str = "—"
+
+    if record.status == FileStatus.CONVERTED:
+        savings_str = "Done"
+    elif record.status == FileStatus.NOT_WORTHWHILE:
+        savings_str = "Skip"
+    elif record.video_codec and record.video_codec.lower() == "av1":
+        # Already AV1 - show subtle indicator
+        savings_str = "AV1"
+    elif record.status in (FileStatus.SCANNED, FileStatus.ANALYZED):
+        # File needs conversion - show estimates/predictions
+        has_layer2 = record.predicted_size_reduction is not None
+        reduction_percent = record.predicted_size_reduction or record.estimated_reduction_percent
+
+        if reduction_percent and record.file_size_bytes:
+            file_savings = int(record.file_size_bytes * reduction_percent / 100)
+            savings_str = format_file_size(file_savings)
+            if not has_layer2:
+                savings_str = f"~{savings_str}"
+
+            time_estimate = estimate_file_time(
+                codec=record.video_codec,
+                duration=record.duration_sec,
+                width=record.width,
+                height=record.height,
+            )
+            # Layer 2 = precise (no prefix), Layer 1 = use estimate confidence
+            confidence = "high" if has_layer2 else time_estimate.confidence
+            time_str = format_compact_time(time_estimate.best_seconds, confidence=confidence)
+            eff_str = format_efficiency(file_savings, time_estimate.best_seconds)
+
+    return format_str, size_str, savings_str, time_str, eff_str, tag
 
 
 # =============================================================================

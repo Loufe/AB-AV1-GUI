@@ -12,14 +12,19 @@ from src.config import ANALYSIS_TREE_HEADINGS, EFFICIENCY_DECIMAL_THRESHOLD
 logger = logging.getLogger(__name__)
 
 
-def format_compact_time(seconds: float) -> str:
-    """Format time in a compact way for the analysis tree.
+def format_compact_time(seconds: float, *, confidence: str = "none") -> str:
+    """Format time in a compact way for tree views.
 
     Args:
         seconds: Time in seconds
+        confidence: Estimation confidence level:
+            - "high" or "precise": No prefix (accurate data from CRF analysis or in-progress)
+            - "medium": Single "~" prefix (estimate from similar file match)
+            - "low": Double "~~" prefix (statistical estimate from codec/duration)
+            - "none": No prefix (no estimate available)
 
     Returns:
-        Formatted string like "2h 15m", "45m", "12m"
+        Formatted string like "~~2h 15m", "~45m", "< 1m"
     """
     if seconds <= 0:
         return "—"
@@ -27,11 +32,20 @@ def format_compact_time(seconds: float) -> str:
     hours = int(seconds // 3600)
     minutes = int((seconds % 3600) // 60)
 
+    # Determine prefix based on confidence
+    if confidence == "medium":
+        prefix = "~"
+    elif confidence == "low":
+        prefix = "~~"
+    else:
+        prefix = ""
+
     if hours > 0:
-        return f"{hours}h {minutes}m"
+        return f"{prefix}{hours}h {minutes}m"
     if minutes > 0:
-        return f"{minutes}m"
-    return "< 1m"
+        return f"{prefix}{minutes}m"
+    # Less than 1 minute
+    return f"{prefix}< 1m" if prefix else "< 1m"
 
 
 def format_efficiency(savings_bytes: int, time_seconds: float) -> str:
@@ -96,13 +110,18 @@ def parse_time_to_seconds(time_str: str) -> float:
     """Parse formatted time string to seconds for sorting.
 
     Args:
-        time_str: Formatted time like "2h 15m", "45m", or "—"
+        time_str: Formatted time like "~~2h 15m", "~45m", "< 1m", or "—"
 
     Returns:
         Time in seconds, or float('inf') for "—"
     """
-    if time_str in {"—", "< 1m"}:
-        return float("inf") if time_str == "—" else 30  # Treat "< 1m" as 30 seconds
+    if time_str == "—":
+        return float("inf")
+    if time_str in {"< 1m", "~< 1m", "~~< 1m"}:
+        return 30  # Treat < 1 minute as 30 seconds for sorting
+
+    # Strip ~ or ~~ prefix if present
+    time_str = time_str.lstrip("~")
 
     total_seconds = 0.0
     # Parse patterns like "2h 15m" or "45m"

@@ -672,16 +672,20 @@ def build_summary_message(gui, final_message: str, total_duration: float) -> str
     if s.skipped_low_resolution_count > 0:
         summary_msg += f"Skipped (Low Resolution): {s.skipped_low_resolution_count}\n"
 
-    # Count other skips
+    # Count other skips (excluding known categories)
     other_skips = (
         s.processed_files
         - s.successful_conversions
         - s.skipped_not_worth_count
         - s.skipped_low_resolution_count
+        - s.stopped_count
         - s.error_count
     )
     if other_skips > 0:
         summary_msg += f"Skipped (Other): {other_skips}\n"
+
+    if s.stopped_count > 0:
+        summary_msg += f"Stopped (User Request): {s.stopped_count}\n"
 
     if s.error_count > 0:
         summary_msg += f"Errors: {s.error_count}\n"
@@ -733,8 +737,11 @@ def format_error_details(error_details: list) -> str:
     # Display up to 3 files per error type
     for error_type, filenames in error_types.items():
         msg += f"\n{error_type}: {len(filenames)} file{'s' if len(filenames) > 1 else ''}\n"
-        for _, filename in enumerate(filenames[:3]):
-            msg += f"  - {filename}\n"
+        for filename in filenames[:3]:
+            basename = os.path.basename(filename)
+            if len(basename) > 40:  # noqa: PLR2004
+                basename = basename[:37] + "..."
+            msg += f"  - {basename}\n"
         if len(filenames) > 3:  # noqa: PLR2004
             msg += f"  ... and {len(filenames) - 3} more\n"
 
@@ -757,8 +764,11 @@ def format_skip_details(skipped_files: list, skipped_low_res_files: list) -> str
     if skipped_files:
         msg += "\n--- Files Skipped (Inefficient Conversion) ---\n"
         msg += "Files where conversion would not save space:\n"
-        for _, filename in enumerate(skipped_files[:5]):
-            msg += f"  - {filename}\n"
+        for filename in skipped_files[:5]:
+            basename = os.path.basename(filename)
+            if len(basename) > 40:  # noqa: PLR2004
+                basename = basename[:37] + "..."
+            msg += f"  - {basename}\n"
         if len(skipped_files) > 5:  # noqa: PLR2004
             msg += f"  ... and {len(skipped_files) - 5} more\n"
 
@@ -766,8 +776,11 @@ def format_skip_details(skipped_files: list, skipped_low_res_files: list) -> str
     if skipped_low_res_files:
         msg += "\n--- Files Skipped (Low Resolution) ---\n"
         msg += f"Files below {MIN_RESOLUTION_WIDTH}x{MIN_RESOLUTION_HEIGHT}:\n"
-        for _, filename in enumerate(skipped_low_res_files[:5]):
-            msg += f"  - {filename}\n"
+        for filename in skipped_low_res_files[:5]:
+            basename = os.path.basename(filename)
+            if len(basename) > 40:  # noqa: PLR2004
+                basename = basename[:37] + "..."
+            msg += f"  - {basename}\n"
         if len(skipped_low_res_files) > 5:  # noqa: PLR2004
             msg += f"  ... and {len(skipped_low_res_files) - 5} more\n"
 
@@ -850,7 +863,7 @@ def conversion_complete(gui, final_message="Queue complete"):
         # Add error details if any
         if s.error_details:
             summary_msg += format_error_details(s.error_details)
-            summary_msg += f"\nCheck the logs ({gui.log_directory}) for full details."
+            summary_msg += f"\nCheck the logs ({gui.log_directory}) for full details.\n"
 
         # Add skip details if any
         summary_msg += format_skip_details(s.skipped_not_worth_files, s.skipped_low_resolution_files)
