@@ -7,13 +7,12 @@ Manages queue UI interactions including:
 - Adding files/folders to queue
 - Removing items from queue
 - Queue selection and properties panel updates
-- Item property changes (output mode, suffix, folder)
+- Item property changes (suffix, folder)
 """
 
 from tkinter import filedialog, messagebox
 
-from src.gui.constants import OUTPUT_MODE_DISPLAY_TO_VALUE
-from src.models import OperationType, OutputMode
+from src.models import OperationType
 
 # =============================================================================
 # Add to Queue
@@ -131,29 +130,6 @@ def on_clear_queue(gui) -> None:
 # =============================================================================
 # Property Changes
 # =============================================================================
-
-
-def on_item_output_mode_changed(gui) -> None:
-    """Handle output mode change - applies to all queue items (bulk setting).
-
-    Args:
-        gui: The VideoConverterGUI instance.
-    """
-    mode_display = gui.item_output_mode.get()
-    if not mode_display or mode_display == "—":
-        return
-
-    # Map display string to internal enum value
-    mode_str = OUTPUT_MODE_DISPLAY_TO_VALUE.get(mode_display, mode_display)
-
-    # Update all queue items with the new mode
-    new_mode = OutputMode(mode_str)
-    for queue_item in gui.get_queue_items():
-        if queue_item.operation_type != OperationType.ANALYZE:
-            queue_item.output_mode = new_mode
-
-    gui.save_queue_to_config()
-    gui.refresh_queue_tree()
 
 
 def on_item_suffix_changed(gui) -> None:

@@ -119,15 +119,6 @@ def handle_error(gui, filename, error_info) -> None:
 
     update_ui_safely(gui.root, update_error_details)
 
-    # Update overall status label in the UI to reflect the error count
-    def update_status():
-        total_files = len(gui.session.video_files)
-        successful = gui.session.successful_conversions
-        base_status = f"Progress: {gui.session.processed_files}/{total_files} files ({successful} successful)"
-        gui.status_label.config(text=f"{base_status} - {gui.session.error_count} errors")
-
-    update_ui_safely(gui.root, update_status)
-
 
 def handle_retrying(gui, filename, info) -> None:
     """Handle retry attempts with fallback VMAF targets."""

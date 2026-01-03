@@ -627,10 +627,6 @@ class VideoConverterGUI:
         """Clear all items from queue."""
         queue_controller.on_clear_queue(self)
 
-    def on_item_output_mode_changed(self):
-        """Handle output mode change for selected item."""
-        queue_controller.on_item_output_mode_changed(self)
-
     def on_item_suffix_changed(self):
         """Handle suffix change for selected item."""
         queue_controller.on_item_suffix_changed(self)

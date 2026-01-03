@@ -229,14 +229,19 @@ def sequential_conversion_worker(
         return
     logger.info(f"Worker: Processing extensions: {', '.join(extensions)}")
 
-    # --- Phase 1: Count pending items (not files) ---
+    # --- Phase 1: Count pending items and total files ---
     update_ui_safely(gui.root, lambda: gui.status_label.config(text="Processing queue..."))
 
-    # Count initial pending items
-    items_total = len([item for item in config.queue_items if item.status == QueueItemStatus.PENDING])
+    # Count pending items and total files across all pending queue items
+    pending_items = [item for item in config.queue_items if item.status == QueueItemStatus.PENDING]
+    items_total = len(pending_items)
+    total_files_in_queue = sum(
+        len(item.files) if item.is_folder else 1
+        for item in pending_items
+    )
     items_completed = 0
 
-    logger.info(f"Total queue items to process: {items_total}")
+    logger.info(f"Total queue items to process: {items_total} ({total_files_in_queue} files)")
 
     if items_total == 0:
         logger.info("No pending items in queue.")
@@ -248,7 +253,7 @@ def sequential_conversion_worker(
     update_ui_safely(gui.root, lambda: setattr(gui.session, "successful_conversions", 0))
 
     # --- Phase 2: Process queue items dynamically ---
-    global_file_index = 0  # Track overall progress across all items (for file-level progress)
+    global_file_index = 0  # Track overall file progress across all queue items
     retry_count = 0
     max_retries = 10
 
@@ -337,14 +342,11 @@ def sequential_conversion_worker(
 
             filename = os.path.basename(file_path)
             anonymized_name = anonymize_filename(file_path)
-            # Show item-based progress with file info
-            item_num = items_completed + 1
-            file_num = queue_item.processed_files + 1
-            file_total = queue_item.total_files
+            # Show overall file progress (filename shown separately in current_file_label)
             update_ui_safely(
                 gui.root,
-                lambda ic=item_num, it=items_total, fp=file_num, ft=file_total, fname=filename: (
-                    gui.status_label.config(text=f"Item {ic}/{it}: Converting file {fp}/{ft} - {fname}")
+                lambda idx=global_file_index, total=total_files_in_queue: (
+                    gui.status_label.config(text=f"File {idx}/{total}")
                 ),
             )
             update_ui_safely(gui.root, reset_ui_callback)  # Reset UI elements for the new file

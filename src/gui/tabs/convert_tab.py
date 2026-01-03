@@ -21,7 +21,6 @@ from src.gui.constants import (
     COLOR_STATUS_PENDING,
     COLOR_STATUS_SUCCESS,
     COLOR_STATUS_WARNING,
-    OUTPUT_MODE_DISPLAY_TO_VALUE,
     SCROLLBAR_WIDTH_PADDING,
     TOOLTIP_TIME_COLUMN,
 )
@@ -33,7 +32,44 @@ from src.gui.widgets.operation_dropdown import (
     OperationDropdownManager,
 )
 from src.history_index import compute_path_hash, get_history_index
-from src.models import OperationType
+from src.models import OperationType, OutputMode
+
+
+def _update_output_settings_state(gui) -> None:
+    """Enable/disable suffix and folder fields based on selected items' output modes.
+
+    - Suffix field enabled only if any selected item has SUFFIX mode
+    - Folder field enabled only if any selected item has SEPARATE_FOLDER mode
+    - All fields disabled if no items selected or only ANALYZE items selected
+    """
+    selection = gui.queue_tree.selection()
+
+    # Collect output modes from selected queue items (skip ANALYZE items)
+    has_suffix_mode = False
+    has_folder_mode = False
+
+    for item_id in selection:
+        queue_item = gui.get_queue_item_for_tree_item(item_id)
+        if queue_item and queue_item.operation_type != OperationType.ANALYZE:
+            if queue_item.output_mode == OutputMode.SUFFIX:
+                has_suffix_mode = True
+            elif queue_item.output_mode == OutputMode.SEPARATE_FOLDER:
+                has_folder_mode = True
+
+    # Update suffix field state
+    suffix_state = "normal" if has_suffix_mode else "disabled"
+    gui.item_suffix_entry.config(state=suffix_state)
+
+    # Update folder field state
+    folder_state = "normal" if has_folder_mode else "disabled"
+    gui.item_folder_entry.config(state=folder_state)
+    gui.item_folder_browse_button.config(state=folder_state)
+
+    # Update label styling to indicate disabled state
+    disabled_fg = "#999999"
+    normal_fg = ""  # Use default
+    gui._suffix_label.config(foreground=normal_fg if has_suffix_mode else disabled_fg)
+    gui._folder_label.config(foreground=normal_fg if has_folder_mode else disabled_fg)
 
 
 def create_convert_tab(gui):
@@ -400,25 +436,17 @@ def create_convert_tab(gui):
     output_settings_frame.grid(row=4, column=0, sticky="ew", pady=(5, 0))
     gui._output_settings_frame = output_settings_frame
 
-    # Output Mode dropdown
-    ttk.Label(output_settings_frame, text="Output Mode:").pack(side="left", padx=(5, 5))
-    gui.item_output_mode = tk.StringVar(value="Replace Original")
-    gui.item_mode_combo = ttk.Combobox(
-        output_settings_frame, textvariable=gui.item_output_mode, width=15, state="readonly"
-    )
-    gui.item_mode_combo["values"] = tuple(OUTPUT_MODE_DISPLAY_TO_VALUE.keys())
-    gui.item_mode_combo.pack(side="left", padx=(0, 15))
-    gui.item_mode_combo.bind("<<ComboboxSelected>>", lambda e: gui.on_item_output_mode_changed())
-
     # Suffix entry (applies when mode is "Add Suffix")
-    ttk.Label(output_settings_frame, text="Suffix:").pack(side="left", padx=(0, 5))
+    gui._suffix_label = ttk.Label(output_settings_frame, text="Suffix:")
+    gui._suffix_label.pack(side="left", padx=(5, 5))
     gui.item_suffix = tk.StringVar(value="_av1")
     gui.item_suffix_entry = ttk.Entry(output_settings_frame, textvariable=gui.item_suffix, width=8)
     gui.item_suffix_entry.pack(side="left", padx=(0, 15))
     gui.item_suffix_entry.bind("<FocusOut>", lambda e: gui.on_item_suffix_changed())
 
     # Output folder (applies when mode is "Separate Folder")
-    ttk.Label(output_settings_frame, text="Folder:").pack(side="left", padx=(0, 5))
+    gui._folder_label = ttk.Label(output_settings_frame, text="Folder:")
+    gui._folder_label.pack(side="left", padx=(0, 5))
     gui.item_output_folder = tk.StringVar()
     gui.item_folder_entry = ttk.Entry(output_settings_frame, textvariable=gui.item_output_folder, width=30)
     gui.item_folder_entry.pack(side="left", padx=(0, 5))
@@ -426,3 +454,6 @@ def create_convert_tab(gui):
         output_settings_frame, text="Browse...", command=gui.on_browse_item_output_folder
     )
     gui.item_folder_browse_button.pack(side="left")
+
+    # Update output settings state when queue selection changes
+    gui.queue_tree.bind("<<TreeviewSelect>>", lambda e: _update_output_settings_state(gui))
