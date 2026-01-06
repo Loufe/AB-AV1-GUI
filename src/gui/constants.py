@@ -48,6 +48,7 @@ COLOR_BADGE_TEXT = "#f0f0f0"  # Light text on dark background
 # COLORS - Text Colors (foreground parameter)
 # =============================================================================
 COLOR_TEXT_MUTED = "#606060"  # Dark gray for range labels
+COLOR_TEXT_DISABLED = "#999999"  # Disabled/inactive label text
 
 # =============================================================================
 # COLORS - Chart Palettes

@@ -7,8 +7,9 @@ import logging
 from tkinter import ttk
 
 from src.ab_av1.checker import get_ab_av1_version
+from src.config import APP_VERSION
 from src.gui.base import ToolTip
-from src.gui.constants import COLOR_STATUS_NEUTRAL, COLOR_STATUS_SUCCESS_LIGHT, FONT_SYSTEM_BOLD
+from src.gui.constants import COLOR_STATUS_NEUTRAL, COLOR_STATUS_SUCCESS_LIGHT, COLOR_TEXT_MUTED, FONT_SYSTEM_BOLD
 from src.hardware_accel import get_available_hw_decoders
 from src.utils import check_ffmpeg_availability, parse_ffmpeg_version
 from src.vendor_manager import get_ab_av1_path, is_using_vendor_ffmpeg
@@ -38,23 +39,28 @@ def create_settings_tab(gui):
         "If unchecked, files that already exist in the output folder will be skipped.",
     )
 
-    # Default Output Mode dropdown
+    # Default Output Mode dropdown (with inline helper)
     ttk.Label(output_frame, text="Default Output Mode:").grid(row=1, column=0, sticky="w", padx=10, pady=3)
-    mode_combo = ttk.Combobox(output_frame, textvariable=gui.default_output_mode, width=18, state="readonly")
+    mode_row = ttk.Frame(output_frame)
+    mode_row.grid(row=1, column=1, columnspan=2, sticky="w", padx=5, pady=3)
+    mode_combo = ttk.Combobox(mode_row, textvariable=gui.default_output_mode, width=18, state="readonly")
     mode_combo["values"] = ("replace", "suffix", "separate_folder")
-    mode_combo.grid(row=1, column=1, sticky="w", padx=5, pady=3)
-    ToolTip(
-        mode_combo,
-        "Replace: Delete original after conversion\n"
-        "Suffix: Keep original, add suffix to output\n"
-        "Separate Folder: Output to different folder",
-    )
+    mode_combo.pack(side="left")
+    ttk.Label(
+        mode_row,
+        text="replace = delete original  |  suffix = keep both  |  separate_folder = different location",
+        foreground=COLOR_TEXT_MUTED,
+    ).pack(side="left", padx=(10, 0))
 
-    # Default Suffix entry
+    # Default Suffix entry (with inline helper)
     ttk.Label(output_frame, text="Default Suffix:").grid(row=2, column=0, sticky="w", padx=10, pady=3)
-    suffix_entry = ttk.Entry(output_frame, textvariable=gui.default_suffix, width=15)
-    suffix_entry.grid(row=2, column=1, sticky="w", padx=5, pady=3)
-    ToolTip(suffix_entry, "Suffix added before .mkv extension\nExample: '_av1' creates 'video_av1.mkv'")
+    suffix_row = ttk.Frame(output_frame)
+    suffix_row.grid(row=2, column=1, columnspan=2, sticky="w", padx=5, pady=3)
+    suffix_entry = ttk.Entry(suffix_row, textvariable=gui.default_suffix, width=15)
+    suffix_entry.pack(side="left")
+    ttk.Label(
+        suffix_row, text="e.g. '_av1' → video_av1.mkv", foreground=COLOR_TEXT_MUTED
+    ).pack(side="left", padx=(10, 0))
 
     # Default Output Folder (for separate_folder mode)
     ttk.Label(output_frame, text="Default Output Folder:").grid(row=3, column=0, sticky="w", padx=10, pady=(3, 5))
@@ -113,9 +119,9 @@ def create_settings_tab(gui):
     audio_combo = ttk.Combobox(audio_frame, textvariable=gui.audio_codec, width=10, state="readonly")
     audio_combo["values"] = ("opus", "aac")
     audio_combo.pack(side="left")
-    ToolTip(
-        audio_combo, "Select audio codec for re-encoding. Opus offers better compression. AAC is widely compatible."
-    )
+    ttk.Label(
+        audio_frame, text="(opus = smaller, aac = compatible)", foreground=COLOR_TEXT_MUTED
+    ).pack(side="left", padx=(10, 0))
 
     # Hardware decoding (moved from separate Hardware Acceleration frame)
     hw_decode_row = ttk.Frame(processing_frame)
@@ -183,7 +189,7 @@ def create_settings_tab(gui):
 
     scrub_logs_btn = ttk.Button(log_actions_frame, text="Scrub Logs", command=gui.on_scrub_logs)
     scrub_logs_btn.pack(side="left")
-    ToolTip(scrub_logs_btn, "Permanently anonymize all existing file paths in log files. This cannot be undone.")
+    ttk.Label(log_actions_frame, text="(irreversible)", foreground=COLOR_TEXT_MUTED).pack(side="left", padx=(5, 0))
 
     # History actions frame
     history_actions_frame = ttk.Frame(log_hist_frame)
@@ -191,7 +197,7 @@ def create_settings_tab(gui):
 
     history_open_btn = ttk.Button(history_actions_frame, text="Open History File", command=gui.on_open_history_file)
     history_open_btn.pack(side="left", padx=(0, 10))
-    ToolTip(history_open_btn, "Open the conversion_history_v2.json file (if it exists).")
+    ToolTip(history_open_btn, "Open the conversion_history.json file (if it exists).")
 
     anonymize_history_check = ttk.Checkbutton(
         history_actions_frame, text="Anonymize Filenames in History", variable=gui.anonymize_history
@@ -199,19 +205,43 @@ def create_settings_tab(gui):
     anonymize_history_check.pack(side="left", padx=(0, 10))
     ToolTip(
         anonymize_history_check,
-        "If checked, replaces specific filenames in the conversion_history_v2.json file "
+        "If checked, replaces specific filenames in the conversion_history.json file "
         "with generic placeholders for privacy.",
     )
 
     scrub_history_btn = ttk.Button(history_actions_frame, text="Scrub History", command=gui.on_scrub_history)
     scrub_history_btn.pack(side="left")
-    ToolTip(
-        scrub_history_btn, "Permanently anonymize all existing file paths in the history file. This cannot be undone."
-    )
+    ttk.Label(
+        history_actions_frame, text="(irreversible)", foreground=COLOR_TEXT_MUTED
+    ).pack(side="left", padx=(5, 0))
 
     # --- Version Info ---
     version_frame = ttk.LabelFrame(settings_frame, text="Version Info")
     version_frame.grid(row=3, column=0, sticky="ew", padx=5, pady=(0, 5))
+
+    # App version row
+    app_frame = ttk.Frame(version_frame)
+    app_frame.grid(row=0, column=0, sticky="w", padx=10, pady=(5, 3))
+    gui.app_frame = app_frame
+
+    ttk.Label(app_frame, text="AB-AV1-GUI Version:").pack(side="left", padx=(0, 5))
+    gui.app_version_label = ttk.Label(app_frame, text=APP_VERSION, font=FONT_SYSTEM_BOLD)
+    gui.app_version_label.pack(side="left", padx=(0, 15))
+
+    # Show Check for Updates button (hide for dev builds since we can't compare)
+    if APP_VERSION != "dev":
+        gui.app_check_btn = ttk.Button(app_frame, text="Check for Updates", command=gui.on_check_app_updates)
+        gui.app_check_btn.pack(side="left", padx=(0, 10))
+        ToolTip(
+            gui.app_check_btn,
+            "Check GitHub for the latest AB-AV1-GUI release.\nThis will make a network request to api.github.com.",
+        )
+    else:
+        gui.app_check_btn = None
+
+    # Label to show update check result (initially empty)
+    gui.app_update_label = ttk.Label(app_frame, text="")
+    gui.app_update_label.pack(side="left")
 
     # Get local ab-av1 version
     local_version = get_ab_av1_version() or "Not found"
@@ -219,7 +249,7 @@ def create_settings_tab(gui):
 
     # ab-av1 version row
     ab_av1_frame = ttk.Frame(version_frame)
-    ab_av1_frame.grid(row=0, column=0, sticky="w", padx=10, pady=(5, 3))
+    ab_av1_frame.grid(row=1, column=0, sticky="w", padx=10, pady=(5, 3))
     gui.ab_av1_frame = ab_av1_frame  # Store reference for dynamic button creation
 
     ttk.Label(ab_av1_frame, text="ab-av1 Version:").pack(side="left", padx=(0, 5))
@@ -251,7 +281,7 @@ def create_settings_tab(gui):
 
     # FFmpeg version row
     ffmpeg_frame = ttk.Frame(version_frame)
-    ffmpeg_frame.grid(row=1, column=0, sticky="w", padx=10, pady=(3, 5))
+    ffmpeg_frame.grid(row=2, column=0, sticky="w", padx=10, pady=(3, 5))
     gui.ffmpeg_frame = ffmpeg_frame  # Store reference for dynamic button creation
 
     # Get FFmpeg version info

@@ -3,6 +3,18 @@
 Central configuration constants for the AV1 Video Converter application.
 """
 
+# --- Application Version ---
+try:
+    from pathlib import Path
+
+    import tomllib
+
+    _pyproject = Path(__file__).parent.parent / "pyproject.toml"
+    with open(_pyproject, "rb") as _f:
+        APP_VERSION = tomllib.load(_f)["project"]["version"]
+except Exception:
+    APP_VERSION = "dev"
+
 # --- Encoding Settings ---
 DEFAULT_VMAF_TARGET = 95  # Target VMAF score for quality-based encoding
 DEFAULT_ENCODING_PRESET = 6  # Corresponds to SVT-AV1 "--preset 6" (Balanced speed/quality)
@@ -38,7 +50,7 @@ MAX_CRF_VALUE = 63  # Maximum valid CRF value for AV1/HEVC/H264
 MAX_VMAF_VALUE = 100  # Maximum valid VMAF score
 
 # --- History File ---
-HISTORY_FILE_V2 = "conversion_history_v2.json"  # New unified history format
+HISTORY_FILE = "conversion_history.json"
 
 # --- UI Batching ---
 TREE_UPDATE_BATCH_SIZE = 50  # Number of items to batch before updating UI
@@ -49,6 +61,9 @@ MIN_SAMPLES_FOR_ESTIMATE = 5  # Minimum conversion history samples needed for es
 MIN_SAMPLES_HIGH_CONFIDENCE = 10  # Samples needed for "high" vs "medium" confidence
 DEFAULT_REDUCTION_ESTIMATE_PERCENT = 45.0  # Default file size reduction estimate if no history data
 RESOLUTION_TOLERANCE_PERCENT = 0.2  # Tolerance for resolution matching (20%)
+
+# --- Duplicate Detection ---
+DURATION_TOLERANCE_SEC = 0.01  # Float precision tolerance for duration matching (same file = deterministic)
 
 # --- Queue/Output Settings ---
 DEFAULT_OUTPUT_MODE = "replace"  # "replace", "suffix", "separate_folder"
@@ -66,6 +81,23 @@ ANALYSIS_TREE_HEADINGS: dict[str, str] = {
     "savings": "Est. Savings",
     "time": "Est. Time",
     "efficiency": "Efficiency",
+}
+
+# History tree column headings
+HISTORY_TREE_HEADINGS: dict[str, str] = {
+    "date": "Date",
+    "#0": "Name",
+    "status": "Status",
+    "resolution": "Resolution",
+    "codec": "Codec",
+    "bitrate": "Bitrate",
+    "duration": "Duration",
+    "audio": "Audio",
+    "input_size": "Input",
+    "output_size": "Output",
+    "reduction": "Reduction",
+    "vmaf": "VMAF",
+    "crf": "CRF",
 }
 
 # --- Hardware Decoder Settings ---

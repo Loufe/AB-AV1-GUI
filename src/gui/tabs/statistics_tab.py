@@ -18,6 +18,7 @@ from typing import TYPE_CHECKING, Any
 if TYPE_CHECKING:
     from src.gui.main_window import VideoConverterGUI
 
+from src.gui.base import ToolTip
 from src.gui.charts import BarChart, LineGraph, PieChart
 from src.history_index import get_history_index
 from src.models import FileRecord
@@ -106,7 +107,9 @@ def _create_summary_panel(gui: "VideoConverterGUI", parent: ttk.Frame, row: int)
     # VMAF row
     vmaf_row = ttk.Frame(left_col)
     vmaf_row.grid(row=1, column=0, sticky="w", pady=3)
-    ttk.Label(vmaf_row, text="Avg VMAF Score:").pack(side="left")
+    vmaf_label = ttk.Label(vmaf_row, text="Avg VMAF Score:")
+    vmaf_label.pack(side="left")
+    ToolTip(vmaf_label, "Average video quality score (0-100).\n95+ is visually lossless.")
     gui.vmaf_stats_label = ttk.Label(vmaf_row, text="-")
     gui.vmaf_stats_label.pack(side="left", padx=(5, 5))
     gui.vmaf_range_label = ttk.Label(vmaf_row, text="", foreground="#666")
@@ -115,7 +118,9 @@ def _create_summary_panel(gui: "VideoConverterGUI", parent: ttk.Frame, row: int)
     # CRF row
     crf_row = ttk.Frame(left_col)
     crf_row.grid(row=2, column=0, sticky="w", pady=3)
-    ttk.Label(crf_row, text="Avg CRF Value:").pack(side="left")
+    crf_label = ttk.Label(crf_row, text="Avg CRF Value:")
+    crf_label.pack(side="left")
+    ToolTip(crf_label, "Average compression level (0-63).\nLower = higher quality encoding.")
     gui.crf_stats_label = ttk.Label(crf_row, text="-")
     gui.crf_stats_label.pack(side="left", padx=(5, 5))
     gui.crf_range_label = ttk.Label(crf_row, text="", foreground="#666")
@@ -144,7 +149,13 @@ def _create_summary_panel(gui: "VideoConverterGUI", parent: ttk.Frame, row: int)
     # Throughput row
     throughput_row = ttk.Frame(right_col)
     throughput_row.grid(row=2, column=0, sticky="w", pady=3)
-    ttk.Label(throughput_row, text="Avg Throughput:").pack(side="left")
+    throughput_label = ttk.Label(throughput_row, text="Avg Throughput:")
+    throughput_label.pack(side="left")
+    ToolTip(
+        throughput_label,
+        "Encoding speed in GB of source video per hour.\n"
+        "Depends on hardware and video complexity.",
+    )
     gui.throughput_stats_label = ttk.Label(throughput_row, text="-")
     gui.throughput_stats_label.pack(side="left", padx=(5, 0))
 

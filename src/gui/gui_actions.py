@@ -16,7 +16,8 @@ from tkinter import filedialog, messagebox
 # Project imports - Replace 'convert_app' with 'src'
 # Import the checker function from its new location
 from src.ab_av1.checker import check_ab_av1_available
-from src.utils import check_ffmpeg_availability, get_history_file_path
+from src.history_index import get_history_path
+from src.utils import check_ffmpeg_availability
 
 logger = logging.getLogger(__name__)
 
@@ -96,7 +97,7 @@ def open_history_file_action(gui) -> None:
     Args:
         gui: The main GUI instance (not directly used but consistent with other actions)
     """
-    history_path = get_history_file_path()
+    history_path = get_history_path()
     try:
         if os.path.exists(history_path):
             logger.info(f"Opening history file: {history_path}")

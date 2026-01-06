@@ -8,7 +8,7 @@ into a single, well-tested extraction function.
 
 from typing import Any
 
-from src.models import VideoMetadata
+from src.models import AudioStreamInfo, VideoMetadata
 
 
 def extract_video_metadata(video_info: dict[str, Any] | None) -> VideoMetadata:
@@ -36,15 +36,16 @@ def extract_video_metadata(video_info: dict[str, Any] | None) -> VideoMetadata:
     profile: str | None = None
     pix_fmt: str | None = None
 
-    # First audio stream metadata
-    audio_codec: str | None = None
+    # Audio streams (all streams with full metadata)
+    audio_streams: list[AudioStreamInfo] = []
+
+    # Convenience fields from first audio stream
     audio_channels: int | None = None
     audio_sample_rate: int | None = None
     audio_bitrate_kbps: float | None = None
 
     # Stream counts
     video_stream_count = 0
-    audio_stream_count = 0
     subtitle_stream_count = 0
 
     # Total audio bitrate (sum across all audio streams)
@@ -77,28 +78,38 @@ def extract_video_metadata(video_info: dict[str, Any] | None) -> VideoMetadata:
                         fps = None
 
         elif codec_type == "audio":
-            audio_stream_count += 1
-            # Only extract details from first audio stream
-            if audio_stream_count == 1:
-                audio_codec = stream.get("codec_name")
-                audio_channels = stream.get("channels")
-                try:
-                    audio_sample_rate = int(stream.get("sample_rate", 0)) or None
-                except (ValueError, TypeError):
-                    audio_sample_rate = None
-                try:
-                    audio_bitrate_kbps = int(stream.get("bit_rate", 0)) / 1000 or None
-                except (ValueError, TypeError):
-                    audio_bitrate_kbps = None
+            # Extract per-stream metadata
+            try:
+                stream_sample_rate = int(stream.get("sample_rate", 0)) or None
+            except (ValueError, TypeError):
+                stream_sample_rate = None
+
+            try:
+                stream_bitrate = float(stream.get("bit_rate", 0)) / 1000 or None
+            except (ValueError, TypeError):
+                stream_bitrate = None
+
+            tags = stream.get("tags", {})
+            stream_info = AudioStreamInfo(
+                codec=stream.get("codec_name", "unknown"),
+                language=tags.get("language"),
+                title=tags.get("title"),
+                channels=stream.get("channels"),
+                sample_rate=stream_sample_rate,
+                bitrate_kbps=stream_bitrate,
+            )
+            audio_streams.append(stream_info)
 
             # Sum bitrates from ALL audio streams
-            try:
-                stream_bitrate = int(stream.get("bit_rate", 0)) / 1000
-                if stream_bitrate > 0:
-                    total_audio_bitrate_kbps += stream_bitrate
-                    has_any_audio_bitrate = True
-            except (ValueError, TypeError):
-                pass
+            if stream_bitrate and stream_bitrate > 0:
+                total_audio_bitrate_kbps += stream_bitrate
+                has_any_audio_bitrate = True
+
+            # First stream info for convenience fields
+            if len(audio_streams) == 1:
+                audio_channels = stream.get("channels")
+                audio_sample_rate = stream_sample_rate
+                audio_bitrate_kbps = stream_bitrate
 
         elif codec_type == "subtitle":
             subtitle_stream_count += 1
@@ -119,14 +130,14 @@ def extract_video_metadata(video_info: dict[str, Any] | None) -> VideoMetadata:
 
     return VideoMetadata(
         has_video=video_stream_count > 0,
-        has_audio=audio_stream_count > 0,
+        has_audio=len(audio_streams) > 0,
         video_codec=video_codec,
         width=width,
         height=height,
         fps=fps,
         profile=profile,
         pix_fmt=pix_fmt,
-        audio_codec=audio_codec,
+        audio_streams=audio_streams,
         audio_channels=audio_channels,
         audio_sample_rate=audio_sample_rate,
         audio_bitrate_kbps=audio_bitrate_kbps,
@@ -134,7 +145,6 @@ def extract_video_metadata(video_info: dict[str, Any] | None) -> VideoMetadata:
         bitrate_kbps=bitrate_kbps,
         file_size_bytes=file_size_bytes,
         video_stream_count=video_stream_count,
-        audio_stream_count=audio_stream_count,
         subtitle_stream_count=subtitle_stream_count,
         total_audio_bitrate_kbps=total_audio_bitrate_kbps if has_any_audio_bitrate else None,
     )

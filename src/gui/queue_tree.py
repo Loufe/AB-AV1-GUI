@@ -10,9 +10,15 @@ Handles full rebuilds of the queue tree view, including:
 - Drag-drop reordering synchronization
 """
 
+import contextlib
 import os
 
 from src.estimation import estimate_file_time
+from src.gui.queue_controller import (
+    update_clear_completed_button_state,
+    update_remove_button_state,
+    update_start_button_state,
+)
 from src.gui.tree_display import format_queue_file_status, format_queue_status_display, format_stream_display
 from src.gui.tree_formatters import format_compact_time
 from src.history_index import compute_path_hash, get_history_index
@@ -101,6 +107,11 @@ def refresh_queue_tree(gui) -> None:
     # Update total row
     _update_total_row(gui, index)
 
+    # Update button states
+    update_clear_completed_button_state(gui)
+    update_remove_button_state(gui)
+    update_start_button_state(gui)
+
 
 def sync_queue_order_from_tree(gui) -> None:
     """Sync _queue_items order from the tree view after drag-drop reordering.
@@ -117,11 +128,16 @@ def sync_queue_order_from_tree(gui) -> None:
             if item:
                 new_order.append(item)
 
-    if len(new_order) == len(gui._queue_items):
-        gui._queue_items = new_order
-        gui.save_queue_to_config()
-        # Refresh to update order numbers
-        refresh_queue_tree(gui)
+    if len(new_order) != len(gui._queue_items):
+        return  # Length mismatch - something wrong, bail out
+
+    # Early exit if order unchanged (identity comparison)
+    if all(a is b for a, b in zip(new_order, gui._queue_items)):
+        return
+
+    gui._queue_items = new_order
+    gui.save_queue_to_config()
+    refresh_queue_tree(gui)
 
 
 # =============================================================================
@@ -135,7 +151,7 @@ def _format_format_display(queue_item, record) -> str:
         return ""  # Folders don't show format
     if not record or not record.video_codec:
         return "—"
-    return format_stream_display(record.video_codec, record.audio_codec)
+    return format_stream_display(record.video_codec, record.audio_streams)
 
 
 def _format_operation_display(queue_item, record) -> str:
@@ -143,7 +159,16 @@ def _format_operation_display(queue_item, record) -> str:
     if queue_item.operation_type == OperationType.ANALYZE:
         return "Analyze"
     if queue_item.operation_type == OperationType.CONVERT:
-        # Check if file has Layer 2 data (CRF search results)
+        # For folders, check if ALL files have Layer 2 data
+        if queue_item.is_folder and queue_item.files:
+            index = get_history_index()
+            for file_item in queue_item.files:
+                file_record = index.lookup_file(file_item.path)
+                if not (file_record and file_record.best_crf is not None
+                        and file_record.best_vmaf_achieved is not None):
+                    return "Analyze+Convert"
+            return "Convert"
+        # Single file: check if it has Layer 2 data (CRF search results)
         has_layer2 = record and record.best_crf is not None and record.best_vmaf_achieved is not None
         return "Convert" if has_layer2 else "Analyze+Convert"
     return "Unknown"
@@ -220,9 +245,18 @@ def _format_time_estimate(queue_item, record, index) -> str:
 def _insert_folder_file_rows(gui, queue_item, parent_item_id: str, stopping: bool) -> None:
     """Insert nested file rows for a folder queue item."""
     op_type = queue_item.operation_type
+    index = get_history_index()
+
     for file_item in queue_item.files:
         file_name = os.path.basename(file_item.path)
         file_size = format_file_size(file_item.size_bytes) if file_item.size_bytes > 0 else "—"
+
+        # Look up file record for format display
+        file_record = index.lookup_file(file_item.path)
+        if file_record and file_record.video_codec:
+            file_format = format_stream_display(file_record.video_codec, file_record.audio_streams)
+        else:
+            file_format = "—"
 
         # Calculate estimated time for this file
         file_time_estimate = estimate_file_time(file_item.path, operation_type=op_type)
@@ -244,7 +278,7 @@ def _insert_folder_file_rows(gui, queue_item, parent_item_id: str, stopping: boo
             parent_item_id,
             "end",
             text=f"    🎬 {file_name}",
-            values=("", file_size, file_est_time, "", "", file_status),
+            values=(file_format, file_size, file_est_time, "", "", file_status),
             tags=(file_tag,),
         )
         gui._queue_file_tree_map[file_item.path] = file_tree_id
@@ -256,7 +290,8 @@ def _update_total_row(gui, index) -> None:
     total_items = len(gui._queue_items)
     total_files = sum(len(item.files) if item.is_folder else 1 for item in gui._queue_items)
 
-    # Calculate total estimated time, tracking lowest confidence
+    # Calculate total size and estimated time
+    total_size_bytes = 0
     total_est_seconds = 0.0
     lowest_confidence = "high"
     confidence_order = {"high": 0, "medium": 1, "low": 2, "none": 3}
@@ -264,16 +299,26 @@ def _update_total_row(gui, index) -> None:
     for queue_item in gui._queue_items:
         op_type = queue_item.operation_type
         if queue_item.is_folder and queue_item.files:
+            # Folder: sum file sizes and estimates
             for file_item in queue_item.files:
+                if file_item.size_bytes > 0:
+                    total_size_bytes += file_item.size_bytes
                 file_estimate = estimate_file_time(file_item.path, operation_type=op_type)
                 if file_estimate.confidence != "none" and file_estimate.best_seconds > 0:
                     total_est_seconds += file_estimate.best_seconds
                     if confidence_order.get(file_estimate.confidence, 3) > confidence_order.get(lowest_confidence, 0):
                         lowest_confidence = file_estimate.confidence
         elif not queue_item.is_folder:
-            # Single file item
+            # Single file: get size from record or filesystem
             path_hash = compute_path_hash(queue_item.source_path)
             record = index.get(path_hash)
+            if record and record.file_size_bytes:
+                total_size_bytes += record.file_size_bytes
+            elif os.path.isfile(queue_item.source_path):
+                with contextlib.suppress(OSError):
+                    total_size_bytes += os.path.getsize(queue_item.source_path)
+
+            # Time estimate
             if record:
                 file_estimate = estimate_file_time(
                     codec=record.video_codec,
@@ -288,15 +333,14 @@ def _update_total_row(gui, index) -> None:
                 total_est_seconds += file_estimate.best_seconds
                 if confidence_order.get(file_estimate.confidence, 3) > confidence_order.get(lowest_confidence, 0):
                     lowest_confidence = file_estimate.confidence
-        # else: folder without files populated - skip estimation
+        # else: folder without files populated - skip
 
+    # Format displays
+    total_size_display = format_file_size(total_size_bytes) if total_size_bytes > 0 else "—"
     if total_est_seconds > 0:
         total_est_time_display = format_compact_time(total_est_seconds, confidence=lowest_confidence)
     else:
         total_est_time_display = "—"
+    status_text = f"{total_items} items ({total_files} files)" if total_files != total_items else f"{total_items} items"
 
-    if total_files != total_items:
-        status_text = f"{total_items} items ({total_files} files)"
-        gui.queue_total_tree.item("total", values=("", "", total_est_time_display, "", "", status_text))
-    else:
-        gui.queue_total_tree.item("total", values=("", "", total_est_time_display, "", "", f"{total_items} items"))
+    gui.queue_total_tree.item("total", values=("", total_size_display, total_est_time_display, "", "", status_text))

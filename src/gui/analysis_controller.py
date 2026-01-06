@@ -421,7 +421,8 @@ def update_analysis_tree_for_completed_file(gui, file_path: str, status: str) ->
     if not hasattr(gui, "analysis_tree"):
         return
 
-    item_id = gui._tree_item_map.get(file_path)
+    # Normalize for case-insensitive lookup on Windows
+    item_id = gui._tree_item_map.get(os.path.normcase(file_path))
     if not item_id:
         return
 
@@ -456,6 +457,9 @@ def update_analysis_tree_for_completed_file(gui, file_path: str, status: str) ->
 
         # Sync queue tags since this file is no longer "in queue" effectively
         gui.sync_queue_tags_to_analysis_tree()
+
+        # Update the total row to reflect done/skip count changes
+        update_total_from_tree(gui)
 
     except tk.TclError:
         pass

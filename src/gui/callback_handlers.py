@@ -197,16 +197,16 @@ def handle_completed(gui, filename, info) -> None:
     # Log completion message
     logger.info(log_msg)
 
-    # Update analysis tree entry if file is visible there
-    file_path = gui.session.current_file_path
-    if file_path:
-        update_ui_safely(gui.root, lambda fp=file_path: gui.update_analysis_tree_for_completed_file(fp, "done"))
+    # Note: Analysis tree update is handled by the worker AFTER saving history
+    # to avoid race conditions with folder aggregate calculations.
 
 
 def handle_skipped(gui, filename, reason) -> None:
-    """Handle skipped files."""
-    # This is primarily for logging, UI doesn't show individual skipped files typically
+    """Handle skipped files (cache hits, output exists, low resolution, etc.)."""
     logger.info(f"Skipped {anonymize_filename(filename)}: {reason}")
+
+    # Note: Analysis tree update is handled by the worker AFTER saving history
+    # to avoid race conditions with folder aggregate calculations.
 
 
 def handle_skipped_not_worth(gui, filename, info):
@@ -251,7 +251,5 @@ def handle_skipped_not_worth(gui, filename, info):
     # Update UI to show this as a skip, not an error
     update_ui_safely(gui.root, lambda: gui.current_file_label.config(text=f"Skipped (inefficient): {filename}"))
 
-    # Update analysis tree entry if file is visible there
-    file_path = gui.session.current_file_path
-    if file_path:
-        update_ui_safely(gui.root, lambda fp=file_path: gui.update_analysis_tree_for_completed_file(fp, "skip"))
+    # Note: Analysis tree update is handled by the worker AFTER saving history
+    # to avoid race conditions with folder aggregate calculations.

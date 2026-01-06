@@ -40,6 +40,7 @@ from src.gui.gui_actions import (
 # Project imports - Replace 'convert_app' with 'src'
 from src.gui.tabs.analysis_tab import create_analysis_tab
 from src.gui.tabs.convert_tab import create_convert_tab
+from src.gui.tabs.history_tab import create_history_tab
 from src.gui.tabs.settings_tab import create_settings_tab
 from src.gui.tabs.statistics_tab import create_statistics_tab
 from src.gui.tree_formatters import clear_sort_state, sort_analysis_tree, update_sort_indicators
@@ -64,6 +65,7 @@ class VideoConverterGUI:
     add_files_button: ttk.Button
     remove_queue_button: ttk.Button
     clear_queue_button: ttk.Button
+    clear_completed_button: ttk.Button
     start_button: ttk.Button
     stop_button: ttk.Button
     force_stop_button: ttk.Button
@@ -92,6 +94,10 @@ class VideoConverterGUI:
     analysis_scan_badge: tk.Label
 
     # Settings tab widgets (created in create_settings_tab)
+    app_frame: ttk.Frame
+    app_version_label: ttk.Label
+    app_check_btn: ttk.Button | None
+    app_update_label: ttk.Label
     ab_av1_frame: ttk.Frame
     ab_av1_version_label: ttk.Label
     ab_av1_download_btn: ttk.Button | None
@@ -126,10 +132,14 @@ class VideoConverterGUI:
     throughput_stats_label: ttk.Label
     stats_date_range_label: ttk.Label
 
+    # History tab widgets (created in create_history_tab)
+    history_tree: ttk.Treeview
+    history_status_label: ttk.Label
+
     def __init__(self, root):
         """Initialize the main window and all components."""
         self.root = root
-        self.root.title("AV1 Video Converter")
+        self.root.title("AB-AV1 GUI")
         self.root.geometry("950x750")  # Increased for Analysis tab
         self.root.minsize(850, 650)  # Increased for Analysis tab
 
@@ -177,7 +187,7 @@ class VideoConverterGUI:
                 self.log_folder.set("")  # Clear the entry field if logging dir failed
                 logger.warning("Log directory could not be determined or created. GUI display cleared.")
 
-            logger.info("=== Starting AV1 Video Converter ===")  # Now log start message
+            logger.info("=== Starting AB-AV1 GUI ===")  # Now log start message
 
         except Exception as e:
             # Handle errors during logging setup itself
@@ -200,16 +210,19 @@ class VideoConverterGUI:
         self.convert_tab = ttk.Frame(self.tab_control)
         self.analysis_tab = ttk.Frame(self.tab_control)
         self.statistics_tab = ttk.Frame(self.tab_control)
+        self.history_tab = ttk.Frame(self.tab_control)
         self.settings_tab = ttk.Frame(self.tab_control)
         self.tab_control.add(self.convert_tab, text="Queue")
         self.tab_control.add(self.analysis_tab, text="Analysis")
         self.tab_control.add(self.statistics_tab, text="Statistics")
+        self.tab_control.add(self.history_tab, text="History")
         self.tab_control.add(self.settings_tab, text="Settings")
         self.tab_control.pack(expand=1, fill="both")
 
         create_convert_tab(self)
         create_analysis_tab(self)
         create_statistics_tab(self)
+        create_history_tab(self)
         create_settings_tab(self)
         self.initialize_conversion_state()
         self.initialize_button_states()
@@ -367,6 +380,15 @@ class VideoConverterGUI:
         self._sort_col: str | None = None  # Current sort column
         self._sort_reverse: bool = False  # Current sort direction
 
+        # History tab filter state
+        self.history_show_converted = tk.BooleanVar(value=True)
+        self.history_show_analyzed = tk.BooleanVar(value=True)
+        self.history_show_skipped = tk.BooleanVar(value=True)
+        self._history_tree_map: dict[str, str] = {}  # path_hash -> tree_item_id
+        self._history_sort_col: str | None = None
+        self._history_sort_reverse: bool = True  # Default: date descending
+        self._history_filter_timer: str | None = None  # Debounce timer ID
+
         # Add traces to auto-refresh analysis tree when settings change
         self.input_folder.trace_add("write", self._on_folder_or_extension_changed)
         self.ext_mp4.trace_add("write", self._on_folder_or_extension_changed)
@@ -434,7 +456,7 @@ class VideoConverterGUI:
         if self.session.running:
             confirm_exit = messagebox.askyesno("Confirm Exit", "Queue is running. Exit will stop it.\nAre you sure?")
         if confirm_exit:
-            logger.info("=== AV1 Video Converter Exiting ===")
+            logger.info("=== AB-AV1 GUI Exiting ===")
             self.save_settings()
             if self.session.running:
                 logger.info("Signalling conversion thread to stop...")
@@ -568,6 +590,10 @@ class VideoConverterGUI:
                 f"{unchanged} file(s) were already anonymized or contained no paths.",
             )
 
+    def on_check_app_updates(self):
+        """Check GitHub for the latest AB-AV1-GUI version and update the label."""
+        dependency_manager.check_app_updates(self)
+
     def on_check_ab_av1_updates(self):
         """Check GitHub for the latest ab-av1 version and update the label."""
         dependency_manager.check_ab_av1_updates(self)
@@ -626,6 +652,10 @@ class VideoConverterGUI:
     def on_clear_queue(self):
         """Clear all items from queue."""
         queue_controller.on_clear_queue(self)
+
+    def on_clear_completed(self):
+        """Clear completed/errored/stopped items from queue."""
+        queue_controller.on_clear_completed(self)
 
     def on_item_suffix_changed(self):
         """Handle suffix change for selected item."""

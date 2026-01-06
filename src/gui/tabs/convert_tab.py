@@ -14,6 +14,7 @@ import tkinter as tk
 from tkinter import ttk
 
 from src.config import DEFAULT_VMAF_TARGET
+from src.gui import queue_controller
 from src.gui.base import ToolTip, TreeviewHeaderTooltip, open_in_explorer, reveal_in_explorer
 from src.gui.constants import (
     COLOR_STATUS_ERROR,
@@ -21,6 +22,7 @@ from src.gui.constants import (
     COLOR_STATUS_PENDING,
     COLOR_STATUS_SUCCESS,
     COLOR_STATUS_WARNING,
+    COLOR_TEXT_DISABLED,
     SCROLLBAR_WIDTH_PADDING,
     TOOLTIP_TIME_COLUMN,
 )
@@ -32,7 +34,7 @@ from src.gui.widgets.operation_dropdown import (
     OperationDropdownManager,
 )
 from src.history_index import compute_path_hash, get_history_index
-from src.models import OperationType, OutputMode
+from src.models import OperationType, OutputMode, QueueItemStatus
 
 
 def _update_output_settings_state(gui) -> None:
@@ -66,7 +68,7 @@ def _update_output_settings_state(gui) -> None:
     gui.item_folder_browse_button.config(state=folder_state)
 
     # Update label styling to indicate disabled state
-    disabled_fg = "#999999"
+    disabled_fg = COLOR_TEXT_DISABLED
     normal_fg = ""  # Use default
     gui._suffix_label.config(foreground=normal_fg if has_suffix_mode else disabled_fg)
     gui._folder_label.config(foreground=normal_fg if has_folder_mode else disabled_fg)
@@ -95,7 +97,9 @@ def create_convert_tab(gui):
     gui.add_files_button.pack(side="left", padx=5)
     ToolTip(gui.add_files_button, "Add individual video files to the queue")
 
-    gui.remove_queue_button = ttk.Button(left_buttons, text="Remove", command=gui.on_remove_from_queue)
+    gui.remove_queue_button = ttk.Button(
+        left_buttons, text="Remove", command=gui.on_remove_from_queue, state="disabled"
+    )
     gui.remove_queue_button.pack(side="left", padx=5)
     ToolTip(gui.remove_queue_button, "Remove selected items from queue")
 
@@ -103,11 +107,19 @@ def create_convert_tab(gui):
     gui.clear_queue_button.pack(side="left", padx=5)
     ToolTip(gui.clear_queue_button, "Clear all items from queue")
 
+    gui.clear_completed_button = ttk.Button(
+        left_buttons, text="Clear Completed", command=gui.on_clear_completed, state="disabled"
+    )
+    gui.clear_completed_button.pack(side="left", padx=5)
+    ToolTip(gui.clear_completed_button, "Remove completed, errored, and stopped items from queue")
+
     # Right side: Conversion control buttons
     right_buttons = ttk.Frame(controls_frame)
     right_buttons.pack(side="right")
 
-    gui.start_button = ttk.Button(right_buttons, text="Start Queue", command=gui.on_start_conversion)
+    gui.start_button = ttk.Button(
+        right_buttons, text="Start Queue", command=gui.on_start_conversion, state="disabled"
+    )
     gui.start_button.pack(side="left", padx=5)
     ToolTip(gui.start_button, "Begin processing all queued items")
 
@@ -191,24 +203,55 @@ def create_convert_tab(gui):
 
     # Drag-and-drop reordering
     def _on_drag_motion(event):
-        """Move selected items during drag."""
-        if gui.session.running:
-            return  # Don't allow reordering during conversion
+        """Move selected items during drag.
+
+        During conversion, the CONVERTING item is locked in place.
+        Items dragged above it are placed just after it instead.
+        """
+        # Don't process drag while dropdown is active - would destroy the dropdown
+        if operation_dropdown.is_active:
+            return
+
         tv = event.widget
         target = tv.identify_row(event.y)
-        if target:
-            target_index = tv.index(target)
-            for item in tv.selection():
+        if not target:
+            return
+
+        target_index = tv.index(target)
+
+        # Find the currently converting item's index (if any)
+        converting_index = None
+        for i, child_id in enumerate(tv.get_children()):
+            queue_item = gui.get_queue_item_for_tree_item(child_id)
+            if queue_item and queue_item.status == QueueItemStatus.CONVERTING:
+                converting_index = i
+                break
+
+        for item in tv.selection():
+            # Don't allow moving the CONVERTING item
+            item_queue = gui.get_queue_item_for_tree_item(item)
+            if item_queue and item_queue.status == QueueItemStatus.CONVERTING:
+                continue
+
+            # If dropping above the CONVERTING item, place just after it
+            if converting_index is not None and target_index <= converting_index:
+                tv.move(item, "", converting_index + 1)
+            else:
                 tv.move(item, "", target_index)
-            # Sync the underlying data model
-            gui.sync_queue_order_from_tree()
 
     def _on_drag_end(event):
-        """Finalize selection on release."""
+        """Finalize selection and sync order on release."""
+        # Don't process drag end while dropdown is active
+        if operation_dropdown.is_active:
+            return
+
         tv = event.widget
         item = tv.identify_row(event.y)
         if item and item in tv.selection():
             tv.selection_set(item)
+
+        # Sync the underlying data model only at end of drag (not on every motion)
+        gui.sync_queue_order_from_tree()
 
     gui.queue_tree.bind("<B1-Motion>", _on_drag_motion, add="+")
     gui.queue_tree.bind("<ButtonRelease-1>", _on_drag_end, add="+")
@@ -268,7 +311,14 @@ def create_convert_tab(gui):
 
         # Multi-selection: show batch actions only
         if len(selected_items) > 1:
-            menu.add_command(label=f"Remove {len(selected_items)} Items", command=gui.on_remove_from_queue)
+            # Count removable items (not CONVERTING)
+            removable_count = 0
+            for sel_id in selected_items:
+                item = gui.get_queue_item_for_tree_item(sel_id)
+                if item and item.status != QueueItemStatus.CONVERTING:
+                    removable_count += 1
+            if removable_count > 0:
+                menu.add_command(label=f"Remove {removable_count} Items", command=gui.on_remove_from_queue)
             menu.update_idletasks()
             menu.tk_popup(event.x_root, event.y_root)
             return
@@ -309,7 +359,9 @@ def create_convert_tab(gui):
                 )
             menu.add_separator()
 
-        menu.add_command(label="Remove", command=gui.on_remove_from_queue)
+        # Only show Remove if item is not currently converting
+        if not queue_item or queue_item.status != QueueItemStatus.CONVERTING:
+            menu.add_command(label="Remove", command=gui.on_remove_from_queue)
 
         # Force geometry recalculation before showing (fixes Windows shadow rendering)
         menu.update_idletasks()
@@ -391,69 +443,115 @@ def create_convert_tab(gui):
     progress_row.columnconfigure(1, weight=1)  # Quality/CRF search bar
     progress_row.columnconfigure(4, weight=2)  # Encoding bar (2x larger - takes more time)
 
-    ttk.Label(progress_row, text="Analyze:").grid(row=0, column=0, sticky="w")
+    analyze_label = ttk.Label(progress_row, text="Analyze:")
+    analyze_label.grid(row=0, column=0, sticky="w")
+    ToolTip(
+        analyze_label,
+        "CRF search phase: samples video at various quality levels\n"
+        "to find optimal compression meeting VMAF target",
+    )
     gui.quality_progress = ttk.Progressbar(progress_row, orient="horizontal", length=80, mode="determinate")
     gui.quality_progress.grid(row=0, column=1, sticky="ew", padx=(5, 0))
     gui.quality_percent_label = ttk.Label(progress_row, text="0%", width=4)
     gui.quality_percent_label.grid(row=0, column=2, padx=(5, 25))
 
-    ttk.Label(progress_row, text="Encoding:").grid(row=0, column=3, sticky="w")
+    encoding_label = ttk.Label(progress_row, text="Encoding:")
+    encoding_label.grid(row=0, column=3, sticky="w")
+    ToolTip(encoding_label, "Full video encoding using the optimal CRF\nfound during analysis")
     gui.encoding_progress = ttk.Progressbar(progress_row, orient="horizontal", length=80, mode="determinate")
     gui.encoding_progress.grid(row=0, column=4, sticky="ew", padx=(5, 0))
     gui.encoding_percent_label = ttk.Label(progress_row, text="0%", width=4)
     gui.encoding_percent_label.grid(row=0, column=5, sticky="w", padx=(5, 0))
 
-    # Row 2: Details row with grid layout for stable column widths
+    # Row 2: Details row with grid layout - expands to use full width
     details_row = ttk.Frame(processing_frame)
-    details_row.grid(row=2, column=0, sticky="w", padx=5, pady=(2, 5))
+    details_row.grid(row=2, column=0, sticky="ew", padx=5, pady=(2, 5))
 
-    # VMAF column
-    ttk.Label(details_row, text="VMAF:").grid(row=0, column=0, sticky="w")
-    gui.vmaf_label = ttk.Label(details_row, text=f"{DEFAULT_VMAF_TARGET}", width=12)
-    gui.vmaf_label.grid(row=0, column=1, sticky="w", padx=(5, 20))
+    # Distribute extra space to value columns
+    details_row.columnconfigure(1, weight=1)   # VMAF value
+    details_row.columnconfigure(4, weight=1)   # CRF value
+    details_row.columnconfigure(7, weight=1)   # Elapsed value
+    details_row.columnconfigure(9, weight=1)   # ETA value
+    details_row.columnconfigure(12, weight=2)  # Output value (needs most space)
 
-    # CRF column
-    gui.encoding_settings_label = ttk.Label(details_row, text="-", width=8)
-    gui.encoding_settings_label.grid(row=0, column=2, sticky="w", padx=(0, 20))
+    # VMAF group
+    vmaf_text_label = ttk.Label(details_row, text="VMAF:")
+    vmaf_text_label.grid(row=0, column=0, sticky="w")
+    ToolTip(
+        vmaf_text_label,
+        "Video quality score (0-100). Higher = better quality.\n"
+        "Target 95 is visually lossless for most content.",
+    )
+    gui.vmaf_label = ttk.Label(details_row, text=f"{DEFAULT_VMAF_TARGET}", width=22)
+    gui.vmaf_label.grid(row=0, column=1, sticky="w", padx=(5, 5))
 
-    # Elapsed column
-    ttk.Label(details_row, text="Elapsed:").grid(row=0, column=3, sticky="w")
-    gui.elapsed_label = ttk.Label(details_row, text="-", width=8)
-    gui.elapsed_label.grid(row=0, column=4, sticky="w", padx=(5, 20))
+    ttk.Separator(details_row, orient="vertical").grid(row=0, column=2, sticky="ns", padx=15)
 
-    # ETA column
-    ttk.Label(details_row, text="ETA:").grid(row=0, column=5, sticky="w")
-    gui.eta_label = ttk.Label(details_row, text="-", width=8)
-    gui.eta_label.grid(row=0, column=6, sticky="w", padx=(5, 20))
+    # CRF group
+    crf_text_label = ttk.Label(details_row, text="CRF:")
+    crf_text_label.grid(row=0, column=3, sticky="w")
+    ToolTip(
+        crf_text_label,
+        "Constant Rate Factor (0-63). Lower = higher quality.\n"
+        "Automatically determined to meet VMAF target.",
+    )
+    gui.encoding_settings_label = ttk.Label(details_row, text="-", width=16)
+    gui.encoding_settings_label.grid(row=0, column=4, sticky="w", padx=(5, 5))
 
-    # Output column
-    ttk.Label(details_row, text="Output:").grid(row=0, column=7, sticky="w")
-    gui.output_size_label = ttk.Label(details_row, text="-", width=12)
-    gui.output_size_label.grid(row=0, column=8, sticky="w", padx=(5, 0))
+    ttk.Separator(details_row, orient="vertical").grid(row=0, column=5, sticky="ns", padx=15)
 
-    # --- Row 4: Output Settings ---
+    # Time group: Elapsed + ETA
+    ttk.Label(details_row, text="Elapsed:").grid(row=0, column=6, sticky="w")
+    gui.elapsed_label = ttk.Label(details_row, text="-", width=10)
+    gui.elapsed_label.grid(row=0, column=7, sticky="w", padx=(5, 20))
+
+    ttk.Label(details_row, text="ETA:").grid(row=0, column=8, sticky="w")
+    gui.eta_label = ttk.Label(details_row, text="-", width=15)
+    gui.eta_label.grid(row=0, column=9, sticky="w", padx=(5, 5))
+
+    ttk.Separator(details_row, orient="vertical").grid(row=0, column=10, sticky="ns", padx=15)
+
+    # Output group
+    output_text_label = ttk.Label(details_row, text="Output:")
+    output_text_label.grid(row=0, column=11, sticky="w")
+    ToolTip(output_text_label, "Predicted or actual output file size\nand space savings percentage")
+    gui.output_size_label = ttk.Label(details_row, text="-", width=25)
+    gui.output_size_label.grid(row=0, column=12, sticky="w", padx=(5, 0))
+
+    # --- Row 4: Output Settings (for selected items) ---
     output_settings_frame = ttk.Frame(main_frame)
     output_settings_frame.grid(row=4, column=0, sticky="ew", pady=(5, 0))
     gui._output_settings_frame = output_settings_frame
 
+    # Label indicating these settings apply to selection
+    ttk.Label(output_settings_frame, text="Selection:").pack(side="left", padx=(5, 10))
+
     # Suffix entry (applies when mode is "Add Suffix")
-    gui._suffix_label = ttk.Label(output_settings_frame, text="Suffix:")
+    # Starts disabled - enabled when item with SUFFIX mode is selected
+    gui._suffix_label = ttk.Label(output_settings_frame, text="Suffix:", foreground=COLOR_TEXT_DISABLED)
     gui._suffix_label.pack(side="left", padx=(5, 5))
     gui.item_suffix = tk.StringVar(value="_av1")
-    gui.item_suffix_entry = ttk.Entry(output_settings_frame, textvariable=gui.item_suffix, width=8)
+    gui.item_suffix_entry = ttk.Entry(output_settings_frame, textvariable=gui.item_suffix, width=8, state="disabled")
     gui.item_suffix_entry.pack(side="left", padx=(0, 15))
     gui.item_suffix_entry.bind("<FocusOut>", lambda e: gui.on_item_suffix_changed())
 
     # Output folder (applies when mode is "Separate Folder")
-    gui._folder_label = ttk.Label(output_settings_frame, text="Folder:")
+    # Starts disabled - enabled when item with SEPARATE_FOLDER mode is selected
+    gui._folder_label = ttk.Label(output_settings_frame, text="Folder:", foreground=COLOR_TEXT_DISABLED)
     gui._folder_label.pack(side="left", padx=(0, 5))
     gui.item_output_folder = tk.StringVar()
-    gui.item_folder_entry = ttk.Entry(output_settings_frame, textvariable=gui.item_output_folder, width=30)
+    gui.item_folder_entry = ttk.Entry(
+        output_settings_frame, textvariable=gui.item_output_folder, width=30, state="disabled"
+    )
     gui.item_folder_entry.pack(side="left", padx=(0, 5))
     gui.item_folder_browse_button = ttk.Button(
-        output_settings_frame, text="Browse...", command=gui.on_browse_item_output_folder
+        output_settings_frame, text="Browse...", command=gui.on_browse_item_output_folder, state="disabled"
     )
     gui.item_folder_browse_button.pack(side="left")
 
-    # Update output settings state when queue selection changes
-    gui.queue_tree.bind("<<TreeviewSelect>>", lambda e: _update_output_settings_state(gui))
+    # Update UI state when queue selection changes
+    def _on_queue_selection_change(event):
+        _update_output_settings_state(gui)
+        queue_controller.update_remove_button_state(gui)
+
+    gui.queue_tree.bind("<<TreeviewSelect>>", _on_queue_selection_change)

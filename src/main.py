@@ -22,7 +22,7 @@ def main():
     log_file = None
     try:
         log_file = setup_logging()
-        logger.info("=== Starting AV1 Video Converter ===")
+        logger.info("=== Starting AB-AV1 GUI ===")
         if log_file:
             logger.info(f"Log file: {log_file}")
         logger.info(f"System: {sys.platform}, Python: {sys.version}")

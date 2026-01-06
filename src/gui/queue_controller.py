@@ -12,7 +12,7 @@ Manages queue UI interactions including:
 
 from tkinter import filedialog, messagebox
 
-from src.models import OperationType
+from src.models import OperationType, QueueItemStatus
 
 # =============================================================================
 # Add to Queue
@@ -83,6 +83,8 @@ def add_to_queue(
 def on_remove_from_queue(gui) -> None:
     """Remove selected items from queue.
 
+    Skips items that are currently converting (status == CONVERTING).
+
     Args:
         gui: The VideoConverterGUI instance.
     """
@@ -91,12 +93,15 @@ def on_remove_from_queue(gui) -> None:
     if not selected:
         return
 
-    # Collect queue items to remove using O(1) lookups
+    # Collect queue items to remove using O(1) lookups, skip CONVERTING items
     items_to_remove = []
     for tree_id in selected:
         item = gui.get_queue_item_for_tree_item(tree_id)
-        if item:
+        if item and item.status != QueueItemStatus.CONVERTING:
             items_to_remove.append(item)
+
+    if not items_to_remove:
+        return
 
     # Remove from queue
     for item in items_to_remove:
@@ -125,6 +130,78 @@ def on_clear_queue(gui) -> None:
         gui.save_queue_to_config()
         gui.refresh_queue_tree()
         gui.sync_queue_tags_to_analysis_tree()
+
+
+def on_clear_completed(gui) -> None:
+    """Clear completed, errored, and stopped items from queue (no confirmation).
+
+    Args:
+        gui: The VideoConverterGUI instance.
+    """
+    # Filter to keep only pending and converting items
+    keep_statuses = {QueueItemStatus.PENDING, QueueItemStatus.CONVERTING}
+    original_count = len(gui._queue_items)
+    gui._queue_items = [item for item in gui._queue_items if item.status in keep_statuses]
+
+    if len(gui._queue_items) < original_count:
+        gui._queue_items_by_id = {item.id: item for item in gui._queue_items}
+        gui.save_queue_to_config()
+        gui.refresh_queue_tree()
+        gui.sync_queue_tags_to_analysis_tree()
+
+
+def update_clear_completed_button_state(gui) -> None:
+    """Update the clear completed button state based on queue contents.
+
+    Enables the button if there are any completed/errored/stopped items.
+
+    Args:
+        gui: The VideoConverterGUI instance.
+    """
+    keep_statuses = {QueueItemStatus.PENDING, QueueItemStatus.CONVERTING}
+    has_clearable = any(item.status not in keep_statuses for item in gui._queue_items)
+    state = "normal" if has_clearable else "disabled"
+    gui.clear_completed_button.config(state=state)
+
+
+def update_remove_button_state(gui) -> None:
+    """Update remove button state based on selection.
+
+    Enables if any selected items are removable (not CONVERTING).
+
+    Args:
+        gui: The VideoConverterGUI instance.
+    """
+    selection = gui.queue_tree.selection()
+    if not selection:
+        gui.remove_queue_button.config(state="disabled")
+        return
+
+    # Check if any selected item is removable (not currently converting)
+    for tree_id in selection:
+        item = gui.get_queue_item_for_tree_item(tree_id)
+        if item and item.status != QueueItemStatus.CONVERTING:
+            gui.remove_queue_button.config(state="normal")
+            return
+
+    gui.remove_queue_button.config(state="disabled")
+
+
+def update_start_button_state(gui) -> None:
+    """Update start button state based on queue contents and running state.
+
+    Disabled when conversion is running or no pending items exist.
+
+    Args:
+        gui: The VideoConverterGUI instance.
+    """
+    if gui.session.running:
+        gui.start_button.config(state="disabled")
+        return
+
+    has_pending = any(item.status == QueueItemStatus.PENDING for item in gui._queue_items)
+    state = "normal" if has_pending else "disabled"
+    gui.start_button.config(state=state)
 
 
 # =============================================================================

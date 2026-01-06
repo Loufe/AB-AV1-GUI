@@ -140,7 +140,7 @@ def incremental_scan_thread(gui, folder: str, extensions: list[str], stop_event:
                                 values=(format_str, size_str, savings_str, time_str, eff_str),
                                 tags=(tag,) if tag else (),
                             )
-                            gui.get_tree_item_map()[file_path] = item_id
+                            gui.get_tree_item_map()[os.path.normcase(file_path)] = item_id
                             file_count += 1
                     else:
                         # Non-root: create folder node and add files
@@ -156,7 +156,7 @@ def incremental_scan_thread(gui, folder: str, extensions: list[str], stop_event:
                                 values=(format_str, size_str, savings_str, time_str, eff_str),
                                 tags=(tag,) if tag else (),
                             )
-                            gui.get_tree_item_map()[file_path] = item_id
+                            gui.get_tree_item_map()[os.path.normcase(file_path)] = item_id
                             file_count += 1
                         # Update folder aggregate from its files
                         if fdata:

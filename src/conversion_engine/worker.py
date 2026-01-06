@@ -61,9 +61,11 @@ def _create_file_record(
     original_size: int,
     input_duration: float | None,
     input_vcodec: str,
-    input_acodec: str,
     input_width: int | None,
     input_height: int | None,
+    # Metadata fields
+    bitrate_kbps: float | None = None,
+    audio_streams: list | None = None,
     # Status-specific optional fields
     output_path: str | None = None,
     output_size: int | None = None,
@@ -113,9 +115,10 @@ def _create_file_record(
         file_mtime=file_mtime,
         duration_sec=round(input_duration, 1) if input_duration else None,
         video_codec=input_vcodec.lower() if input_vcodec != "?" else None,
-        audio_codec=input_acodec.lower() if input_acodec != "?" else None,
         width=input_width,
         height=input_height,
+        bitrate_kbps=bitrate_kbps,
+        audio_streams=audio_streams or [],
         # SCANNED/ANALYZED status fields (Layer 1 and Layer 2 analysis)
         vmaf_target_when_analyzed=vmaf_target
         if status in (FileStatus.SCANNED, FileStatus.ANALYZED)
@@ -336,8 +339,9 @@ def sequential_conversion_worker(
             queue_item.current_file_index = file_index
             _update_file_status(queue_item, file_index, QueueItemStatus.CONVERTING)
 
-            # Store current file path for estimation
-            update_ui_safely(gui.root, lambda vp=file_path: setattr(gui.session, "current_file_path", vp))
+            # Store current file path for estimation and callback handlers
+            # Set synchronously - thread-safe per single-writer model (see worker.py:34-44)
+            gui.session.current_file_path = file_path
             logger.debug(f"Current file path set to: {file_path}")
 
             filename = os.path.basename(file_path)
@@ -441,6 +445,13 @@ def sequential_conversion_worker(
                 queue_status_callback(
                     queue_item.id, QueueItemStatus.CONVERTING, queue_item.processed_files, queue_item.total_files
                 )
+                # Update analysis tree - "done" for already-converted, "skip" for others
+                reason_lower = reason.lower() if reason else ""
+                tree_status = "done" if "already converted" in reason_lower else "skip"
+                update_ui_safely(
+                    gui.root,
+                    lambda fp=file_path, s=tree_status: gui.update_analysis_tree_for_completed_file(fp, s)
+                )
                 continue
 
             # File needs conversion - proceed with processing
@@ -450,6 +461,8 @@ def sequential_conversion_worker(
             input_duration = 0.0
             input_width = None
             input_height = None
+            input_bitrate_kbps = None
+            input_audio_streams = []
             output_acodec = "?"  # Initialize output audio codec
 
             # --- Extract Info & Update UI ---
@@ -457,11 +470,14 @@ def sequential_conversion_worker(
                 try:
                     meta = extract_video_metadata(video_info)
                     input_vcodec = (meta.video_codec or "?").upper()
-                    input_acodec = (meta.audio_codec or "?").upper()
+                    # Get audio codec from first stream (for display purposes)
+                    input_acodec = (meta.audio_streams[0].codec if meta.audio_streams else "?").upper()
                     input_width = meta.width
                     input_height = meta.height
                     input_duration = meta.duration_sec or 0.0
                     original_size = meta.file_size_bytes or 0
+                    input_bitrate_kbps = meta.bitrate_kbps
+                    input_audio_streams = meta.audio_streams
 
                     update_ui_safely(gui.root, lambda os=original_size: setattr(gui.session, "last_input_size", os))
                     output_acodec = input_acodec  # Default output codec
@@ -601,9 +617,10 @@ def sequential_conversion_worker(
                             original_size,
                             input_duration,
                             input_vcodec,
-                            input_acodec,
                             input_width,
                             input_height,
+                            bitrate_kbps=input_bitrate_kbps,
+                            audio_streams=input_audio_streams,
                             crf_search_time_sec=crf_search_time,
                             final_crf=final_crf,
                             final_vmaf=final_vmaf,
@@ -629,15 +646,18 @@ def sequential_conversion_worker(
                         _update_file_status(queue_item, file_index, QueueItemStatus.COMPLETED)
                         logger.info(f"Analysis complete for {anonymized_name}: CRF {final_crf}, VMAF {final_vmaf:.2f}")
 
+                        # Update analysis tree now that history is saved
+                        update_ui_safely(
+                            gui.root,
+                            lambda fp=file_path: gui.update_analysis_tree_for_completed_file(fp, "done")
+                        )
+
                     except ConversionNotWorthwhileError as e:
                         # CRF search failed at all VMAF targets - record as NOT_WORTHWHILE
                         crf_search_elapsed = time.time() - crf_search_start
                         logger.warning(f"Analysis showed conversion not worthwhile for {anonymized_name}: {e}")
-                        file_event_callback(filename, "skipped", str(e))
-                        queue_item.files_skipped += 1
-                        _update_file_status(queue_item, file_index, QueueItemStatus.COMPLETED)
 
-                        # Record NOT_WORTHWHILE to history (including time spent)
+                        # Record NOT_WORTHWHILE to history BEFORE callback (so folder aggregates are correct)
                         record = _create_file_record(
                             file_path,
                             anonymize_history_value[0],
@@ -645,15 +665,34 @@ def sequential_conversion_worker(
                             original_size,
                             input_duration,
                             input_vcodec,
-                            input_acodec,
                             input_width,
                             input_height,
+                            bitrate_kbps=input_bitrate_kbps,
+                            audio_streams=input_audio_streams,
                             crf_search_time_sec=crf_search_elapsed,
                             vmaf_target_attempted=DEFAULT_VMAF_TARGET,
                             min_vmaf_attempted=MIN_VMAF_FALLBACK_TARGET,
                             skip_reason=str(e),
                         )
                         _save_file_record(record)
+
+                        file_event_callback(
+                            filename,
+                            "skipped_not_worth",
+                            {
+                                "message": str(e),
+                                "original_size": original_size,
+                                "min_vmaf_attempted": MIN_VMAF_FALLBACK_TARGET,
+                            },
+                        )
+                        queue_item.files_skipped += 1
+                        _update_file_status(queue_item, file_index, QueueItemStatus.COMPLETED)
+
+                        # Update analysis tree now that history is saved
+                        update_ui_safely(
+                            gui.root,
+                            lambda fp=file_path: gui.update_analysis_tree_for_completed_file(fp, "skip")
+                        )
 
                         process_successful = False
 
@@ -756,9 +795,10 @@ def sequential_conversion_worker(
                             original_size,
                             input_duration,
                             input_vcodec,
-                            input_acodec,
                             input_width,
                             input_height,
+                            bitrate_kbps=input_bitrate_kbps,
+                            audio_streams=input_audio_streams,
                             output_path=output_file_path,
                             output_size=output_size,
                             crf_search_time_sec=crf_search_time_file,
@@ -769,6 +809,11 @@ def sequential_conversion_worker(
                             output_acodec=output_acodec,
                         )
                         _save_file_record(record)
+                        # Update analysis tree now that history is saved
+                        update_ui_safely(
+                            gui.root,
+                            lambda fp=file_path: gui.update_analysis_tree_for_completed_file(fp, "done")
+                        )
                     except Exception:
                         logger.exception(f"Failed to record history for {anonymized_name}")
             # Check if this was a NOT_WORTHWHILE skip and record to history
@@ -795,9 +840,10 @@ def sequential_conversion_worker(
                         original_size,
                         input_duration,
                         input_vcodec,
-                        input_acodec,
                         input_width,
                         input_height,
+                        bitrate_kbps=input_bitrate_kbps,
+                        audio_streams=input_audio_streams,
                         crf_search_time_sec=crf_search_elapsed,
                         vmaf_target_attempted=DEFAULT_VMAF_TARGET,
                         min_vmaf_attempted=min_vmaf_attempted,
@@ -805,6 +851,11 @@ def sequential_conversion_worker(
                     )
                     _save_file_record(record)
                     logger.info(f"Recorded NOT_WORTHWHILE status to history for {anonymized_name}")
+                    # Update analysis tree now that history is saved
+                    update_ui_safely(
+                        gui.root,
+                        lambda fp=file_path: gui.update_analysis_tree_for_completed_file(fp, "skip")
+                    )
                 except Exception:
                     logger.exception(f"Failed to record NOT_WORTHWHILE history for {anonymized_name}")
             else:

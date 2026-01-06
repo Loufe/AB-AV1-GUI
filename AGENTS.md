@@ -8,7 +8,7 @@ GUI application for batch converting videos to AV1 using VMAF-targeted quality e
 - **UV** for package management
 - **Ruff** for linting/formatting
 - **ty** for type checking
-- **External tools**: `ab-av1` (in `src/`), FFmpeg with libsvtav1 (system PATH)
+- **External tools**: `ab-av1`, FFmpeg with libsvtav1 (downloaded to `vendor/` or system PATH)
 
 ## Commands
 
@@ -255,8 +255,9 @@ See `ab_av1/wrapper.py` for environment variables that maximize verbosity.
 | File | Purpose |
 |------|---------|
 | `av1_converter_config.json` | User settings (managed via GUI) |
-| `conversion_history_v2.json` | File records: metadata, analysis results, conversion history |
+| `conversion_history.json` | File records: metadata, analysis results, conversion history |
 | `logs/*.log` | Rotating log files |
+| `vendor/` | Downloaded ab-av1 and FFmpeg binaries (gitignored) |
 
 **History/Index usage**:
 - **Time estimation**: Find similar files (codec/resolution/duration) to predict encoding time
@@ -311,4 +312,5 @@ python tools/hash_lookup.py --list .                   # List all file hashes
 - `docs/ARCHITECTURE.md` - Technical diagrams and data flow
 - `docs/TIME_ESTIMATION.md` - How encoding time predictions work
 - `docs/AB_AV1_PARSING.md` - How ab-av1/FFmpeg output is parsed
-- `docs/HISTORY_FORMAT.md` - Structure of conversion_history_v2.json
+- `docs/HISTORY_FORMAT.md` - Structure of conversion_history.json
+- `docs/adr/` - Architecture Decision Records (see `claude.md` within for format rules)

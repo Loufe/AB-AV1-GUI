@@ -13,7 +13,8 @@ from pathlib import Path
 from tkinter import ttk
 from typing import TYPE_CHECKING
 
-from src.ab_av1.checker import check_ab_av1_latest_github, get_ab_av1_version
+from src.ab_av1.checker import check_ab_av1_latest_github, check_app_latest_github, get_ab_av1_version
+from src.config import APP_VERSION
 from src.gui.constants import (
     COLOR_STATUS_ERROR,
     COLOR_STATUS_INFO,
@@ -35,6 +36,73 @@ if TYPE_CHECKING:
     from src.gui.main_window import VideoConverterGUI
 
 logger = logging.getLogger(__name__)
+
+
+def check_app_updates(gui: "VideoConverterGUI") -> None:
+    """Check GitHub for the latest application version and update the label.
+
+    Disables the check button, compares local version with GitHub release,
+    and shows a clickable link to the releases page if an update is available.
+
+    Args:
+        gui: The main application window instance.
+    """
+    # Disable check button immediately
+    if gui.app_check_btn:
+        gui.app_check_btn.config(state="disabled")
+
+    # Reset label state
+    _reset_app_update_label(gui)
+    gui.app_update_label.config(text="Checking...", foreground=COLOR_STATUS_NEUTRAL)
+    gui.root.update_idletasks()
+
+    latest_version, release_url, message = check_app_latest_github()
+
+    # Check button stays disabled permanently after use
+
+    if latest_version is None:
+        gui.app_update_label.config(text=message, foreground=COLOR_STATUS_ERROR)
+        return
+
+    # For "dev" version, just show latest without comparison
+    if APP_VERSION == "dev":
+        gui.app_update_label.config(
+            text=f"Latest: {latest_version}", foreground=COLOR_STATUS_INFO, cursor="hand2", font=FONT_SYSTEM_UNDERLINE
+        )
+        if release_url:
+            gui.app_update_label.bind("<Button-1>", lambda e: webbrowser.open(release_url))
+        return
+
+    # Compare versions (semantic version comparison)
+    def parse_semver(v: str) -> tuple[int, ...]:
+        return tuple(int(x) for x in v.split("."))
+
+    try:
+        local_parts = parse_semver(APP_VERSION)
+        latest_parts = parse_semver(latest_version)
+        is_up_to_date = local_parts >= latest_parts
+    except ValueError:
+        # Fallback to string comparison if parsing fails
+        is_up_to_date = latest_version == APP_VERSION
+
+    if is_up_to_date:
+        gui.app_update_label.config(text=f"Up to date ({APP_VERSION})", foreground=COLOR_STATUS_SUCCESS)
+    else:
+        # Update available - make label clickable
+        gui.app_update_label.config(
+            text=f"Update available: {latest_version}",
+            foreground=COLOR_STATUS_INFO,
+            cursor="hand2",
+            font=FONT_SYSTEM_UNDERLINE,
+        )
+        if release_url:
+            gui.app_update_label.bind("<Button-1>", lambda e: webbrowser.open(release_url))
+
+
+def _reset_app_update_label(gui: "VideoConverterGUI") -> None:
+    """Reset the app update label to non-clickable state."""
+    gui.app_update_label.config(cursor="", font=FONT_SYSTEM_NORMAL)
+    gui.app_update_label.unbind("<Button-1>")
 
 
 def check_ab_av1_updates(gui: "VideoConverterGUI") -> None:

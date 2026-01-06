@@ -13,9 +13,9 @@ import logging
 import os
 import threading
 
-from src.config import HISTORY_FILE_V2, MAX_CRF_VALUE, MAX_VMAF_VALUE, RESOLUTION_TOLERANCE_PERCENT
+from src.config import HISTORY_FILE, MAX_CRF_VALUE, MAX_VMAF_VALUE, RESOLUTION_TOLERANCE_PERCENT
 from src.logging_setup import get_script_directory
-from src.models import FileRecord, FileStatus
+from src.models import AudioStreamInfo, FileRecord, FileStatus
 from src.privacy import compute_hash, normalize_path
 
 logger = logging.getLogger(__name__)
@@ -83,13 +83,13 @@ def compute_path_hash(file_path: str) -> str:
     return compute_hash(normalized, length=16)
 
 
-def get_history_v2_path() -> str:
-    """Get the path to the v2 history file.
+def get_history_path() -> str:
+    """Get the path to the history file.
 
     Returns:
-        Absolute path to conversion_history_v2.json.
+        Absolute path to conversion_history.json.
     """
-    return os.path.join(get_script_directory(), HISTORY_FILE_V2)
+    return os.path.join(get_script_directory(), HISTORY_FILE)
 
 
 class HistoryIndex:
@@ -248,7 +248,7 @@ class HistoryIndex:
 
     def _load_from_disk(self) -> None:
         """Load records from the JSON history file."""
-        history_path = get_history_v2_path()
+        history_path = get_history_path()
 
         if not os.path.exists(history_path):
             logger.info(f"History file not found, starting fresh: {history_path}")
@@ -266,9 +266,26 @@ class HistoryIndex:
             self._records = {}
             for record_dict in data:
                 try:
+                    # Detect old format that needs migration
+                    if "audio_codec" in record_dict and "audio_streams" not in record_dict:
+                        raise RuntimeError(
+                            "History file uses old format (audio_codec field).\n"
+                            "Please run migration before starting the app:\n"
+                            "  python tools/migrate_audio_streams.py\n"
+                            "See docs/PLAN_AUDIO_STREAMS_AND_BITRATE.md for details."
+                        )
+
                     # Convert status string back to enum
                     if "status" in record_dict:
                         record_dict["status"] = FileStatus(record_dict["status"])
+
+                    # Convert audio_streams dicts to AudioStreamInfo objects
+                    audio_streams_data = record_dict.get("audio_streams")
+                    if audio_streams_data:
+                        record_dict["audio_streams"] = [
+                            AudioStreamInfo.from_dict(s) for s in audio_streams_data
+                        ]
+
                     record = FileRecord(**record_dict)
                     # Validate record fields
                     if not _validate_record(record):
@@ -290,7 +307,7 @@ class HistoryIndex:
 
     def _save_to_disk(self) -> None:
         """Save records to the JSON history file with atomic write."""
-        history_path = get_history_v2_path()
+        history_path = get_history_path()
         temp_path = history_path + ".tmp"
 
         try:

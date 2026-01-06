@@ -12,6 +12,7 @@ from tkinter import ttk
 from typing import Callable
 
 from src.gui.constants import COLOR_TOOLTIP_BACKGROUND
+from src.gui.tree_utils import get_column_name
 
 logger = logging.getLogger(__name__)
 
@@ -222,17 +223,8 @@ class TreeviewHeaderTooltip(_TreeviewTooltipBase):
     def _identify_target(self, event) -> str | None:
         if self.treeview.identify_region(event.x, event.y) != "heading":
             return None
-
-        column = self.treeview.identify_column(event.x)
-        if column == "#0":
-            return "#0"
-
-        try:
-            col_index = int(column[1:]) - 1
-            columns = self.treeview["columns"]
-            return columns[col_index] if col_index < len(columns) else None
-        except (ValueError, IndexError):
-            return None
+        column_id = self.treeview.identify_column(event.x)
+        return get_column_name(self.treeview, column_id)
 
     def _get_tooltip_text(self, target: str) -> str | None:
         return self.column_tooltips.get(target)

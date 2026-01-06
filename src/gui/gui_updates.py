@@ -112,9 +112,9 @@ def update_crf_display(gui, info: ProgressEvent) -> None:
     if info.crf is not None:
         try:
             crf_val = int(info.crf)
-            settings_text = f"CRF: {crf_val}, Preset: {DEFAULT_ENCODING_PRESET}"
+            settings_text = f"{crf_val}, Preset {DEFAULT_ENCODING_PRESET}"
             update_ui_safely(gui.root, lambda s=settings_text: gui.encoding_settings_label.config(text=s))
-            logger.info(f"Encoding settings update: {settings_text}")
+            logger.info(f"CRF update: {settings_text}")
         except (ValueError, TypeError) as e:
             logger.warning(f"Invalid CRF value in info for update: {info.crf} - {e}")
 

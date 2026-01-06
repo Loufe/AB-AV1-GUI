@@ -8,7 +8,7 @@ the analysis tree and queue tree, reducing code duplication.
 
 from src.estimation import estimate_file_time
 from src.gui.tree_formatters import format_compact_time, format_efficiency
-from src.models import FileRecord, FileStatus, QueueItemStatus
+from src.models import AudioStreamInfo, FileRecord, FileStatus, QueueItemStatus
 from src.utils import format_file_size
 
 # =============================================================================
@@ -152,7 +152,7 @@ def compute_analysis_display_values(
     Returns:
         Tuple of (format_str, size_str, savings_str, time_str, eff_str, tag).
     """
-    format_str = format_stream_display(record.video_codec, record.audio_codec)
+    format_str = format_stream_display(record.video_codec, record.audio_streams)
     size_str = format_file_size(record.file_size_bytes) if record.file_size_bytes else "—"
     tag = get_analysis_file_tag(record.status, record.video_codec)
 
@@ -200,36 +200,35 @@ def compute_analysis_display_values(
 
 def format_stream_display(
     video_codec: str | None,
-    audio_codec: str | None = None,
-    audio_stream_count: int = 1,
+    audio_streams: list[AudioStreamInfo] | None = None,
     subtitle_stream_count: int = 0,
 ) -> str:
     """Build format string showing codec and stream counts.
 
     Args:
         video_codec: Video codec name (e.g., "h264", "hevc").
-        audio_codec: First audio stream codec name (e.g., "aac", "opus").
-        audio_stream_count: Total number of audio streams.
+        audio_streams: List of AudioStreamInfo objects.
         subtitle_stream_count: Total number of subtitle streams.
 
     Returns:
-        Format string like "H264 / 3 audio [2 subs]".
+        Format string like "H264 / AAC, AC3 [2 subs]".
 
     Examples:
-        >>> format_stream_display("h264", "aac")
+        >>> format_stream_display("h264", [AudioStreamInfo(codec="aac")])
         'H264 / AAC'
-        >>> format_stream_display("hevc", "aac", audio_stream_count=3)
+        >>> format_stream_display("hevc", [AudioStreamInfo(codec="aac")] * 3)
         'HEVC / 3 audio'
-        >>> format_stream_display("h264", "opus", audio_stream_count=2, subtitle_stream_count=3)
-        'H264 / 2 audio [3 subs]'
     """
     video = (video_codec or "?").upper()
 
-    # Audio portion: show count if multiple, codec name if single
-    if audio_stream_count > 1:
-        audio = f"{audio_stream_count} audio"
-    elif audio_codec:
-        audio = audio_codec.upper()
+    # Audio portion: show codecs if 1-3 streams, count if more
+    if audio_streams:
+        if len(audio_streams) == 1:
+            audio = audio_streams[0].codec.upper()
+        elif len(audio_streams) <= 3:
+            audio = ", ".join(s.codec.upper() for s in audio_streams)
+        else:
+            audio = f"{len(audio_streams)} audio"
     else:
         audio = "no audio"
 

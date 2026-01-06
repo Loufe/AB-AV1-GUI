@@ -15,8 +15,9 @@ from src.vendor_manager import AB_AV1_EXE, AB_AV1_EXE_NAME, get_ab_av1_path
 
 logger = logging.getLogger(__name__)
 
-# GitHub API endpoint for ab-av1 releases
+# GitHub API endpoints
 AB_AV1_GITHUB_API = "https://api.github.com/repos/alexheretic/ab-av1/releases/latest"
+APP_GITHUB_API = "https://api.github.com/repos/Loufe/AB-AV1-GUI/releases/latest"
 
 # Cached result for --log-interval support detection
 _log_interval_support: bool | None = None
@@ -107,6 +108,45 @@ def check_ab_av1_latest_github() -> tuple[str | None, str | None, str]:
 
     except URLError as e:
         logger.warning(f"Failed to check GitHub for ab-av1 updates: {e}")
+        return None, None, f"Network error: {e.reason}"
+    except json.JSONDecodeError as e:
+        logger.warning(f"Failed to parse GitHub response: {e}")
+        return None, None, "Failed to parse GitHub response"
+    except Exception as e:
+        logger.warning(f"Unexpected error checking GitHub: {e}")
+        return None, None, f"Error: {e}"
+
+
+def check_app_latest_github() -> tuple[str | None, str | None, str]:
+    """Check GitHub for the latest application release version.
+
+    This function makes a network request and should only be called
+    when the user explicitly requests a version check.
+
+    Returns:
+        Tuple of (latest_version, release_url, message) where:
+        - latest_version: Version string (e.g., "2.0.0") or None on error
+        - release_url: URL to the release page, or None on error
+        - message: Descriptive message about the result
+    """
+    try:
+        request = urllib.request.Request(  # noqa: S310 - hardcoded https URL is safe
+            APP_GITHUB_API, headers={"Accept": "application/vnd.github.v3+json", "User-Agent": "Auto-AV1-Converter"}
+        )
+        with urllib.request.urlopen(request, timeout=10) as response:  # noqa: S310
+            data = json.loads(response.read().decode("utf-8"))
+            tag_name = data.get("tag_name", "")
+            html_url = data.get("html_url", "")
+
+            # Tag is usually "vX.Y.Z", strip the 'v' prefix if present
+            version = tag_name.lstrip("v") if tag_name else None
+
+            if version:
+                return version, html_url, f"Latest version: {version}"
+            return None, None, "Could not parse version from GitHub response"
+
+    except URLError as e:
+        logger.warning(f"Failed to check GitHub for app updates: {e}")
         return None, None, f"Network error: {e.reason}"
     except json.JSONDecodeError as e:
         logger.warning(f"Failed to parse GitHub response: {e}")

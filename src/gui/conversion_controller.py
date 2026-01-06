@@ -339,9 +339,6 @@ def start_conversion(gui) -> None:
     gui.start_button.config(state="disabled")
     gui.stop_button.config(state="normal")
     gui.force_stop_button.config(state="normal")
-    gui.add_folder_button.config(state="disabled")
-    gui.add_files_button.config(state="disabled")
-    gui.remove_queue_button.config(state="disabled")
     gui.clear_queue_button.config(state="disabled")
 
     # Initialize conversion state
@@ -557,13 +554,10 @@ def restore_ui_after_stop(gui) -> None:
 
     update_ui_safely(gui.root, lambda: gui.status_label.config(text="Processing force stopped"))
     update_ui_safely(gui.root, reset_current_file_details, gui)
-    update_ui_safely(gui.root, lambda: gui.start_button.config(state="normal"))
     update_ui_safely(gui.root, lambda: gui.stop_button.config(state="disabled"))
     update_ui_safely(gui.root, lambda: gui.force_stop_button.config(state="disabled"))
-    update_ui_safely(gui.root, lambda: gui.add_folder_button.config(state="normal"))
-    update_ui_safely(gui.root, lambda: gui.add_files_button.config(state="normal"))
-    update_ui_safely(gui.root, lambda: gui.remove_queue_button.config(state="normal"))
     update_ui_safely(gui.root, lambda: gui.clear_queue_button.config(state="normal"))
+    update_ui_safely(gui.root, gui.refresh_queue_tree)
 
 
 def force_stop_conversion(gui, confirm: bool = True) -> None:
@@ -833,19 +827,7 @@ def conversion_complete(gui, final_message="Queue complete"):
         logger.info("System sleep prevention disabled.")
         s.sleep_prevention_active = False
 
-    # Refresh queue tree to update estimates (e.g., after ANALYZE operations complete)
-    gui.refresh_queue_tree()
-
-    # Reset button states
-    gui.start_button.config(state="normal")
-    gui.stop_button.config(state="disabled")
-    gui.force_stop_button.config(state="disabled")
-    gui.add_folder_button.config(state="normal")
-    gui.add_files_button.config(state="normal")
-    gui.remove_queue_button.config(state="normal")
-    gui.clear_queue_button.config(state="normal")
-
-    # Final state reset
+    # Final state reset (before refresh so button states are computed correctly)
     s.running = False
     gui.conversion_thread = None
     gui.stop_event = None
@@ -854,6 +836,21 @@ def conversion_complete(gui, final_message="Queue complete"):
     if s.elapsed_timer_id:  # Ensure timer is stopped if still running
         gui.root.after_cancel(s.elapsed_timer_id)
         s.elapsed_timer_id = None
+
+    # Refresh queue tree to update estimates and button states
+    gui.refresh_queue_tree()
+
+    # Refresh analysis tree to show correct done/skip counts and folder aggregates
+    # (During conversion, callbacks fire before history is saved, causing stale data)
+    file_paths = list(gui.get_tree_item_map().keys())
+    if file_paths:
+        gui.batch_update_tree_rows(file_paths)
+        gui.update_total_from_tree()
+
+    # Reset conversion control button states
+    gui.stop_button.config(state="disabled")
+    gui.force_stop_button.config(state="disabled")
+    gui.clear_queue_button.config(state="normal")
 
     # Show summary message box if files were processed
     if s.processed_files > 0:

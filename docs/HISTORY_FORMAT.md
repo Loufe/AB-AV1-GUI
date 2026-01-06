@@ -1,6 +1,6 @@
 # History File Format
 
-This document describes the structure of `conversion_history_v2.json`, the persistent storage for file metadata and conversion history.
+This document describes the structure of `conversion_history.json`, the persistent storage for file metadata and conversion history.
 
 ## Overview
 
@@ -13,7 +13,7 @@ The history file is a JSON object mapping path hashes to `FileRecord` objects. I
 
 ## File Location
 
-Default: `conversion_history_v2.json` in the application directory.
+Default: `conversion_history.json` in the application directory.
 
 ## Top-Level Structure
 
@@ -55,10 +55,21 @@ Populated during "Basic Scan" or first analysis.
 |-------|------|-------------|
 | `duration_sec` | float\|null | Video duration in seconds |
 | `video_codec` | string\|null | e.g., "h264", "hevc", "av1" |
-| `audio_codec` | string\|null | e.g., "aac", "opus" |
+| `audio_streams` | array | List of audio stream objects (see below) |
 | `width` | int\|null | Video width in pixels |
 | `height` | int\|null | Video height in pixels |
 | `bitrate_kbps` | float\|null | Overall bitrate |
+
+#### Audio Stream Object
+
+Each entry in `audio_streams` contains:
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `codec` | string | Audio codec, e.g., "aac", "opus", "ac3" |
+| `channels` | int\|null | Number of audio channels |
+| `bitrate_kbps` | float\|null | Stream bitrate in kbps |
+| `language` | string\|null | Language code, e.g., "eng", "jpn" |
 
 ### Estimation (Layer 1)
 
@@ -143,91 +154,17 @@ The `FileRecord.get_analysis_level()` method maps status to analysis level:
 | 2 | ANALYZED | Has best_crf AND best_vmaf_achieved |
 | 3 | CONVERTED | Status is "converted" |
 
-## Example Records
+## Fields by Status
 
-### Scanned File (Layer 1)
+All records have identity fields (`path_hash`, `status`) and cache fields (`file_size_bytes`, `file_mtime`). Additional fields depend on status:
 
-```json
-{
-  "path_hash": "a1b2c3...",
-  "original_path": "/videos/movie.mp4",
-  "status": "scanned",
-  "file_size_bytes": 1500000000,
-  "file_mtime": 1704067200.0,
-  "duration_sec": 7200.0,
-  "video_codec": "h264",
-  "audio_codec": "aac",
-  "width": 1920,
-  "height": 1080,
-  "bitrate_kbps": 5000.0,
-  "estimated_reduction_percent": 45.0,
-  "first_seen": "2024-01-01T00:00:00",
-  "last_updated": "2024-01-01T00:00:00"
-}
-```
-
-### Analyzed File (Layer 2)
-
-```json
-{
-  "path_hash": "b2c3d4...",
-  "status": "analyzed",
-  "file_size_bytes": 2000000000,
-  "file_mtime": 1704067200.0,
-  "duration_sec": 5400.0,
-  "video_codec": "hevc",
-  "width": 3840,
-  "height": 2160,
-  "best_crf": 28,
-  "best_vmaf_achieved": 95.2,
-  "predicted_output_size": 800000000,
-  "predicted_size_reduction": 60.0,
-  "vmaf_target_when_analyzed": 95,
-  "crf_search_time_sec": 45.0
-}
-```
-
-### Converted File (Layer 3)
-
-```json
-{
-  "path_hash": "c3d4e5...",
-  "status": "converted",
-  "file_size_bytes": 1000000000,
-  "file_mtime": 1704067200.0,
-  "duration_sec": 3600.0,
-  "video_codec": "h264",
-  "width": 1920,
-  "height": 1080,
-  "best_crf": 30,
-  "best_vmaf_achieved": 95.5,
-  "output_size_bytes": 450000000,
-  "reduction_percent": 55.0,
-  "final_crf": 30,
-  "final_vmaf": 95.4,
-  "vmaf_target_used": 95,
-  "crf_search_time_sec": 30.0,
-  "encoding_time_sec": 1800.0
-}
-```
-
-### Not Worthwhile File
-
-```json
-{
-  "path_hash": "d4e5f6...",
-  "status": "not_worthwhile",
-  "file_size_bytes": 500000000,
-  "file_mtime": 1704067200.0,
-  "duration_sec": 1800.0,
-  "video_codec": "h264",
-  "width": 1920,
-  "height": 1080,
-  "vmaf_target_attempted": 95,
-  "min_vmaf_attempted": 90,
-  "skip_reason": "Could not achieve VMAF 90 even at lowest CRF"
-}
-```
+| Field Group | `scanned` | `analyzed` | `not_worthwhile` | `converted` |
+|-------------|:---------:|:----------:|:----------------:|:-----------:|
+| **Layer 1** (ffprobe metadata) | ✓ | ✓ | ✓ | ✓ |
+| **Layer 1** (estimates) | ✓ | ✓ | — | ✓ |
+| **Layer 2** (CRF search results) | — | ✓ | — | ✓ |
+| **Skip reason fields** | — | — | ✓ | — |
+| **Layer 3** (conversion results) | — | — | — | ✓ |
 
 ## Implementation
 

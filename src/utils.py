@@ -19,7 +19,6 @@ import urllib.request
 from typing import Any, Callable
 from urllib.error import URLError
 
-from src.config import HISTORY_FILE_V2
 from src.logging_setup import get_script_directory
 from src.platform_utils import get_windows_subprocess_startupinfo
 from src.privacy import PATH_PATTERNS, _anonymize_path_match, anonymize_filename
@@ -506,17 +505,8 @@ def log_conversion_result(input_path: str, output_path: str, elapsed_time: float
 
 
 # --- History Management Functions ---
-# Note: The main history logic is now in src/history_index.py
-# These functions provide utility access for GUI and file operations.
-
-
-def get_history_file_path() -> str:
-    """Get the path to the conversion history JSON file (v2 format).
-
-    Returns:
-        Absolute path to the history file
-    """
-    return os.path.join(get_script_directory(), HISTORY_FILE_V2)
+# Note: The main history logic is in src/history_index.py.
+# Use get_history_path() from there for the history file path.
 
 
 def scrub_history_paths() -> tuple[int, int]:

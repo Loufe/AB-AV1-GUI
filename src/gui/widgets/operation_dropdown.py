@@ -16,6 +16,7 @@ from tkinter import ttk
 from typing import TYPE_CHECKING, Callable
 
 from src.gui.constants import COLOR_MENU_ACTIVE_BG, COLOR_MENU_ACTIVE_FG, COLOR_MENU_BACKGROUND
+from src.gui.tree_utils import get_column_name
 from src.history_index import compute_path_hash, get_history_index
 from src.models import OperationType, QueueItem
 
@@ -35,9 +36,8 @@ OPERATION_DISPLAY_TO_ENUM: dict[str, OperationType] = {
     "Analyze Only": OperationType.ANALYZE,
 }
 
-# Operation column index in Treeview (after tree column #0)
-# Columns: #0=Name, #1=size, #2=est_time, #3=operation, #4=output, #5=status
-OPERATION_COLUMN_ID = "#3"
+# Column name for operation dropdown detection
+OPERATION_COLUMN = "operation"
 
 
 class OperationDropdownManager:
@@ -53,12 +53,18 @@ class OperationDropdownManager:
         self._active_item_id: str | None = None
         self._pending_cleanup_id: str | None = None
 
+    @property
+    def is_active(self) -> bool:
+        """Return True if a dropdown is currently shown."""
+        return self._active_combo is not None
+
     def is_operation_column_click(self, event: tk.Event) -> bool:
         """Check if click event is on the operation column of a valid item."""
         tree = self._gui.queue_tree
         item_id = tree.identify_row(event.y)
         col_id = tree.identify_column(event.x)
-        return bool(item_id and col_id == OPERATION_COLUMN_ID)
+        col_name = get_column_name(tree, col_id)
+        return bool(item_id and col_name == OPERATION_COLUMN)
 
     def show_dropdown(self, event: tk.Event) -> bool:
         """Show operation dropdown at clicked cell.
@@ -93,7 +99,7 @@ class OperationDropdownManager:
 
         # Get cell bounding box
         try:
-            bbox = tree.bbox(item_id, OPERATION_COLUMN_ID)
+            bbox = tree.bbox(item_id, OPERATION_COLUMN)
         except tk.TclError:
             return False
 
@@ -164,13 +170,14 @@ class OperationDropdownManager:
         if selected == "Re-analyze + Convert":
             self._clear_layer2_data(queue_item.source_path)
 
+        # Cleanup dropdown before refreshing tree (avoids visual glitch of orphaned combo)
+        self._cleanup()
+
         # Update queue item if operation changed
         if queue_item.operation_type != new_operation:
             queue_item.operation_type = new_operation
             self._gui.save_queue_to_config()
             self._gui.refresh_queue_tree()
-
-        self._cleanup()
 
     def _clear_layer2_data(self, source_path: str) -> None:
         """Clear cached CRF/VMAF data so file will be re-analyzed."""

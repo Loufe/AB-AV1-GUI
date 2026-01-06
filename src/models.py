@@ -10,6 +10,37 @@ from enum import Enum
 from typing import Any, Literal
 
 
+@dataclass
+class AudioStreamInfo:
+    """Information about a single audio stream.
+
+    Extracted from ffprobe stream data. Used to track all audio streams
+    in a file rather than just the first one.
+
+    Serialization: Use dataclasses.asdict() to convert to dict.
+    Deserialization: Use AudioStreamInfo.from_dict() to create from dict.
+    """
+
+    codec: str  # e.g., "aac", "ac3", "opus"
+    language: str | None = None  # e.g., "eng", "jpn", None
+    title: str | None = None  # e.g., "English 5.1", "Commentary"
+    channels: int | None = None  # e.g., 2 (stereo), 6 (5.1)
+    sample_rate: int | None = None  # e.g., 48000
+    bitrate_kbps: float | None = None  # e.g., 128.0, 640.0
+
+    @classmethod
+    def from_dict(cls, d: dict) -> "AudioStreamInfo":
+        """Create from dict (for JSON deserialization)."""
+        return cls(
+            codec=d.get("codec", "unknown"),
+            language=d.get("language"),
+            title=d.get("title"),
+            channels=d.get("channels"),
+            sample_rate=d.get("sample_rate"),
+            bitrate_kbps=d.get("bitrate_kbps"),
+        )
+
+
 @dataclass(frozen=True)
 class TimeEstimate:
     """Time estimation with confidence level and optional range.
@@ -60,8 +91,10 @@ class VideoMetadata:
     profile: str | None = None  # e.g., "High", "Main"
     pix_fmt: str | None = None  # e.g., "yuv420p"
 
-    # Audio stream info (from first audio stream)
-    audio_codec: str | None = None  # e.g., "aac", "opus"
+    # Audio stream info - all streams
+    audio_streams: list[AudioStreamInfo] = field(default_factory=list)
+
+    # Convenience fields from first audio stream (commonly accessed)
     audio_channels: int | None = None
     audio_sample_rate: int | None = None
     audio_bitrate_kbps: float | None = None
@@ -73,7 +106,6 @@ class VideoMetadata:
 
     # Stream counts (for multi-stream awareness)
     video_stream_count: int = 0
-    audio_stream_count: int = 0
     subtitle_stream_count: int = 0
 
     # Total audio bitrate across all streams (for size estimation)
@@ -312,10 +344,10 @@ class FileRecord:
     # === Video Metadata (from ffprobe, Layer 1) ===
     duration_sec: float | None = None
     video_codec: str | None = None
-    audio_codec: str | None = None
     width: int | None = None
     height: int | None = None
     bitrate_kbps: float | None = None
+    audio_streams: list[AudioStreamInfo] = field(default_factory=list)
 
     # === Estimation (Layer 1) ===
     estimated_reduction_percent: float | None = None  # Based on similar files

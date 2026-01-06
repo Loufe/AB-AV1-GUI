@@ -26,8 +26,8 @@ def update_tree_row(gui, file_path: str):
         gui: The VideoConverterGUI instance.
         file_path: Path to the file that was analyzed.
     """
-    # Find the tree item by file_path
-    item_id = gui.get_tree_item_map().get(file_path)
+    # Find the tree item by file_path (normalize for case-insensitive lookup on Windows)
+    item_id = gui.get_tree_item_map().get(os.path.normcase(file_path))
     if not item_id or not gui.analysis_tree.exists(item_id):
         return
 
@@ -72,7 +72,8 @@ def batch_update_tree_rows(gui, file_paths: list[str]) -> None:
     affected_folders: set[str] = set()
 
     for file_path in file_paths:
-        item_id = gui.get_tree_item_map().get(file_path)
+        # Normalize for case-insensitive lookup on Windows
+        item_id = gui.get_tree_item_map().get(os.path.normcase(file_path))
         if not item_id or not gui.analysis_tree.exists(item_id):
             continue
 
@@ -214,16 +215,16 @@ def get_queued_file_paths(gui) -> set[str]:
 
         if item.is_folder:
             # Find all files in tree_item_map that are under this folder
-            # Normalize paths to handle mixed separators on Windows
-            normalized_folder = os.path.normpath(item.source_path)
+            # Normalize paths for case-insensitive comparison on Windows
+            normalized_folder = os.path.normcase(item.source_path)
             folder_prefix = normalized_folder + os.sep
             for file_path in gui.get_tree_item_map():
-                normalized_file = os.path.normpath(file_path)
-                if normalized_file.startswith(folder_prefix) or normalized_file == normalized_folder:
+                # tree_item_map keys are already normcase'd
+                if file_path.startswith(folder_prefix) or file_path == normalized_folder:
                     queued_paths.add(file_path)
         else:
-            # Single file
-            queued_paths.add(item.source_path)
+            # Single file - normalize for comparison with tree_item_map keys
+            queued_paths.add(os.path.normcase(item.source_path))
 
     return queued_paths
 
