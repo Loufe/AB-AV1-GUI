@@ -8,8 +8,9 @@ This module provides functions to convert videos to AV1 format using ab-av1.
 import logging
 import time
 import traceback
+from collections.abc import Callable
 from pathlib import Path
-from typing import Any, Callable
+from typing import Any
 
 from src.ab_av1.exceptions import (
     AbAv1Error,

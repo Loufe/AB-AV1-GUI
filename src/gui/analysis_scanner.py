@@ -14,6 +14,7 @@ from pathlib import Path
 
 from src.cache_helpers import mtimes_match
 from src.config import MIN_FILES_FOR_PERCENT_UPDATES, TREE_UPDATE_BATCH_SIZE
+from src.estimation import compute_grouped_percentiles
 from src.folder_analysis import _analyze_file
 from src.gui.tree_display import compute_analysis_display_values
 from src.history_index import get_history_index
@@ -72,6 +73,9 @@ def incremental_scan_thread(gui, folder: str, extensions: list[str], stop_event:
         folder_tree_ids: dict[str, str] = {}
         folder_tree_ids[root_folder] = ""  # Root maps to tree root
 
+        # Pre-compute percentiles once for entire scan (history doesn't change during scan)
+        grouped_percentiles = compute_grouped_percentiles()
+
         while stack and not stop_event.is_set():
             dirpath, parent_dirpath = stack.pop()
 
@@ -102,7 +106,9 @@ def incremental_scan_thread(gui, folder: str, extensions: list[str], stop_event:
                         if better:
                             record = better
                     # Cache hit - use cached display values
-                    format_str, size_str, savings_str, time_str, eff_str, tag = compute_analysis_display_values(record)
+                    format_str, size_str, savings_str, time_str, eff_str, tag = compute_analysis_display_values(
+                        record, grouped_percentiles=grouped_percentiles
+                    )
                 else:
                     # No valid cache - show defaults until scanned
                     format_str = "—"

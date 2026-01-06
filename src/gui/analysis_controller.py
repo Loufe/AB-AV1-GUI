@@ -17,7 +17,7 @@ import threading
 import tkinter as tk
 from tkinter import messagebox
 
-from src.estimation import estimate_file_time
+from src.estimation import compute_grouped_percentiles, estimate_file_time
 from src.gui import analysis_scanner
 from src.gui.tree_formatters import clear_sort_state, format_compact_time, format_efficiency, sort_analysis_tree
 from src.history_index import get_history_index
@@ -540,6 +540,9 @@ def update_total_from_tree(gui) -> int:
     total_time = 0.0
     any_estimate = False  # Track if any file lacks CRF search (layer 2) data
 
+    # Pre-compute percentiles once for all time estimates
+    grouped_percentiles = compute_grouped_percentiles()
+
     for file_path in gui._tree_item_map:
         record = index.lookup_file(file_path)
         if not record:
@@ -566,6 +569,7 @@ def update_total_from_tree(gui) -> int:
                     duration=record.duration_sec,
                     width=record.width,
                     height=record.height,
+                    grouped_percentiles=grouped_percentiles,
                 ).best_seconds
                 total_time += file_time
 

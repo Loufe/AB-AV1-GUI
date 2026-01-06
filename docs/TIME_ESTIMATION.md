@@ -107,7 +107,7 @@ This ensures the preview dialog shows accurate estimates for whichever operation
 
 ## Performance
 
-### Current Architecture
+### Architecture
 
 ```
 ┌─────────────────────────────────────────────────────────────────────────┐
@@ -118,57 +118,47 @@ This ensures the preview dialog shows accurate estimates for whichever operation
                               │
                               ▼
 ┌─────────────────────────────────────────────────────────────────────────┐
-│              compute_grouped_encoding_rates()                            │
-│  Iterates _converted_cache once                                          │
-│  Returns: dict[(codec, resolution) → list[float rates]]                  │
-│  NOT CACHED - recomputed each call                                       │
+│              compute_grouped_percentiles()                               │
+│  Called ONCE at start of batch operation                                 │
+│  Iterates _converted_cache, groups by (codec, resolution)                │
+│  Computes P25/P50/P75 for each group (O(n log n) sort per group)         │
+│  Returns: dict[(codec, resolution) → {p25, p50, p75, count}]             │
 └─────────────────────────────────────────────────────────────────────────┘
                               │
                               ▼
 ┌─────────────────────────────────────────────────────────────────────────┐
 │                    estimate_file_time()                                  │
-│  Receives grouped_rates, but for EACH call:                              │
-│    → compute_percentiles(rates) ← O(n log n) SORT EVERY TIME!            │
-│  Percentiles NOT cached between calls                                    │
+│  Receives pre-computed grouped_percentiles                               │
+│  O(1) dict lookup per file - no sorting                                  │
 └─────────────────────────────────────────────────────────────────────────┘
 ```
 
-### The Bottleneck
+### Why This Matters
 
-`estimate_file_time()` calls `compute_percentiles()` on **every invocation**, even when called repeatedly with identical `grouped_rates`. Since `statistics.quantiles()` sorts internally (O(n log n)), this causes redundant work:
+`statistics.quantiles()` sorts internally (O(n log n)). Without pre-computation, a batch operation like refreshing a queue with 5 files would sort the same rate lists 15-45 times redundantly.
 
-| Operation | Calls to estimate_file_time() | Percentile sorts |
-|-----------|------------------------------|------------------|
-| Add 5 files (individual) | 5 | Up to 15 |
-| Add 1 folder (5 files) | 15 (3 passes) | Up to 45 |
-| Refresh queue tree | N × files in queue | Scales with queue size |
+With 5000 converted records, that's ~100-200ms wasted per UI operation.
 
-For 5000 converted records in history, the global bucket `(None, None)` has 5000 rates. Each sort: ~2-5ms. With 45 redundant sorts: **~100-200ms wasted**.
+### Current Implementation
 
-### Mitigation
+Percentiles are cached at the session level in `HistoryIndex`:
 
-`grouped_rates` is passed to avoid recomputing raw rates. For batch operations, compute percentiles once upfront:
+- `compute_grouped_percentiles()` checks `HistoryIndex` cache first
+- On cache miss, computes percentiles and stores in cache
+- Cache is cleared when a CONVERTED record is upserted (new data point)
+- All callers automatically benefit from caching
 
-```python
-# Good: Pre-compute percentiles
-percentiles_by_group = {key: compute_percentiles(rates) for key, rates in grouped_rates.items()}
-# Then pass percentiles_by_group to helper functions
-
-# Bad: Pass grouped_rates, recompute percentiles each call
-for file in files:
-    estimate_file_time(path, grouped_rates=rates)  # Sorts on every call!
-```
-
-History data is stable within a single UI operation, so pre-computed percentiles remain valid throughout.
+This means percentiles are computed at most once per operation type per session (until a file finishes converting). Multiple UI operations reuse the same cached values.
 
 ## Implementation
 
 Key functions in `src/estimation.py`:
 
 - `get_resolution_bucket(width, height)` - Categorizes resolution
-- `compute_grouped_encoding_rates(operation_type)` - Builds rate dictionary
-- `compute_percentiles(values)` - Calculates P25/P50/P75
-- `estimate_file_time(...)` - Main entry point, returns `TimeEstimate`
+- `compute_grouped_encoding_rates(operation_type)` - Builds raw rate lists by (codec, resolution)
+- `compute_grouped_percentiles(operation_type)` - Pre-computes percentiles for all groups (use this for batch ops)
+- `compute_percentiles(values)` - Calculates P25/P50/P75 for a single list
+- `estimate_file_time(...)` - Main entry point, accepts optional `grouped_percentiles` param
 
 The `TimeEstimate` dataclass contains:
 - `min_seconds`, `max_seconds`, `best_seconds` - The estimate range

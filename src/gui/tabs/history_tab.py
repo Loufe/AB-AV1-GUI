@@ -260,7 +260,7 @@ def compute_history_display_values(record: FileRecord) -> tuple[str, ...]:
 
     # Bitrate (convert kbps to Mbps)
     if record.bitrate_kbps:
-        if record.bitrate_kbps >= 1000:
+        if record.bitrate_kbps >= 1000:  # noqa: PLR2004 - 1 Mbps
             bitrate = f"{record.bitrate_kbps / 1000:.1f} Mbps"
         else:
             bitrate = f"{record.bitrate_kbps:.0f} kbps"
@@ -271,10 +271,11 @@ def compute_history_display_values(record: FileRecord) -> tuple[str, ...]:
     duration = format_time(record.duration_sec) if record.duration_sec else "—"
 
     # Audio codec(s) from audio_streams
+    max_inline_codecs = 3
     if record.audio_streams:
         if len(record.audio_streams) == 1:
             audio = record.audio_streams[0].codec.upper()
-        elif len(record.audio_streams) <= 3:
+        elif len(record.audio_streams) <= max_inline_codecs:
             # Show all codecs: "AAC, AC3"
             codecs = [s.codec.upper() for s in record.audio_streams]
             audio = ", ".join(codecs)
@@ -400,7 +401,7 @@ def _parse_size(val: str) -> float:
         return -1
     try:
         parts = val.split()
-        if len(parts) != 2:
+        if len(parts) != 2:  # noqa: PLR2004 - "<number> <unit>" format
             return -1
         num = float(parts[0])
         unit = parts[1].upper()
@@ -436,7 +437,7 @@ def _parse_bitrate(val: str) -> float:
         return -1
     try:
         parts = val.split()
-        if len(parts) != 2:
+        if len(parts) != 2:  # noqa: PLR2004 - "<number> <unit>" format
             return -1
         num = float(parts[0])
         unit = parts[1].lower()
@@ -453,9 +454,9 @@ def _parse_duration(val: str) -> float:
         return -1
     try:
         parts = val.split(":")
-        if len(parts) == 3:
+        if len(parts) == 3:  # noqa: PLR2004 - HH:MM:SS
             return int(parts[0]) * 3600 + int(parts[1]) * 60 + int(parts[2])
-        if len(parts) == 2:
+        if len(parts) == 2:  # noqa: PLR2004 - MM:SS
             return int(parts[0]) * 60 + int(parts[1])
         return float(parts[0])
     except (ValueError, IndexError):

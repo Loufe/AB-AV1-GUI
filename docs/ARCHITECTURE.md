@@ -160,6 +160,42 @@ Conversion uses a queue-based architecture rather than direct folder scanning:
 └─────────────────────────────┘
 ```
 
+## Data Persistence
+
+### Files
+
+| File | Loaded | Saved | Contents |
+|------|--------|-------|----------|
+| `conversion_history.json` | First history access | After analyze/convert | FileRecord array |
+| `av1_converter_config.json` | App startup | Settings/queue change | Settings + queue_items |
+
+### HistoryIndex Lifecycle
+
+The history index is a **singleton** with **lazy loading**:
+
+1. `get_history_index()` returns the same instance for the entire session
+2. First `lookup_file()` / `get()` / `upsert()` triggers `_load_from_disk()`
+3. After load, all operations are O(1) dict lookups in memory
+4. `index.save()` is called explicitly after analysis/conversion completes
+
+**After history is loaded, file size is irrelevant** - all lookups are in-memory dict access.
+
+### What Triggers History Load
+
+- `incremental_scan_thread()` checking cache
+- `categorize_queue_items()` filtering files
+- `estimate_file_time()` getting metadata
+
+### In-Memory Caches
+
+| Cache | Location | Built | Invalidated |
+|-------|----------|-------|-------------|
+| `_records` | HistoryIndex | On load | Never (session-scoped) |
+| `_converted_cache` | HistoryIndex | First `get_converted_records()` | On CONVERTED record change |
+| `_size_index` | HistoryIndex | On load | On record upsert |
+| `_percentiles_cache` | HistoryIndex | First `compute_grouped_percentiles()` | On CONVERTED record change |
+| Encoding rates | Not cached | Each `compute_grouped_encoding_rates()` call | N/A |
+
 ## Data Flow
 
 ### Conversion Start

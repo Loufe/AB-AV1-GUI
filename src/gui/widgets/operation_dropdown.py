@@ -13,7 +13,7 @@ from __future__ import annotations
 import contextlib
 import tkinter as tk
 from tkinter import ttk
-from typing import TYPE_CHECKING, Callable
+from typing import TYPE_CHECKING
 
 from src.gui.constants import COLOR_MENU_ACTIVE_BG, COLOR_MENU_ACTIVE_FG, COLOR_MENU_BACKGROUND
 from src.gui.tree_utils import get_column_name
@@ -21,6 +21,8 @@ from src.history_index import compute_path_hash, get_history_index
 from src.models import OperationType, QueueItem
 
 if TYPE_CHECKING:
+    from collections.abc import Callable
+
     from src.gui.main_window import VideoConverterGUI
 
 

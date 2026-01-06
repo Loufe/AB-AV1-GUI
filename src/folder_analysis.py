@@ -17,10 +17,10 @@ import dataclasses
 import datetime
 import logging
 import os
+from collections.abc import Generator
 from dataclasses import dataclass, field
 from pathlib import Path
 from statistics import mean
-from typing import Generator
 
 from src.cache_helpers import mtimes_match
 from src.config import DEFAULT_REDUCTION_ESTIMATE_PERCENT

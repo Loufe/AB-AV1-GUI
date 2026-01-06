@@ -5,9 +5,8 @@ Central configuration constants for the AV1 Video Converter application.
 
 # --- Application Version ---
 try:
-    from pathlib import Path
-
     import tomllib
+    from pathlib import Path
 
     _pyproject = Path(__file__).parent.parent / "pyproject.toml"
     with open(_pyproject, "rb") as _f:

@@ -11,7 +11,7 @@ import threading
 import time
 
 # GUI-related imports (for type hinting gui object, not direct use of widgets here)
-from typing import Callable  # Import Callable
+from collections.abc import Callable  # Import Callable
 
 # Project imports
 from src.ab_av1.exceptions import ConversionNotWorthwhileError

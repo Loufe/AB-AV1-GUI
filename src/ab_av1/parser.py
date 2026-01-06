@@ -7,7 +7,8 @@ Focuses on lines expected directly from ab-av1 via stdout/stderr.
 import logging
 import os
 import re
-from typing import Any, Callable
+from collections.abc import Callable
+from typing import Any
 
 from src.config import SIZE_REDUCTION_CHANGE_THRESHOLD, VMAF_CHANGE_THRESHOLD
 from src.models import ProgressEvent

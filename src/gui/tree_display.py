@@ -6,10 +6,13 @@ Provides consistent status formatting and tag mapping for both
 the analysis tree and queue tree, reducing code duplication.
 """
 
-from src.estimation import estimate_file_time
+from src.estimation import compute_grouped_percentiles, estimate_file_time
 from src.gui.tree_formatters import format_compact_time, format_efficiency
 from src.models import AudioStreamInfo, FileRecord, FileStatus, QueueItemStatus
 from src.utils import format_file_size
+
+# Maximum audio streams to list individually before showing count (e.g., "3 audio")
+MAX_AUDIO_STREAMS_TO_LIST = 3
 
 # =============================================================================
 # Status Tag Mappings
@@ -140,6 +143,8 @@ def get_analysis_file_tag(status: FileStatus, video_codec: str | None = None) ->
 
 def compute_analysis_display_values(
     record: FileRecord,
+    *,
+    grouped_percentiles: dict | None = None,
 ) -> tuple[str, str, str, str, str, str]:
     """Compute display values for a file record in the analysis tree.
 
@@ -148,6 +153,8 @@ def compute_analysis_display_values(
 
     Args:
         record: The FileRecord from history index.
+        grouped_percentiles: Pre-computed percentiles from compute_grouped_percentiles().
+                            If provided, skips percentile computation (for batch operations).
 
     Returns:
         Tuple of (format_str, size_str, savings_str, time_str, eff_str, tag).
@@ -179,11 +186,16 @@ def compute_analysis_display_values(
             if not has_layer2:
                 savings_str = f"~{savings_str}"
 
+            # Use pre-computed percentiles if provided, otherwise compute
+            if grouped_percentiles is None:
+                grouped_percentiles = compute_grouped_percentiles()
+
             time_estimate = estimate_file_time(
                 codec=record.video_codec,
                 duration=record.duration_sec,
                 width=record.width,
                 height=record.height,
+                grouped_percentiles=grouped_percentiles,
             )
             # Layer 2 = precise (no prefix), Layer 1 = use estimate confidence
             confidence = "high" if has_layer2 else time_estimate.confidence
@@ -225,7 +237,7 @@ def format_stream_display(
     if audio_streams:
         if len(audio_streams) == 1:
             audio = audio_streams[0].codec.upper()
-        elif len(audio_streams) <= 3:
+        elif len(audio_streams) <= MAX_AUDIO_STREAMS_TO_LIST:
             audio = ", ".join(s.codec.upper() for s in audio_streams)
         else:
             audio = f"{len(audio_streams)} audio"

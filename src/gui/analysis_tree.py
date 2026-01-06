@@ -11,7 +11,7 @@ Handles incremental updates to the analysis tree view, including:
 import os
 import tkinter as tk
 
-from src.estimation import estimate_file_time
+from src.estimation import compute_grouped_percentiles, estimate_file_time
 from src.gui.tree_display import compute_analysis_display_values
 from src.gui.tree_formatters import format_compact_time, format_efficiency
 from src.history_index import get_history_index
@@ -38,8 +38,13 @@ def update_tree_row(gui, file_path: str):
     if not record:
         return
 
+    # Pre-compute percentiles once for display values and folder updates
+    grouped_percentiles = compute_grouped_percentiles()
+
     # Compute display values from record
-    format_str, size_str, savings_str, time_str, eff_str, tag = compute_analysis_display_values(record)
+    format_str, size_str, savings_str, time_str, eff_str, tag = compute_analysis_display_values(
+        record, grouped_percentiles=grouped_percentiles
+    )
 
     # Update tree item - preserve queue tags (in_queue, partial_queue) while updating status tags
     current_tags = list(gui.analysis_tree.item(item_id, "tags") or ())
@@ -50,7 +55,7 @@ def update_tree_row(gui, file_path: str):
     # Update all ancestor folder aggregates
     parent_id = gui.analysis_tree.parent(item_id)
     while parent_id:
-        update_folder_aggregates(gui, parent_id)
+        update_folder_aggregates(gui, parent_id, grouped_percentiles=grouped_percentiles)
         parent_id = gui.analysis_tree.parent(parent_id)
 
 
@@ -71,6 +76,9 @@ def batch_update_tree_rows(gui, file_paths: list[str]) -> None:
     index = get_history_index()
     affected_folders: set[str] = set()
 
+    # Pre-compute percentiles once for all file display values and folder updates
+    grouped_percentiles = compute_grouped_percentiles()
+
     for file_path in file_paths:
         # Normalize for case-insensitive lookup on Windows
         item_id = gui.get_tree_item_map().get(os.path.normcase(file_path))
@@ -88,7 +96,9 @@ def batch_update_tree_rows(gui, file_paths: list[str]) -> None:
                 record = better
 
         # Compute display values from record
-        format_str, size_str, savings_str, time_str, eff_str, tag = compute_analysis_display_values(record)
+        format_str, size_str, savings_str, time_str, eff_str, tag = compute_analysis_display_values(
+            record, grouped_percentiles=grouped_percentiles
+        )
 
         # Update tree item - preserve queue tags (in_queue, partial_queue) while updating status tags
         current_tags = list(gui.analysis_tree.item(item_id, "tags") or ())
@@ -110,10 +120,16 @@ def batch_update_tree_rows(gui, file_paths: list[str]) -> None:
     if affected_folders:
         item_to_path = {item_id: path for path, item_id in gui.get_tree_item_map().items()}
         for folder_id in affected_folders:
-            update_folder_aggregates(gui, folder_id, item_to_path)
+            update_folder_aggregates(gui, folder_id, item_to_path, grouped_percentiles=grouped_percentiles)
 
 
-def update_folder_aggregates(gui, folder_id: str, item_to_path: dict[str, str] | None = None):
+def update_folder_aggregates(
+    gui,
+    folder_id: str,
+    item_to_path: dict[str, str] | None = None,
+    *,
+    grouped_percentiles: dict | None = None,
+):
     """Recalculate and update folder aggregate values.
 
     For direct child files, reads data from history index.
@@ -124,9 +140,15 @@ def update_folder_aggregates(gui, folder_id: str, item_to_path: dict[str, str] |
         folder_id: The tree item ID of the folder to update.
         item_to_path: Optional pre-built reverse map of item_id -> file_path.
                      If not provided, builds one (slower for batch updates).
+        grouped_percentiles: Pre-computed percentiles from compute_grouped_percentiles().
+                            If provided, skips percentile computation (for batch operations).
     """
     if item_to_path is None:
         item_to_path = {item_id: path for path, item_id in gui.get_tree_item_map().items()}
+
+    # Pre-compute percentiles once if not provided
+    if grouped_percentiles is None:
+        grouped_percentiles = compute_grouped_percentiles()
 
     # Get all direct children (files and subfolders)
     children = gui.analysis_tree.get_children(folder_id)
@@ -170,6 +192,7 @@ def update_folder_aggregates(gui, folder_id: str, item_to_path: dict[str, str] |
                     duration=record.duration_sec,
                     width=record.width,
                     height=record.height,
+                    grouped_percentiles=grouped_percentiles,
                 ).best_seconds
                 total_time += file_time
         else:

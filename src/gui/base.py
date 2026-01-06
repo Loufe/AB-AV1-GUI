@@ -8,8 +8,8 @@ import os
 import subprocess
 import sys
 import tkinter as tk
+from collections.abc import Callable
 from tkinter import ttk
-from typing import Callable
 
 from src.gui.constants import COLOR_TOOLTIP_BACKGROUND
 from src.gui.tree_utils import get_column_name

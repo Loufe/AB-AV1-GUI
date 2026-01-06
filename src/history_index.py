@@ -15,7 +15,7 @@ import threading
 
 from src.config import DURATION_TOLERANCE_SEC, HISTORY_FILE, MAX_CRF_VALUE, MAX_VMAF_VALUE, RESOLUTION_TOLERANCE_PERCENT
 from src.logging_setup import get_script_directory
-from src.models import AudioStreamInfo, FileRecord, FileStatus
+from src.models import AudioStreamInfo, FileRecord, FileStatus, OperationType
 from src.privacy import compute_hash, normalize_path
 
 logger = logging.getLogger(__name__)
@@ -134,6 +134,7 @@ class HistoryIndex:
         self._loaded = False
         self._dirty = False
         self._converted_cache: list[FileRecord] | None = None
+        self._percentiles_cache: dict[OperationType | None, dict] | None = None
 
     def get(self, path_hash: str) -> FileRecord | None:
         """Get a record by its path hash.
@@ -175,9 +176,10 @@ class HistoryIndex:
             self._ensure_loaded()
             old_record = self._records.get(record.path_hash)
 
-            # Invalidate converted cache if this affects converted records
+            # Invalidate caches if this affects converted records
             if record.status == FileStatus.CONVERTED or (old_record and old_record.status == FileStatus.CONVERTED):
                 self._converted_cache = None
+                self._percentiles_cache = None
 
             # Maintain size index (ADR-001)
             if old_record and old_record.file_size_bytes != record.file_size_bytes:
@@ -222,6 +224,32 @@ class HistoryIndex:
             if self._converted_cache is None:
                 self._converted_cache = [r for r in self._records.values() if r.status == FileStatus.CONVERTED]
             return self._converted_cache
+
+    def get_cached_percentiles(self, operation_type: OperationType | None) -> dict | None:
+        """Get cached percentiles for an operation type.
+
+        Args:
+            operation_type: ANALYZE, CONVERT, or None for default.
+
+        Returns:
+            Cached percentiles dict, or None if not cached.
+        """
+        with self._lock:
+            if self._percentiles_cache is None:
+                return None
+            return self._percentiles_cache.get(operation_type)
+
+    def cache_percentiles(self, operation_type: OperationType | None, percentiles: dict) -> None:
+        """Store computed percentiles in cache.
+
+        Args:
+            operation_type: ANALYZE, CONVERT, or None for default.
+            percentiles: The computed percentiles dict to cache.
+        """
+        with self._lock:
+            if self._percentiles_cache is None:
+                self._percentiles_cache = {}
+            self._percentiles_cache[operation_type] = percentiles
 
     def get_all_records(self) -> list[FileRecord]:
         """Get all records in the index.

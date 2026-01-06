@@ -13,7 +13,7 @@ Handles full rebuilds of the queue tree view, including:
 import contextlib
 import os
 
-from src.estimation import compute_grouped_encoding_rates, estimate_file_time
+from src.estimation import compute_grouped_percentiles, estimate_file_time
 from src.gui.queue_controller import (
     update_clear_completed_button_state,
     update_remove_button_state,
@@ -49,10 +49,10 @@ def refresh_queue_tree(gui) -> None:
 
     index = get_history_index()
 
-    # Pre-compute encoding rates once for all estimates (see TIME_ESTIMATION.md ## Performance)
-    rates_by_op = {
-        OperationType.CONVERT: compute_grouped_encoding_rates(OperationType.CONVERT),
-        OperationType.ANALYZE: compute_grouped_encoding_rates(OperationType.ANALYZE),
+    # Pre-compute percentiles once for all estimates (see TIME_ESTIMATION.md ## Performance)
+    percentiles_by_op = {
+        OperationType.CONVERT: compute_grouped_percentiles(OperationType.CONVERT),
+        OperationType.ANALYZE: compute_grouped_percentiles(OperationType.ANALYZE),
     }
 
     # Add each queue item with order number
@@ -74,7 +74,7 @@ def refresh_queue_tree(gui) -> None:
         size_display = _format_size_display(queue_item, record)
 
         # Format estimated time
-        est_time_display = _format_time_estimate(queue_item, record, index, rates_by_op)
+        est_time_display = _format_time_estimate(queue_item, record, index, percentiles_by_op)
 
         # Format status with tag
         status_display, item_tag = format_queue_status_display(
@@ -108,10 +108,10 @@ def refresh_queue_tree(gui) -> None:
 
         # Insert nested file rows for folder items
         if queue_item.is_folder and queue_item.files:
-            _insert_folder_file_rows(gui, queue_item, item_id, stopping, rates_by_op)
+            _insert_folder_file_rows(gui, queue_item, item_id, stopping, percentiles_by_op)
 
     # Update total row
-    _update_total_row(gui, index, rates_by_op)
+    _update_total_row(gui, index, percentiles_by_op)
 
     # Update button states
     update_clear_completed_button_state(gui)
@@ -138,7 +138,7 @@ def sync_queue_order_from_tree(gui) -> None:
         return  # Length mismatch - something wrong, bail out
 
     # Early exit if order unchanged (identity comparison)
-    if all(a is b for a, b in zip(new_order, gui._queue_items)):
+    if all(a is b for a, b in zip(new_order, gui._queue_items, strict=True)):
         return
 
     gui._queue_items = new_order
@@ -209,17 +209,17 @@ def _format_size_display(queue_item, record) -> str:
         return "—"
 
 
-def _format_time_estimate(queue_item, record, index, rates_by_op: dict) -> str:
+def _format_time_estimate(queue_item, record, index, percentiles_by_op: dict) -> str:
     """Format the estimated time column display text."""
     op_type = queue_item.operation_type
-    rates = rates_by_op.get(op_type)
+    percentiles = percentiles_by_op.get(op_type)
     if queue_item.is_folder and queue_item.files:
         # Sum estimates for all files in folder, track lowest confidence
         total_seconds = 0.0
         lowest_confidence = "high"
         confidence_order = {"high": 0, "medium": 1, "low": 2, "none": 3}
         for file_item in queue_item.files:
-            file_estimate = estimate_file_time(file_item.path, operation_type=op_type, grouped_rates=rates)
+            file_estimate = estimate_file_time(file_item.path, operation_type=op_type, grouped_percentiles=percentiles)
             if file_estimate.confidence != "none" and file_estimate.best_seconds > 0:
                 total_seconds += file_estimate.best_seconds
                 if confidence_order.get(file_estimate.confidence, 3) > confidence_order.get(lowest_confidence, 0):
@@ -235,14 +235,16 @@ def _format_time_estimate(queue_item, record, index, rates_by_op: dict) -> str:
             width=record.width,
             height=record.height,
             operation_type=op_type,
-            grouped_rates=rates,
+            grouped_percentiles=percentiles,
         )
         if file_estimate.confidence != "none" and file_estimate.best_seconds > 0:
             return format_compact_time(file_estimate.best_seconds, confidence=file_estimate.confidence)
         return "—"
     if not queue_item.is_folder:
         # Try path-based estimate as fallback (only for files, not folders)
-        file_estimate = estimate_file_time(queue_item.source_path, operation_type=op_type, grouped_rates=rates)
+        file_estimate = estimate_file_time(
+            queue_item.source_path, operation_type=op_type, grouped_percentiles=percentiles
+        )
         if file_estimate.confidence != "none" and file_estimate.best_seconds > 0:
             return format_compact_time(file_estimate.best_seconds, confidence=file_estimate.confidence)
         return "—"
@@ -250,10 +252,10 @@ def _format_time_estimate(queue_item, record, index, rates_by_op: dict) -> str:
     return "—"
 
 
-def _insert_folder_file_rows(gui, queue_item, parent_item_id: str, stopping: bool, rates_by_op: dict) -> None:
+def _insert_folder_file_rows(gui, queue_item, parent_item_id: str, stopping: bool, percentiles_by_op: dict) -> None:
     """Insert nested file rows for a folder queue item."""
     op_type = queue_item.operation_type
-    rates = rates_by_op.get(op_type)
+    percentiles = percentiles_by_op.get(op_type)
     index = get_history_index()
 
     for file_item in queue_item.files:
@@ -268,7 +270,7 @@ def _insert_folder_file_rows(gui, queue_item, parent_item_id: str, stopping: boo
             file_format = "—"
 
         # Calculate estimated time for this file
-        file_time_estimate = estimate_file_time(file_item.path, operation_type=op_type, grouped_rates=rates)
+        file_time_estimate = estimate_file_time(file_item.path, operation_type=op_type, grouped_percentiles=percentiles)
         if file_time_estimate.confidence != "none" and file_time_estimate.best_seconds > 0:
             file_est_time = format_compact_time(
                 file_time_estimate.best_seconds, confidence=file_time_estimate.confidence
@@ -294,7 +296,7 @@ def _insert_folder_file_rows(gui, queue_item, parent_item_id: str, stopping: boo
         gui._tree_file_map[file_tree_id] = (queue_item.id, file_item.path)
 
 
-def _update_total_row(gui, index, rates_by_op: dict) -> None:
+def _update_total_row(gui, index, percentiles_by_op: dict) -> None:
     """Update the total row at the bottom of the queue tree."""
     total_items = len(gui._queue_items)
     total_files = sum(len(item.files) if item.is_folder else 1 for item in gui._queue_items)
@@ -307,13 +309,15 @@ def _update_total_row(gui, index, rates_by_op: dict) -> None:
 
     for queue_item in gui._queue_items:
         op_type = queue_item.operation_type
-        rates = rates_by_op.get(op_type)
+        percentiles = percentiles_by_op.get(op_type)
         if queue_item.is_folder and queue_item.files:
             # Folder: sum file sizes and estimates
             for file_item in queue_item.files:
                 if file_item.size_bytes > 0:
                     total_size_bytes += file_item.size_bytes
-                file_estimate = estimate_file_time(file_item.path, operation_type=op_type, grouped_rates=rates)
+                file_estimate = estimate_file_time(
+                    file_item.path, operation_type=op_type, grouped_percentiles=percentiles
+                )
                 if file_estimate.confidence != "none" and file_estimate.best_seconds > 0:
                     total_est_seconds += file_estimate.best_seconds
                     if confidence_order.get(file_estimate.confidence, 3) > confidence_order.get(lowest_confidence, 0):
@@ -336,10 +340,12 @@ def _update_total_row(gui, index, rates_by_op: dict) -> None:
                     width=record.width,
                     height=record.height,
                     operation_type=op_type,
-                    grouped_rates=rates,
+                    grouped_percentiles=percentiles,
                 )
             else:
-                file_estimate = estimate_file_time(queue_item.source_path, operation_type=op_type, grouped_rates=rates)
+                file_estimate = estimate_file_time(
+                    queue_item.source_path, operation_type=op_type, grouped_percentiles=percentiles
+                )
             if file_estimate.confidence != "none" and file_estimate.best_seconds > 0:
                 total_est_seconds += file_estimate.best_seconds
                 if confidence_order.get(file_estimate.confidence, 3) > confidence_order.get(lowest_confidence, 0):

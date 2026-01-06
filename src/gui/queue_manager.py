@@ -9,7 +9,7 @@ import os
 import uuid
 
 from src.conversion_engine.scanner import find_video_files
-from src.estimation import compute_grouped_encoding_rates, compute_percentiles, get_resolution_bucket
+from src.estimation import compute_grouped_percentiles, get_resolution_bucket
 from src.gui.widgets.add_to_queue_dialog import AddToQueuePreviewDialog, QueuePreviewData
 from src.history_index import get_history_index
 from src.models import FileStatus, OperationType, OutputMode, QueueFileItem, QueueItem, QueueItemStatus
@@ -261,14 +261,9 @@ def calculate_queue_estimates(
 
     index = get_history_index()
 
-    # Pre-compute encoding rates grouped by (codec, resolution) in one O(C) pass
+    # Pre-compute percentiles grouped by (codec, resolution) in one pass
     # Pass operation_type so ANALYZE uses crf_search_time, CONVERT uses encoding_time
-    grouped_rates = compute_grouped_encoding_rates(operation_type)
-
-    # Pre-compute percentiles per group
-    percentiles_by_group: dict[tuple[str | None, str | None], dict[str, float] | None] = {
-        key: compute_percentiles(rates) for key, rates in grouped_rates.items()
-    }
+    percentiles_by_group = compute_grouped_percentiles(operation_type)
     global_percentiles = percentiles_by_group.get((None, None))
 
     for path, is_folder in items:

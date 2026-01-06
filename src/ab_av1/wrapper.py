@@ -13,7 +13,8 @@ import os
 import re
 import subprocess
 import time
-from typing import Any, Callable
+from collections.abc import Callable
+from typing import Any
 
 # Project imports
 from src.config import DEFAULT_ENCODING_PRESET, DEFAULT_VMAF_TARGET, MIN_VMAF_FALLBACK_TARGET, VMAF_FALLBACK_STEP

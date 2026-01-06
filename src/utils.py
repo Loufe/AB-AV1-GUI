@@ -16,7 +16,8 @@ import re
 import subprocess
 import tkinter as tk
 import urllib.request
-from typing import Any, Callable
+from collections.abc import Callable
+from typing import Any
 from urllib.error import URLError
 
 from src.logging_setup import get_script_directory

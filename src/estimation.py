@@ -104,6 +104,26 @@ def compute_grouped_encoding_rates(
     return rates
 
 
+def compute_grouped_percentiles(operation_type: OperationType | None = None) -> dict:
+    """Compute percentiles for all rate groups. Cached until converted records change.
+
+    Results are cached in HistoryIndex and automatically invalidated when
+    a CONVERTED record is added or modified.
+    """
+    index = get_history_index()
+
+    # Check cache first
+    cached = index.get_cached_percentiles(operation_type)
+    if cached is not None:
+        return cached
+
+    # Compute and cache
+    grouped_rates = compute_grouped_encoding_rates(operation_type)
+    result = {key: compute_percentiles(rates) for key, rates in grouped_rates.items()}
+    index.cache_percentiles(operation_type, result)
+    return result
+
+
 def compute_percentiles(values: list[float]) -> dict[str, float] | None:
     """Compute P25, P50, P75 percentiles from a list of values.
 
@@ -111,12 +131,12 @@ def compute_percentiles(values: list[float]) -> dict[str, float] | None:
         values: List of numeric values.
 
     Returns:
-        Dict with 'p25', 'p50', 'p75' keys, or None if insufficient data.
+        Dict with 'p25', 'p50', 'p75', 'count' keys, or None if insufficient data.
     """
     if len(values) < MIN_SAMPLES_FOR_ESTIMATE:
         return None
     quantiles = statistics.quantiles(values, n=4)
-    return {"p25": quantiles[0], "p50": quantiles[1], "p75": quantiles[2]}
+    return {"p25": quantiles[0], "p50": quantiles[1], "p75": quantiles[2], "count": len(values)}
 
 
 def estimate_file_time(
@@ -127,7 +147,7 @@ def estimate_file_time(
     width: int | None = None,
     height: int | None = None,
     operation_type: OperationType | None = None,
-    grouped_rates: dict | None = None,
+    grouped_percentiles: dict | None = None,
 ) -> TimeEstimate:
     """Estimate processing time using resolution and codec-based percentiles.
 
@@ -145,8 +165,8 @@ def estimate_file_time(
         height: Video height in pixels. Extracted from file if not provided.
         operation_type: If ANALYZE, estimates CRF search time only (no encoding).
                        If CONVERT or None, estimates full encoding time (CRF search + encode).
-        grouped_rates: Pre-computed rates from compute_grouped_encoding_rates().
-                      If provided, skips rate computation (for batch operations).
+        grouped_percentiles: Pre-computed percentiles from compute_grouped_percentiles().
+                            If provided, skips percentile computation (for batch operations).
 
     Returns:
         TimeEstimate with min/max range, best guess, and confidence level.
@@ -183,56 +203,48 @@ def estimate_file_time(
     if not duration or duration <= 0:
         return TimeEstimate(0, 0, 0, "none", "no_duration")
 
-    # Use pre-computed rates if provided, otherwise compute (expensive for batch operations)
-    if grouped_rates is None:
-        grouped_rates = compute_grouped_encoding_rates(operation_type)
+    # Use pre-computed percentiles if provided, otherwise compute
+    if grouped_percentiles is None:
+        grouped_percentiles = compute_grouped_percentiles(operation_type)
     res_bucket = get_resolution_bucket(width, height)
 
-    # Tier 1: (codec, resolution) specific rates
+    # Tier 1: (codec, resolution) specific
     if codec and res_bucket != "unknown":
         key = (codec, res_bucket)
-        if key in grouped_rates:
-            rates = grouped_rates[key]
-            stats = compute_percentiles(rates)
-            if stats:
-                # High confidence with 10+ samples, medium with fewer
-                confidence = "high" if len(rates) >= MIN_SAMPLES_HIGH_CONFIDENCE else "medium"
-                return TimeEstimate(
-                    min_seconds=duration * stats["p25"],
-                    max_seconds=duration * stats["p75"],
-                    best_seconds=duration * stats["p50"],
-                    confidence=confidence,
-                    source=f"{codec}:{res_bucket}",
-                )
+        stats = grouped_percentiles.get(key)
+        if stats:
+            confidence = "high" if stats.get("count", 0) >= MIN_SAMPLES_HIGH_CONFIDENCE else "medium"
+            return TimeEstimate(
+                min_seconds=duration * stats["p25"],
+                max_seconds=duration * stats["p75"],
+                best_seconds=duration * stats["p50"],
+                confidence=confidence,
+                source=f"{codec}:{res_bucket}",
+            )
 
-    # Tier 2: Codec-only rates (all resolutions)
+    # Tier 2: Codec-only (all resolutions)
     if codec:
         key = (codec, None)
-        if key in grouped_rates:
-            rates = grouped_rates[key]
-            stats = compute_percentiles(rates)
-            if stats:
-                return TimeEstimate(
-                    min_seconds=duration * stats["p25"],
-                    max_seconds=duration * stats["p75"],
-                    best_seconds=duration * stats["p50"],
-                    confidence="medium",
-                    source=f"codec:{codec}",
-                )
-
-    # Tier 3: Global rates
-    key = (None, None)
-    if key in grouped_rates:
-        rates = grouped_rates[key]
-        stats = compute_percentiles(rates)
+        stats = grouped_percentiles.get(key)
         if stats:
             return TimeEstimate(
                 min_seconds=duration * stats["p25"],
                 max_seconds=duration * stats["p75"],
                 best_seconds=duration * stats["p50"],
-                confidence="low",
-                source="global",
+                confidence="medium",
+                source=f"codec:{codec}",
             )
+
+    # Tier 3: Global
+    stats = grouped_percentiles.get((None, None))
+    if stats:
+        return TimeEstimate(
+            min_seconds=duration * stats["p25"],
+            max_seconds=duration * stats["p75"],
+            best_seconds=duration * stats["p50"],
+            confidence="low",
+            source="global",
+        )
 
     # Tier 4: Insufficient data
     return TimeEstimate(0, 0, 0, "none", "insufficient_data")
@@ -282,6 +294,7 @@ def estimate_pending_files_eta(
     current_file_path: str | None,
     current_file_encoding_started: bool,
     operation_type: OperationType | None = None,
+    grouped_percentiles: dict | None = None,
 ) -> float:
     """Estimate total time needed for all pending files.
 
@@ -291,12 +304,18 @@ def estimate_pending_files_eta(
         current_file_encoding_started: Whether current file has started encoding phase
         operation_type: Operation type for time estimation (ANALYZE vs CONVERT).
                        If None, defaults to CONVERT estimates.
+        grouped_percentiles: Pre-computed percentiles from compute_grouped_percentiles().
+                            If provided, skips percentile computation (for batch operations).
 
     Returns:
         Estimated total seconds for all pending files
     """
     if not pending_files:
         return 0
+
+    # Pre-compute percentiles once for all files if not provided
+    if grouped_percentiles is None:
+        grouped_percentiles = compute_grouped_percentiles(operation_type)
 
     total_time = 0
 
@@ -312,7 +331,9 @@ def estimate_pending_files_eta(
             continue
 
         # Estimate time for this file
-        file_estimate = estimate_file_time(file_path, operation_type=operation_type).best_seconds
+        file_estimate = estimate_file_time(
+            file_path, operation_type=operation_type, grouped_percentiles=grouped_percentiles
+        ).best_seconds
         total_time += file_estimate
 
     return total_time

@@ -13,8 +13,8 @@ import sys
 import tempfile
 import urllib.request
 import zipfile
+from collections.abc import Callable
 from pathlib import Path
-from typing import Callable
 from urllib.error import URLError
 
 logger = logging.getLogger(__name__)
