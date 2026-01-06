@@ -19,7 +19,7 @@ from src.ab_av1.wrapper import AbAv1Wrapper
 from src.cache_helpers import is_file_unchanged
 from src.config import DEFAULT_ENCODING_PRESET, DEFAULT_VMAF_TARGET, MIN_VMAF_FALLBACK_TARGET
 from src.hardware_accel import get_hw_decoder_for_codec, get_video_codec_from_info
-from src.history_index import compute_path_hash, get_history_index
+from src.history_index import compute_filename_hash, compute_path_hash, get_history_index
 from src.models import FileRecord, FileStatus, OperationType, ProgressEvent, QueueConversionConfig, QueueItemStatus
 from src.privacy import anonymize_filename
 from src.utils import get_video_info, update_ui_safely
@@ -111,6 +111,7 @@ def _create_file_record(
         path_hash=path_hash,
         original_path=original_path_for_record,
         status=status,
+        filename_hash=compute_filename_hash(file_path),  # ADR-001 duplicate detection
         file_size_bytes=original_size,
         file_mtime=file_mtime,
         duration_sec=round(input_duration, 1) if input_duration else None,

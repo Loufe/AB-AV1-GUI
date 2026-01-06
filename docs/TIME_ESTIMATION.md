@@ -105,6 +105,62 @@ The system estimates differently based on operation:
 
 This ensures the preview dialog shows accurate estimates for whichever operation you're queueing.
 
+## Performance
+
+### Current Architecture
+
+```
+┌─────────────────────────────────────────────────────────────────────────┐
+│                    HistoryIndex (in memory)                              │
+│  _records: dict[hash → FileRecord]     ← O(1) lookups                   │
+│  _converted_cache: list[FileRecord]    ← Lazy-built, reused             │
+└─────────────────────────────────────────────────────────────────────────┘
+                              │
+                              ▼
+┌─────────────────────────────────────────────────────────────────────────┐
+│              compute_grouped_encoding_rates()                            │
+│  Iterates _converted_cache once                                          │
+│  Returns: dict[(codec, resolution) → list[float rates]]                  │
+│  NOT CACHED - recomputed each call                                       │
+└─────────────────────────────────────────────────────────────────────────┘
+                              │
+                              ▼
+┌─────────────────────────────────────────────────────────────────────────┐
+│                    estimate_file_time()                                  │
+│  Receives grouped_rates, but for EACH call:                              │
+│    → compute_percentiles(rates) ← O(n log n) SORT EVERY TIME!            │
+│  Percentiles NOT cached between calls                                    │
+└─────────────────────────────────────────────────────────────────────────┘
+```
+
+### The Bottleneck
+
+`estimate_file_time()` calls `compute_percentiles()` on **every invocation**, even when called repeatedly with identical `grouped_rates`. Since `statistics.quantiles()` sorts internally (O(n log n)), this causes redundant work:
+
+| Operation | Calls to estimate_file_time() | Percentile sorts |
+|-----------|------------------------------|------------------|
+| Add 5 files (individual) | 5 | Up to 15 |
+| Add 1 folder (5 files) | 15 (3 passes) | Up to 45 |
+| Refresh queue tree | N × files in queue | Scales with queue size |
+
+For 5000 converted records in history, the global bucket `(None, None)` has 5000 rates. Each sort: ~2-5ms. With 45 redundant sorts: **~100-200ms wasted**.
+
+### Mitigation
+
+`grouped_rates` is passed to avoid recomputing raw rates. For batch operations, compute percentiles once upfront:
+
+```python
+# Good: Pre-compute percentiles
+percentiles_by_group = {key: compute_percentiles(rates) for key, rates in grouped_rates.items()}
+# Then pass percentiles_by_group to helper functions
+
+# Bad: Pass grouped_rates, recompute percentiles each call
+for file in files:
+    estimate_file_time(path, grouped_rates=rates)  # Sorts on every call!
+```
+
+History data is stable within a single UI operation, so pre-computed percentiles remain valid throughout.
+
 ## Implementation
 
 Key functions in `src/estimation.py`:

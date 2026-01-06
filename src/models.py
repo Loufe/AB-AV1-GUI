@@ -341,6 +341,9 @@ class FileRecord:
     file_size_bytes: int  # Used to detect if file changed
     file_mtime: float  # Used to detect if file changed
 
+    # === Duplicate Detection (ADR-001) ===
+    filename_hash: str | None = None  # BLAKE2b hash of basename (includes extension)
+
     # === Video Metadata (from ffprobe, Layer 1) ===
     duration_sec: float | None = None
     video_codec: str | None = None

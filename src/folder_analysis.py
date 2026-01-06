@@ -24,7 +24,7 @@ from typing import Generator
 
 from src.cache_helpers import mtimes_match
 from src.config import DEFAULT_REDUCTION_ESTIMATE_PERCENT
-from src.history_index import HistoryIndex, compute_path_hash
+from src.history_index import HistoryIndex, compute_filename_hash, compute_path_hash
 from src.models import FileRecord, FileStatus
 from src.utils import get_video_info
 from src.video_metadata import extract_video_metadata
@@ -260,6 +260,12 @@ def _analyze_file(
         index.upsert(record)
         return _record_to_result(file_path, record, index)
 
+    # ADR-001: Check for duplicate with better status (same file via different path)
+    meta = extract_video_metadata(video_info)
+    duplicate = index.find_better_duplicate(file_path, file_size, meta.duration_sec)
+    if duplicate:
+        return _record_to_result(file_path, duplicate, index)
+
     # New file or previously SCANNED - create new SCANNED record
     record = _create_scanned_record(file_path, path_hash, file_size, file_mtime, video_info, anonymize)
 
@@ -363,6 +369,7 @@ def _create_scanned_record(
         path_hash=path_hash,
         original_path=file_path if not anonymize else None,
         status=FileStatus.SCANNED,
+        filename_hash=compute_filename_hash(file_path),  # ADR-001 duplicate detection
         file_size_bytes=file_size,
         file_mtime=file_mtime,
         duration_sec=meta.duration_sec,
@@ -405,6 +412,8 @@ def _update_existing_record_metadata(
         existing,
         file_size_bytes=file_size,
         file_mtime=file_mtime,
+        # ADR-001: Preserve or compute filename_hash for duplicate detection
+        filename_hash=existing.filename_hash or compute_filename_hash(file_path),
         duration_sec=meta.duration_sec if meta.duration_sec else existing.duration_sec,
         video_codec=meta.video_codec if meta.video_codec else existing.video_codec,
         audio_streams=meta.audio_streams if meta.audio_streams else existing.audio_streams,

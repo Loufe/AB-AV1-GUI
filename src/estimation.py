@@ -127,6 +127,7 @@ def estimate_file_time(
     width: int | None = None,
     height: int | None = None,
     operation_type: OperationType | None = None,
+    grouped_rates: dict | None = None,
 ) -> TimeEstimate:
     """Estimate processing time using resolution and codec-based percentiles.
 
@@ -144,6 +145,8 @@ def estimate_file_time(
         height: Video height in pixels. Extracted from file if not provided.
         operation_type: If ANALYZE, estimates CRF search time only (no encoding).
                        If CONVERT or None, estimates full encoding time (CRF search + encode).
+        grouped_rates: Pre-computed rates from compute_grouped_encoding_rates().
+                      If provided, skips rate computation (for batch operations).
 
     Returns:
         TimeEstimate with min/max range, best guess, and confidence level.
@@ -180,8 +183,9 @@ def estimate_file_time(
     if not duration or duration <= 0:
         return TimeEstimate(0, 0, 0, "none", "no_duration")
 
-    # Compute grouped rates (uses operation_type to select CRF search vs full encoding times)
-    grouped_rates = compute_grouped_encoding_rates(operation_type)
+    # Use pre-computed rates if provided, otherwise compute (expensive for batch operations)
+    if grouped_rates is None:
+        grouped_rates = compute_grouped_encoding_rates(operation_type)
     res_bucket = get_resolution_bucket(width, height)
 
     # Tier 1: (codec, resolution) specific rates

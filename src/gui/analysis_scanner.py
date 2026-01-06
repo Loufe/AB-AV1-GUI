@@ -17,6 +17,7 @@ from src.config import MIN_FILES_FOR_PERCENT_UPDATES, TREE_UPDATE_BATCH_SIZE
 from src.folder_analysis import _analyze_file
 from src.gui.tree_display import compute_analysis_display_values
 from src.history_index import get_history_index
+from src.models import FileStatus
 from src.utils import format_file_size, update_ui_safely
 
 logger = logging.getLogger(__name__)
@@ -95,6 +96,11 @@ def incremental_scan_thread(gui, folder: str, extensions: list[str], stop_event:
                 # Check cache (use tolerance for mtime due to float precision in JSON)
                 record = index.lookup_file(file_path)
                 if record and record.file_size_bytes == file_size and mtimes_match(record.file_mtime, file_mtime):
+                    # ADR-001: Check for better duplicate if status is SCANNED/ANALYZED
+                    if record.status in (FileStatus.SCANNED, FileStatus.ANALYZED):
+                        better = index.find_better_duplicate(file_path, record.file_size_bytes, record.duration_sec)
+                        if better:
+                            record = better
                     # Cache hit - use cached display values
                     format_str, size_str, savings_str, time_str, eff_str, tag = compute_analysis_display_values(record)
                 else:

@@ -63,7 +63,11 @@ DEFAULT_REDUCTION_ESTIMATE_PERCENT = 45.0  # Default file size reduction estimat
 RESOLUTION_TOLERANCE_PERCENT = 0.2  # Tolerance for resolution matching (20%)
 
 # --- Duplicate Detection ---
-DURATION_TOLERANCE_SEC = 0.01  # Float precision tolerance for duration matching (same file = deterministic)
+# Tolerance for duration matching - must account for rounding differences between code paths:
+# - folder_analysis.py stores raw ffprobe duration (e.g., 384.533313)
+# - worker.py rounds to 1 decimal (e.g., 384.5)
+# A tolerance of 0.1 safely covers rounding while avoiding false positives on different files.
+DURATION_TOLERANCE_SEC = 0.1
 
 # --- Queue/Output Settings ---
 DEFAULT_OUTPUT_MODE = "replace"  # "replace", "suffix", "separate_folder"

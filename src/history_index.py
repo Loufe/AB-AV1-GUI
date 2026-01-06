@@ -13,7 +13,7 @@ import logging
 import os
 import threading
 
-from src.config import HISTORY_FILE, MAX_CRF_VALUE, MAX_VMAF_VALUE, RESOLUTION_TOLERANCE_PERCENT
+from src.config import DURATION_TOLERANCE_SEC, HISTORY_FILE, MAX_CRF_VALUE, MAX_VMAF_VALUE, RESOLUTION_TOLERANCE_PERCENT
 from src.logging_setup import get_script_directory
 from src.models import AudioStreamInfo, FileRecord, FileStatus
 from src.privacy import compute_hash, normalize_path
@@ -83,6 +83,22 @@ def compute_path_hash(file_path: str) -> str:
     return compute_hash(normalized, length=16)
 
 
+def compute_filename_hash(file_path: str) -> str:
+    """Compute hash of filename (basename with extension) for duplicate detection.
+
+    Used by ADR-001 duplicate detection to match files across different paths.
+    The hash includes the extension (e.g., "movie.mp4" -> hash).
+
+    Args:
+        file_path: Path to the file (only basename is used).
+
+    Returns:
+        12-character hex hash of the lowercase filename.
+    """
+    filename = os.path.basename(file_path).lower()
+    return compute_hash(filename, length=12)
+
+
 def get_history_path() -> str:
     """Get the path to the history file.
 
@@ -113,6 +129,7 @@ class HistoryIndex:
     def __init__(self):
         """Initialize an empty index."""
         self._records: dict[str, FileRecord] = {}
+        self._size_index: dict[int, list[str]] = {}  # file_size -> [path_hash, ...] (ADR-001)
         self._lock = threading.RLock()
         self._loaded = False
         self._dirty = False
@@ -156,10 +173,25 @@ class HistoryIndex:
         """
         with self._lock:
             self._ensure_loaded()
-            # Invalidate converted cache if this affects converted records
             old_record = self._records.get(record.path_hash)
+
+            # Invalidate converted cache if this affects converted records
             if record.status == FileStatus.CONVERTED or (old_record and old_record.status == FileStatus.CONVERTED):
                 self._converted_cache = None
+
+            # Maintain size index (ADR-001)
+            if old_record and old_record.file_size_bytes != record.file_size_bytes:
+                # Remove from old size bucket
+                old_bucket = self._size_index.get(old_record.file_size_bytes, [])
+                if record.path_hash in old_bucket:
+                    old_bucket.remove(record.path_hash)
+
+            # Add to new size bucket (if not already there)
+            if record.file_size_bytes not in self._size_index:
+                self._size_index[record.file_size_bytes] = []
+            if record.path_hash not in self._size_index[record.file_size_bytes]:
+                self._size_index[record.file_size_bytes].append(record.path_hash)
+
             self._records[record.path_hash] = record
             self._dirty = True
 
@@ -227,6 +259,149 @@ class HistoryIndex:
             if width_diff <= resolution_tolerance:
                 similar.append(record)
         return similar
+
+    def find_by_size(self, file_size_bytes: int) -> list[FileRecord]:
+        """Find all records with a given file size.
+
+        O(1) lookup using the size index. Used by ADR-001 duplicate detection.
+
+        Args:
+            file_size_bytes: Exact file size to match.
+
+        Returns:
+            List of FileRecords with the specified size.
+        """
+        with self._lock:
+            self._ensure_loaded()
+            hashes = self._size_index.get(file_size_bytes, [])
+            return [self._records[h] for h in hashes if h in self._records]
+
+    def find_better_duplicate(
+        self, file_path: str, file_size: int, duration_sec: float | None
+    ) -> FileRecord | None:
+        """Find a higher-status record representing the same physical file.
+
+        Implements ADR-001 duplicate detection using a 3-step metadata cascade:
+        1. Size + duration + filename literal (when original_path available)
+        2. Size + duration + filename_hash (for anonymized records)
+        3. Size + duration uniqueness (if globally unique)
+
+        Args:
+            file_path: Path to the file being checked.
+            file_size: File size in bytes.
+            duration_sec: Video duration (for matching).
+
+        Returns:
+            A FileRecord with higher status priority if duplicate found, else None.
+        """
+        # Status priority: higher number = better status
+        status_priority = {
+            FileStatus.SCANNED: 1,
+            FileStatus.ANALYZED: 2,
+            FileStatus.NOT_WORTHWHILE: 3,
+            FileStatus.CONVERTED: 4,
+        }
+
+        # Pre-filter: find candidates by size
+        candidates = self.find_by_size(file_size)
+        if not candidates:
+            return None
+
+        # Filter by duration (within tolerance)
+        if duration_sec is not None:
+            candidates = [
+                c for c in candidates
+                if c.duration_sec is not None
+                and abs(c.duration_sec - duration_sec) <= DURATION_TOLERANCE_SEC
+            ]
+
+        if not candidates:
+            return None
+
+        # Sort by priority descending (check highest priority first)
+        candidates.sort(key=lambda c: status_priority.get(c.status, 0), reverse=True)
+
+        # Compute filename info for matching
+        filename_lower = os.path.basename(file_path).lower()
+        file_hash = compute_filename_hash(file_path)
+
+        best_record: FileRecord | None = None
+        best_priority = 0
+        uncertain_candidates: list[FileRecord] = []
+
+        for candidate in candidates:
+            priority = status_priority.get(candidate.status, 0)
+            if priority <= best_priority:
+                continue  # Already found better or equal
+
+            # Step 1: Filename literal match (requires original_path)
+            if candidate.original_path:
+                candidate_filename = os.path.basename(candidate.original_path).lower()
+                if filename_lower == candidate_filename:
+                    best_record = candidate
+                    best_priority = priority
+                    continue
+
+            # Step 2: Filename hash match (for anonymized records)
+            if candidate.filename_hash and file_hash == candidate.filename_hash:
+                best_record = candidate
+                best_priority = priority
+                continue
+
+            # Couldn't confirm via filename - mark as uncertain for step 3
+            uncertain_candidates.append(candidate)
+
+        # If we found a match via steps 1-2, return it
+        if best_record:
+            return best_record
+
+        # Step 3: Uniqueness fallback
+        # If exactly one uncertain candidate AND size+duration is globally unique
+        if len(uncertain_candidates) == 1:
+            # Check if this size+duration combo is unique in the entire index
+            all_with_size = self.find_by_size(file_size)
+            matching_duration = [
+                c for c in all_with_size
+                if duration_sec is not None and c.duration_sec is not None
+                and abs(c.duration_sec - duration_sec) <= DURATION_TOLERANCE_SEC
+            ]
+            if len(matching_duration) == 1:
+                return uncertain_candidates[0]
+
+        return None
+
+    def delete(self, path_hash: str) -> bool:
+        """Delete a record by path_hash.
+
+        Removes the record from the main index and size index.
+        Changes are not persisted until save() is called.
+
+        Args:
+            path_hash: The hash of the record to delete.
+
+        Returns:
+            True if the record was deleted, False if not found.
+        """
+        with self._lock:
+            self._ensure_loaded()
+            if path_hash not in self._records:
+                return False
+
+            record = self._records[path_hash]
+
+            # Remove from size index
+            bucket = self._size_index.get(record.file_size_bytes, [])
+            if path_hash in bucket:
+                bucket.remove(path_hash)
+
+            # Invalidate converted cache if needed
+            if record.status == FileStatus.CONVERTED:
+                self._converted_cache = None
+
+            # Remove from records
+            del self._records[path_hash]
+            self._dirty = True
+            return True
 
     def save(self) -> None:
         """Persist changes to disk.
@@ -297,6 +472,13 @@ class HistoryIndex:
                     continue
 
             logger.info(f"Loaded {len(self._records)} records from {history_path}")
+
+            # Build size index for ADR-001 duplicate detection
+            self._size_index = {}
+            for path_hash, record in self._records.items():
+                if record.file_size_bytes not in self._size_index:
+                    self._size_index[record.file_size_bytes] = []
+                self._size_index[record.file_size_bytes].append(path_hash)
 
         except json.JSONDecodeError:
             logger.exception(f"Failed to parse history file: {history_path}")
