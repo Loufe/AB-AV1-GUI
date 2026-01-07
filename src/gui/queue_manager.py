@@ -155,7 +155,10 @@ def create_queue_item(
 
 
 def categorize_queue_items(
-    gui, items: list[tuple[str, bool]], operation_type: OperationType
+    gui,
+    items: list[tuple[str, bool]],
+    operation_type: OperationType,
+    precomputed_folder_files: dict[str, list[str]] | None = None,
 ) -> tuple[
     list[tuple[str, bool]],
     list[str],
@@ -170,6 +173,14 @@ def categorize_queue_items(
     - Not worth converting (NOT_WORTHWHILE status)
     - Already AV1 codec (for CONVERT operations)
     - Folders with no convertible files
+
+    Args:
+        gui: The VideoConverterGUI instance.
+        items: List of (path, is_folder) tuples to categorize.
+        operation_type: The operation type (CONVERT or ANALYZE).
+        precomputed_folder_files: Optional dict mapping folder paths to their file lists.
+            When provided for a folder, skips filesystem scan and uses these files instead.
+            Used when adding from Analysis tab where file lists are already known.
 
     Returns:
         Tuple of (to_add, duplicates, conflicts, skipped, folder_files_cache) where:
@@ -208,7 +219,12 @@ def categorize_queue_items(
                 skipped.append((path, "no file extensions selected"))
                 continue
 
-            file_paths = find_video_files(path, extensions)
+            # Use precomputed files if available (from Analysis tab tree structure)
+            if precomputed_folder_files and path in precomputed_folder_files:
+                file_paths = precomputed_folder_files[path]
+            else:
+                file_paths = find_video_files(path, extensions)
+
             if not file_paths:
                 skipped.append((path, "no video files found"))
                 continue
@@ -308,17 +324,24 @@ def calculate_queue_estimates(
 
 
 def add_items_to_queue(
-    gui, items: list[tuple[str, bool]], operation_type: OperationType, force_preview: bool = False
+    gui,
+    items: list[tuple[str, bool]],
+    operation_type: OperationType,
+    force_preview: bool = False,
+    precomputed_folder_files: dict[str, list[str]] | None = None,
 ) -> dict[str, int]:
     """Add items to queue with appropriate UI feedback.
 
     This is the main entry point for all queue additions.
 
     Args:
-        items: List of (path, is_folder) tuples
-        operation_type: OperationType.CONVERT or OperationType.ANALYZE
-        force_preview: If True, always show preview dialog (for "Add All")
-                      If False, only show dialog if there are conflicts
+        gui: The VideoConverterGUI instance.
+        items: List of (path, is_folder) tuples.
+        operation_type: OperationType.CONVERT or OperationType.ANALYZE.
+        force_preview: If True, always show preview dialog (for "Add All").
+                      If False, only show dialog if there are conflicts.
+        precomputed_folder_files: Optional dict mapping folder paths to their file lists.
+            Passed to categorize_queue_items to skip filesystem scan for known folders.
 
     Returns:
         Dict with counts: {"added", "duplicate", "conflict_added", "conflict_replaced", "cancelled", "skipped"}
@@ -330,7 +353,7 @@ def add_items_to_queue(
 
     # Categorize items (includes filtering and caches folder file lists)
     to_add, duplicates, conflicts, skipped, folder_files_cache = categorize_queue_items(
-        gui, items, operation_type
+        gui, items, operation_type, precomputed_folder_files
     )
     counts["duplicate"] = len(duplicates)
     counts["skipped"] = len(skipped)
@@ -342,6 +365,14 @@ def add_items_to_queue(
         # Calculate estimates for preview (uses operation_type for correct time estimates)
         estimated_time, estimated_savings = calculate_queue_estimates(gui, to_add, operation_type)
 
+        # Calculate total files to add (for folders, count nested files from cache)
+        total_files = 0
+        for path, is_folder in to_add:
+            if is_folder:
+                total_files += len(folder_files_cache.get(path, []))
+            else:
+                total_files += 1
+
         # Build preview data
         preview_data = QueuePreviewData(
             to_add=to_add,
@@ -351,6 +382,7 @@ def add_items_to_queue(
             operation_type=operation_type,
             estimated_time_sec=estimated_time,
             estimated_savings_percent=estimated_savings,
+            total_files_to_add=total_files,
         )
 
         # Show dialog

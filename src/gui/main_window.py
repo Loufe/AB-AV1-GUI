@@ -637,9 +637,13 @@ class VideoConverterGUI:
         queue_controller.on_add_files_to_queue(self)
 
     def add_items_to_queue(
-        self, items: list[tuple[str, bool]], operation_type: OperationType, force_preview: bool = False
+        self,
+        items: list[tuple[str, bool]],
+        operation_type: OperationType,
+        force_preview: bool = False,
+        precomputed_folder_files: dict[str, list[str]] | None = None,
     ) -> dict[str, int]:
-        return queue_manager.add_items_to_queue(self, items, operation_type, force_preview)
+        return queue_manager.add_items_to_queue(self, items, operation_type, force_preview, precomputed_folder_files)
 
     def add_to_queue(self, path: str, is_folder: bool, operation_type: OperationType = OperationType.CONVERT) -> str:
         """Add a single item to the queue (convenience wrapper)."""

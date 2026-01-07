@@ -24,6 +24,7 @@ class QueuePreviewData:
     operation_type: OperationType = OperationType.CONVERT
     estimated_time_sec: float | None = None
     estimated_savings_percent: float | None = None
+    total_files_to_add: int | None = None  # Actual file count (for folders, counts nested files)
 
     @property
     def total_items(self) -> int:
@@ -98,8 +99,8 @@ class AddToQueuePreviewDialog(tk.Toplevel):
         data = self.preview_data
         op_name = data.operation_type.value.capitalize()
 
-        # Files to add
-        add_count = len(data.to_add)
+        # Files to add - use total_files_to_add if available (counts nested files in folders)
+        add_count = data.total_files_to_add if data.total_files_to_add is not None else len(data.to_add)
         if data.has_conflicts:
             # When there are conflicts, we might add more depending on resolution
             add_text = f"{add_count} file(s) ready to add for {op_name}"

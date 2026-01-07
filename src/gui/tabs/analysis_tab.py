@@ -161,13 +161,17 @@ def create_analysis_tab(gui):
 
     def _add_selected_items_to_queue(selected_items: tuple[str, ...], operation_type: OperationType) -> None:
         """Add multiple selected items from analysis tree to queue with specified operation type."""
-        # Collect file paths - expand folders to individual files to avoid filesystem rescan
         items: list[tuple[str, bool]] = []
+        precomputed_folder_files: dict[str, list[str]] = {}
+
         for item_id in selected_items:
             is_folder = bool(gui.analysis_tree.get_children(item_id))
             if is_folder:
-                # Expand folder to files using tree structure
-                items.extend((fp, False) for fp in _get_file_paths_under_tree_item(item_id))
+                folder_path = _get_folder_path_from_tree_item(item_id)
+                file_paths = _get_file_paths_under_tree_item(item_id)
+                items.append((folder_path, True))
+                if file_paths:
+                    precomputed_folder_files[folder_path] = file_paths
             else:
                 file_path = gui.get_file_path_for_tree_item(item_id)
                 if file_path:
@@ -175,7 +179,9 @@ def create_analysis_tab(gui):
 
         # Use bulk add - shows preview if there are conflicts
         if items:
-            gui.add_items_to_queue(items, operation_type, force_preview=len(items) > 1)
+            gui.add_items_to_queue(
+                items, operation_type, force_preview=len(items) > 1, precomputed_folder_files=precomputed_folder_files
+            )
 
     def _show_context_menu(event):
         if getattr(gui, "_scanning", False):
@@ -218,22 +224,24 @@ def create_analysis_tab(gui):
         if is_folder:
             folder_path = _get_folder_path_from_tree_item(item_id)
 
-            def _add_folder_files_to_queue(item: str, op_type: OperationType) -> None:
-                """Add all files under a folder to queue without rescanning filesystem."""
+            def _add_folder_to_queue(item: str, op_type: OperationType) -> None:
+                """Add folder to queue using precomputed file list from tree structure."""
+                fp = _get_folder_path_from_tree_item(item)
                 file_paths = _get_file_paths_under_tree_item(item)
-                if file_paths:
-                    items = [(fp, False) for fp in file_paths]
-                    gui.add_items_to_queue(items, op_type, force_preview=len(items) > 1)
+                precomputed = {fp: file_paths} if file_paths else None
+                gui.add_items_to_queue(
+                    [(fp, True)], op_type, force_preview=len(file_paths) > 1, precomputed_folder_files=precomputed
+                )
 
             menu.add_command(label="Open in Explorer", command=lambda path=folder_path: open_in_explorer(path))
             menu.add_separator()
             menu.add_command(
                 label="Add Folder to Queue: Convert",
-                command=lambda item=item_id: _add_folder_files_to_queue(item, OperationType.CONVERT),
+                command=lambda item=item_id: _add_folder_to_queue(item, OperationType.CONVERT),
             )
             menu.add_command(
                 label="Add Folder to Queue: Analyze",
-                command=lambda item=item_id: _add_folder_files_to_queue(item, OperationType.ANALYZE),
+                command=lambda item=item_id: _add_folder_to_queue(item, OperationType.ANALYZE),
             )
         else:
             # It's a file - get path from GUI's lookup method
