@@ -10,6 +10,7 @@ This tab allows users to:
 - Monitor processing progress
 """
 
+import os
 import tkinter as tk
 from tkinter import ttk
 
@@ -35,6 +36,27 @@ from src.gui.widgets.operation_dropdown import (
 )
 from src.history_index import compute_path_hash, get_history_index
 from src.models import OperationType, OutputMode, QueueItemStatus
+
+
+def _get_openable_path(file_path: str) -> str | None:
+    """Get path to open - output if converted, else input. Returns None if no valid path.
+
+    Looks up the file's output_path from history (FileRecord). Falls back to input path
+    if no history record exists. Returns None if neither path exists on the filesystem
+    (e.g., Replace mode with anonymized history).
+    """
+    path_hash = compute_path_hash(file_path)
+    record = get_history_index().get(path_hash)
+
+    # Use output_path if available and exists on filesystem
+    # (anonymized paths won't exist, so this handles that case)
+    if record and record.output_path and os.path.exists(record.output_path):
+        return record.output_path
+    # Use input path if it exists
+    if os.path.exists(file_path):
+        return file_path
+    # No valid path available (e.g., Replace mode + anonymized)
+    return None
 
 
 def _update_output_settings_state(gui) -> None:
@@ -111,7 +133,7 @@ def create_convert_tab(gui):
         left_buttons, text="Clear Completed", command=gui.on_clear_completed, state="disabled"
     )
     gui.clear_completed_button.pack(side="left", padx=5)
-    ToolTip(gui.clear_completed_button, "Remove completed, errored, and stopped items from queue")
+    ToolTip(gui.clear_completed_button, "Remove completed and skipped videos from queue")
 
     # Right side: Conversion control buttons
     right_buttons = ttk.Frame(controls_frame)
@@ -293,8 +315,14 @@ def create_convert_tab(gui):
         file_path = gui.get_file_path_for_queue_tree_item(item_id)
         if file_path:
             menu = create_styled_context_menu(gui.queue_tree)
-            menu.add_command(label="Open File", command=lambda p=file_path: open_in_explorer(p))
-            menu.add_command(label="Show in Explorer", command=lambda p=file_path: reveal_in_explorer(p))
+            path = _get_openable_path(file_path)
+            if path:
+                menu.add_command(label="Open File", command=lambda p=path: open_in_explorer(p))
+                menu.add_command(label="Show in Explorer", command=lambda p=path: reveal_in_explorer(p))
+            elif gui.anonymize_history.get():
+                menu.add_command(label="Output path anonymized", state="disabled")
+            else:
+                menu.add_command(label="File not found (deleted?)", state="disabled")
             menu.update_idletasks()
             menu.tk_popup(event.x_root, event.y_root)
             return
@@ -332,8 +360,14 @@ def create_convert_tab(gui):
             if is_folder:
                 menu.add_command(label="Open in Explorer", command=lambda path=source_path: open_in_explorer(path))
             else:
-                menu.add_command(label="Open File", command=lambda path=source_path: open_in_explorer(path))
-                menu.add_command(label="Show in Explorer", command=lambda path=source_path: reveal_in_explorer(path))
+                path = _get_openable_path(source_path)
+                if path:
+                    menu.add_command(label="Open File", command=lambda p=path: open_in_explorer(p))
+                    menu.add_command(label="Show in Explorer", command=lambda p=path: reveal_in_explorer(p))
+                elif gui.anonymize_history.get():
+                    menu.add_command(label="Output path anonymized", state="disabled")
+                else:
+                    menu.add_command(label="File not found (deleted?)", state="disabled")
             menu.add_separator()
 
         # Add operation options (not during processing)
@@ -380,12 +414,19 @@ def create_convert_tab(gui):
         # Check for nested file row first
         file_path = gui.get_file_path_for_queue_tree_item(item_id)
         if file_path:
-            open_in_explorer(file_path)
+            path = _get_openable_path(file_path)
+            if path:
+                open_in_explorer(path)
             return
         # Otherwise check for queue item
-        source_path = gui.get_queue_source_path_for_tree_item(item_id)
-        if source_path:
-            open_in_explorer(source_path)
+        queue_item = gui.get_queue_item_for_tree_item(item_id)
+        if queue_item:
+            if queue_item.is_folder:
+                open_in_explorer(queue_item.source_path)  # Folder always exists
+            else:
+                path = _get_openable_path(queue_item.source_path)
+                if path:
+                    open_in_explorer(path)
 
     gui.queue_tree.bind("<Double-Button-1>", _on_double_click)
 

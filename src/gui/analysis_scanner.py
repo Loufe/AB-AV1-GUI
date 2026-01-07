@@ -262,53 +262,60 @@ def run_ffprobe_analysis(gui, file_paths: list[str], output_folder: str, input_f
             logger.exception(f"Error analyzing {os.path.basename(file_path)}")
             return None, False
 
-    with ThreadPoolExecutor(max_workers=max_workers) as executor:
-        futures = {executor.submit(analyze_one_file, fp): fp for fp in file_paths}
-        pending = set(futures.keys())
+    try:
+        with ThreadPoolExecutor(max_workers=max_workers) as executor:
+            futures = {executor.submit(analyze_one_file, fp): fp for fp in file_paths}
+            pending = set(futures.keys())
 
-        while pending:
-            # Check stop event before waiting for futures
-            if gui.analysis_stop_event and gui.analysis_stop_event.is_set():
-                logger.info("Analysis interrupted by user")
-                executor.shutdown(wait=True, cancel_futures=True)
-                index.save()
-                update_ui_safely(gui.root, gui.on_ffprobe_complete)
-                return
+            while pending:
+                # Check stop event before waiting for futures
+                if gui.analysis_stop_event and gui.analysis_stop_event.is_set():
+                    logger.info("Analysis interrupted by user")
+                    executor.shutdown(wait=True, cancel_futures=True)
+                    index.save()
+                    return  # finally block will call on_ffprobe_complete
 
-            # Wait for futures with timeout to allow periodic stop checks
-            done, pending = wait(pending, timeout=0.5, return_when=FIRST_COMPLETED)
+                # Wait for futures with timeout to allow periodic stop checks
+                done, pending = wait(pending, timeout=0.5, return_when=FIRST_COMPLETED)
 
-            # Collect completed files for batch UI update
-            completed_paths: list[str] = []
+                # Collect completed files for batch UI update
+                completed_paths: list[str] = []
 
-            for future in done:
-                file_path, was_cached = future.result()
-                files_completed += 1
-                if was_cached:
-                    cache_hits += 1
-                if file_path:
-                    completed_paths.append(file_path)
+                for future in done:
+                    file_path, was_cached = future.result()
+                    files_completed += 1
+                    if was_cached:
+                        cache_hits += 1
+                    if file_path:
+                        completed_paths.append(file_path)
 
-            # Single batched UI update for all completed files in this round
-            if completed_paths:
-                paths_snapshot = list(completed_paths)
-                update_ui_safely(gui.root, lambda paths=paths_snapshot: gui.batch_update_tree_rows(paths))
+                # Single batched UI update for all completed files in this round
+                if completed_paths:
+                    paths_snapshot = list(completed_paths)
+                    update_ui_safely(gui.root, lambda paths=paths_snapshot: gui.batch_update_tree_rows(paths))
 
-            # Update totals and save less frequently (every batch or 5% progress)
-            batch_interval = TREE_UPDATE_BATCH_SIZE
-            pct_interval = max(1, total_files // 20)  # 5% increments
-            if files_completed % batch_interval == 0 or (
-                total_files > MIN_FILES_FOR_PERCENT_UPDATES and files_completed % pct_interval == 0
-            ):
-                update_ui_safely(gui.root, gui.update_total_from_tree)
-                index.save()
+                # Update progress badge
+                pct = int(100 * files_completed / total_files)
+                text = f"Analyzing {pct}% ({files_completed}/{total_files} files)"
+                update_ui_safely(gui.root, lambda t=text: gui.analysis_scan_badge.config(text=t))
 
-    # Save index after all files processed (handles remainder)
-    index.save()
+                # Update totals and save less frequently (every batch or 5% progress)
+                batch_interval = TREE_UPDATE_BATCH_SIZE
+                pct_interval = max(1, total_files // 20)  # 5% increments
+                if files_completed % batch_interval == 0 or (
+                    total_files > MIN_FILES_FOR_PERCENT_UPDATES and files_completed % pct_interval == 0
+                ):
+                    update_ui_safely(gui.root, gui.update_total_from_tree)
+                    index.save()
 
-    # Log cache efficiency
-    if cache_hits > 0:
-        logger.info(f"Analysis complete: {cache_hits}/{total_files} from cache")
+        # Save index after all files processed (handles remainder)
+        index.save()
 
-    # Analysis complete
-    update_ui_safely(gui.root, gui.on_ffprobe_complete)
+        # Log cache efficiency
+        if cache_hits > 0:
+            logger.info(f"Analysis complete: {cache_hits}/{total_files} from cache")
+    except Exception:
+        logger.exception("Unexpected error during ffprobe analysis")
+    finally:
+        # Always cleanup UI state (hide badge, re-enable buttons)
+        update_ui_safely(gui.root, gui.on_ffprobe_complete)

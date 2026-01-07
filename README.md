@@ -2,6 +2,9 @@
 
 A lean, cross-platform [Tkinter](https://docs.python.org/3/library/tkinter.html)-based GUI for intelligently reducing the footprint of your video library by converting to [AV1](https://aomedia.org/av1/), with some bells & whistles.
 
+> [!NOTE]
+> **v2 Breaking Changes:** The config and history file formats have changed. Existing `av1_converter_config.json` and `conversion_history.json` files will be reset on first launch.
+
 ## Premise
 
 The AV1 video codec offers incredible gains for most video types vs standard [x264](https://www.videolan.org/developers/x264.html) and [x265](https://www.videolan.org/developers/x265.html) encoded files. However, letting [FFmpeg](https://ffmpeg.org/) rip through a project without tweaking parameters on a per-video basis produces terrible results. 
@@ -14,9 +17,24 @@ This tool mainly acts as a wrapper for the incredible cli tool [ab-av1](https://
 - **Queue-based workflow:** add files or folders, preview estimates, process sequentially
 - **Private, secure, safe:** no pip packages, no telemetry, optional anonymization of history/logs
 
+<details open>
+<summary>Screenshots</summary>
+
+![Analysis Tab](docs/screenshots/analysis.png)
+
+---
+
+![Queue Tab](docs/screenshots/queue.png)
+
+---
+
+![Statistics Tab](docs/screenshots/statistics.png)
+
+</details>
+
 ## Usage
 
-- Install [Python](https://www.python.org/) 3.8+ ([Ensure your install includes Tkinter](https://stackoverflow.com/questions/76105218/why-does-tkinter-or-turtle-seem-to-be-missing-or-broken-shouldnt-it-be-part), included by default on Windows and MacOS).
+- Install [Python](https://www.python.org/) 3.11+ ([Ensure your install includes Tkinter](https://stackoverflow.com/questions/76105218/why-does-tkinter-or-turtle-seem-to-be-missing-or-broken-shouldnt-it-be-part), included by default on Windows and MacOS).
 - **Optional:** [FFmpeg](https://ffmpeg.org/) with libsvtav1 and [ab-av1](https://github.com/alexheretic/ab-av1/releases) may be pre-installed system-wide and available in PATH. Or download portable binaries in-app.
 
 
@@ -26,6 +44,7 @@ The app will prompt to download FFmpeg and ab-av1 if not found.
 
 ## Notes
 
+- Output is always MKV container (best AV1 compatibility).
 - Tested on Windows. Designed for cross-platform but Linux/macOS are untested. Known limitation: sleep prevention during conversion is Windows-only.
 - **Media servers**: Be thoughtful about support for AV1 decoding in devices you want to watch video on. Old phones, PCs, streamers, and smart TVs may not support it, adding a high computational burden for transcoding on the server.
 

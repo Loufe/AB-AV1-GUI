@@ -10,10 +10,11 @@ Manages queue UI interactions including:
 - Item property changes (suffix, folder)
 """
 
+import os
 from tkinter import filedialog, messagebox
 
 from src.gui.analysis_tree import extract_paths_from_queue_items
-from src.models import OperationType, QueueItemStatus
+from src.models import OperationType, QueueItem, QueueItemStatus
 
 # =============================================================================
 # Add to Queue
@@ -139,37 +140,75 @@ def on_clear_queue(gui) -> None:
 
 
 def on_clear_completed(gui) -> None:
-    """Clear completed, errored, and stopped items from queue (no confirmation).
+    """Clear completed/stopped queue items and nested files within folders.
+
+    Removes:
+    - Entire queue items with completed or stopped status
+    - Completed/stopped nested files from folder items (preserves errored files)
+    - Folder items that become empty after clearing nested files
 
     Args:
         gui: The VideoConverterGUI instance.
     """
-    # Filter to keep only pending and converting items
-    keep_statuses = {QueueItemStatus.PENDING, QueueItemStatus.CONVERTING}
-    items_to_remove = [item for item in gui._queue_items if item.status not in keep_statuses]
+    clearable = {QueueItemStatus.COMPLETED, QueueItemStatus.STOPPED}
+    removed_paths: set[str] = set()
+    kept_items: list[QueueItem] = []
 
-    if items_to_remove:
-        # Extract paths before removal for incremental sync
-        removed_paths = extract_paths_from_queue_items(items_to_remove)
-        gui._queue_items = [item for item in gui._queue_items if item.status in keep_statuses]
-        gui._queue_items_by_id = {item.id: item for item in gui._queue_items}
+    for item in gui._queue_items:
+        # Completed/stopped items: remove entirely
+        if item.status in clearable:
+            removed_paths.update(extract_paths_from_queue_items([item]))
+            continue
+
+        # Folder items: remove completed/stopped nested files (keep errors visible)
+        if item.is_folder and item.files:
+            to_clear = [f for f in item.files if f.status in clearable]
+            if to_clear:
+                removed_paths.update(os.path.normcase(f.path) for f in to_clear)
+                item.files = [f for f in item.files if f.status not in clearable]
+                # Recalculate counters (errors preserved, success/skip cleared)
+                item.total_files = len(item.files)
+                item.processed_files = sum(1 for f in item.files if f.status != QueueItemStatus.PENDING)
+                item.files_succeeded = 0
+                item.files_skipped = 0
+                # files_failed preserved - error files are kept
+
+            if not item.files:
+                continue  # Folder now empty, don't keep
+
+        kept_items.append(item)
+
+    if removed_paths:
+        gui._queue_items = kept_items
+        gui._queue_items_by_id = {item.id: item for item in kept_items}
         gui.save_queue_to_config()
         gui.refresh_queue_tree()
         gui.sync_queue_tags_to_analysis_tree(removed_paths=removed_paths)
 
 
 def update_clear_completed_button_state(gui) -> None:
-    """Update the clear completed button state based on queue contents.
+    """Update button state based on clearable content (items or nested files).
 
-    Enables the button if there are any completed/errored/stopped items.
+    Enables the button if there are any:
+    - Queue items with completed or stopped status
+    - Completed/stopped nested files within folder items
 
     Args:
         gui: The VideoConverterGUI instance.
     """
-    keep_statuses = {QueueItemStatus.PENDING, QueueItemStatus.CONVERTING}
-    has_clearable = any(item.status not in keep_statuses for item in gui._queue_items)
-    state = "normal" if has_clearable else "disabled"
-    gui.clear_completed_button.config(state=state)
+    clearable = {QueueItemStatus.COMPLETED, QueueItemStatus.STOPPED}
+
+    for item in gui._queue_items:
+        # Completed/stopped queue items are clearable
+        if item.status in clearable:
+            gui.clear_completed_button.config(state="normal")
+            return
+        # Completed/stopped nested files are clearable
+        if item.is_folder and any(f.status in clearable for f in item.files):
+            gui.clear_completed_button.config(state="normal")
+            return
+
+    gui.clear_completed_button.config(state="disabled")
 
 
 def update_remove_button_state(gui) -> None:

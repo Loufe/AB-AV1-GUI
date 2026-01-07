@@ -28,6 +28,32 @@ logger = logging.getLogger(__name__)
 
 
 # =============================================================================
+# Badge Utilities
+# =============================================================================
+
+
+def show_scan_badge(gui, text: str) -> None:
+    """Show the analysis scan badge centered over the tree.
+
+    Args:
+        gui: The VideoConverterGUI instance.
+        text: The text to display in the badge.
+    """
+    gui.analysis_scan_badge.config(text=text)
+    gui.analysis_scan_badge.place(relx=0.5, rely=0.5, anchor="center")
+    gui.analysis_scan_badge.lift()
+
+
+def hide_scan_badge(gui) -> None:
+    """Hide the analysis scan badge.
+
+    Args:
+        gui: The VideoConverterGUI instance.
+    """
+    gui.analysis_scan_badge.place_forget()
+
+
+# =============================================================================
 # Scanning Coordination
 # =============================================================================
 
@@ -86,13 +112,13 @@ def refresh_analysis_tree(gui) -> None:
     update_add_all_buttons_state(gui)  # Disable while scanning
 
     # Show scanning badge (floating indicator, tree visible behind)
-    gui.analysis_scan_badge.config(text="Scanning folder...")
-    gui.analysis_scan_badge.place(relx=0.5, rely=0.5, anchor="center")
-    gui.analysis_scan_badge.lift()
+    show_scan_badge(gui, "Scanning folder...")
 
-    # Cancel any existing scan
+    # Cancel any existing scans (both incremental and ffprobe)
     if gui._scan_stop_event:
         gui._scan_stop_event.set()
+    if gui.analysis_stop_event:
+        gui.analysis_stop_event.set()
 
     # Start incremental background scan
     gui._scan_stop_event = threading.Event()
@@ -160,7 +186,7 @@ def finish_incremental_scan(gui, stopped: bool) -> None:
     gui._scanning = False
 
     # Hide scanning badge
-    gui.analysis_scan_badge.place_forget()
+    hide_scan_badge(gui)
 
     # Prune empty folders after scan completes
     prune_empty_folders(gui)
@@ -213,6 +239,11 @@ def on_analyze_folders(gui) -> None:
     anonymize = gui.anonymize_history.get()
     logger.info(f"Starting ffprobe analysis of {len(file_paths)} files in: {input_folder}")
 
+    # Block tree interactions and show progress badge
+    gui._scanning = True
+    total_files = len(file_paths)
+    show_scan_badge(gui, f"Analyzing 0% (0/{total_files} files)")
+
     # Cancel any pending auto-refresh timer
     if gui._refresh_timer_id:
         gui.root.after_cancel(gui._refresh_timer_id)
@@ -241,6 +272,10 @@ def on_ffprobe_complete(gui) -> None:
     Args:
         gui: The VideoConverterGUI instance.
     """
+    # Hide progress badge and unblock tree interactions
+    gui._scanning = False
+    hide_scan_badge(gui)
+
     gui.analyze_button.config(state="normal")
 
     # Update total row

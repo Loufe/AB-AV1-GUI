@@ -5,43 +5,152 @@ Queue management functions extracted from main_window.py.
 These functions handle queue item creation, categorization, and addition logic.
 """
 
+import logging
 import os
 import uuid
 
+from src.cache_helpers import is_file_unchanged
 from src.conversion_engine.scanner import find_video_files
 from src.estimation import compute_grouped_percentiles, get_resolution_bucket
 from src.gui.analysis_tree import extract_paths_from_queue_items
 from src.gui.widgets.add_to_queue_dialog import AddToQueuePreviewDialog, QueuePreviewData
 from src.history_index import get_history_index
-from src.models import FileStatus, OperationType, OutputMode, QueueFileItem, QueueItem, QueueItemStatus
+from src.models import FileRecord, FileStatus, OperationType, OutputMode, QueueFileItem, QueueItem, QueueItemStatus
 from src.privacy import normalize_path
+
+logger = logging.getLogger(__name__)
 
 
 def load_queue_from_config(gui) -> list[QueueItem]:
-    """Load queue items from config, filtering out completed/invalid entries."""
+    """Load queue items from config, filtering out completed/invalid entries.
+
+    Reconciles queue state with history: files that were already converted/analyzed
+    (per history) are marked COMPLETED, not reset to PENDING. This ensures accurate
+    UI display and time estimates for partially-completed queue items.
+    """
     raw_items = gui.config.get("queue_items", [])
     items = []
+    index = get_history_index()
+
     for data in raw_items:
         try:
             item = QueueItem.from_dict(data)
-            # Reset interrupted items (CONVERTING, STOPPED) to PENDING for retry
+
+            # Reset interrupted parent status to PENDING for potential retry
             if item.status in (QueueItemStatus.CONVERTING, QueueItemStatus.STOPPED):
                 item.status = QueueItemStatus.PENDING
-                # Reset outcome counters for retry
-                item.files_succeeded = 0
-                item.files_skipped = 0
-                item.files_failed = 0
                 item.last_error = None
-                # Reset nested file statuses to PENDING as well
-                for file_item in item.files:
-                    file_item.status = QueueItemStatus.PENDING
-                    file_item.error_message = None
-            # Only restore PENDING items if file exists (skip completed/error items)
+
+            # Reconcile file statuses with history (instead of blindly resetting)
+            if item.status == QueueItemStatus.PENDING:
+                _reconcile_queue_item_with_history(item, index)
+
+            # Only restore items that have pending work and exist on disk
             if item.status == QueueItemStatus.PENDING and os.path.exists(item.source_path):
                 items.append(item)
         except (KeyError, ValueError):
             continue  # Skip invalid entries
     return items
+
+
+def _reconcile_queue_item_with_history(item: QueueItem, index) -> None:
+    """Reconcile queue item file statuses with history.
+
+    Checks each file against history to determine if it's already been processed.
+    Updates file statuses and recalculates counters accordingly. If all files are
+    done, marks the queue item as COMPLETED.
+
+    Args:
+        item: The QueueItem to reconcile.
+        index: The HistoryIndex instance.
+    """
+    if item.is_folder and item.files:
+        _reconcile_folder_files(item, index)
+    else:
+        _reconcile_single_file(item, index)
+
+
+def _reconcile_folder_files(item: QueueItem, index) -> None:
+    """Reconcile a folder queue item's nested files with history."""
+    # Reset counters - will recalculate from actual file statuses
+    item.files_succeeded = 0
+    item.files_skipped = 0
+    item.files_failed = 0
+    item.processed_files = 0
+    pending_count = 0
+
+    for file_item in item.files:
+        record = index.lookup_file(file_item.path)
+
+        if record and _is_file_done_per_history(record, item.operation_type, file_item.path):
+            file_item.status = QueueItemStatus.COMPLETED
+            file_item.error_message = None
+            item.processed_files += 1
+            # Categorize outcome
+            if record.status == FileStatus.NOT_WORTHWHILE:
+                item.files_skipped += 1
+            else:
+                item.files_succeeded += 1
+        else:
+            # No history record, file changed, or not in terminal state - needs processing
+            file_item.status = QueueItemStatus.PENDING
+            file_item.error_message = None
+            pending_count += 1
+
+    # Update total_files to match actual file list
+    item.total_files = len(item.files)
+
+    # If all files are done, mark the queue item as completed
+    if pending_count == 0 and item.files:
+        item.status = QueueItemStatus.COMPLETED
+        logger.debug(f"Queue item fully completed per history: {item.source_path}")
+
+
+def _reconcile_single_file(item: QueueItem, index) -> None:
+    """Reconcile a single-file queue item with history."""
+    record = index.lookup_file(item.source_path)
+
+    if record and _is_file_done_per_history(record, item.operation_type, item.source_path):
+        item.status = QueueItemStatus.COMPLETED
+        item.processed_files = 1
+        item.files_succeeded = 1 if record.status != FileStatus.NOT_WORTHWHILE else 0
+        item.files_skipped = 1 if record.status == FileStatus.NOT_WORTHWHILE else 0
+        logger.debug(f"Single file already done per history: {item.source_path}")
+
+
+def _is_file_done_per_history(record: FileRecord, operation_type: OperationType, file_path: str) -> bool:
+    """Check if a file is considered 'done' based on its history record.
+
+    Args:
+        record: The FileRecord from history.
+        operation_type: The queue item's operation type.
+        file_path: Path to the file (for unchanged check).
+
+    Returns:
+        True if the file doesn't need processing, False otherwise.
+    """
+    # CONVERTED - file was fully converted, done for both CONVERT and ANALYZE ops
+    # Don't check is_file_unchanged for CONVERTED: in REPLACE mode, the file at this
+    # path is now the AV1 output (different size), so the check would incorrectly fail.
+    if record.status == FileStatus.CONVERTED:
+        return True
+
+    # For non-CONVERTED statuses, verify the source file hasn't changed.
+    # Analysis/NOT_WORTHWHILE results are only valid for the analyzed file version.
+    if not is_file_unchanged(record, file_path):
+        return False
+
+    # NOT_WORTHWHILE - conversion determined not beneficial, done for both ops
+    if record.status == FileStatus.NOT_WORTHWHILE:
+        return True
+
+    # ANALYZED - has Layer 2 data (CRF search done)
+    # Done for ANALYZE ops, but CONVERT ops still need encoding
+    if record.status == FileStatus.ANALYZED:
+        return operation_type == OperationType.ANALYZE
+
+    # SCANNED - only has Layer 1 data (ffprobe), still needs processing
+    return False
 
 
 def get_selected_extensions(gui) -> list[str]:
