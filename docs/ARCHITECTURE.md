@@ -167,7 +167,7 @@ Conversion uses a queue-based architecture rather than direct folder scanning:
 | File | Loaded | Saved | Contents |
 |------|--------|-------|----------|
 | `conversion_history.json` | First history access | After analyze/convert | FileRecord array |
-| `av1_converter_config.json` | App startup | Settings/queue change | Settings + queue_items |
+| `ab_av1_gui_config.json` | App startup | Settings/queue change | Settings + queue_items |
 
 ### HistoryIndex Lifecycle
 

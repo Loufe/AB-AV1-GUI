@@ -254,7 +254,7 @@ See `ab_av1/wrapper.py` for environment variables that maximize verbosity.
 
 | File | Purpose |
 |------|---------|
-| `av1_converter_config.json` | User settings (managed via GUI) |
+| `ab_av1_gui_config.json` | User settings (managed via GUI) |
 | `conversion_history.json` | File records: metadata, analysis results, conversion history |
 | `logs/*.log` | Rotating log files |
 | `vendor/` | Downloaded ab-av1 and FFmpeg binaries (gitignored) |
@@ -298,7 +298,7 @@ python tools/hash_lookup.py --list .                   # List all file hashes
 
 ### Other Security Notes
 
-- Never commit `av1_converter_config.json` (may contain paths)
+- Never commit `ab_av1_gui_config.json` (may contain paths)
 - Process tree termination required for force-stop
 
 ## Git

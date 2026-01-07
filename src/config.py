@@ -3,6 +3,8 @@
 Central configuration constants for the AV1 Video Converter application.
 """
 
+from typing import TypedDict
+
 # --- Application Version ---
 try:
     import tomllib
@@ -51,6 +53,51 @@ MAX_VMAF_VALUE = 100  # Maximum valid VMAF score
 # --- History File ---
 HISTORY_FILE = "conversion_history.json"
 
+# --- Settings File ---
+CONFIG_FILE = "ab_av1_gui_config.json"
+
+
+class ConfigDict(TypedDict):
+    """Type-safe configuration dictionary."""
+
+    input_folder: str
+    output_folder: str
+    log_folder: str
+    overwrite: bool
+    ext_mp4: bool
+    ext_mkv: bool
+    ext_avi: bool
+    ext_wmv: bool
+    convert_audio: bool
+    audio_codec: str
+    anonymize_logs: bool
+    anonymize_history: bool
+    hw_decode_enabled: bool
+    default_output_mode: str
+    default_suffix: str
+    default_output_folder: str
+
+
+# Default configuration values (used for merging with loaded config)
+CONFIG_DEFAULTS: ConfigDict = {
+    "input_folder": "",
+    "output_folder": "",
+    "log_folder": "",
+    "overwrite": False,
+    "ext_mp4": True,
+    "ext_mkv": True,
+    "ext_avi": True,
+    "ext_wmv": True,
+    "convert_audio": True,
+    "audio_codec": "opus",
+    "anonymize_logs": True,
+    "anonymize_history": False,
+    "hw_decode_enabled": True,
+    "default_output_mode": "replace",
+    "default_suffix": "_av1",
+    "default_output_folder": "",
+}
+
 # --- UI Batching ---
 TREE_UPDATE_BATCH_SIZE = 50  # Number of items to batch before updating UI
 MIN_FILES_FOR_PERCENT_UPDATES = 20  # Minimum files before using percentage-based update intervals
@@ -67,11 +114,6 @@ RESOLUTION_TOLERANCE_PERCENT = 0.2  # Tolerance for resolution matching (20%)
 # - worker.py rounds to 1 decimal (e.g., 384.5)
 # A tolerance of 0.1 safely covers rounding while avoiding false positives on different files.
 DURATION_TOLERANCE_SEC = 0.1
-
-# --- Queue/Output Settings ---
-DEFAULT_OUTPUT_MODE = "replace"  # "replace", "suffix", "separate_folder"
-DEFAULT_SUFFIX = "_av1"
-OUTPUT_MODE_OPTIONS = ("replace", "suffix", "separate_folder")
 
 # --- Tree Display Formatting ---
 EFFICIENCY_DECIMAL_THRESHOLD = 10  # Show GB/hr without decimals above this value

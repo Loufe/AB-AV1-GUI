@@ -16,9 +16,7 @@ This tool mainly acts as a wrapper for the incredible cli tool [ab-av1](https://
 - **VMAF-based quality targeting:** targets visual quality (_default: **95**_) instead of guessing bitrates
 - **Queue-based workflow:** add files or folders, preview estimates, process sequentially
 - **Private, secure, safe:** no pip packages, no telemetry, optional anonymization of history/logs
-
-<details open>
-<summary>Screenshots</summary>
+- **Estimate tuning:** continually improves estimates using your own conversion history (based on resolution, duration, and codec)
 
 ![Analysis Tab](docs/screenshots/analysis.png)
 
@@ -30,8 +28,6 @@ This tool mainly acts as a wrapper for the incredible cli tool [ab-av1](https://
 
 ![Statistics Tab](docs/screenshots/statistics.png)
 
-</details>
-
 ## Usage
 
 - Install [Python](https://www.python.org/) 3.11+ ([Ensure your install includes Tkinter](https://stackoverflow.com/questions/76105218/why-does-tkinter-or-turtle-seem-to-be-missing-or-broken-shouldnt-it-be-part), included by default on Windows and MacOS).
@@ -40,7 +36,7 @@ This tool mainly acts as a wrapper for the incredible cli tool [ab-av1](https://
 
 On Windows, double-click `convert.bat`. On Linux/macOS, run `./convert.sh`.
 
-The app will prompt to download FFmpeg and ab-av1 if not found.
+If FFmpeg or ab-av1 are missing, download them from the Settings tab.
 
 ## Notes
 

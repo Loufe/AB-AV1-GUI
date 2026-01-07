@@ -21,14 +21,19 @@ from src.privacy import normalize_path
 logger = logging.getLogger(__name__)
 
 
-def load_queue_from_config(gui) -> list[QueueItem]:
+def load_queue_from_config(raw_items: list[dict]) -> list[QueueItem]:
     """Load queue items from config, filtering out completed/invalid entries.
 
     Reconciles queue state with history: files that were already converted/analyzed
     (per history) are marked COMPLETED, not reset to PENDING. This ensures accurate
     UI display and time estimates for partially-completed queue items.
+
+    Args:
+        raw_items: List of queue item dictionaries from config.
+
+    Returns:
+        List of validated QueueItem objects.
     """
-    raw_items = gui.config.get("queue_items", [])
     items = []
     index = get_history_index()
 

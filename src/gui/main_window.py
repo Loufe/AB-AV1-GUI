@@ -4,6 +4,7 @@ Main window module for the AV1 Video Converter application.
 """
 
 # Standard library imports
+import contextlib
 import json  # For settings persistence
 import logging
 import multiprocessing
@@ -17,6 +18,7 @@ from typing import TYPE_CHECKING
 if TYPE_CHECKING:
     from src.gui.charts import BarChart, LineGraph, PieChart
 
+from src.config import CONFIG_DEFAULTS, CONFIG_FILE
 from src.gui import (
     analysis_controller,
     analysis_scanner,
@@ -53,8 +55,8 @@ from src.utils import scrub_history_paths, scrub_log_files
 logger = logging.getLogger(__name__)
 
 
-# Place config file next to script/executable
-CONFIG_FILE = os.path.join(get_script_directory(), "av1_converter_config.json")
+# Build full path to config file (CONFIG_FILE is just the filename)
+CONFIG_PATH = os.path.join(get_script_directory(), CONFIG_FILE)
 
 
 class VideoConverterGUI:
@@ -238,20 +240,21 @@ class VideoConverterGUI:
     def load_settings(self):
         """Load settings from JSON config file"""
         try:
-            if os.path.exists(CONFIG_FILE):
-                with open(CONFIG_FILE, encoding="utf-8") as f:
+            if os.path.exists(CONFIG_PATH):
+                with open(CONFIG_PATH, encoding="utf-8") as f:
                     config = json.load(f)
-                    logger.info(f"Loaded settings from {CONFIG_FILE}")
+                    logger.info(f"Loaded settings from {CONFIG_PATH}")
                     return config  # Changed print to logger
             else:
-                logger.info(f"Config file {CONFIG_FILE} not found, using defaults.")
+                logger.info(f"Config file {CONFIG_PATH} not found, using defaults.")
                 return {}  # Changed print to logger
         except Exception:
-            logger.exception(f"Error loading settings from {CONFIG_FILE}. Using defaults.")
+            logger.exception(f"Error loading settings from {CONFIG_PATH}. Using defaults.")
             return {}  # Changed print to logger
 
     def save_settings(self):
         """Save settings to JSON config file"""
+        temp_config_file = None
         try:
             # IMPORTANT: When saving, use the value from the StringVar, which the user might have changed
             # via the Browse button, even if the initial logging setup used a default/different path.
@@ -271,20 +274,24 @@ class VideoConverterGUI:
                 "log_folder": log_folder_to_save,  # Save the potentially user-modified path
                 "anonymize_logs": self.anonymize_logs.get(),
                 "anonymize_history": self.anonymize_history.get(),
-                "delete_original_after_conversion": self.delete_original_var.get(),  # Added
                 "default_output_mode": self.default_output_mode.get(),
                 "default_suffix": self.default_suffix.get(),
                 "default_output_folder": self.default_output_folder.get(),
                 "hw_decode_enabled": self.hw_decode_enabled.get(),
                 "queue_items": [item.to_dict() for item in self._queue_items],
             }
-            temp_config_file = CONFIG_FILE + ".tmp"
+            temp_config_file = CONFIG_PATH + ".tmp"
             with open(temp_config_file, "w", encoding="utf-8") as f:
                 json.dump(current_config, f, indent=4)
-            os.replace(temp_config_file, CONFIG_FILE)
-            logger.info(f"Saved settings to {CONFIG_FILE} (Log folder saved: '{log_folder_to_save}')")
+            os.replace(temp_config_file, CONFIG_PATH)
+            logger.info(f"Saved settings to {CONFIG_PATH} (Log folder saved: '{log_folder_to_save}')")
         except Exception:
-            logger.exception(f"Error saving settings to {CONFIG_FILE}")
+            logger.exception(f"Error saving settings to {CONFIG_PATH}")
+        finally:
+            # Clean up temp file if it still exists (save failed after write)
+            if temp_config_file and os.path.exists(temp_config_file):
+                with contextlib.suppress(OSError):
+                    os.remove(temp_config_file)
 
     def setup_styles(self):
         """Set up the GUI styles"""
@@ -331,23 +338,24 @@ class VideoConverterGUI:
 
     def initialize_variables(self):
         """Initialize the GUI variables, using loaded config"""
-        # Initialize StringVars/BooleanVars *first* based on config or defaults
-        self.input_folder = tk.StringVar(value=self.config.get("input_folder", ""))
-        self.output_folder = tk.StringVar(value=self.config.get("output_folder", ""))
-        # Initialize log_folder based on config. It will be overwritten shortly after
-        # logging setup confirms the actual path, or cleared if invalid.
-        self.log_folder = tk.StringVar(value=self.config.get("log_folder", ""))
-        self.overwrite = tk.BooleanVar(value=self.config.get("overwrite", False))
-        self.ext_mp4 = tk.BooleanVar(value=self.config.get("ext_mp4", True))
-        self.ext_mkv = tk.BooleanVar(value=self.config.get("ext_mkv", True))
-        self.ext_avi = tk.BooleanVar(value=self.config.get("ext_avi", True))
-        self.ext_wmv = tk.BooleanVar(value=self.config.get("ext_wmv", True))
-        self.convert_audio = tk.BooleanVar(value=self.config.get("convert_audio", True))
-        self.anonymize_logs = tk.BooleanVar(value=self.config.get("anonymize_logs", True))
-        self.anonymize_history = tk.BooleanVar(value=self.config.get("anonymize_history", True))
-        self.audio_codec = tk.StringVar(value=self.config.get("audio_codec", "opus"))
-        self.delete_original_var = tk.BooleanVar(value=self.config.get("delete_original_after_conversion", False))
-        self.hw_decode_enabled = tk.BooleanVar(value=self.config.get("hw_decode_enabled", True))
+        # Merge loaded config with defaults (loaded values override defaults)
+        config = {**CONFIG_DEFAULTS, **self.config}
+
+        # Initialize StringVars/BooleanVars from merged config
+        self.input_folder = tk.StringVar(value=config["input_folder"])
+        self.output_folder = tk.StringVar(value=config["output_folder"])
+        # log_folder will be overwritten shortly after logging setup confirms the actual path
+        self.log_folder = tk.StringVar(value=config["log_folder"])
+        self.overwrite = tk.BooleanVar(value=config["overwrite"])
+        self.ext_mp4 = tk.BooleanVar(value=config["ext_mp4"])
+        self.ext_mkv = tk.BooleanVar(value=config["ext_mkv"])
+        self.ext_avi = tk.BooleanVar(value=config["ext_avi"])
+        self.ext_wmv = tk.BooleanVar(value=config["ext_wmv"])
+        self.convert_audio = tk.BooleanVar(value=config["convert_audio"])
+        self.anonymize_logs = tk.BooleanVar(value=config["anonymize_logs"])
+        self.anonymize_history = tk.BooleanVar(value=config["anonymize_history"])
+        self.audio_codec = tk.StringVar(value=config["audio_codec"])
+        self.hw_decode_enabled = tk.BooleanVar(value=config["hw_decode_enabled"])
 
         # CPU count for display purposes
         try:
@@ -357,9 +365,9 @@ class VideoConverterGUI:
             logger.warning("Could not detect CPU count.")
 
         # Queue/Output defaults
-        self.default_output_mode = tk.StringVar(value=self.config.get("default_output_mode", "replace"))
-        self.default_suffix = tk.StringVar(value=self.config.get("default_suffix", "_av1"))
-        self.default_output_folder = tk.StringVar(value=self.config.get("default_output_folder", ""))
+        self.default_output_mode = tk.StringVar(value=config["default_output_mode"])
+        self.default_suffix = tk.StringVar(value=config["default_suffix"])
+        self.default_output_folder = tk.StringVar(value=config["default_output_folder"])
 
         # Queue state (will be restored from config on startup)
         self._queue_items: list[QueueItem] = self._load_queue_from_config()
@@ -611,7 +619,8 @@ class VideoConverterGUI:
         dependency_manager.download_ffmpeg_update(self)
 
     def _load_queue_from_config(self) -> list[QueueItem]:
-        return queue_manager.load_queue_from_config(self)
+        raw_items = self.config.get("queue_items", [])
+        return queue_manager.load_queue_from_config(raw_items)
 
     def save_queue_to_config(self):
         """Save current queue state (called on add/remove/modify)."""
