@@ -10,13 +10,35 @@ Handles incremental updates to the analysis tree view, including:
 
 import os
 import tkinter as tk
+from collections.abc import Iterable
 
 from src.estimation import compute_grouped_percentiles, estimate_file_time
 from src.gui.tree_display import compute_analysis_display_values
 from src.gui.tree_formatters import format_compact_time, format_efficiency
 from src.history_index import get_history_index
-from src.models import FileStatus, QueueItemStatus
+from src.models import FileStatus, QueueItem, QueueItemStatus
 from src.utils import format_file_size
+
+
+def extract_paths_from_queue_items(items: Iterable[QueueItem]) -> set[str]:
+    """Extract normalized file paths from queue items.
+
+    For folder items with files, extracts all file paths.
+    For folder items without files or single file items, extracts the source path.
+
+    Args:
+        items: Iterable of QueueItem objects.
+
+    Returns:
+        Set of normalized (os.path.normcase) file paths.
+    """
+    paths: set[str] = set()
+    for item in items:
+        if item.is_folder and item.files:
+            paths.update(os.path.normcase(f.path) for f in item.files)
+        else:
+            paths.add(os.path.normcase(item.source_path))
+    return paths
 
 
 def update_tree_row(gui, file_path: str):
@@ -243,14 +265,13 @@ def get_queued_file_paths(gui) -> set[str]:
             continue
 
         if item.is_folder:
-            # Find all files in tree_item_map that are under this folder
-            # Normalize paths for case-insensitive comparison on Windows
-            normalized_folder = os.path.normcase(item.source_path)
-            folder_prefix = normalized_folder + os.sep
-            for file_path in gui.get_tree_item_map():
-                # tree_item_map keys are already normcase'd
-                if file_path.startswith(folder_prefix) or file_path == normalized_folder:
-                    queued_paths.add(file_path)
+            # Use item.files directly instead of scanning tree_item_map - O(files) vs O(Q*A)
+            if item.files:
+                for f in item.files:
+                    queued_paths.add(os.path.normcase(f.path))
+            else:
+                # Edge case: folder without files populated
+                queued_paths.add(os.path.normcase(item.source_path))
         else:
             # Single file - normalize for comparison with tree_item_map keys
             queued_paths.add(os.path.normcase(item.source_path))
@@ -258,43 +279,98 @@ def get_queued_file_paths(gui) -> set[str]:
     return queued_paths
 
 
-def sync_queue_tags_to_analysis_tree(gui):
+def sync_queue_tags_to_analysis_tree(
+    gui,
+    added_paths: set[str] | None = None,
+    removed_paths: set[str] | None = None,
+):
     """Synchronize queue status to analysis tree item tags.
 
     Applies 'in_queue' tag to files in the queue, 'partial_queue' to folders
     with some (but not all) files queued, and removes queue tags from items
     no longer in queue.
 
+    Supports two modes:
+    - Full sync (both params None): Updates all files in tree - O(A)
+    - Incremental sync: Only updates specified paths and their parent folders - O(changed)
+
     Args:
         gui: The VideoConverterGUI instance.
+        added_paths: Set of normalized paths added to queue (incremental mode).
+        removed_paths: Set of normalized paths removed from queue (incremental mode).
     """
     if not hasattr(gui, "analysis_tree") or not gui.get_tree_item_map():
         return
 
-    queued_paths = get_queued_file_paths(gui)
+    tree_item_map = gui.get_tree_item_map()
 
-    # Track which folders need updating and their child stats
+    # Incremental mode: only update specific paths
+    if added_paths is not None or removed_paths is not None:
+        affected_parents: set[str] = set()
+
+        # Remove queue tags from removed paths
+        for path in removed_paths or ():
+            item_id = tree_item_map.get(path)
+            if not item_id:
+                continue
+            try:
+                if not gui.analysis_tree.exists(item_id):
+                    continue
+                current_tags = list(gui.analysis_tree.item(item_id, "tags") or ())
+                current_tags = [t for t in current_tags if t not in ("in_queue", "partial_queue")]
+                gui.analysis_tree.item(item_id, tags=tuple(current_tags))
+
+                # Traverse full parent hierarchy (not just immediate parent)
+                parent_id = gui.analysis_tree.parent(item_id)
+                while parent_id:
+                    affected_parents.add(parent_id)
+                    parent_id = gui.analysis_tree.parent(parent_id)
+            except tk.TclError:
+                continue
+
+        # Add queue tags to added paths
+        for path in added_paths or ():
+            item_id = tree_item_map.get(path)
+            if not item_id:
+                continue
+            try:
+                if not gui.analysis_tree.exists(item_id):
+                    continue
+                current_tags = list(gui.analysis_tree.item(item_id, "tags") or ())
+                current_tags = [t for t in current_tags if t not in ("in_queue", "partial_queue")]
+                current_tags.append("in_queue")
+                gui.analysis_tree.item(item_id, tags=tuple(current_tags))
+
+                # Traverse full parent hierarchy (not just immediate parent)
+                parent_id = gui.analysis_tree.parent(item_id)
+                while parent_id:
+                    affected_parents.add(parent_id)
+                    parent_id = gui.analysis_tree.parent(parent_id)
+            except tk.TclError:
+                continue
+
+        # Update affected parent folders by recomputing their child stats
+        _update_folder_queue_tags(gui, affected_parents)
+        return
+
+    # Full sync mode: iterate all files (for initial load or folder scan completion)
+    queued_paths = get_queued_file_paths(gui)
     folder_stats: dict[str, tuple[int, int]] = {}  # folder_id -> (queued_count, total_count)
 
-    # Update file tags
-    for file_path, item_id in gui.get_tree_item_map().items():
+    for file_path, item_id in tree_item_map.items():
         try:
             if not gui.analysis_tree.exists(item_id):
                 continue
 
             current_tags = list(gui.analysis_tree.item(item_id, "tags") or ())
-
-            # Remove existing queue tags
             current_tags = [t for t in current_tags if t not in ("in_queue", "partial_queue")]
 
-            # Add queue tag if file is in queue
             is_queued = file_path in queued_paths
             if is_queued:
                 current_tags.append("in_queue")
 
             gui.analysis_tree.item(item_id, tags=tuple(current_tags))
 
-            # Track parent folder stats
             parent_id = gui.analysis_tree.parent(item_id)
             if parent_id:
                 queued, total = folder_stats.get(parent_id, (0, 0))
@@ -313,10 +389,70 @@ def sync_queue_tags_to_analysis_tree(gui):
             current_tags = [t for t in current_tags if t not in ("in_queue", "partial_queue")]
 
             if queued_count == total_count and total_count > 0:
-                # All children queued
                 current_tags.append("in_queue")
             elif queued_count > 0:
-                # Some children queued
+                current_tags.append("partial_queue")
+
+            gui.analysis_tree.item(folder_id, tags=tuple(current_tags))
+        except tk.TclError:
+            continue
+
+
+def _get_folder_depth(gui, folder_id: str) -> int:
+    """Get tree depth of a folder (0 = root level)."""
+    depth = 0
+    parent = gui.analysis_tree.parent(folder_id)
+    while parent:
+        depth += 1
+        parent = gui.analysis_tree.parent(parent)
+    return depth
+
+
+def _update_folder_queue_tags(gui, folder_ids: set[str]) -> None:
+    """Update queue tags for specific folders based on their direct children.
+
+    For each folder, counts how many direct children have queue-related tags
+    and sets the folder's tag accordingly:
+    - in_queue: ALL children have in_queue (all descendants fully queued)
+    - partial_queue: SOME children have in_queue or partial_queue
+    - no tag: NO children are queued
+
+    Folders are processed bottom-up (deepest first) so parent folders see
+    updated child tags.
+
+    Args:
+        gui: The VideoConverterGUI instance.
+        folder_ids: Set of folder tree item IDs to update.
+    """
+    # Sort by depth descending (deepest folders first) for correct propagation
+    sorted_folders = sorted(folder_ids, key=lambda fid: _get_folder_depth(gui, fid), reverse=True)
+
+    for folder_id in sorted_folders:
+        try:
+            if not gui.analysis_tree.exists(folder_id):
+                continue
+
+            children = gui.analysis_tree.get_children(folder_id)
+            total_count = len(children)
+            full_queue_count = 0  # Children with in_queue (all descendants queued)
+            partial_count = 0  # Children with partial_queue (some descendants queued)
+
+            for child_id in children:
+                child_tags = gui.analysis_tree.item(child_id, "tags") or ()
+                if "in_queue" in child_tags:
+                    full_queue_count += 1
+                elif "partial_queue" in child_tags:
+                    partial_count += 1
+
+            # Update folder tag
+            current_tags = list(gui.analysis_tree.item(folder_id, "tags") or ())
+            current_tags = [t for t in current_tags if t not in ("in_queue", "partial_queue")]
+
+            if full_queue_count == total_count and total_count > 0:
+                # All children fully queued → folder fully queued
+                current_tags.append("in_queue")
+            elif full_queue_count > 0 or partial_count > 0:
+                # Some children queued (fully or partially) → folder partially queued
                 current_tags.append("partial_queue")
 
             gui.analysis_tree.item(folder_id, tags=tuple(current_tags))

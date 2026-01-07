@@ -10,6 +10,7 @@ import uuid
 
 from src.conversion_engine.scanner import find_video_files
 from src.estimation import compute_grouped_percentiles, get_resolution_bucket
+from src.gui.analysis_tree import extract_paths_from_queue_items
 from src.gui.widgets.add_to_queue_dialog import AddToQueuePreviewDialog, QueuePreviewData
 from src.history_index import get_history_index
 from src.models import FileStatus, OperationType, OutputMode, QueueFileItem, QueueItem, QueueItemStatus
@@ -367,6 +368,7 @@ def add_items_to_queue(
 
     # Add the non-conflicting items
     queue_items = gui.get_queue_items()
+    items_added: list[QueueItem] = []
     for path, is_folder in to_add:
         # Use cached file list for folders to avoid re-scanning (Fix 3)
         cached_files = folder_files_cache.get(path) if is_folder else None
@@ -375,6 +377,7 @@ def add_items_to_queue(
         if is_folder and not item.files:
             continue
         queue_items.append(item)
+        items_added.append(item)
         counts["added"] += 1
 
     # Handle conflicts based on resolution choice
@@ -389,6 +392,7 @@ def add_items_to_queue(
                 if is_folder and not item.files:
                     continue
                 queue_items.append(item)
+                items_added.append(item)
                 counts["conflict_added"] += 1
         elif conflict_resolution == "replace":
             for path, is_folder, existing in conflicts:
@@ -398,6 +402,7 @@ def add_items_to_queue(
                     continue
                 idx = queue_items.index(existing)
                 queue_items[idx] = new_item
+                items_added.append(new_item)
                 counts["conflict_replaced"] += 1
         # else: skip - conflicts are not added
 
@@ -405,6 +410,7 @@ def add_items_to_queue(
     if counts["added"] > 0 or counts["conflict_added"] > 0 or counts["conflict_replaced"] > 0:
         gui.save_queue_to_config()
         gui.refresh_queue_tree()
-        gui.sync_queue_tags_to_analysis_tree()
+        added_paths = extract_paths_from_queue_items(items_added)
+        gui.sync_queue_tags_to_analysis_tree(added_paths=added_paths)
 
     return counts

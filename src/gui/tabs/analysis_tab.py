@@ -139,15 +139,35 @@ def create_analysis_tab(gui):
             current = gui.analysis_tree.parent(current)
         return os.path.join(gui.input_folder.get(), *path_parts)
 
+    def _get_file_paths_under_tree_item(item_id: str) -> list[str]:
+        """Recursively collect all file paths under a tree item.
+
+        Uses _tree_item_map to get paths, avoiding filesystem rescan.
+        """
+        file_paths: list[str] = []
+        stack = [item_id]
+        while stack:
+            current = stack.pop()
+            children = gui.analysis_tree.get_children(current)
+            if children:
+                # It's a folder - add children to stack
+                stack.extend(children)
+            else:
+                # It's a file - get path from tree_item_map
+                path = gui.get_file_path_for_tree_item(current)
+                if path:
+                    file_paths.append(path)
+        return file_paths
+
     def _add_selected_items_to_queue(selected_items: tuple[str, ...], operation_type: OperationType) -> None:
         """Add multiple selected items from analysis tree to queue with specified operation type."""
-        # Collect items first
+        # Collect file paths - expand folders to individual files to avoid filesystem rescan
         items: list[tuple[str, bool]] = []
         for item_id in selected_items:
             is_folder = bool(gui.analysis_tree.get_children(item_id))
             if is_folder:
-                folder_path = _get_folder_path_from_tree_item(item_id)
-                items.append((folder_path, True))
+                # Expand folder to files using tree structure
+                items.extend((fp, False) for fp in _get_file_paths_under_tree_item(item_id))
             else:
                 file_path = gui.get_file_path_for_tree_item(item_id)
                 if file_path:
@@ -198,19 +218,22 @@ def create_analysis_tab(gui):
         if is_folder:
             folder_path = _get_folder_path_from_tree_item(item_id)
 
+            def _add_folder_files_to_queue(item: str, op_type: OperationType) -> None:
+                """Add all files under a folder to queue without rescanning filesystem."""
+                file_paths = _get_file_paths_under_tree_item(item)
+                if file_paths:
+                    items = [(fp, False) for fp in file_paths]
+                    gui.add_items_to_queue(items, op_type, force_preview=len(items) > 1)
+
             menu.add_command(label="Open in Explorer", command=lambda path=folder_path: open_in_explorer(path))
             menu.add_separator()
             menu.add_command(
                 label="Add Folder to Queue: Convert",
-                command=lambda path=folder_path: gui.add_to_queue(
-                    path, is_folder=True, operation_type=OperationType.CONVERT
-                ),
+                command=lambda item=item_id: _add_folder_files_to_queue(item, OperationType.CONVERT),
             )
             menu.add_command(
                 label="Add Folder to Queue: Analyze",
-                command=lambda path=folder_path: gui.add_to_queue(
-                    path, is_folder=True, operation_type=OperationType.ANALYZE
-                ),
+                command=lambda item=item_id: _add_folder_files_to_queue(item, OperationType.ANALYZE),
             )
         else:
             # It's a file - get path from GUI's lookup method

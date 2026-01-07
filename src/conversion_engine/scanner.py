@@ -28,6 +28,9 @@ def find_video_files(folder_path: str, extensions: list[str]) -> list[str]:
     Returns:
         Sorted list of absolute file paths
     """
+    # Resolve path to match how analysis scanner stores paths (fixes history lookups)
+    folder_path = str(Path(folder_path).resolve())
+
     # Build set of lowercase extensions for fast lookup
     ext_set = {ext.lower() for ext in extensions}
 

@@ -12,6 +12,7 @@ Manages queue UI interactions including:
 
 from tkinter import filedialog, messagebox
 
+from src.gui.analysis_tree import extract_paths_from_queue_items
 from src.models import OperationType, QueueItemStatus
 
 # =============================================================================
@@ -103,6 +104,9 @@ def on_remove_from_queue(gui) -> None:
     if not items_to_remove:
         return
 
+    # Extract paths before removal for incremental sync
+    removed_paths = extract_paths_from_queue_items(items_to_remove)
+
     # Remove from queue
     for item in items_to_remove:
         gui._queue_items.remove(item)
@@ -110,7 +114,7 @@ def on_remove_from_queue(gui) -> None:
 
     gui.save_queue_to_config()
     gui.refresh_queue_tree()
-    gui.sync_queue_tags_to_analysis_tree()
+    gui.sync_queue_tags_to_analysis_tree(removed_paths=removed_paths)
 
 
 def on_clear_queue(gui) -> None:
@@ -125,11 +129,13 @@ def on_clear_queue(gui) -> None:
     if not gui._queue_items:
         return
     if messagebox.askyesno("Clear Queue", "Remove all items from the queue?"):
+        # Extract paths before clearing for incremental sync
+        removed_paths = extract_paths_from_queue_items(gui._queue_items)
         gui._queue_items.clear()
         gui._queue_items_by_id.clear()
         gui.save_queue_to_config()
         gui.refresh_queue_tree()
-        gui.sync_queue_tags_to_analysis_tree()
+        gui.sync_queue_tags_to_analysis_tree(removed_paths=removed_paths)
 
 
 def on_clear_completed(gui) -> None:
@@ -140,14 +146,16 @@ def on_clear_completed(gui) -> None:
     """
     # Filter to keep only pending and converting items
     keep_statuses = {QueueItemStatus.PENDING, QueueItemStatus.CONVERTING}
-    original_count = len(gui._queue_items)
-    gui._queue_items = [item for item in gui._queue_items if item.status in keep_statuses]
+    items_to_remove = [item for item in gui._queue_items if item.status not in keep_statuses]
 
-    if len(gui._queue_items) < original_count:
+    if items_to_remove:
+        # Extract paths before removal for incremental sync
+        removed_paths = extract_paths_from_queue_items(items_to_remove)
+        gui._queue_items = [item for item in gui._queue_items if item.status in keep_statuses]
         gui._queue_items_by_id = {item.id: item for item in gui._queue_items}
         gui.save_queue_to_config()
         gui.refresh_queue_tree()
-        gui.sync_queue_tags_to_analysis_tree()
+        gui.sync_queue_tags_to_analysis_tree(removed_paths=removed_paths)
 
 
 def update_clear_completed_button_state(gui) -> None:

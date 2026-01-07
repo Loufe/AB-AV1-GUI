@@ -456,7 +456,7 @@ def update_analysis_tree_for_completed_file(gui, file_path: str, status: str) ->
             parent_id = gui.analysis_tree.parent(parent_id)
 
         # Sync queue tags since this file is no longer "in queue" effectively
-        gui.sync_queue_tags_to_analysis_tree()
+        gui.sync_queue_tags_to_analysis_tree(removed_paths={os.path.normcase(file_path)})
 
         # Update the total row to reflect done/skip count changes
         update_total_from_tree(gui)

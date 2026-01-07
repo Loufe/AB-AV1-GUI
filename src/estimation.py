@@ -18,8 +18,6 @@ from typing import Any
 from src.config import MIN_SAMPLES_FOR_ESTIMATE, MIN_SAMPLES_HIGH_CONFIDENCE
 from src.history_index import get_history_index
 from src.models import OperationType, TimeEstimate
-from src.utils import get_video_info
-from src.video_metadata import extract_video_metadata
 
 logger = logging.getLogger(__name__)
 
@@ -185,19 +183,8 @@ def estimate_file_time(
             if height is None:
                 height = record.height
 
-    # Fall back to ffprobe only if still missing required data
-    if file_path and (codec is None or duration is None or width is None or height is None):
-        file_info = get_video_info(file_path)
-        if file_info:
-            meta = extract_video_metadata(file_info)
-            if codec is None:
-                codec = meta.video_codec
-            if duration is None:
-                duration = meta.duration_sec or 0
-            if width is None:
-                width = meta.width
-            if height is None:
-                height = meta.height
+    # NOTE: No ffprobe fallback - prevents expensive subprocess calls during UI display.
+    # If file isn't in history, estimation returns "none" confidence and UI shows "—".
 
     # Validate we have minimum required data
     if not duration or duration <= 0:

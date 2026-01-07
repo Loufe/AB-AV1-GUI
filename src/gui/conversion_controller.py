@@ -27,6 +27,9 @@ from src.conversion_engine.cleanup import schedule_temp_folder_cleanup  # Import
 # Import from the new conversion_engine package
 from src.conversion_engine.worker import sequential_conversion_worker
 
+# Import analysis tree helper for incremental sync
+from src.gui.analysis_tree import extract_paths_from_queue_items
+
 # Import callback handlers
 from src.gui.callback_handlers import (
     handle_completed,
@@ -187,8 +190,9 @@ def create_queue_status_callback(gui):
                             logger.debug(f"Could not update file tree row for {file_item.path}")
 
             # Sync analysis tree queue tags when queue item completes
-            if status == QueueItemStatus.COMPLETED:
-                gui.sync_queue_tags_to_analysis_tree()
+            if status == QueueItemStatus.COMPLETED and queue_item:
+                removed_paths = extract_paths_from_queue_items([queue_item])
+                gui.sync_queue_tags_to_analysis_tree(removed_paths=removed_paths)
 
         update_ui_safely(gui.root, update)
 

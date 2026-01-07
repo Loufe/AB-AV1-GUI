@@ -757,8 +757,12 @@ class VideoConverterGUI:
     def _get_queued_file_paths(self) -> set[str]:
         return analysis_tree.get_queued_file_paths(self)
 
-    def sync_queue_tags_to_analysis_tree(self):
-        return analysis_tree.sync_queue_tags_to_analysis_tree(self)
+    def sync_queue_tags_to_analysis_tree(
+        self,
+        added_paths: set[str] | None = None,
+        removed_paths: set[str] | None = None,
+    ):
+        return analysis_tree.sync_queue_tags_to_analysis_tree(self, added_paths, removed_paths)
 
     def update_analysis_tree_for_completed_file(self, file_path: str, status: str):
         """Update analysis tree entry when a file completes conversion."""
