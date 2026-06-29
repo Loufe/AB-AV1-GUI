@@ -264,7 +264,27 @@ def _analyze_file(
     meta = extract_video_metadata(video_info)
     duplicate = index.find_better_duplicate(file_path, file_size, meta.duration_sec)
     if duplicate:
-        return _record_to_result(file_path, duplicate, index)
+        # On ffprobe failure we have no duration, so find_better_duplicate fell back to a
+        # filename+size match (low confidence). Show it but DON'T persist a terminal status.
+        if meta.duration_sec is None:
+            return _record_to_result(file_path, duplicate, index)
+        # Same physical file via a different path. Persist an ALIAS record keyed by THIS path so
+        # index.lookup_file(this_path) succeeds (fixes Analysis "-" and the queue-filter bypass).
+        # duplicate_of flags it so statistics / estimation / history don't double-count it.
+        # (The alias also joins the size index, so it can be a candidate for future duplicate
+        # matches - benign: it only weakens the step-3 uniqueness fallback, and duplicate_of is a
+        # boolean exclusion so an alias-of-alias pointer is harmless.)
+        record = _update_existing_record_metadata(duplicate, file_size, file_mtime, video_info, anonymize, file_path)
+        record = dataclasses.replace(
+            record,
+            path_hash=path_hash,
+            first_seen=record.last_updated,
+            duplicate_of=duplicate.path_hash,
+            audio_streams=list(record.audio_streams or []),
+        )
+        logger.debug("ADR-001: aliased %s record to new path %s", duplicate.status, filename)
+        index.upsert(record)
+        return _record_to_result(file_path, record, index)
 
     # New file or previously SCANNED - create new SCANNED record
     record = _create_scanned_record(file_path, path_hash, file_size, file_mtime, video_info, anonymize)

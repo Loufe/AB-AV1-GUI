@@ -343,6 +343,7 @@ class FileRecord:
 
     # === Duplicate Detection (ADR-001) ===
     filename_hash: str | None = None  # BLAKE2b hash of basename (includes extension)
+    duplicate_of: str | None = None  # ADR-001: path_hash of the source record this path aliases
 
     # === Video Metadata (from ffprobe, Layer 1) ===
     duration_sec: float | None = None

@@ -208,7 +208,9 @@ class HistoryIndex:
         """
         with self._lock:
             self._ensure_loaded()
-            return [r for r in self._records.values() if r.status == status]
+            # ADR-001: exclude alias records (duplicate_of set) - they mirror another path's status
+            # and must not appear as independent results (e.g. a phantom History-tab row).
+            return [r for r in self._records.values() if r.status == status and r.duplicate_of is None]
 
     def get_converted_records(self) -> list[FileRecord]:
         """Get all successfully converted records.
@@ -222,7 +224,11 @@ class HistoryIndex:
         with self._lock:
             self._ensure_loaded()
             if self._converted_cache is None:
-                self._converted_cache = [r for r in self._records.values() if r.status == FileStatus.CONVERTED]
+                # ADR-001: exclude alias records (duplicate_of set) so statistics / estimation do not
+                # double-count a single physical conversion reached via multiple paths.
+                self._converted_cache = [
+                    r for r in self._records.values() if r.status == FileStatus.CONVERTED and r.duplicate_of is None
+                ]
             return self._converted_cache
 
     def get_cached_percentiles(self, operation_type: OperationType | None) -> dict | None:
