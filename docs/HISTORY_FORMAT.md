@@ -49,12 +49,13 @@ Cache is valid if both size AND mtime match the current file (mtime has 1-second
 
 ### Duplicate Detection (ADR-001)
 
-Used to recognize the same physical file accessed via different paths. See ADR-001.
+Used to recognize the same physical file accessed via different paths.
+See [ADR-001](adr/001-use-metadata-for-duplicate-detection.md).
 
 | Field | Type | Description |
 |-------|------|-------------|
 | `filename_hash` | string\|null | BLAKE2b hash of the basename (includes extension); enables matching when `original_path` is null (anonymized) |
-| `duplicate_of` | string\|null | If set, the `path_hash` of the source record this path *aliases*. The alias mirrors the source's status/metadata so per-path lookups (queue filter, Analysis display) succeed, but it is **excluded** from `get_converted_records()` and `get_by_status()` so one physical conversion reached via multiple paths is not double-counted. Normally null. |
+| `duplicate_of` | string\|null | If set, the `path_hash` of the source record this path *aliases*. The alias mirrors the source's status/metadata so per-path lookups (queue filter, Analysis display) succeed, but it is **excluded** from the size index used for duplicate detection (so it never becomes a false match candidate) **and** from `get_converted_records()` / `get_by_status()` (so one physical conversion reached via multiple paths is not double-counted). Normally null. |
 
 ### Video Metadata (Layer 1 - ffprobe)
 
@@ -175,7 +176,7 @@ All records have identity fields (`path_hash`, `status`) and cache fields (`file
 | **Skip reason fields** | — | — | ✓ | — |
 | **Layer 3** (conversion results) | — | — | — | ✓ |
 
-**Alias records** (`duplicate_of` set): mirror another path's record for the same physical file (ADR-001). They carry the source's status and fields but are excluded from `get_converted_records()` / `get_by_status()`, so statistics, time-estimation, and the History tab count each physical conversion once.
+**Alias records** (`duplicate_of` set): mirror another path's record for the same physical file (ADR-001). They carry the source's status and fields but are excluded from the size index used for duplicate detection (so an alias never becomes a false match candidate) and from `get_converted_records()` / `get_by_status()` (so statistics, time-estimation, and the History tab count each physical conversion once). They remain resolvable by exact `path_hash`, so per-path lookups still succeed.
 
 ## Implementation
 

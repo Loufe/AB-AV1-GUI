@@ -86,7 +86,7 @@ def compute_path_hash(file_path: str) -> str:
 def compute_filename_hash(file_path: str) -> str:
     """Compute hash of filename (basename with extension) for duplicate detection.
 
-    Used by ADR-001 duplicate detection to match files across different paths.
+    Used by duplicate detection to match files across different paths.
     The hash includes the extension (e.g., "movie.mp4" -> hash).
 
     Args:
@@ -129,7 +129,7 @@ class HistoryIndex:
     def __init__(self):
         """Initialize an empty index."""
         self._records: dict[str, FileRecord] = {}
-        self._size_index: dict[int, list[str]] = {}  # file_size -> [path_hash, ...] (ADR-001)
+        self._size_index: dict[int, set[str]] = {}  # file_size -> {path_hash, ...} for duplicate detection
         self._lock = threading.RLock()
         self._loaded = False
         self._dirty = False
@@ -181,21 +181,37 @@ class HistoryIndex:
                 self._converted_cache = None
                 self._percentiles_cache = None
 
-            # Maintain size index (ADR-001)
-            if old_record and old_record.file_size_bytes != record.file_size_bytes:
-                # Remove from old size bucket
-                old_bucket = self._size_index.get(old_record.file_size_bytes, [])
-                if record.path_hash in old_bucket:
-                    old_bucket.remove(record.path_hash)
-
-            # Add to new size bucket (if not already there)
-            if record.file_size_bytes not in self._size_index:
-                self._size_index[record.file_size_bytes] = []
-            if record.path_hash not in self._size_index[record.file_size_bytes]:
-                self._size_index[record.file_size_bytes].append(record.path_hash)
+            # Maintain size index: re-home this path_hash; _add_to_size_index skips
+            # aliases. Removing the OLD record (by its own size) handles an in-place
+            # SCANNED->alias replacement at the same size, which the old size-change-only check
+            # left as a stale entry.
+            if old_record is not None:
+                self._remove_from_size_index(old_record)
+            self._add_to_size_index(record)
 
             self._records[record.path_hash] = record
             self._dirty = True
+
+    def _add_to_size_index(self, record: FileRecord) -> None:
+        """Register a record in the size index for duplicate detection.
+
+        Alias records (duplicate_of set) are deliberately excluded - they mirror another
+        path's file and must never be duplicate-detection candidates (they would corrupt
+        find_by_size and the step-3 uniqueness check). They stay resolvable by exact
+        path_hash via _records. Caller holds self._lock.
+        """
+        if record.duplicate_of is None:
+            self._size_index.setdefault(record.file_size_bytes, set()).add(record.path_hash)
+
+    def _remove_from_size_index(self, record: FileRecord) -> None:
+        """Remove a record's path_hash from its size bucket; no-op if absent. Caller holds self._lock.
+
+        Takes the record whose slot is being vacated (in upsert, the *old* record) so the
+        signature mirrors _add_to_size_index and the call sites can't transpose loose args.
+        """
+        bucket = self._size_index.get(record.file_size_bytes)
+        if bucket is not None:
+            bucket.discard(record.path_hash)
 
     def get_by_status(self, status: FileStatus) -> list[FileRecord]:
         """Get all records with a given status.
@@ -208,7 +224,7 @@ class HistoryIndex:
         """
         with self._lock:
             self._ensure_loaded()
-            # ADR-001: exclude alias records (duplicate_of set) - they mirror another path's status
+            # Exclude alias records (duplicate_of set) - they mirror another path's status
             # and must not appear as independent results (e.g. a phantom History-tab row).
             return [r for r in self._records.values() if r.status == status and r.duplicate_of is None]
 
@@ -224,7 +240,7 @@ class HistoryIndex:
         with self._lock:
             self._ensure_loaded()
             if self._converted_cache is None:
-                # ADR-001: exclude alias records (duplicate_of set) so statistics / estimation do not
+                # Exclude alias records (duplicate_of set) so statistics / estimation do not
                 # double-count a single physical conversion reached via multiple paths.
                 self._converted_cache = [
                     r for r in self._records.values() if r.status == FileStatus.CONVERTED and r.duplicate_of is None
@@ -297,7 +313,7 @@ class HistoryIndex:
     def find_by_size(self, file_size_bytes: int) -> list[FileRecord]:
         """Find all records with a given file size.
 
-        O(1) lookup using the size index. Used by ADR-001 duplicate detection.
+        O(1) lookup using the size index. Used by duplicate detection.
 
         Args:
             file_size_bytes: Exact file size to match.
@@ -307,18 +323,23 @@ class HistoryIndex:
         """
         with self._lock:
             self._ensure_loaded()
-            hashes = self._size_index.get(file_size_bytes, [])
+            hashes = self._size_index.get(file_size_bytes, set())
             return [self._records[h] for h in hashes if h in self._records]
 
     def find_better_duplicate(
         self, file_path: str, file_size: int, duration_sec: float | None
     ) -> FileRecord | None:
-        """Find a higher-status record representing the same physical file.
+        """Find an equal-or-higher-status record representing the same physical file.
 
-        Implements ADR-001 duplicate detection using a 3-step metadata cascade:
+        Only non-alias records are ever considered: aliases (duplicate_of set) are excluded
+        from the size index, so they never enter the candidate pool here.
+
+        Implements duplicate detection using a 3-step metadata cascade:
         1. Size + duration + filename literal (when original_path available)
         2. Size + duration + filename_hash (for anonymized records)
         3. Size + duration uniqueness (if globally unique)
+
+        Background/rationale: docs/adr/001-use-metadata-for-duplicate-detection.md
 
         Args:
             file_path: Path to the file being checked.
@@ -424,9 +445,7 @@ class HistoryIndex:
             record = self._records[path_hash]
 
             # Remove from size index
-            bucket = self._size_index.get(record.file_size_bytes, [])
-            if path_hash in bucket:
-                bucket.remove(path_hash)
+            self._remove_from_size_index(record)
 
             # Invalidate converted cache if needed
             if record.status == FileStatus.CONVERTED:
@@ -507,12 +526,10 @@ class HistoryIndex:
 
             logger.info(f"Loaded {len(self._records)} records from {history_path}")
 
-            # Build size index for ADR-001 duplicate detection
+            # Rebuild the size index; aliases are excluded by _add_to_size_index.
             self._size_index = {}
-            for path_hash, record in self._records.items():
-                if record.file_size_bytes not in self._size_index:
-                    self._size_index[record.file_size_bytes] = []
-                self._size_index[record.file_size_bytes].append(path_hash)
+            for record in self._records.values():
+                self._add_to_size_index(record)
 
         except json.JSONDecodeError:
             logger.exception(f"Failed to parse history file: {history_path}")

@@ -111,7 +111,7 @@ def _create_file_record(
         path_hash=path_hash,
         original_path=original_path_for_record,
         status=status,
-        filename_hash=compute_filename_hash(file_path),  # ADR-001 duplicate detection
+        filename_hash=compute_filename_hash(file_path),  # for duplicate detection
         file_size_bytes=original_size,
         file_mtime=file_mtime,
         duration_sec=round(input_duration, 1) if input_duration else None,

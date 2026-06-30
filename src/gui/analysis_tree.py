@@ -111,7 +111,7 @@ def batch_update_tree_rows(gui, file_paths: list[str]) -> None:
         if not record:
             continue
 
-        # ADR-001: Check for better duplicate if status is SCANNED/ANALYZED
+        # Check for better duplicate if status is SCANNED/ANALYZED
         if record.status in (FileStatus.SCANNED, FileStatus.ANALYZED):
             better = index.find_better_duplicate(file_path, record.file_size_bytes, record.duration_sec)
             if better:
