@@ -181,6 +181,7 @@ The queue supports two operation types via `OperationType` enum:
 **Worker branching** (`sequential_conversion_worker`):
 - CONVERT: Calls `process_video()` (existing flow)
 - ANALYZE: Calls `wrapper.crf_search()`, updates history with Layer 2 data
+- Both: before processing, a duplicate short-circuit skips files already decided under another path (ADR-001), writing a `duplicate_of` alias — catches duplicates queued without a prior Basic Scan
 
 ### Callback Flow
 
