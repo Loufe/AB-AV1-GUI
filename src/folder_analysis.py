@@ -251,9 +251,11 @@ def _analyze_file(
     # Cache miss or stale - run ffprobe
     video_info = get_video_info(file_path)
 
-    # Check if we have an existing record with ANALYZED, CONVERTED, or NOT_WORTHWHILE status
-    # that should be preserved (only update metadata, not overwrite analysis/conversion data)
-    if cached and cached.status in DECIDED_STATUSES:
+    # Only a canonical CONVERTED record survives a size/mtime mismatch: in replace mode the
+    # file at that path IS the AV1 output, so changed stamps are the expected steady state.
+    # Anything else - aliases (any status) and ANALYZED/NOT_WORTHWHILE verdicts - described
+    # content that no longer exists; fall through and re-derive from the fresh ffprobe.
+    if cached and cached.status == FileStatus.CONVERTED and cached.duplicate_of is None:
         # Update metadata while preserving conversion data
         record = _update_existing_record_metadata(cached, file_size, file_mtime, video_info, anonymize, file_path)
         # Save updated record and return result based on existing status
@@ -408,9 +410,10 @@ def _update_existing_record_metadata(
 ) -> FileRecord:
     """Update metadata fields on an existing record while preserving status and conversion data.
 
-    This is used when we have a CONVERTED or NOT_WORTHWHILE record with stale metadata
-    (e.g., file_mtime=0 from migration). We update the metadata from ffprobe but keep
-    all the conversion-related fields intact.
+    This is used when we have a canonical CONVERTED record with stale cache stamps
+    (in replace mode the converted output sits at the input path, so a size/mtime
+    mismatch is the expected steady state). We update the metadata from ffprobe but
+    keep all the conversion-related fields intact.
 
     Args:
         existing: The existing FileRecord to update.

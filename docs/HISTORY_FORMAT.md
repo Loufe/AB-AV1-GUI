@@ -178,6 +178,8 @@ All records have identity fields (`path_hash`, `status`) and cache fields (`file
 
 **Alias records** (`duplicate_of` set): mirror another path's record for the same physical file (ADR-001). They carry the source's status and fields but are excluded from the size index used for duplicate detection (so an alias never becomes a false match candidate) and from `get_converted_records()` / `get_by_status()` (so statistics, time-estimation, and the History tab count each physical conversion once). They remain resolvable by exact `path_hash`, so per-path lookups still succeed.
 
+An alias is only valid while its cache stamps (size + mtime) match the file on disk. On mismatch it is re-derived through duplicate detection — re-aliased if a decided source still matches, otherwise demoted to a fresh SCANNED record — never metadata-refreshed in place. More generally, on re-scan of a changed file only canonical CONVERTED records keep their status (in replace mode the converted output sits at the input path, so changed stamps are the expected steady state); ANALYZED / NOT_WORTHWHILE verdicts are discarded with the stale content.
+
 ## Implementation
 
 - **Dataclass**: `FileRecord` in `src/models.py`

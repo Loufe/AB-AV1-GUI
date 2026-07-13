@@ -332,7 +332,8 @@ class HistoryIndex:
         """Find an equal-or-higher-status record representing the same physical file.
 
         Only non-alias records are ever considered: aliases (duplicate_of set) are excluded
-        from the size index, so they never enter the candidate pool here.
+        from the size index, so they never enter the candidate pool here. The queried path's
+        own record is also excluded - a file is never its own duplicate.
 
         Implements duplicate detection using a 3-step metadata cascade:
         1. Size + duration + filename literal (when original_path available)
@@ -357,8 +358,11 @@ class HistoryIndex:
             FileStatus.CONVERTED: 4,
         }
 
-        # Pre-filter: find candidates by size
-        candidates = self.find_by_size(file_size)
+        # Pre-filter: candidates sharing this size, excluding this path's own record - a
+        # file is never its own duplicate (a decided record re-entering detection after an
+        # mtime-only change would otherwise match itself and become a self-alias).
+        own_hash = compute_path_hash(file_path)
+        candidates = [c for c in self.find_by_size(file_size) if c.path_hash != own_hash]
         if not candidates:
             return None
 
@@ -373,8 +377,14 @@ class HistoryIndex:
         if not candidates:
             return None
 
-        # Sort by priority descending (check highest priority first)
-        candidates.sort(key=lambda c: status_priority.get(c.status, 0), reverse=True)
+        # Sort by priority descending, then most-recently-updated, then path_hash: a total
+        # order, so the winner among equal-priority candidates is determined by the data
+        # rather than per-process set iteration order. last_updated is ISO "YYYY-MM-DD
+        # HH:MM:SS" everywhere, so lexicographic == chronological; None sorts last.
+        candidates.sort(
+            key=lambda c: (status_priority.get(c.status, 0), c.last_updated or "", c.path_hash),
+            reverse=True,
+        )
 
         # Compute filename info for matching
         filename_lower = os.path.basename(file_path).lower()
@@ -417,7 +427,8 @@ class HistoryIndex:
             all_with_size = self.find_by_size(file_size)
             matching_duration = [
                 c for c in all_with_size
-                if duration_sec is not None and c.duration_sec is not None
+                if c.path_hash != own_hash
+                and duration_sec is not None and c.duration_sec is not None
                 and abs(c.duration_sec - duration_sec) <= DURATION_TOLERANCE_SEC
             ]
             if len(matching_duration) == 1:
