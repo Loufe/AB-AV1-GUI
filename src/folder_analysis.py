@@ -24,8 +24,8 @@ from statistics import mean
 
 from src.cache_helpers import mtimes_match
 from src.config import DEFAULT_REDUCTION_ESTIMATE_PERCENT
-from src.history_index import HistoryIndex, compute_filename_hash, compute_path_hash
-from src.models import DECIDED_STATUSES, FileRecord, FileStatus, VideoMetadata
+from src.history_index import HistoryIndex, compute_filename_hash, compute_path_hash, create_alias_record
+from src.models import DECIDED_STATUSES, FileRecord, FileStatus
 from src.utils import get_video_info
 from src.video_metadata import extract_video_metadata
 
@@ -273,7 +273,7 @@ def _analyze_file(
         if duplicate.status in DECIDED_STATUSES:
             # Source carries a decided result worth mirroring. Persist an alias keyed by THIS
             # path so lookup_file(this_path) resolves to it and the copy isn't re-encoded.
-            record = _create_alias_record(
+            record = create_alias_record(
                 duplicate,
                 cached.first_seen if cached else None,
                 file_path,
@@ -447,57 +447,6 @@ def _update_existing_record_metadata(
         last_updated=now,
         # Preserve first_seen if it exists
         first_seen=existing.first_seen or now,
-    )
-
-
-def _create_alias_record(
-    source: FileRecord,
-    prior_first_seen: str | None,
-    file_path: str,
-    path_hash: str,
-    file_size: int,
-    file_mtime: float,
-    meta: VideoMetadata,
-    anonymize: bool,
-) -> FileRecord:
-    """Build a duplicate-path alias record: the source's decided result, re-keyed to this path.
-
-    Status and Layer-2/3 results are mirrored from ``source`` (so lookup_file(file_path)
-    resolves to the same outcome); identity, cache stamps, and Layer-1 metadata are this
-    path's. ``duplicate_of`` keeps it out of the size index and the statistics accessors.
-
-    Args:
-        source: The decided record for the same physical file (status/results mirror it).
-        prior_first_seen: first_seen of any existing record at this path_hash, else None.
-        file_path: The current (duplicate) path.
-        path_hash: Pre-computed hash of file_path.
-        file_size: Current file size in bytes.
-        file_mtime: Current file modification time.
-        meta: Metadata from this file's ffprobe.
-        anonymize: Whether to store the path or None.
-    """
-    now = datetime.datetime.now().isoformat(sep=" ", timespec="seconds")
-    return dataclasses.replace(
-        source,
-        # Identity + cache validation - this path / this file on disk
-        path_hash=path_hash,
-        original_path=file_path if not anonymize else None,
-        filename_hash=compute_filename_hash(file_path),
-        duplicate_of=source.path_hash,
-        file_size_bytes=file_size,
-        file_mtime=file_mtime,
-        # Layer-1 metadata - this file's fresh ffprobe, source as fallback (refreshes a stale source).
-        duration_sec=meta.duration_sec or source.duration_sec,
-        video_codec=meta.video_codec or source.video_codec,
-        width=meta.width or source.width,
-        height=meta.height or source.height,
-        bitrate_kbps=meta.bitrate_kbps or source.bitrate_kbps,
-        audio_streams=list(meta.audio_streams or source.audio_streams or []),
-        # Estimates are meaningless on a decided record; preserve this path's first_seen.
-        estimated_reduction_percent=None,
-        estimated_from_similar=None,
-        first_seen=prior_first_seen or now,
-        last_updated=now,
     )
 
 
