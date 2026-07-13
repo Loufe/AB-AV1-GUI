@@ -679,8 +679,24 @@ class VideoConverterGUI:
         queue_controller.on_browse_item_output_folder(self)
 
     def refresh_queue_tree(self):
-        """Refresh the queue tree view from _queue_items."""
+        """Rebuild the queue tree view from _queue_items."""
         queue_tree.refresh_queue_tree(self)
+
+    def refresh_queue_tree_values(self):
+        """Refresh all queue tree row values in place (preserves expand state)."""
+        queue_tree.refresh_queue_tree_values(self)
+
+    def update_queue_item_row(self, queue_item):
+        """Update a single queue item's tree row in place."""
+        queue_tree.update_queue_item_row(self, queue_item)
+
+    def add_queue_items_to_tree(self, new_items):
+        """Append tree rows for newly added queue items."""
+        queue_tree.add_queue_items_to_tree(self, new_items)
+
+    def remove_queue_items_from_tree(self, removed_items):
+        """Remove tree rows for queue items no longer in the queue."""
+        queue_tree.remove_queue_items_from_tree(self, removed_items)
 
     def sync_queue_order_from_tree(self):
         """Sync _queue_items order from the tree view after drag-drop reordering."""

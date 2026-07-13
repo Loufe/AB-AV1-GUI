@@ -179,7 +179,7 @@ class OperationDropdownManager:
         if queue_item.operation_type != new_operation:
             queue_item.operation_type = new_operation
             self._gui.save_queue_to_config()
-            self._gui.refresh_queue_tree()
+            self._gui.update_queue_item_row(queue_item)
 
     def _clear_layer2_data(self, source_path: str) -> None:
         """Clear cached CRF/VMAF data so file will be re-analyzed."""

@@ -430,7 +430,7 @@ def stop_conversion(gui) -> None:
         logger.info("Graceful stop requested (Stop After Current File). Signalling worker thread.")
         gui.stop_event.set()
         gui.stop_button.config(state="disabled")  # Disable button once stop is requested
-        gui.refresh_queue_tree()  # Show "Will skip" for pending items
+        gui.refresh_queue_tree_values()  # Show "Will skip" for pending items
     elif not gui.session.running:
         logger.info("Stop requested but conversion is not currently running.")
     elif gui.stop_event and gui.stop_event.is_set():
@@ -561,7 +561,7 @@ def restore_ui_after_stop(gui) -> None:
     update_ui_safely(gui.root, lambda: gui.stop_button.config(state="disabled"))
     update_ui_safely(gui.root, lambda: gui.force_stop_button.config(state="disabled"))
     update_ui_safely(gui.root, lambda: gui.clear_queue_button.config(state="normal"))
-    update_ui_safely(gui.root, gui.refresh_queue_tree)
+    update_ui_safely(gui.root, gui.refresh_queue_tree_values)
 
 
 def force_stop_conversion(gui, confirm: bool = True) -> None:
@@ -841,8 +841,8 @@ def conversion_complete(gui, final_message="Queue complete"):
         gui.root.after_cancel(s.elapsed_timer_id)
         s.elapsed_timer_id = None
 
-    # Refresh queue tree to update estimates and button states
-    gui.refresh_queue_tree()
+    # Refresh queue tree values to update estimates and button states
+    gui.refresh_queue_tree_values()
 
     # Refresh analysis tree to show correct done/skip counts and folder aggregates
     # (During conversion, callbacks fire before history is saved, causing stale data)
