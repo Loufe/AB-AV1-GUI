@@ -305,6 +305,10 @@ def create_convert_tab(gui):
             queue_item.operation_type = new_operation
             gui.save_queue_to_config()
             gui.update_queue_item_row(queue_item)
+        elif selected_display == "Re-analyze + Convert":
+            # Type unchanged, but clearing Layer 2 data changes the displayed
+            # operation ("Convert" → "Analyze+Convert")
+            gui.update_queue_item_row(queue_item)
 
     def _show_context_menu(event):
         item_id = gui.queue_tree.identify_row(event.y)
