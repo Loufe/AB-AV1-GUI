@@ -136,6 +136,11 @@ class FileStatus(str, Enum):
     CONVERTED = "converted"  # Successfully converted
 
 
+# Statuses whose record carries a decided, reusable result (terminal outcome or completed
+# Layer-2 CRF analysis), preserved/mirrored rather than overwritten on re-scan.
+DECIDED_STATUSES = frozenset({FileStatus.CONVERTED, FileStatus.NOT_WORTHWHILE, FileStatus.ANALYZED})
+
+
 class AnalysisLevel(int, Enum):
     """Analysis level of a file, representing how much processing has been done.
 
@@ -341,8 +346,9 @@ class FileRecord:
     file_size_bytes: int  # Used to detect if file changed
     file_mtime: float  # Used to detect if file changed
 
-    # === Duplicate Detection (ADR-001) ===
+    # === Duplicate Detection ===
     filename_hash: str | None = None  # BLAKE2b hash of basename (includes extension)
+    duplicate_of: str | None = None  # path_hash of aliased source; excluded from result accessors
 
     # === Video Metadata (from ffprobe, Layer 1) ===
     duration_sec: float | None = None

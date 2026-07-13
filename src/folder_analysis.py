@@ -25,7 +25,7 @@ from statistics import mean
 from src.cache_helpers import mtimes_match
 from src.config import DEFAULT_REDUCTION_ESTIMATE_PERCENT
 from src.history_index import HistoryIndex, compute_filename_hash, compute_path_hash
-from src.models import FileRecord, FileStatus
+from src.models import DECIDED_STATUSES, FileRecord, FileStatus, VideoMetadata
 from src.utils import get_video_info
 from src.video_metadata import extract_video_metadata
 
@@ -251,20 +251,43 @@ def _analyze_file(
     # Cache miss or stale - run ffprobe
     video_info = get_video_info(file_path)
 
-    # Check if we have an existing record with ANALYZED, CONVERTED, or NOT_WORTHWHILE status
-    # that should be preserved (only update metadata, not overwrite analysis/conversion data)
-    if cached and cached.status in (FileStatus.CONVERTED, FileStatus.NOT_WORTHWHILE, FileStatus.ANALYZED):
+    # Only a canonical CONVERTED record survives a size/mtime mismatch: in replace mode the
+    # file at that path IS the AV1 output, so changed stamps are the expected steady state.
+    # Anything else - aliases (any status) and ANALYZED/NOT_WORTHWHILE verdicts - described
+    # content that no longer exists; fall through and re-derive from the fresh ffprobe.
+    if cached and cached.status == FileStatus.CONVERTED and cached.duplicate_of is None:
         # Update metadata while preserving conversion data
         record = _update_existing_record_metadata(cached, file_size, file_mtime, video_info, anonymize, file_path)
         # Save updated record and return result based on existing status
         index.upsert(record)
         return _record_to_result(file_path, record, index)
 
-    # ADR-001: Check for duplicate with better status (same file via different path)
+    # Duplicate detection: same physical file reached via a different path?
     meta = extract_video_metadata(video_info)
     duplicate = index.find_better_duplicate(file_path, file_size, meta.duration_sec)
-    if duplicate:
-        return _record_to_result(file_path, duplicate, index)
+    if duplicate is not None:
+        if meta.duration_sec is None:
+            # No duration -> find_better_duplicate could only match on filename+size (low
+            # confidence). Show the duplicate's status but don't persist a terminal one.
+            return _record_to_result(file_path, duplicate, index)
+        if duplicate.status in DECIDED_STATUSES:
+            # Source carries a decided result worth mirroring. Persist an alias keyed by THIS
+            # path so lookup_file(this_path) resolves to it and the copy isn't re-encoded.
+            record = _create_alias_record(
+                duplicate,
+                cached.first_seen if cached else None,
+                file_path,
+                path_hash,
+                file_size,
+                file_mtime,
+                meta,
+                anonymize,
+            )
+            logger.debug("Aliased %s record to new path %s (duplicate detection)", duplicate.status, filename)
+            index.upsert(record)
+            return _record_to_result(file_path, record, index)
+        # Duplicate is only SCANNED - nothing decided to mirror; fall through and create a
+        # fresh SCANNED record for this path below.
 
     # New file or previously SCANNED - create new SCANNED record
     record = _create_scanned_record(file_path, path_hash, file_size, file_mtime, video_info, anonymize)
@@ -298,8 +321,7 @@ def _analyze_file(
     # Calculate estimated savings (accounting for audio which is copied unchanged)
     est_savings = None
     if est_reduction and file_size:
-        # Estimate audio size - not reduced, copied unchanged
-        meta = extract_video_metadata(video_info)
+        # Estimate audio size - not reduced, copied unchanged (meta hoisted above)
         audio_size = 0
         if meta.duration_sec and meta.total_audio_bitrate_kbps:
             audio_size = int(meta.duration_sec * meta.total_audio_bitrate_kbps * 1000 / 8)
@@ -369,7 +391,7 @@ def _create_scanned_record(
         path_hash=path_hash,
         original_path=file_path if not anonymize else None,
         status=FileStatus.SCANNED,
-        filename_hash=compute_filename_hash(file_path),  # ADR-001 duplicate detection
+        filename_hash=compute_filename_hash(file_path),  # for duplicate detection
         file_size_bytes=file_size,
         file_mtime=file_mtime,
         duration_sec=meta.duration_sec,
@@ -388,9 +410,10 @@ def _update_existing_record_metadata(
 ) -> FileRecord:
     """Update metadata fields on an existing record while preserving status and conversion data.
 
-    This is used when we have a CONVERTED or NOT_WORTHWHILE record with stale metadata
-    (e.g., file_mtime=0 from migration). We update the metadata from ffprobe but keep
-    all the conversion-related fields intact.
+    This is used when we have a canonical CONVERTED record with stale cache stamps
+    (in replace mode the converted output sits at the input path, so a size/mtime
+    mismatch is the expected steady state). We update the metadata from ffprobe but
+    keep all the conversion-related fields intact.
 
     Args:
         existing: The existing FileRecord to update.
@@ -412,7 +435,7 @@ def _update_existing_record_metadata(
         existing,
         file_size_bytes=file_size,
         file_mtime=file_mtime,
-        # ADR-001: Preserve or compute filename_hash for duplicate detection
+        # Preserve or compute filename_hash for duplicate detection
         filename_hash=existing.filename_hash or compute_filename_hash(file_path),
         duration_sec=meta.duration_sec if meta.duration_sec else existing.duration_sec,
         video_codec=meta.video_codec if meta.video_codec else existing.video_codec,
@@ -424,6 +447,57 @@ def _update_existing_record_metadata(
         last_updated=now,
         # Preserve first_seen if it exists
         first_seen=existing.first_seen or now,
+    )
+
+
+def _create_alias_record(
+    source: FileRecord,
+    prior_first_seen: str | None,
+    file_path: str,
+    path_hash: str,
+    file_size: int,
+    file_mtime: float,
+    meta: VideoMetadata,
+    anonymize: bool,
+) -> FileRecord:
+    """Build a duplicate-path alias record: the source's decided result, re-keyed to this path.
+
+    Status and Layer-2/3 results are mirrored from ``source`` (so lookup_file(file_path)
+    resolves to the same outcome); identity, cache stamps, and Layer-1 metadata are this
+    path's. ``duplicate_of`` keeps it out of the size index and the statistics accessors.
+
+    Args:
+        source: The decided record for the same physical file (status/results mirror it).
+        prior_first_seen: first_seen of any existing record at this path_hash, else None.
+        file_path: The current (duplicate) path.
+        path_hash: Pre-computed hash of file_path.
+        file_size: Current file size in bytes.
+        file_mtime: Current file modification time.
+        meta: Metadata from this file's ffprobe.
+        anonymize: Whether to store the path or None.
+    """
+    now = datetime.datetime.now().isoformat(sep=" ", timespec="seconds")
+    return dataclasses.replace(
+        source,
+        # Identity + cache validation - this path / this file on disk
+        path_hash=path_hash,
+        original_path=file_path if not anonymize else None,
+        filename_hash=compute_filename_hash(file_path),
+        duplicate_of=source.path_hash,
+        file_size_bytes=file_size,
+        file_mtime=file_mtime,
+        # Layer-1 metadata - this file's fresh ffprobe, source as fallback (refreshes a stale source).
+        duration_sec=meta.duration_sec or source.duration_sec,
+        video_codec=meta.video_codec or source.video_codec,
+        width=meta.width or source.width,
+        height=meta.height or source.height,
+        bitrate_kbps=meta.bitrate_kbps or source.bitrate_kbps,
+        audio_streams=list(meta.audio_streams or source.audio_streams or []),
+        # Estimates are meaningless on a decided record; preserve this path's first_seen.
+        estimated_reduction_percent=None,
+        estimated_from_similar=None,
+        first_seen=prior_first_seen or now,
+        last_updated=now,
     )
 
 

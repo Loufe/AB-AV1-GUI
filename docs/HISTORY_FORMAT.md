@@ -47,6 +47,16 @@ The JSON file is an **array** of FileRecord objects:
 
 Cache is valid if both size AND mtime match the current file (mtime has 1-second tolerance due to JSON precision loss).
 
+### Duplicate Detection (ADR-001)
+
+Used to recognize the same physical file accessed via different paths.
+See [ADR-001](adr/001-use-metadata-for-duplicate-detection.md).
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `filename_hash` | string\|null | BLAKE2b hash of the basename (includes extension); enables matching when `original_path` is null (anonymized) |
+| `duplicate_of` | string\|null | If set, the `path_hash` of the source record this path *aliases*. The alias mirrors the source's status/metadata so per-path lookups (queue filter, Analysis display) succeed, but it is **excluded** from the size index used for duplicate detection (so it never becomes a false match candidate) **and** from `get_converted_records()` / `get_by_status()` (so one physical conversion reached via multiple paths is not double-counted). Normally null. |
+
 ### Video Metadata (Layer 1 - ffprobe)
 
 Populated during "Basic Scan" or first analysis.
@@ -165,6 +175,10 @@ All records have identity fields (`path_hash`, `status`) and cache fields (`file
 | **Layer 2** (CRF search results) | — | ✓ | — | ✓ |
 | **Skip reason fields** | — | — | ✓ | — |
 | **Layer 3** (conversion results) | — | — | — | ✓ |
+
+**Alias records** (`duplicate_of` set): mirror another path's record for the same physical file (ADR-001). They carry the source's status and fields but are excluded from the size index used for duplicate detection (so an alias never becomes a false match candidate) and from `get_converted_records()` / `get_by_status()` (so statistics, time-estimation, and the History tab count each physical conversion once). They remain resolvable by exact `path_hash`, so per-path lookups still succeed.
+
+An alias is only valid while its cache stamps (size + mtime) match the file on disk. On mismatch it is re-derived through duplicate detection — re-aliased if a decided source still matches, otherwise demoted to a fresh SCANNED record — never metadata-refreshed in place. More generally, on re-scan of a changed file only canonical CONVERTED records keep their status (in replace mode the converted output sits at the input path, so changed stamps are the expected steady state); ANALYZED / NOT_WORTHWHILE verdicts are discarded with the stale content.
 
 ## Implementation
 
