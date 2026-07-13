@@ -125,6 +125,25 @@ Conversion uses a queue-based architecture rather than direct folder scanning:
 
 `PENDING` → `CONVERTING` → `COMPLETED` / `ERROR` / `STOPPED`
 
+### Queue Tree Updates
+
+The queue tree (`gui/queue_tree.py`) updates incrementally so folder expand
+state, selection, and scroll position survive changes:
+
+| Change | Function | Strategy |
+|--------|----------|----------|
+| Status/estimate/output change | `refresh_queue_tree_values()` | Recompute values/tags of all rows in place |
+| Operation type change | `update_queue_item_row()` | Recompute one item + nested file rows |
+| Items added | `add_queue_items_to_tree()` | Append rows only |
+| Items removed | `remove_queue_items_from_tree()` | Delete rows, renumber the rest |
+| Drag-drop reorder | `sync_queue_order_from_tree()` | Renumber row text in place |
+| Structural bulk (startup load, clear queue, clear completed, conflict replace) | `refresh_queue_tree()` | Full rebuild; restores folder expand state keyed by queue item id |
+
+Row identity is tracked by stable queue-item-id → tree-iid maps
+(`_queue_tree_map`, `_tree_queue_map`, plus per-file maps); the incremental
+functions maintain these maps and fall back to a full rebuild if the tree
+has drifted from `_queue_items`.
+
 ## Threading Model
 
 ```

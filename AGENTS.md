@@ -67,7 +67,7 @@ src/
     ├── analysis_scanner.py    # Incremental folder scanning with ffprobe
     ├── analysis_tree.py       # Analysis tree display/state management
     ├── queue_manager.py       # Queue item creation/categorization
-    ├── queue_tree.py          # Queue tree display/state management
+    ├── queue_tree.py          # Queue tree display: incremental in-place updates + full rebuild
     ├── tree_utils.py          # Tree expand/collapse utilities
     ├── tree_display.py        # Shared tree status formatting
     ├── tree_formatters.py     # Time/size/efficiency formatting and parsing
@@ -182,6 +182,8 @@ The queue supports two operation types via `OperationType` enum:
 - CONVERT: Calls `process_video()` (existing flow)
 - ANALYZE: Calls `wrapper.crf_search()`, updates history with Layer 2 data
 - Both: before processing, a duplicate short-circuit skips files already decided under another path (ADR-001), writing a `duplicate_of` alias — catches duplicates queued without a prior Basic Scan
+
+**Queue tree updates** (`gui/queue_tree.py`): status/value changes, operation changes, adds, removes, and drag reorders update rows in place (folder expand state, selection, and scroll survive). Full rebuild via `refresh_queue_tree()` is reserved for structural bulk ops (startup load, clear queue, clear completed, conflict replace) and restores expand state. See `docs/ARCHITECTURE.md` § Queue Tree Updates.
 
 ### Callback Flow
 
