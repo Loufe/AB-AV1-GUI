@@ -8,6 +8,7 @@ cache validation based on file size and modification time.
 
 import contextlib
 import dataclasses
+import datetime
 import json
 import logging
 import os
@@ -15,7 +16,7 @@ import threading
 
 from src.config import DURATION_TOLERANCE_SEC, HISTORY_FILE, MAX_CRF_VALUE, MAX_VMAF_VALUE, RESOLUTION_TOLERANCE_PERCENT
 from src.logging_setup import get_script_directory
-from src.models import AudioStreamInfo, FileRecord, FileStatus, OperationType
+from src.models import AudioStreamInfo, FileRecord, FileStatus, OperationType, VideoMetadata
 from src.privacy import compute_hash, normalize_path
 
 logger = logging.getLogger(__name__)
@@ -106,6 +107,57 @@ def get_history_path() -> str:
         Absolute path to conversion_history.json.
     """
     return os.path.join(get_script_directory(), HISTORY_FILE)
+
+
+def create_alias_record(
+    source: FileRecord,
+    prior_first_seen: str | None,
+    file_path: str,
+    path_hash: str,
+    file_size: int,
+    file_mtime: float,
+    meta: VideoMetadata,
+    anonymize: bool,
+) -> FileRecord:
+    """Build a duplicate-path alias record: the source's decided result, re-keyed to this path.
+
+    Status and Layer-2/3 results are mirrored from ``source`` (so lookup_file(file_path)
+    resolves to the same outcome); identity, cache stamps, and Layer-1 metadata are this
+    path's. ``duplicate_of`` keeps it out of the size index and the statistics accessors.
+
+    Args:
+        source: The decided record for the same physical file (status/results mirror it).
+        prior_first_seen: first_seen of any existing record at this path_hash, else None.
+        file_path: The current (duplicate) path.
+        path_hash: Pre-computed hash of file_path.
+        file_size: Current file size in bytes.
+        file_mtime: Current file modification time.
+        meta: Metadata from this file's ffprobe.
+        anonymize: Whether to store the path or None.
+    """
+    now = datetime.datetime.now().isoformat(sep=" ", timespec="seconds")
+    return dataclasses.replace(
+        source,
+        # Identity + cache validation - this path / this file on disk
+        path_hash=path_hash,
+        original_path=file_path if not anonymize else None,
+        filename_hash=compute_filename_hash(file_path),
+        duplicate_of=source.path_hash,
+        file_size_bytes=file_size,
+        file_mtime=file_mtime,
+        # Layer-1 metadata - this file's fresh ffprobe, source as fallback (refreshes a stale source).
+        duration_sec=meta.duration_sec or source.duration_sec,
+        video_codec=meta.video_codec or source.video_codec,
+        width=meta.width or source.width,
+        height=meta.height or source.height,
+        bitrate_kbps=meta.bitrate_kbps or source.bitrate_kbps,
+        audio_streams=list(meta.audio_streams or source.audio_streams or []),
+        # Estimates are meaningless on a decided record; preserve this path's first_seen.
+        estimated_reduction_percent=None,
+        estimated_from_similar=None,
+        first_seen=prior_first_seen or now,
+        last_updated=now,
+    )
 
 
 class HistoryIndex:
