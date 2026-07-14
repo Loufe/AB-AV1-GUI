@@ -125,6 +125,18 @@ Conversion uses a queue-based architecture rather than direct folder scanning:
 
 `PENDING` → `CONVERTING` → `COMPLETED` / `ERROR` / `STOPPED`
 
+### Queue Filtering and Verdict Freshness
+
+All queue additions funnel through `filter_file_for_queue()` (`gui/queue_manager.py`);
+saved-queue reloads go through `_is_file_done_per_history()`. Both skip files with a
+decided history verdict (CONVERTED / NOT_WORTHWHILE / ANALYZED-for-ANALYZE) only while
+that verdict still describes the file on disk — a changed file at a known path is
+re-queueable. Since no ffprobe runs on these paths (Layer-1/Layer-2 separation), the
+replace-mode steady state (the AV1 output sitting at the input path with changed
+stamps) is recognized by stat alone via `cache_helpers.converted_verdict_applies()`:
+unchanged stamps, or a `.mkv` path whose size equals the recorded `output_size_bytes`.
+See `docs/HISTORY_FORMAT.md` for the full validity rules.
+
 ### Queue Tree Updates
 
 The queue tree (`gui/queue_tree.py`) updates incrementally so folder expand
@@ -228,7 +240,7 @@ The history index is a **singleton** with **lazy loading**:
 2. For folder items: scan for video files matching extensions
 3. For each file in item:
    - Check resolution, codec, output existence
-   - Duplicate short-circuit: a file already CONVERTED/NOT_WORTHWHILE under another path (ADR-001) is skipped and recorded as a `duplicate_of` alias; an ANALYZED duplicate lets CONVERT reuse the cached CRF
+   - Duplicate short-circuit: a file already CONVERTED/NOT_WORTHWHILE under another path (ADR-001) is skipped and recorded as a `duplicate_of` alias; an ANALYZED duplicate lets CONVERT reuse the cached CRF. A canonical CONVERTED record at the file's own path suppresses this only while the verdict still applies (`converted_verdict_applies`); genuinely changed content is checked against other paths' verdicts like any new file
    - Call `video_conversion.process_video()` (CONVERT) or `wrapper.crf_search()` (ANALYZE)
    - Dispatch progress via callbacks
    - Update history on completion

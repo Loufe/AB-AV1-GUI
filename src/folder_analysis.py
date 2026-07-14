@@ -25,7 +25,7 @@ from statistics import mean
 from src.cache_helpers import mtimes_match
 from src.config import DEFAULT_REDUCTION_ESTIMATE_PERCENT
 from src.history_index import HistoryIndex, compute_filename_hash, compute_path_hash, create_alias_record
-from src.models import DECIDED_STATUSES, FileRecord, FileStatus
+from src.models import DECIDED_STATUSES, FileRecord, FileStatus, VideoMetadata
 from src.utils import get_video_info
 from src.video_metadata import extract_video_metadata
 
@@ -250,20 +250,25 @@ def _analyze_file(
 
     # Cache miss or stale - run ffprobe
     video_info = get_video_info(file_path)
+    meta = extract_video_metadata(video_info)
 
-    # Only a canonical CONVERTED record survives a size/mtime mismatch: in replace mode the
-    # file at that path IS the AV1 output, so changed stamps are the expected steady state.
-    # Anything else - aliases (any status) and ANALYZED/NOT_WORTHWHILE verdicts - described
-    # content that no longer exists; fall through and re-derive from the fresh ffprobe.
+    # A canonical CONVERTED record survives a size/mtime mismatch only while the file is
+    # plausibly its own output: in replace mode the file at that path IS the AV1 output,
+    # so changed stamps are the expected steady state (also preserved when the probe
+    # failed and the codec is unknown). A non-AV1 file cannot be our output - the path
+    # was replaced with new content, so the verdict is stale. Aliases (any status) and
+    # ANALYZED/NOT_WORTHWHILE verdicts likewise described content that no longer exists;
+    # all of these fall through and re-derive from the fresh ffprobe.
     if cached and cached.status == FileStatus.CONVERTED and cached.duplicate_of is None:
-        # Update metadata while preserving conversion data
-        record = _update_existing_record_metadata(cached, file_size, file_mtime, video_info, anonymize, file_path)
-        # Save updated record and return result based on existing status
-        index.upsert(record)
-        return _record_to_result(file_path, record, index)
+        if meta.video_codec is None or meta.is_av1:
+            # Update metadata while preserving conversion data
+            record = _update_existing_record_metadata(cached, file_size, file_mtime, meta, anonymize, file_path)
+            # Save updated record and return result based on existing status
+            index.upsert(record)
+            return _record_to_result(file_path, record, index)
+        logger.info("Converted file replaced with non-AV1 content, re-deriving record: %s", filename)
 
     # Duplicate detection: same physical file reached via a different path?
-    meta = extract_video_metadata(video_info)
     duplicate = index.find_better_duplicate(file_path, file_size, meta.duration_sec)
     if duplicate is not None:
         if meta.duration_sec is None:
@@ -406,7 +411,7 @@ def _create_scanned_record(
 
 
 def _update_existing_record_metadata(
-    existing: FileRecord, file_size: int, file_mtime: float, video_info: dict | None, anonymize: bool, file_path: str
+    existing: FileRecord, file_size: int, file_mtime: float, meta: VideoMetadata, anonymize: bool, file_path: str
 ) -> FileRecord:
     """Update metadata fields on an existing record while preserving status and conversion data.
 
@@ -419,7 +424,7 @@ def _update_existing_record_metadata(
         existing: The existing FileRecord to update.
         file_size: Current file size in bytes.
         file_mtime: Current file modification time.
-        video_info: Output from get_video_info(), or None if failed.
+        meta: Extracted metadata from the fresh ffprobe.
         anonymize: Whether to anonymize paths.
         file_path: Path to the file.
 
@@ -427,8 +432,6 @@ def _update_existing_record_metadata(
         Updated FileRecord with refreshed metadata.
     """
     now = datetime.datetime.now().isoformat(sep=" ", timespec="seconds")
-
-    meta = extract_video_metadata(video_info)
 
     # Update metadata fields while preserving status and conversion data
     return dataclasses.replace(

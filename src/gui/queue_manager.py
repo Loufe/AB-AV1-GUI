@@ -9,7 +9,7 @@ import logging
 import os
 import uuid
 
-from src.cache_helpers import is_file_unchanged
+from src.cache_helpers import converted_verdict_applies, is_file_unchanged
 from src.conversion_engine.scanner import find_video_files
 from src.estimation import compute_grouped_percentiles, get_resolution_bucket
 from src.gui.analysis_tree import extract_paths_from_queue_items
@@ -134,11 +134,12 @@ def _is_file_done_per_history(record: FileRecord, operation_type: OperationType,
     Returns:
         True if the file doesn't need processing, False otherwise.
     """
-    # CONVERTED - file was fully converted, done for both CONVERT and ANALYZE ops
-    # Don't check is_file_unchanged for CONVERTED: in REPLACE mode, the file at this
-    # path is now the AV1 output (different size), so the check would incorrectly fail.
+    # CONVERTED - file was fully converted, done for both CONVERT and ANALYZE ops.
+    # A plain is_file_unchanged check would incorrectly fail in REPLACE mode (the
+    # file at this path is now the AV1 output); converted_verdict_applies recognizes
+    # that steady state while still catching genuinely changed content.
     if record.status == FileStatus.CONVERTED:
-        return True
+        return converted_verdict_applies(record, file_path)
 
     # For non-CONVERTED statuses, verify the source file hasn't changed.
     # Analysis/NOT_WORTHWHILE results are only valid for the analyzed file version.
@@ -192,9 +193,18 @@ def filter_file_for_queue(
 
     record = index.lookup_file(file_path)
     if record:
-        # Already converted - skip
+        # Already converted - skip while the verdict still describes this file
+        # (handles the replace-mode output sitting at the input path)
         if record.status == FileStatus.CONVERTED:
-            return False, "already converted"
+            if converted_verdict_applies(record, file_path):
+                return False, "already converted"
+            return True, None  # Content changed since conversion - re-queueable
+
+        # For other statuses the verdict/metadata only describe the analyzed
+        # file version - a changed file is re-queueable
+        if not is_file_unchanged(record, file_path):
+            return True, None
+
         # Not worth converting - skip
         if record.status == FileStatus.NOT_WORTHWHILE:
             return False, "not worth converting"
