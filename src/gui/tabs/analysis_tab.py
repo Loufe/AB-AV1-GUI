@@ -288,15 +288,18 @@ def create_analysis_tab(gui):
     TreeviewRowTooltip(gui.analysis_tree, gui.get_analysis_tree_tooltip)
 
     # Set up column header tooltips
-    TreeviewHeaderTooltip(gui.analysis_tree, {
-        "savings": (
-            "Estimated space saved after conversion.\n"
-            "'~' prefix = estimate from similar files.\n"
-            "No prefix = precise prediction from CRF analysis."
-        ),
-        "time": TOOLTIP_TIME_COLUMN,
-        "efficiency": "GB saved per hour of conversion time.\nHigher = more space savings for your time.",
-    })
+    TreeviewHeaderTooltip(
+        gui.analysis_tree,
+        {
+            "savings": (
+                "Estimated space saved after conversion.\n"
+                "'~' prefix = estimate from similar files.\n"
+                "No prefix = precise prediction from CRF analysis."
+            ),
+            "time": TOOLTIP_TIME_COLUMN,
+            "efficiency": "GB saved per hour of conversion time.\nHigher = more space savings for your time.",
+        },
+    )
 
     # --- Row 2: Fixed total row (non-scrolling, always visible) ---
     # Use a separate single-row Treeview with matching columns for perfect alignment

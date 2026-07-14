@@ -58,9 +58,9 @@ def create_settings_tab(gui):
     suffix_row.grid(row=2, column=1, columnspan=2, sticky="w", padx=5, pady=3)
     suffix_entry = ttk.Entry(suffix_row, textvariable=gui.default_suffix, width=15)
     suffix_entry.pack(side="left")
-    ttk.Label(
-        suffix_row, text="e.g. '_av1' → video_av1.mkv", foreground=COLOR_TEXT_MUTED
-    ).pack(side="left", padx=(10, 0))
+    ttk.Label(suffix_row, text="e.g. '_av1' → video_av1.mkv", foreground=COLOR_TEXT_MUTED).pack(
+        side="left", padx=(10, 0)
+    )
 
     # Default Output Folder (for separate_folder mode)
     ttk.Label(output_frame, text="Default Output Folder:").grid(row=3, column=0, sticky="w", padx=10, pady=(3, 5))
@@ -119,9 +119,9 @@ def create_settings_tab(gui):
     audio_combo = ttk.Combobox(audio_frame, textvariable=gui.audio_codec, width=10, state="readonly")
     audio_combo["values"] = ("opus", "aac")
     audio_combo.pack(side="left")
-    ttk.Label(
-        audio_frame, text="(opus = smaller, aac = compatible)", foreground=COLOR_TEXT_MUTED
-    ).pack(side="left", padx=(10, 0))
+    ttk.Label(audio_frame, text="(opus = smaller, aac = compatible)", foreground=COLOR_TEXT_MUTED).pack(
+        side="left", padx=(10, 0)
+    )
 
     # Hardware decoding (moved from separate Hardware Acceleration frame)
     hw_decode_row = ttk.Frame(processing_frame)
@@ -211,9 +211,7 @@ def create_settings_tab(gui):
 
     scrub_history_btn = ttk.Button(history_actions_frame, text="Scrub History", command=gui.on_scrub_history)
     scrub_history_btn.pack(side="left")
-    ttk.Label(
-        history_actions_frame, text="(irreversible)", foreground=COLOR_TEXT_MUTED
-    ).pack(side="left", padx=(5, 0))
+    ttk.Label(history_actions_frame, text="(irreversible)", foreground=COLOR_TEXT_MUTED).pack(side="left", padx=(5, 0))
 
     # --- Version Info ---
     version_frame = ttk.LabelFrame(settings_frame, text="Version Info")

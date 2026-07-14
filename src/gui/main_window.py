@@ -789,9 +789,7 @@ class VideoConverterGUI:
         return analysis_tree.get_queued_file_paths(self)
 
     def sync_queue_tags_to_analysis_tree(
-        self,
-        added_paths: set[str] | None = None,
-        removed_paths: set[str] | None = None,
+        self, added_paths: set[str] | None = None, removed_paths: set[str] | None = None
     ):
         return analysis_tree.sync_queue_tags_to_analysis_tree(self, added_paths, removed_paths)
 

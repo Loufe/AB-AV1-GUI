@@ -146,11 +146,7 @@ def batch_update_tree_rows(gui, file_paths: list[str]) -> None:
 
 
 def update_folder_aggregates(
-    gui,
-    folder_id: str,
-    item_to_path: dict[str, str] | None = None,
-    *,
-    grouped_percentiles: dict | None = None,
+    gui, folder_id: str, item_to_path: dict[str, str] | None = None, *, grouped_percentiles: dict | None = None
 ):
     """Recalculate and update folder aggregate values.
 
@@ -277,11 +273,7 @@ def get_queued_file_paths(gui) -> set[str]:
     return queued_paths
 
 
-def sync_queue_tags_to_analysis_tree(
-    gui,
-    added_paths: set[str] | None = None,
-    removed_paths: set[str] | None = None,
-):
+def sync_queue_tags_to_analysis_tree(gui, added_paths: set[str] | None = None, removed_paths: set[str] | None = None):
     """Synchronize queue status to analysis tree item tags.
 
     Applies 'in_queue' tag to files in the queue, 'partial_queue' to folders
