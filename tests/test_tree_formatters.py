@@ -109,8 +109,12 @@ def test_parse_time_to_seconds_under_one_minute_is_30():
 def test_parse_time_to_seconds_invalid_values_sort_last():
     assert parse_time_to_seconds("—") == math.inf
     assert parse_time_to_seconds("nonsense") == math.inf
-    # Quirk (pinned): a parsed total of exactly zero is treated as unparseable.
-    assert parse_time_to_seconds("0m") == math.inf
+
+
+def test_parse_time_to_seconds_parsed_zero_is_zero():
+    # A successfully parsed zero is a real value (sorts first), not unparseable.
+    assert parse_time_to_seconds("0m") == 0.0
+    assert parse_time_to_seconds("0h 0m") == 0.0
 
 
 # ---------------------------------------------------------------------------

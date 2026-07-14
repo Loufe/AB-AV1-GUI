@@ -125,18 +125,21 @@ def parse_time_to_seconds(time_str: str) -> float:
     time_str = time_str.lstrip("~")
 
     total_seconds = 0.0
+    parsed_any = False
     # Parse patterns like "2h 15m" or "45m"
     parts = time_str.split()
     for part in parts:
         try:
             if part.endswith("h"):
                 total_seconds += float(part[:-1]) * 3600
+                parsed_any = True
             elif part.endswith("m"):
                 total_seconds += float(part[:-1]) * 60
+                parsed_any = True
         except ValueError:
             continue
 
-    return total_seconds if total_seconds > 0 else float("inf")
+    return total_seconds if parsed_any else float("inf")
 
 
 def parse_efficiency_to_value(eff_str: str) -> float:
