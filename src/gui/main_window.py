@@ -382,6 +382,8 @@ class VideoConverterGUI:
         self.analysis_stop_event: threading.Event | None = None
         self.analysis_thread: threading.Thread | None = None
         self._tree_item_map: dict[str, str] = {}  # Map file_path -> tree_item_id for updates
+        # Cached folder aggregates: folder tree_item_id -> (total_size, total_savings, total_time, any_estimate)
+        self.folder_aggregates: dict[str, tuple[int, int, float, bool]] = {}
         self._refresh_timer_id: str | None = None  # Debounce timer for auto-refresh
         self._scan_stop_event: threading.Event | None = None  # Stop event for background scan
         self._scanning: bool = False  # True while background scan is running
@@ -787,9 +789,7 @@ class VideoConverterGUI:
         return analysis_tree.get_queued_file_paths(self)
 
     def sync_queue_tags_to_analysis_tree(
-        self,
-        added_paths: set[str] | None = None,
-        removed_paths: set[str] | None = None,
+        self, added_paths: set[str] | None = None, removed_paths: set[str] | None = None
     ):
         return analysis_tree.sync_queue_tags_to_analysis_tree(self, added_paths, removed_paths)
 

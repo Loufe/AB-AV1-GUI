@@ -7,7 +7,8 @@ display strings and parsing those strings back for sorting/comparison.
 
 import logging
 
-from src.config import ANALYSIS_TREE_HEADINGS, EFFICIENCY_DECIMAL_THRESHOLD
+from src.config import EFFICIENCY_DECIMAL_THRESHOLD
+from src.gui.constants import ANALYSIS_TREE_HEADINGS
 
 logger = logging.getLogger(__name__)
 

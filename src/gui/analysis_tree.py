@@ -146,11 +146,7 @@ def batch_update_tree_rows(gui, file_paths: list[str]) -> None:
 
 
 def update_folder_aggregates(
-    gui,
-    folder_id: str,
-    item_to_path: dict[str, str] | None = None,
-    *,
-    grouped_percentiles: dict | None = None,
+    gui, folder_id: str, item_to_path: dict[str, str] | None = None, *, grouped_percentiles: dict | None = None
 ):
     """Recalculate and update folder aggregate values.
 
@@ -219,7 +215,7 @@ def update_folder_aggregates(
                 total_time += file_time
         else:
             # Child is a subfolder - read its cached aggregates
-            folder_agg = getattr(gui, "folder_aggregates", {}).get(child_id)
+            folder_agg = gui.folder_aggregates.get(child_id)
             if folder_agg:
                 child_size, child_savings, child_time, child_any_estimate = folder_agg
                 total_size += child_size
@@ -241,8 +237,6 @@ def update_folder_aggregates(
     gui.analysis_tree.item(folder_id, values=("", size_str, savings_str, time_str, eff_str))
 
     # Cache this folder's aggregates for parent folder calculations
-    if not hasattr(gui, "folder_aggregates"):
-        gui.folder_aggregates = {}
     gui.folder_aggregates[folder_id] = (total_size, total_savings, total_time, any_estimate)
 
 
@@ -279,11 +273,7 @@ def get_queued_file_paths(gui) -> set[str]:
     return queued_paths
 
 
-def sync_queue_tags_to_analysis_tree(
-    gui,
-    added_paths: set[str] | None = None,
-    removed_paths: set[str] | None = None,
-):
+def sync_queue_tags_to_analysis_tree(gui, added_paths: set[str] | None = None, removed_paths: set[str] | None = None):
     """Synchronize queue status to analysis tree item tags.
 
     Applies 'in_queue' tag to files in the queue, 'partial_queue' to folders

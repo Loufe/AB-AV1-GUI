@@ -22,6 +22,7 @@ uv run ruff check src/         # Lint
 uv run ruff check --fix src/   # Lint with auto-fix
 uv run ruff format src/        # Format
 uv run ty check src/           # Type check
+uv run pytest                  # Run unit tests
 ```
 
 ## Project Structure
@@ -75,9 +76,10 @@ src/
     ├── charts.py              # Canvas-based chart drawing (bar, pie, line)
     ├── tabs/                  # Tab implementations
     │   ├── analysis_tab.py    # Analysis tab UI definition
-    │   ├── convert_tab.py     # Convert tab with queue and progress
+    │   ├── convert_tab.py     # Queue tab with queue and progress
+    │   ├── history_tab.py     # History tab: sortable/filterable list of processed files
     │   ├── settings_tab.py    # Settings tab
-    │   └── statistics_tab.py  # Statistics/history tab
+    │   └── statistics_tab.py  # Statistics tab: charts and summary metrics
     ├── dialogs/               # Modal dialog windows
     │   └── ffmpeg_download_dialog.py  # FFmpeg download confirmation
     └── widgets/               # Reusable UI components
@@ -204,7 +206,7 @@ AbAv1Wrapper.auto_encode()
 - Log caught exceptions with context - no silent swallowing
 - New constants go in `config.py`, not inline
 - Prefer creating focused modules over expanding large files
-- **No tests** - This project does not use automated testing
+- **Tests** - Unit tests live under `tests/` and run via `uv run pytest`. Changes to pure logic (parsing, formatting, cache/estimation math, etc.) should come with tests. GUI and worker code is exempt until the engine/GUI boundary refactor lands
 - **No time estimates** - Never provide effort/duration estimates for tasks
 
 ### Zero Backwards Compatibility Policy
