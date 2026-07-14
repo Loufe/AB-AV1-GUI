@@ -178,6 +178,8 @@ The queue supports two operation types via `OperationType` enum:
 - CONVERT items: Show output mode, suffix, folder settings
 - ANALYZE items: Disable output settings (no output file produced)
 
+**Queue filtering** (`filter_file_for_queue`, `gui/queue_manager.py`): decided verdicts (CONVERTED / NOT_WORTHWHILE / ANALYZED) skip a file only while they still describe the content on disk — a changed file at a known path is re-queueable. The replace-mode output at the input path is recognized without ffprobe via `cache_helpers.converted_verdict_applies()` (see `docs/ARCHITECTURE.md` § Queue Filtering and Verdict Freshness).
+
 **Worker branching** (`sequential_conversion_worker`):
 - CONVERT: Calls `process_video()` (existing flow)
 - ANALYZE: Calls `wrapper.crf_search()`, updates history with Layer 2 data
