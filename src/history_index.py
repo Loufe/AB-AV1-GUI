@@ -188,6 +188,21 @@ class HistoryIndex:
         self._converted_cache: list[FileRecord] | None = None
         self._percentiles_cache: dict[OperationType | None, dict] | None = None
 
+    @contextlib.contextmanager
+    def transaction(self):
+        """Hold the index lock across a multi-step read-decide-write sequence.
+
+        Individual methods are already thread-safe, but a lookup -> find_better_duplicate
+        -> upsert sequence spanning several calls is not atomic on its own: two parallel
+        scan workers processing two copies of the same physical file can both pass
+        find_better_duplicate before either upserts (issue #22). Wrapping the sequence
+        in ``with index.transaction():`` serializes it. The lock is reentrant, so index
+        methods called inside the block keep working.
+        """
+        with self._lock:
+            self._ensure_loaded()
+            yield
+
     def get(self, path_hash: str) -> FileRecord | None:
         """Get a record by its path hash.
 
