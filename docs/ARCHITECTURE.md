@@ -156,6 +156,49 @@ Row identity is tracked by stable queue-item-id → tree-iid maps
 functions maintain these maps and fall back to a full rebuild if the tree
 has drifted from `_queue_items`.
 
+## History, Statistics, and Settings Tabs
+
+### History Tab
+
+The History tab (`gui/tabs/history_tab.py`) shows a flat list of files
+processed by ab-av1, loaded from `HistoryIndex.get_by_status()` for the
+CONVERTED, ANALYZED, and NOT_WORTHWHILE statuses. Filter checkboxes toggle
+each status and trigger a debounced (50 ms) refresh. The tab maintains its
+own tree state on the GUI object: `_history_tree_map` (path_hash → tree item
+id) plus sort state (`_history_sort_col`, `_history_sort_reverse`) — clicking
+a column header sorts in place with ▲/▼ indicators, parsing sizes, bitrates,
+percentages, and durations back to numbers for correct ordering.
+`compute_history_display_values()` formats every column for a record;
+output columns (output size, reduction, VMAF, CRF) are only populated for
+CONVERTED records. Right-click offers Open File / Show in Folder, suppressed
+for anonymized records with no `original_path`.
+
+### Statistics Tab
+
+The Statistics tab (`gui/tabs/statistics_tab.py`) aggregates CONVERTED
+records from `HistoryIndex.get_converted_records()` on the "Refresh
+Statistics" button. It renders three canvas charts from `gui/charts.py`:
+a size-reduction histogram (`BarChart`, 10% buckets), a source-codec
+`PieChart`, and a cumulative-space-saved-over-time `LineGraph`. A summary
+panel shows total files converted, average VMAF/CRF/size reduction (with
+min/max ranges), total space saved, throughput (GB of source video per
+hour), and the history date range.
+
+### Settings Tab
+
+The Settings tab (`gui/tabs/settings_tab.py`) is a form bound to Tkinter
+variables on the GUI object, persisted by `main_window.py`:
+
+- **Output Settings**: overwrite toggle, default output mode
+  (replace/suffix/separate_folder), default suffix and output folder
+- **Processing Options**: file extensions (MP4/MKV/AVI/WMV), audio
+  conversion codec (opus/aac), hardware-accelerated decoding toggle with
+  detected CUVID/QSV availability shown inline
+- **Logging & History**: log folder, anonymization toggles, and the
+  irreversible "Scrub Logs" / "Scrub History" actions
+- **Version Info**: app, ab-av1, and FFmpeg versions with Download /
+  Check for Updates buttons handled by `gui/dependency_manager.py`
+
 ## Threading Model
 
 ```

@@ -75,9 +75,10 @@ src/
     ├── charts.py              # Canvas-based chart drawing (bar, pie, line)
     ├── tabs/                  # Tab implementations
     │   ├── analysis_tab.py    # Analysis tab UI definition
-    │   ├── convert_tab.py     # Convert tab with queue and progress
+    │   ├── convert_tab.py     # Queue tab with queue and progress
+    │   ├── history_tab.py     # History tab: sortable/filterable list of processed files
     │   ├── settings_tab.py    # Settings tab
-    │   └── statistics_tab.py  # Statistics/history tab
+    │   └── statistics_tab.py  # Statistics tab: charts and summary metrics
     ├── dialogs/               # Modal dialog windows
     │   └── ffmpeg_download_dialog.py  # FFmpeg download confirmation
     └── widgets/               # Reusable UI components
