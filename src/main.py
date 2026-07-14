@@ -48,11 +48,8 @@ def main():
     app = None  # Initialize app
 
     try:
-        # Create the application instance
+        # Create the application instance (registers WM_DELETE_WINDOW itself)
         app = VideoConverterGUI(root)
-
-        # Register window protocol for proper cleanup
-        root.protocol("WM_DELETE_WINDOW", app.on_exit)
 
         # Start the Tkinter main event loop
         logger.info("Starting Tkinter main loop...")
