@@ -13,6 +13,7 @@ import json
 import logging
 import os
 import threading
+import time
 
 from src.config import DURATION_TOLERANCE_SEC, HISTORY_FILE, MAX_CRF_VALUE, MAX_VMAF_VALUE, RESOLUTION_TOLERANCE_PERCENT
 from src.logging_setup import get_script_directory
@@ -185,8 +186,24 @@ class HistoryIndex:
         self._lock = threading.RLock()
         self._loaded = False
         self._dirty = False
+        self._last_save_time = float("-inf")  # monotonic timestamp of the last disk write
         self._converted_cache: list[FileRecord] | None = None
         self._percentiles_cache: dict[OperationType | None, dict] | None = None
+
+    @contextlib.contextmanager
+    def transaction(self):
+        """Hold the index lock across a multi-step read-decide-write sequence.
+
+        Individual methods are already thread-safe, but a lookup -> find_better_duplicate
+        -> upsert sequence spanning several calls is not atomic on its own: two parallel
+        scan workers processing two copies of the same physical file can both pass
+        find_better_duplicate before either upserts (issue #22). Wrapping the sequence
+        in ``with index.transaction():`` serializes it. The lock is reentrant, so index
+        methods called inside the block keep working.
+        """
+        with self._lock:
+            self._ensure_loaded()
+            yield
 
     def get(self, path_hash: str) -> FileRecord | None:
         """Get a record by its path hash.
@@ -531,6 +548,26 @@ class HistoryIndex:
             self._save_to_disk()
             self._dirty = False
 
+    def save_if_stale(self, min_interval_sec: float) -> None:
+        """Persist changes only if the last disk write is older than min_interval_sec.
+
+        Debounces the per-file saves in the conversion worker: rewriting the whole
+        multi-MB history JSON after every processed file makes batch cost grow
+        quadratically with history size (issue #22). Callers must still call save()
+        at hard checkpoints (queue-item completion, stop, worker exit) so a crash
+        loses at most min_interval_sec of records, never a completed item.
+
+        Args:
+            min_interval_sec: Minimum seconds between disk writes.
+        """
+        with self._lock:
+            if not self._dirty:
+                return
+            if time.monotonic() - self._last_save_time < min_interval_sec:
+                return
+            self._save_to_disk()
+            self._dirty = False
+
     def _ensure_loaded(self) -> None:
         """Load from disk if not already loaded."""
         if not self._loaded:
@@ -621,6 +658,7 @@ class HistoryIndex:
 
             # Atomic rename
             os.replace(temp_path, history_path)
+            self._last_save_time = time.monotonic()
             logger.debug(f"Saved {len(self._records)} records to {history_path}")
 
         except OSError:

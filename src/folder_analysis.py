@@ -252,101 +252,113 @@ def _analyze_file(
     video_info = get_video_info(file_path)
     meta = extract_video_metadata(video_info)
 
-    # A canonical CONVERTED record survives a size/mtime mismatch only while the file is
-    # plausibly its own output: in replace mode the file at that path IS the AV1 output,
-    # so changed stamps are the expected steady state (also preserved when the probe
-    # failed and the codec is unknown). A non-AV1 file cannot be our output - the path
-    # was replaced with new content, so the verdict is stale. Aliases (any status) and
-    # ANALYZED/NOT_WORTHWHILE verdicts likewise described content that no longer exists;
-    # all of these fall through and re-derive from the fresh ffprobe.
-    if cached and cached.status == FileStatus.CONVERTED and cached.duplicate_of is None:
-        if meta.video_codec is None or meta.is_av1:
-            # Update metadata while preserving conversion data
-            record = _update_existing_record_metadata(cached, file_size, file_mtime, meta, anonymize, file_path)
-            # Save updated record and return result based on existing status
-            index.upsert(record)
-            return _record_to_result(file_path, record, index)
-        logger.info("Converted file replaced with non-AV1 content, re-deriving record: %s", filename)
+    # The remaining lookup -> duplicate-check -> upsert sequence must be atomic: two
+    # parallel scan workers processing two copies of the same physical file could
+    # otherwise both pass find_better_duplicate before either upserts, producing two
+    # canonical records instead of one canonical plus one alias (issue #22). The
+    # ffprobe above deliberately stays outside the lock - probes can take seconds
+    # and must not serialize the other workers.
+    with index.transaction():
+        # Re-read under the lock: another writer may have updated this path meanwhile.
+        cached = index.get(path_hash)
 
-    # Duplicate detection: same physical file reached via a different path?
-    duplicate = index.find_better_duplicate(file_path, file_size, meta.duration_sec)
-    if duplicate is not None:
-        if meta.duration_sec is None:
-            # No duration -> find_better_duplicate could only match on filename+size (low
-            # confidence). Show the duplicate's status but don't persist a terminal one.
-            return _record_to_result(file_path, duplicate, index)
-        if duplicate.status in DECIDED_STATUSES:
-            # Source carries a decided result worth mirroring. Persist an alias keyed by THIS
-            # path so lookup_file(this_path) resolves to it and the copy isn't re-encoded.
-            record = create_alias_record(
-                duplicate,
-                cached.first_seen if cached else None,
-                file_path,
-                path_hash,
-                file_size,
-                file_mtime,
-                meta,
-                anonymize,
+        # A canonical CONVERTED record survives a size/mtime mismatch only while the file is
+        # plausibly its own output: in replace mode the file at that path IS the AV1 output,
+        # so changed stamps are the expected steady state (also preserved when the probe
+        # failed and the codec is unknown). A non-AV1 file cannot be our output - the path
+        # was replaced with new content, so the verdict is stale. Aliases (any status) and
+        # ANALYZED/NOT_WORTHWHILE verdicts likewise described content that no longer exists;
+        # all of these fall through and re-derive from the fresh ffprobe.
+        if cached and cached.status == FileStatus.CONVERTED and cached.duplicate_of is None:
+            if meta.video_codec is None or meta.is_av1:
+                # Update metadata while preserving conversion data
+                record = _update_existing_record_metadata(cached, file_size, file_mtime, meta, anonymize, file_path)
+                # Save updated record and return result based on existing status
+                index.upsert(record)
+                return _record_to_result(file_path, record, index)
+            logger.info("Converted file replaced with non-AV1 content, re-deriving record: %s", filename)
+
+        # Duplicate detection: same physical file reached via a different path?
+        duplicate = index.find_better_duplicate(file_path, file_size, meta.duration_sec)
+        if duplicate is not None:
+            if meta.duration_sec is None:
+                # No duration -> find_better_duplicate could only match on filename+size (low
+                # confidence). Show the duplicate's status but don't persist a terminal one.
+                return _record_to_result(file_path, duplicate, index)
+            if duplicate.status in DECIDED_STATUSES:
+                # Source carries a decided result worth mirroring. Persist an alias keyed by THIS
+                # path so lookup_file(this_path) resolves to it and the copy isn't re-encoded.
+                record = create_alias_record(
+                    duplicate,
+                    cached.first_seen if cached else None,
+                    file_path,
+                    path_hash,
+                    file_size,
+                    file_mtime,
+                    meta,
+                    anonymize,
+                )
+                logger.debug("Aliased %s record to new path %s (duplicate detection)", duplicate.status, filename)
+                index.upsert(record)
+                return _record_to_result(file_path, record, index)
+            # Duplicate is only SCANNED - nothing decided to mirror; fall through and create a
+            # fresh SCANNED record for this path below.
+
+        # New file or previously SCANNED - create new SCANNED record
+        record = _create_scanned_record(file_path, path_hash, file_size, file_mtime, video_info, anonymize)
+
+        # Check for skip conditions
+        skip_status, skip_detail = _check_skip_conditions(record, video_info)
+        if skip_status:
+            record.skip_reason = skip_detail
+            index.upsert(record)
+            return FileAnalysisResult(
+                path=file_path,
+                path_hash=path_hash,
+                status=skip_status,
+                file_size_bytes=file_size,
+                video_codec=record.video_codec,
+                resolution=f"{record.width}x{record.height}" if record.width and record.height else None,
+                duration_sec=record.duration_sec,
+                estimated_reduction_percent=None,
+                estimated_savings_bytes=None,
+                status_detail=skip_detail,
             )
-            logger.debug("Aliased %s record to new path %s (duplicate detection)", duplicate.status, filename)
-            index.upsert(record)
-            return _record_to_result(file_path, record, index)
-        # Duplicate is only SCANNED - nothing decided to mirror; fall through and create a
-        # fresh SCANNED record for this path below.
 
-    # New file or previously SCANNED - create new SCANNED record
-    record = _create_scanned_record(file_path, path_hash, file_size, file_mtime, video_info, anonymize)
+        # Estimate reduction based on similar files
+        est_reduction, similar_count = _estimate_reduction(record, index)
+        record.estimated_reduction_percent = est_reduction
+        record.estimated_from_similar = similar_count
 
-    # Check for skip conditions
-    skip_status, skip_detail = _check_skip_conditions(record, video_info)
-    if skip_status:
-        record.skip_reason = skip_detail
+        # Save to index
         index.upsert(record)
+
+        # Calculate estimated savings (accounting for audio which is copied unchanged)
+        est_savings = None
+        if est_reduction and file_size:
+            # Estimate audio size - not reduced, copied unchanged (meta hoisted above)
+            audio_size = 0
+            if meta.duration_sec and meta.total_audio_bitrate_kbps:
+                audio_size = int(meta.duration_sec * meta.total_audio_bitrate_kbps * 1000 / 8)
+
+            # Apply reduction only to video portion
+            video_size = max(0, file_size - audio_size)
+            est_savings = int(video_size * est_reduction / 100)
+
         return FileAnalysisResult(
             path=file_path,
             path_hash=path_hash,
-            status=skip_status,
+            status="needs_conversion",
             file_size_bytes=file_size,
             video_codec=record.video_codec,
             resolution=f"{record.width}x{record.height}" if record.width and record.height else None,
             duration_sec=record.duration_sec,
-            estimated_reduction_percent=None,
-            estimated_savings_bytes=None,
-            status_detail=skip_detail,
+            estimated_reduction_percent=est_reduction,
+            estimated_savings_bytes=est_savings,
+            status_detail=f"Est. based on {similar_count} similar files"
+            if similar_count
+            else "Est. (no similar files)",
         )
-
-    # Estimate reduction based on similar files
-    est_reduction, similar_count = _estimate_reduction(record, index)
-    record.estimated_reduction_percent = est_reduction
-    record.estimated_from_similar = similar_count
-
-    # Save to index
-    index.upsert(record)
-
-    # Calculate estimated savings (accounting for audio which is copied unchanged)
-    est_savings = None
-    if est_reduction and file_size:
-        # Estimate audio size - not reduced, copied unchanged (meta hoisted above)
-        audio_size = 0
-        if meta.duration_sec and meta.total_audio_bitrate_kbps:
-            audio_size = int(meta.duration_sec * meta.total_audio_bitrate_kbps * 1000 / 8)
-
-        # Apply reduction only to video portion
-        video_size = max(0, file_size - audio_size)
-        est_savings = int(video_size * est_reduction / 100)
-
-    return FileAnalysisResult(
-        path=file_path,
-        path_hash=path_hash,
-        status="needs_conversion",
-        file_size_bytes=file_size,
-        video_codec=record.video_codec,
-        resolution=f"{record.width}x{record.height}" if record.width and record.height else None,
-        duration_sec=record.duration_sec,
-        estimated_reduction_percent=est_reduction,
-        estimated_savings_bytes=est_savings,
-        status_detail=f"Est. based on {similar_count} similar files" if similar_count else "Est. (no similar files)",
-    )
 
 
 def _get_output_path(input_path: str, root_path: Path, output_path: Path) -> Path:
