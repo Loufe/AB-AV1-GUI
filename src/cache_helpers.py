@@ -9,13 +9,11 @@ avoiding redundant CRF searches.
 import logging
 import os
 
+from src.config import MTIME_TOLERANCE
 from src.history_index import compute_path_hash
 from src.models import FileRecord
 
 logger = logging.getLogger(__name__)
-
-# Tolerance for mtime comparison (1 second handles JSON float precision loss)
-MTIME_TOLERANCE = 1.0
 
 
 def mtimes_match(mtime1: float, mtime2: float) -> bool:

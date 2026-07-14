@@ -115,6 +115,9 @@ RESOLUTION_TOLERANCE_PERCENT = 0.2  # Tolerance for resolution matching (20%)
 # A tolerance of 0.1 safely covers rounding while avoiding false positives on different files.
 DURATION_TOLERANCE_SEC = 0.1
 
+# Tolerance for mtime comparison (1 second handles JSON float precision loss)
+MTIME_TOLERANCE = 1.0
+
 # --- Tree Display Formatting ---
 EFFICIENCY_DECIMAL_THRESHOLD = 10  # Show GB/hr without decimals above this value
 
