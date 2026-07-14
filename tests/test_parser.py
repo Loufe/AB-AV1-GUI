@@ -73,7 +73,7 @@ def test_crf_vmaf_line_updates_stats_and_fires_progress_callback():
     assert stats["progress_quality"] == 10.0
     assert len(recorder.calls) == 1
     filename, status, event = recorder.calls[0]
-    assert filename == "movie.mp4"  # basename of input_path, not anonymized
+    assert filename == "movie.mp4"  # raw basename of input_path, kept raw for GUI display
     assert status == "progress"
     assert event.phase == "crf-search"
     assert event.progress_quality == 10.0
