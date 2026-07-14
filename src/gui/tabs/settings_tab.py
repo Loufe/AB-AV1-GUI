@@ -7,7 +7,7 @@ import logging
 from tkinter import ttk
 
 from src.ab_av1.checker import get_ab_av1_version
-from src.config import APP_VERSION
+from src.config import get_app_version
 from src.gui.base import ToolTip
 from src.gui.constants import COLOR_STATUS_NEUTRAL, COLOR_STATUS_SUCCESS_LIGHT, COLOR_TEXT_MUTED, FONT_SYSTEM_BOLD
 from src.hardware_accel import get_available_hw_decoders
@@ -224,12 +224,13 @@ def create_settings_tab(gui):
     app_frame.grid(row=0, column=0, sticky="w", padx=10, pady=(5, 3))
     gui.app_frame = app_frame
 
+    app_version = get_app_version()
     ttk.Label(app_frame, text="AB-AV1-GUI Version:").pack(side="left", padx=(0, 5))
-    gui.app_version_label = ttk.Label(app_frame, text=APP_VERSION, font=FONT_SYSTEM_BOLD)
+    gui.app_version_label = ttk.Label(app_frame, text=app_version, font=FONT_SYSTEM_BOLD)
     gui.app_version_label.pack(side="left", padx=(0, 15))
 
     # Show Check for Updates button (hide for dev builds since we can't compare)
-    if APP_VERSION != "dev":
+    if app_version != "dev":
         gui.app_check_btn = ttk.Button(app_frame, text="Check for Updates", command=gui.on_check_app_updates)
         gui.app_check_btn.pack(side="left", padx=(0, 10))
         ToolTip(

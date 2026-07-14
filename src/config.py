@@ -3,18 +3,30 @@
 Central configuration constants for the AV1 Video Converter application.
 """
 
+import functools
+import logging
+import tomllib
+from pathlib import Path
 from typing import TypedDict
 
-# --- Application Version ---
-try:
-    import tomllib
-    from pathlib import Path
+logger = logging.getLogger(__name__)
 
-    _pyproject = Path(__file__).parent.parent / "pyproject.toml"
-    with open(_pyproject, "rb") as _f:
-        APP_VERSION = tomllib.load(_f)["project"]["version"]
-except Exception:
-    APP_VERSION = "dev"
+
+# --- Application Version ---
+@functools.cache
+def get_app_version() -> str:
+    """Read the application version from pyproject.toml.
+
+    Returns:
+        The version string, or "dev" if pyproject.toml cannot be read.
+    """
+    pyproject = Path(__file__).parent.parent / "pyproject.toml"
+    try:
+        with open(pyproject, "rb") as f:
+            return tomllib.load(f)["project"]["version"]
+    except Exception:
+        logger.warning(f"Could not read application version from {pyproject}; falling back to 'dev'", exc_info=True)
+        return "dev"
 
 # --- Encoding Settings ---
 DEFAULT_VMAF_TARGET = 95  # Target VMAF score for quality-based encoding
