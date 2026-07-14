@@ -17,9 +17,8 @@ from typing import TYPE_CHECKING
 if TYPE_CHECKING:
     from src.gui.main_window import VideoConverterGUI
 
-from src.config import HISTORY_TREE_HEADINGS
 from src.gui.base import ToolTip, TreeviewHeaderTooltip
-from src.gui.constants import COLOR_STATUS_SUCCESS, COLOR_STATUS_WARNING
+from src.gui.constants import COLOR_STATUS_SUCCESS, COLOR_STATUS_WARNING, HISTORY_TREE_HEADINGS
 from src.history_index import get_history_index
 from src.models import FileRecord, FileStatus
 from src.utils import format_file_size, format_time
@@ -61,28 +60,19 @@ def create_history_tab(gui: "VideoConverterGUI") -> None:
     ttk.Label(controls_frame, text="Show:").pack(side="left", padx=(0, 5))
 
     converted_cb = ttk.Checkbutton(
-        controls_frame,
-        text="Converted",
-        variable=gui.history_show_converted,
-        command=lambda: _on_filter_changed(gui),
+        controls_frame, text="Converted", variable=gui.history_show_converted, command=lambda: _on_filter_changed(gui)
     )
     converted_cb.pack(side="left", padx=(0, 10))
     ToolTip(converted_cb, "Files fully encoded to AV1")
 
     analyzed_cb = ttk.Checkbutton(
-        controls_frame,
-        text="Analyzed",
-        variable=gui.history_show_analyzed,
-        command=lambda: _on_filter_changed(gui),
+        controls_frame, text="Analyzed", variable=gui.history_show_analyzed, command=lambda: _on_filter_changed(gui)
     )
     analyzed_cb.pack(side="left", padx=(0, 10))
     ToolTip(analyzed_cb, "Files analyzed for optimal CRF but not yet encoded")
 
     skipped_cb = ttk.Checkbutton(
-        controls_frame,
-        text="Skipped",
-        variable=gui.history_show_skipped,
-        command=lambda: _on_filter_changed(gui),
+        controls_frame, text="Skipped", variable=gui.history_show_skipped, command=lambda: _on_filter_changed(gui)
     )
     skipped_cb.pack(side="left", padx=(0, 10))
     ToolTip(skipped_cb, "Files skipped (already AV1, or no worthwhile savings)")
@@ -113,12 +103,7 @@ def create_history_tab(gui: "VideoConverterGUI") -> None:
         "crf",
     )
 
-    gui.history_tree = ttk.Treeview(
-        tree_frame,
-        columns=columns,
-        show="tree headings",
-        selectmode="extended",
-    )
+    gui.history_tree = ttk.Treeview(tree_frame, columns=columns, show="tree headings", selectmode="extended")
 
     # Configure columns
     gui.history_tree.column("#0", width=COLUMN_WIDTHS["#0"], minwidth=80, stretch=True)
@@ -131,9 +116,7 @@ def create_history_tab(gui: "VideoConverterGUI") -> None:
             anchor = "w"
         gui.history_tree.column(col, width=width, minwidth=width, stretch=False, anchor=anchor)
         gui.history_tree.heading(
-            col,
-            text=HISTORY_TREE_HEADINGS.get(col, col.title()),
-            command=lambda c=col: sort_history_tree(gui, c),
+            col, text=HISTORY_TREE_HEADINGS.get(col, col.title()), command=lambda c=col: sort_history_tree(gui, c)
         )
 
     # Configure tags for status coloring
@@ -141,12 +124,15 @@ def create_history_tab(gui: "VideoConverterGUI") -> None:
     gui.history_tree.tag_configure("skip", foreground=COLOR_STATUS_WARNING)
 
     # Set up column header tooltips
-    TreeviewHeaderTooltip(gui.history_tree, {
-        "bitrate": "Source video bitrate.\nHigher usually means higher quality source.",
-        "reduction": "Percentage of original file size saved.\nHigher = more space saved.",
-        "vmaf": "Quality score achieved (0-100).\n95+ is visually lossless.",
-        "crf": "Compression level used (0-63).\nLower = higher quality.",
-    })
+    TreeviewHeaderTooltip(
+        gui.history_tree,
+        {
+            "bitrate": "Source video bitrate.\nHigher usually means higher quality source.",
+            "reduction": "Percentage of original file size saved.\nHigher = more space saved.",
+            "vmaf": "Quality score achieved (0-100).\n95+ is visually lossless.",
+            "crf": "Compression level used (0-63).\nLower = higher quality.",
+        },
+    )
 
     # Scrollbar
     scrollbar = ttk.Scrollbar(tree_frame, orient="vertical", command=gui.history_tree.yview)
@@ -221,13 +207,7 @@ def populate_history_tree(gui: "VideoConverterGUI", records: list[FileRecord]) -
         values = compute_history_display_values(record)
         tag = get_history_status_tag(record.status)
 
-        item_id = gui.history_tree.insert(
-            "",
-            "end",
-            text=name,
-            values=values,
-            tags=(tag,) if tag else (),
-        )
+        item_id = gui.history_tree.insert("", "end", text=name, values=values, tags=(tag,) if tag else ())
         gui._history_tree_map[record.path_hash] = item_id
 
 
@@ -301,8 +281,18 @@ def compute_history_display_values(record: FileRecord) -> tuple[str, ...]:
         crf = "—"
 
     return (
-        date_str, status, resolution, codec, bitrate, duration,
-        audio, input_size, output_size, reduction, vmaf, crf,
+        date_str,
+        status,
+        resolution,
+        codec,
+        bitrate,
+        duration,
+        audio,
+        input_size,
+        output_size,
+        reduction,
+        vmaf,
+        crf,
     )
 
 
@@ -466,8 +456,19 @@ def _parse_duration(val: str) -> float:
 def _update_sort_indicators(gui: "VideoConverterGUI") -> None:
     """Update column headers to show sort direction."""
     all_columns = [
-        "#0", "date", "status", "resolution", "codec", "bitrate",
-        "duration", "audio", "input_size", "output_size", "reduction", "vmaf", "crf",
+        "#0",
+        "date",
+        "status",
+        "resolution",
+        "codec",
+        "bitrate",
+        "duration",
+        "audio",
+        "input_size",
+        "output_size",
+        "reduction",
+        "vmaf",
+        "crf",
     ]
     for col in all_columns:
         base_text = HISTORY_TREE_HEADINGS.get(col, col.title())

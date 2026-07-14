@@ -11,9 +11,9 @@ import os
 import tkinter as tk
 from tkinter import ttk
 
-from src.config import ANALYSIS_TREE_HEADINGS
 from src.gui.base import ToolTip, TreeviewHeaderTooltip, TreeviewRowTooltip, open_in_explorer, reveal_in_explorer
 from src.gui.constants import (
+    ANALYSIS_TREE_HEADINGS,
     COLOR_BADGE_BACKGROUND,
     COLOR_BADGE_TEXT,
     COLOR_STATUS_DISABLED,
@@ -288,15 +288,18 @@ def create_analysis_tab(gui):
     TreeviewRowTooltip(gui.analysis_tree, gui.get_analysis_tree_tooltip)
 
     # Set up column header tooltips
-    TreeviewHeaderTooltip(gui.analysis_tree, {
-        "savings": (
-            "Estimated space saved after conversion.\n"
-            "'~' prefix = estimate from similar files.\n"
-            "No prefix = precise prediction from CRF analysis."
-        ),
-        "time": TOOLTIP_TIME_COLUMN,
-        "efficiency": "GB saved per hour of conversion time.\nHigher = more space savings for your time.",
-    })
+    TreeviewHeaderTooltip(
+        gui.analysis_tree,
+        {
+            "savings": (
+                "Estimated space saved after conversion.\n"
+                "'~' prefix = estimate from similar files.\n"
+                "No prefix = precise prediction from CRF analysis."
+            ),
+            "time": TOOLTIP_TIME_COLUMN,
+            "efficiency": "GB saved per hour of conversion time.\nHigher = more space savings for your time.",
+        },
+    )
 
     # --- Row 2: Fixed total row (non-scrolling, always visible) ---
     # Use a separate single-row Treeview with matching columns for perfect alignment

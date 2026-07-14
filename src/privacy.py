@@ -220,9 +220,20 @@ class PathPrivacyFilter(logging.Filter):
     """
 
     def filter(self, record: logging.LogRecord) -> bool:
-        if hasattr(record, "msg") and isinstance(record.msg, str):
-            temp_msg = record.msg
-            for pattern in PATH_PATTERNS:
-                temp_msg = pattern.sub(_anonymize_path_match, temp_msg)
-            record.msg = temp_msg
+        try:
+            if record.args:
+                # Collapse %-style args into the message so paths passed as
+                # args are scrubbed too (they'd otherwise bypass the patterns)
+                record.msg = record.getMessage()
+                record.args = ()
+            if hasattr(record, "msg") and isinstance(record.msg, str):
+                temp_msg = record.msg
+                for pattern in PATH_PATTERNS:
+                    temp_msg = pattern.sub(_anonymize_path_match, temp_msg)
+                record.msg = temp_msg
+        except Exception:
+            # A logging failure must never break the app; the record passes
+            # through unmodified (formatting of a malformed record will be
+            # handled by logging's own error handling downstream)
+            logger.exception("PathPrivacyFilter failed to anonymize log record")
         return True

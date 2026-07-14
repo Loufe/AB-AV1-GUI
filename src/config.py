@@ -3,18 +3,31 @@
 Central configuration constants for the AV1 Video Converter application.
 """
 
+import functools
+import logging
+import tomllib
+from pathlib import Path
 from typing import TypedDict
 
-# --- Application Version ---
-try:
-    import tomllib
-    from pathlib import Path
+logger = logging.getLogger(__name__)
 
-    _pyproject = Path(__file__).parent.parent / "pyproject.toml"
-    with open(_pyproject, "rb") as _f:
-        APP_VERSION = tomllib.load(_f)["project"]["version"]
-except Exception:
-    APP_VERSION = "dev"
+
+# --- Application Version ---
+@functools.cache
+def get_app_version() -> str:
+    """Read the application version from pyproject.toml.
+
+    Returns:
+        The version string, or "dev" if pyproject.toml cannot be read.
+    """
+    pyproject = Path(__file__).parent.parent / "pyproject.toml"
+    try:
+        with open(pyproject, "rb") as f:
+            return tomllib.load(f)["project"]["version"]
+    except Exception:
+        logger.warning(f"Could not read application version from {pyproject}; falling back to 'dev'", exc_info=True)
+        return "dev"
+
 
 # --- Encoding Settings ---
 DEFAULT_VMAF_TARGET = 95  # Target VMAF score for quality-based encoding
@@ -29,9 +42,9 @@ VMAF_FALLBACK_STEP = 1  # How much to decrement VMAF target on each fallback att
 # Format: (max_duration_minutes, log_interval) - uses first matching tier
 # Set to None to disable (falls back to ab-av1's exponential backoff)
 LOG_INTERVAL_TIERS: list[tuple[int | None, str]] = [
-    (30, "5%"),    # < 30 min: every 5% (~20 updates)
-    (120, "2%"),   # 30 min - 2 hr: every 2% (~50 updates)
-    (240, "1%"),   # 2 - 4 hr: every 1% (~100 updates)
+    (30, "5%"),  # < 30 min: every 5% (~20 updates)
+    (120, "2%"),  # 30 min - 2 hr: every 2% (~50 updates)
+    (240, "1%"),  # 2 - 4 hr: every 1% (~100 updates)
     (None, "1%"),  # > 4 hr: every 1% (~100 updates)
 ]
 
@@ -115,35 +128,11 @@ RESOLUTION_TOLERANCE_PERCENT = 0.2  # Tolerance for resolution matching (20%)
 # A tolerance of 0.1 safely covers rounding while avoiding false positives on different files.
 DURATION_TOLERANCE_SEC = 0.1
 
+# Tolerance for mtime comparison (1 second handles JSON float precision loss)
+MTIME_TOLERANCE = 1.0
+
 # --- Tree Display Formatting ---
 EFFICIENCY_DECIMAL_THRESHOLD = 10  # Show GB/hr without decimals above this value
-
-# Analysis tree column headings (base text without sort indicators)
-ANALYSIS_TREE_HEADINGS: dict[str, str] = {
-    "#0": "Name",
-    "format": "Format",
-    "size": "Size",
-    "savings": "Est. Savings",
-    "time": "Est. Time",
-    "efficiency": "Efficiency",
-}
-
-# History tree column headings
-HISTORY_TREE_HEADINGS: dict[str, str] = {
-    "date": "Date",
-    "#0": "Name",
-    "status": "Status",
-    "resolution": "Resolution",
-    "codec": "Codec",
-    "bitrate": "Bitrate",
-    "duration": "Duration",
-    "audio": "Audio",
-    "input_size": "Input",
-    "output_size": "Output",
-    "reduction": "Reduction",
-    "vmaf": "VMAF",
-    "crf": "CRF",
-}
 
 # --- Hardware Decoder Settings ---
 # Hardware decoder mapping (source codec -> preferred decoders in priority order)

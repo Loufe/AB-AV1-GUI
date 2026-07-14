@@ -14,7 +14,7 @@ from tkinter import ttk
 from typing import TYPE_CHECKING
 
 from src.ab_av1.checker import check_ab_av1_latest_github, check_app_latest_github, get_ab_av1_version
-from src.config import APP_VERSION
+from src.config import get_app_version
 from src.gui.constants import (
     COLOR_STATUS_ERROR,
     COLOR_STATUS_INFO,
@@ -64,8 +64,10 @@ def check_app_updates(gui: "VideoConverterGUI") -> None:
         gui.app_update_label.config(text=message, foreground=COLOR_STATUS_ERROR)
         return
 
+    app_version = get_app_version()
+
     # For "dev" version, just show latest without comparison
-    if APP_VERSION == "dev":
+    if app_version == "dev":
         gui.app_update_label.config(
             text=f"Latest: {latest_version}", foreground=COLOR_STATUS_INFO, cursor="hand2", font=FONT_SYSTEM_UNDERLINE
         )
@@ -78,15 +80,15 @@ def check_app_updates(gui: "VideoConverterGUI") -> None:
         return tuple(int(x) for x in v.split("."))
 
     try:
-        local_parts = parse_semver(APP_VERSION)
+        local_parts = parse_semver(app_version)
         latest_parts = parse_semver(latest_version)
         is_up_to_date = local_parts >= latest_parts
     except ValueError:
         # Fallback to string comparison if parsing fails
-        is_up_to_date = latest_version == APP_VERSION
+        is_up_to_date = latest_version == app_version
 
     if is_up_to_date:
-        gui.app_update_label.config(text=f"Up to date ({APP_VERSION})", foreground=COLOR_STATUS_SUCCESS)
+        gui.app_update_label.config(text=f"Up to date ({app_version})", foreground=COLOR_STATUS_SUCCESS)
     else:
         # Update available - make label clickable
         gui.app_update_label.config(
