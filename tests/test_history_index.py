@@ -1,6 +1,7 @@
 # tests/test_history_index.py
 """Tests for src/history_index.py: persistence, aliases, and locking."""
 
+import json
 import threading
 import time
 
@@ -232,3 +233,56 @@ def test_concurrent_scan_of_duplicates_yields_one_canonical(tmp_path, index, mon
 
     canonical = [r for r in index.get_all_records() if r.duplicate_of is None]
     assert canonical == [source]
+
+
+# ---------------------------------------------------------------------------
+# save_if_stale debouncing (issue #22)
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture
+def clock(monkeypatch):
+    """Controllable replacement for time.monotonic inside history_index."""
+    now = [1000.0]
+    monkeypatch.setattr("src.history_index.time.monotonic", lambda: now[0])
+    return now
+
+
+def records_on_disk(history_file) -> int:
+    return len(json.loads(history_file.read_text(encoding="utf-8")))
+
+
+def test_save_if_stale_suppresses_saves_within_interval(index, clock, history_file):
+    index.upsert(make_record("/videos/a.mkv"))
+    index.save_if_stale(30)  # No prior save -> writes immediately
+    assert records_on_disk(history_file) == 1
+
+    index.upsert(make_record("/videos/b.mkv"))
+    clock[0] += 10
+    index.save_if_stale(30)  # Dirty, but only 10s since last write -> suppressed
+    assert records_on_disk(history_file) == 1
+
+    clock[0] += 25  # 35s since last write
+    index.save_if_stale(30)  # Stale -> writes
+    assert records_on_disk(history_file) == 2
+
+
+def test_forced_flush_saves_regardless_of_interval(index, clock, history_file):
+    index.upsert(make_record("/videos/a.mkv"))
+    index.save_if_stale(30)
+    assert records_on_disk(history_file) == 1
+
+    index.upsert(make_record("/videos/b.mkv"))
+    clock[0] += 1
+    index.save()  # Mandatory flush ignores the debounce interval
+    assert records_on_disk(history_file) == 2
+
+
+def test_save_if_stale_respects_dirty_flag(index, clock, history_file):
+    index.upsert(make_record("/videos/a.mkv"))
+    index.save()
+    history_file.unlink()
+
+    clock[0] += 100  # Interval elapsed, but nothing changed since the last save
+    index.save_if_stale(30)
+    assert not history_file.exists()
