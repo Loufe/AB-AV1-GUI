@@ -117,7 +117,7 @@ class AbAv1Parser:
             return stats  # Skip empty lines
 
         try:
-            anonymized_input_basename = os.path.basename(stats.get("input_path", "unknown_file"))
+            input_basename = os.path.basename(stats.get("input_path", "unknown_file"))
             current_phase = stats.get("phase", "crf-search")
             processed_line = False  # Flag if line yielded useful info
 
@@ -152,7 +152,7 @@ class AbAv1Parser:
                         original_size=stats.get("original_size"),
                         vmaf_target_used=stats.get("vmaf_target_used"),
                     )
-                    self.file_info_callback(anonymized_input_basename, "progress", callback_info)
+                    self.file_info_callback(input_basename, "progress", callback_info)
                 return stats  # Return early
 
             # --- CRF Search Phase Parsing ---
@@ -227,7 +227,7 @@ class AbAv1Parser:
                             original_size=stats.get("original_size"),
                             vmaf_target_used=stats.get("vmaf_target_used"),
                         )
-                        self.file_info_callback(anonymized_input_basename, "progress", callback_info)
+                        self.file_info_callback(input_basename, "progress", callback_info)
 
             # --- Encoding Phase Parsing (ab-av1 Summary Line) ---
             elif current_phase == "encoding":
@@ -249,7 +249,7 @@ class AbAv1Parser:
                     if self.file_info_callback:
                         message = f"Encoding: {progress_pct:.1f}% (FPS: {fps}, ETA: {eta_text})"
                         callback_data = self._build_encoding_callback_data(stats, progress_pct, message, eta_text)
-                        self.file_info_callback(anonymized_input_basename, "progress", callback_data)
+                        self.file_info_callback(input_basename, "progress", callback_data)
 
                     processed_line = True
                     return stats
@@ -274,7 +274,7 @@ class AbAv1Parser:
                     if self.file_info_callback:
                         message = f"Encoding: {progress_pct:.1f}% (FPS: {fps}, ETA: {eta_text})"
                         callback_data = self._build_encoding_callback_data(stats, progress_pct, message, eta_text)
-                        self.file_info_callback(anonymized_input_basename, "progress", callback_data)
+                        self.file_info_callback(input_basename, "progress", callback_data)
 
                     processed_line = True
                     return stats
@@ -319,7 +319,7 @@ class AbAv1Parser:
 
                                 if self.file_info_callback:
                                     callback_data = self._build_encoding_callback_data(stats, progress_pct, message)
-                                    self.file_info_callback(anonymized_input_basename, "progress", callback_data)
+                                    self.file_info_callback(input_basename, "progress", callback_data)
 
                                 processed_line = True
                                 return stats
@@ -330,18 +330,24 @@ class AbAv1Parser:
                 percentage_match = self._re_percentage.search(line)
                 if percentage_match:
                     progress_pct = float(percentage_match.group(1))
-                    logger.info(f"Percentage detected in line: {progress_pct}% in '{line}'")
 
-                    # Basic progress update (no FPS or ETA)
-                    stats["progress_encoding"] = progress_pct
+                    # Only update if progress increased by at least 0.1% (same guard as the
+                    # ffmpeg time= path): a stray low percentage in unrelated output must
+                    # never drag the progress bar backwards
+                    last_progress = stats.get("progress_encoding", 0.0)
+                    if progress_pct >= last_progress + 0.1:
+                        logger.info(f"Percentage detected in line: {progress_pct}% in '{line}'")
 
-                    # Send progress update
-                    if self.file_info_callback:
-                        message = f"Encoding: {progress_pct:.1f}%"
-                        callback_data = self._build_encoding_callback_data(stats, progress_pct, message)
-                        self.file_info_callback(anonymized_input_basename, "progress", callback_data)
+                        # Basic progress update (no FPS or ETA)
+                        stats["progress_encoding"] = progress_pct
 
-                    processed_line = True
+                        # Send progress update
+                        if self.file_info_callback:
+                            message = f"Encoding: {progress_pct:.1f}%"
+                            callback_data = self._build_encoding_callback_data(stats, progress_pct, message)
+                            self.file_info_callback(input_basename, "progress", callback_data)
+
+                        processed_line = True
 
                 # Fall back to ab-av1 summary line if no ffmpeg progress
                 summary_match = self._re_ab_av1_encoding_summary.search(line)
@@ -363,7 +369,7 @@ class AbAv1Parser:
                                     stats, current_progress, message, eta_text
                                 )
                                 logger.debug(f"Sending progress callback (summary): {current_progress:.1f}%")
-                                self.file_info_callback(anonymized_input_basename, "progress", callback_data)
+                                self.file_info_callback(input_basename, "progress", callback_data)
 
                     except IndexError:
                         logger.warning(f"Error parsing groups from ab-av1 summary line: '{line}'")

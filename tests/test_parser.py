@@ -73,7 +73,7 @@ def test_crf_vmaf_line_updates_stats_and_fires_progress_callback():
     assert stats["progress_quality"] == 10.0
     assert len(recorder.calls) == 1
     filename, status, event = recorder.calls[0]
-    assert filename == "movie.mp4"  # basename of input_path, not anonymized
+    assert filename == "movie.mp4"  # raw basename of input_path, kept raw for GUI display
     assert status == "progress"
     assert event.phase == "crf-search"
     assert event.progress_quality == 10.0
@@ -284,19 +284,18 @@ def test_generic_percentage_fallback():
     assert recorder.events[0].message == "Encoding: 62.0%"
 
 
-def test_generic_percentage_fallback_can_regress_progress():
-    # SUSPECTED BUG: unlike the ffmpeg time= path (which requires a 0.1%
-    # increase), the generic percentage fallback overwrites progress
-    # unconditionally, so a stray low percentage in any output line drags the
-    # progress bar backwards. Pinning current behavior.
+def test_generic_percentage_fallback_never_regresses_progress():
+    # Like the ffmpeg time= path, the generic percentage fallback requires a
+    # 0.1% increase, so a stray low percentage in unrelated output cannot drag
+    # the progress bar backwards.
     parser, recorder = make_parser()
     stats = make_encoding_stats()
     stats["progress_encoding"] = 80.0
 
     parser.parse_line("some tool output mentioning 10%", stats)
 
-    assert stats["progress_encoding"] == 10.0
-    assert len(recorder.calls) == 1
+    assert stats["progress_encoding"] == 80.0
+    assert recorder.calls == []
 
 
 def test_ab_av1_summary_line_updates_eta_only():
