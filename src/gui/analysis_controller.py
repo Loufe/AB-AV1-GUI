@@ -160,8 +160,7 @@ def prune_empty_folders(gui) -> int:
                 if "📁" in text:
                     gui.analysis_tree.delete(item_id)
                     # Clean up cached folder aggregates
-                    if hasattr(gui, "folder_aggregates"):
-                        gui.folder_aggregates.pop(item_id, None)
+                    gui.folder_aggregates.pop(item_id, None)
                     removed_this_pass += 1
 
         total_removed += removed_this_pass
@@ -628,6 +627,5 @@ def clear_analysis_tree(gui) -> None:
     for item in gui.analysis_tree.get_children():
         gui.analysis_tree.delete(item)
     gui._tree_item_map.clear()
-    if hasattr(gui, "folder_aggregates"):
-        gui.folder_aggregates.clear()
+    gui.folder_aggregates.clear()
     clear_sort_state(gui)
