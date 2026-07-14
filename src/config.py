@@ -121,33 +121,6 @@ MTIME_TOLERANCE = 1.0
 # --- Tree Display Formatting ---
 EFFICIENCY_DECIMAL_THRESHOLD = 10  # Show GB/hr without decimals above this value
 
-# Analysis tree column headings (base text without sort indicators)
-ANALYSIS_TREE_HEADINGS: dict[str, str] = {
-    "#0": "Name",
-    "format": "Format",
-    "size": "Size",
-    "savings": "Est. Savings",
-    "time": "Est. Time",
-    "efficiency": "Efficiency",
-}
-
-# History tree column headings
-HISTORY_TREE_HEADINGS: dict[str, str] = {
-    "date": "Date",
-    "#0": "Name",
-    "status": "Status",
-    "resolution": "Resolution",
-    "codec": "Codec",
-    "bitrate": "Bitrate",
-    "duration": "Duration",
-    "audio": "Audio",
-    "input_size": "Input",
-    "output_size": "Output",
-    "reduction": "Reduction",
-    "vmaf": "VMAF",
-    "crf": "CRF",
-}
-
 # --- Hardware Decoder Settings ---
 # Hardware decoder mapping (source codec -> preferred decoders in priority order)
 HW_DECODER_MAP: dict[str, list[str]] = {

@@ -11,9 +11,9 @@ import os
 import tkinter as tk
 from tkinter import ttk
 
-from src.config import ANALYSIS_TREE_HEADINGS
 from src.gui.base import ToolTip, TreeviewHeaderTooltip, TreeviewRowTooltip, open_in_explorer, reveal_in_explorer
 from src.gui.constants import (
+    ANALYSIS_TREE_HEADINGS,
     COLOR_BADGE_BACKGROUND,
     COLOR_BADGE_TEXT,
     COLOR_STATUS_DISABLED,

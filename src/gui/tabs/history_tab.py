@@ -17,9 +17,8 @@ from typing import TYPE_CHECKING
 if TYPE_CHECKING:
     from src.gui.main_window import VideoConverterGUI
 
-from src.config import HISTORY_TREE_HEADINGS
 from src.gui.base import ToolTip, TreeviewHeaderTooltip
-from src.gui.constants import COLOR_STATUS_SUCCESS, COLOR_STATUS_WARNING
+from src.gui.constants import COLOR_STATUS_SUCCESS, COLOR_STATUS_WARNING, HISTORY_TREE_HEADINGS
 from src.history_index import get_history_index
 from src.models import FileRecord, FileStatus
 from src.utils import format_file_size, format_time
