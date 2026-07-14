@@ -555,7 +555,11 @@ def add_items_to_queue(
     # Save and refresh if anything was added or modified
     if counts["added"] > 0 or counts["conflict_added"] > 0 or counts["conflict_replaced"] > 0:
         gui.save_queue_to_config()
-        gui.refresh_queue_tree()
+        if counts["conflict_replaced"] > 0:
+            # Replacement swaps an item mid-list; rebuild (preserves expand state)
+            gui.refresh_queue_tree()
+        else:
+            gui.add_queue_items_to_tree(items_added)
         added_paths = extract_paths_from_queue_items(items_added)
         gui.sync_queue_tags_to_analysis_tree(added_paths=added_paths)
 

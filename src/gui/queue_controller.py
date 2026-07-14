@@ -108,13 +108,12 @@ def on_remove_from_queue(gui) -> None:
     # Extract paths before removal for incremental sync
     removed_paths = extract_paths_from_queue_items(items_to_remove)
 
-    # Remove from queue
+    # Remove from queue (remove_queue_items_from_tree cleans _queue_items_by_id)
     for item in items_to_remove:
         gui._queue_items.remove(item)
-        gui._queue_items_by_id.pop(item.id, None)
 
     gui.save_queue_to_config()
-    gui.refresh_queue_tree()
+    gui.remove_queue_items_from_tree(items_to_remove)
     gui.sync_queue_tags_to_analysis_tree(removed_paths=removed_paths)
 
 
@@ -272,7 +271,7 @@ def on_item_suffix_changed(gui) -> None:
             queue_item.output_suffix = new_suffix
 
     gui.save_queue_to_config()
-    gui.refresh_queue_tree()
+    gui.refresh_queue_tree_values()
 
 
 def on_browse_item_output_folder(gui) -> None:
@@ -293,4 +292,4 @@ def on_browse_item_output_folder(gui) -> None:
             queue_item.output_folder = folder
 
     gui.save_queue_to_config()
-    gui.refresh_queue_tree()
+    gui.refresh_queue_tree_values()
