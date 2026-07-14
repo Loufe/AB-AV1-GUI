@@ -16,7 +16,7 @@ from collections.abc import Callable  # Import Callable
 # Project imports
 from src.ab_av1.exceptions import ConversionNotWorthwhileError
 from src.ab_av1.wrapper import AbAv1Wrapper
-from src.cache_helpers import is_file_unchanged
+from src.cache_helpers import converted_verdict_applies, is_file_unchanged
 from src.config import DEFAULT_ENCODING_PRESET, DEFAULT_VMAF_TARGET, MIN_VMAF_FALLBACK_TARGET
 from src.hardware_accel import get_hw_decoder_for_codec, get_video_codec_from_info
 from src.history_index import (
@@ -192,9 +192,15 @@ def _find_duplicate_verdict(
     if cached is not None:
         if cached.duplicate_of is not None and is_file_unchanged(cached, file_path):
             return cached  # Valid alias: mirrors a decided verdict from another path
-        if cached.status == FileStatus.CONVERTED and cached.duplicate_of is None:
-            # Canonical conversion at this path; changed stamps are the replace-mode
-            # steady state, never grounds to re-derive it as someone else's duplicate.
+        if (
+            cached.status == FileStatus.CONVERTED
+            and cached.duplicate_of is None
+            and converted_verdict_applies(cached, file_path)
+        ):
+            # Canonical conversion at this path; changed stamps in replace mode are
+            # the steady state, never grounds to re-derive it as someone else's
+            # duplicate. Genuinely changed content falls through instead: the new
+            # file may be a copy of another path's decided verdict.
             return None
         if cached.status in DECIDED_STATUSES and is_file_unchanged(cached, file_path):
             return None  # Own valid verdict - existing checks handle it
@@ -643,9 +649,11 @@ def sequential_conversion_worker(
                     index = get_history_index()
                     cached_record = index.lookup_file(file_path)
                     if cached_record:
-                        # Skip CONVERTED files - no point analyzing, conversion history is valuable
+                        # Skip CONVERTED files - no point analyzing, conversion history is
+                        # valuable (converted_verdict_applies also covers the replace-mode
+                        # output at the input path, which would otherwise be CRF-searched)
                         if cached_record.status == FileStatus.CONVERTED:
-                            if is_file_unchanged(cached_record, file_path):
+                            if converted_verdict_applies(cached_record, file_path):
                                 logger.info(f"Skipping {anonymized_name} - already converted")
                                 file_event_callback(filename, "skipped", "Already converted")
                                 queue_item.files_skipped += 1

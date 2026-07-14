@@ -57,6 +57,44 @@ def is_file_unchanged(record: FileRecord, file_path: str) -> bool:
         return False
 
 
+def converted_verdict_applies(record: FileRecord, file_path: str) -> bool:
+    """Check if a CONVERTED record still describes the file at this path.
+
+    A plain stamp check is wrong for CONVERTED records: in replace mode the AV1
+    output sits at the input path, so changed stamps are the expected steady
+    state of a completed conversion, not evidence of new content. The steady
+    state is recognized without ffprobe: replace mode always outputs
+    ``input.with_suffix(".mkv")``, so only a .mkv path can hold our own output,
+    identified by its size matching the recorded output size.
+
+    Args:
+        record: The CONVERTED FileRecord for this path.
+        file_path: Path to the current file.
+
+    Returns:
+        True if the verdict still applies (skip the file), False if the
+        content at the path genuinely changed (eligible for re-processing).
+    """
+    if is_file_unchanged(record, file_path):
+        # Untouched input (suffix/separate-folder modes), or a replace-mode
+        # output whose stamps a later scan refreshed onto the record.
+        return True
+
+    if record.output_size_bytes is None:
+        # Legacy record without Layer-3 size: can't discriminate output from
+        # changed content - stay conservative and keep the verdict.
+        return True
+
+    if not file_path.lower().endswith(".mkv"):
+        return False  # Our output never sits at a non-mkv path
+
+    try:
+        return os.path.getsize(file_path) == record.output_size_bytes
+    except OSError as e:
+        logger.warning(f"Could not stat file for converted-verdict check: {e}")
+        return True  # Conservative: keep the verdict rather than re-queue
+
+
 def can_reuse_crf(record: FileRecord, desired_vmaf: int, desired_preset: int) -> bool:
     """Check if cached CRF can be reused for conversion.
 
