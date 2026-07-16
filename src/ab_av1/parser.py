@@ -13,6 +13,7 @@ from typing import Any
 from src.config import SIZE_REDUCTION_CHANGE_THRESHOLD, VMAF_CHANGE_THRESHOLD
 from src.models import ProgressEvent
 from src.privacy import anonymize_filename
+from src.utils import format_crf
 
 logger = logging.getLogger(__name__)
 
@@ -48,8 +49,8 @@ class AbAv1Parser:
         self._re_main_encoding = re.compile(
             r"command::encode\]\s*(\d+)%,\s*(\d+)\s*fps,\s*eta\s+([\w\s]+)(?:$|\)|\])", re.IGNORECASE
         )
-        self._re_crf_vmaf = re.compile(r"crf\s+(\d+)\s+VMAF\s+(\d+\.?\d*)", re.IGNORECASE)
-        self._re_best_crf = re.compile(r"Best\s+CRF:\s+(\d+)", re.IGNORECASE)
+        self._re_crf_vmaf = re.compile(r"crf\s+(\d+\.?\d*)\s+VMAF\s+(\d+\.?\d*)", re.IGNORECASE)
+        self._re_best_crf = re.compile(r"Best\s+CRF:\s+(\d+\.?\d*)", re.IGNORECASE)
         self._re_size_reduction_percent = re.compile(
             r"predicted video stream size.*?\((\d+\.?\d*)\s*%\)", re.IGNORECASE
         )
@@ -69,7 +70,7 @@ class AbAv1Parser:
 
         # Final output parsing patterns
         self._re_final_vmaf = re.compile(r"VMAF\s+(\d+\.\d+)", re.IGNORECASE)
-        self._re_final_crf = re.compile(r"Best\s+CRF:\s+(\d+)", re.IGNORECASE)
+        self._re_final_crf = re.compile(r"Best\s+CRF:\s+(\d+\.?\d*)", re.IGNORECASE)
 
     def _build_encoding_callback_data(
         self, stats: dict[str, Any], progress_encoding: float, message: str, eta_text: str | None = None
@@ -162,11 +163,11 @@ class AbAv1Parser:
                 if crf_vmaf_match:
                     processed_line = True
                     try:
-                        crf_val = int(crf_vmaf_match.group(1))
+                        crf_val = float(crf_vmaf_match.group(1))
                         vmaf_val = float(crf_vmaf_match.group(2))
                         stats["crf"] = crf_val
                         stats["vmaf"] = vmaf_val
-                        logger.info(f"CRF search update: CRF={stats['crf']}, VMAF={stats['vmaf']:.2f}")
+                        logger.info(f"CRF search update: CRF={format_crf(stats['crf'])}, VMAF={stats['vmaf']:.2f}")
                         new_quality_progress = min(90.0, stats.get("progress_quality", 0) + 10.0)
                     except (ValueError, IndexError) as e:
                         logger.warning(f"Error parsing CRF/VMAF values from line '{line[:80]}...': {e}")
@@ -175,9 +176,9 @@ class AbAv1Parser:
                 if best_crf_match:
                     processed_line = True
                     try:
-                        crf_val = int(best_crf_match.group(1))
+                        crf_val = float(best_crf_match.group(1))
                         stats["crf"] = crf_val
-                        logger.info(f"Best CRF determined: {stats['crf']}")
+                        logger.info(f"Best CRF determined: {format_crf(stats['crf'])}")
                         new_quality_progress = 95.0
                     except (ValueError, IndexError) as e:
                         logger.warning(f"Error parsing Best CRF value from line '{line[:80]}...': {e}")
@@ -215,11 +216,10 @@ class AbAv1Parser:
                                 vmaf_part = f"{float(current_vmaf):.1f}"
                             except (ValueError, TypeError):
                                 vmaf_part = str(current_vmaf)
-
                         callback_info = ProgressEvent(
                             progress_quality=stats["progress_quality"],
                             progress_encoding=0,
-                            message=f"Detecting Quality (CRF:{stats.get('crf', '?')}, VMAF:{vmaf_part})",
+                            message=f"Detecting Quality (CRF:{format_crf(stats.get('crf'))}, VMAF:{vmaf_part})",
                             phase=current_phase,
                             vmaf=stats.get("vmaf"),
                             crf=stats.get("crf"),
@@ -426,9 +426,11 @@ class AbAv1Parser:
         try:
             crf_matches = self._re_final_crf.findall(output_text)
             if crf_matches:
-                final_crf = int(crf_matches[-1])
+                final_crf = float(crf_matches[-1])
                 if stats.get("crf") != final_crf:
-                    logger.info(f"[Final Parse] CRF verified/updated: {final_crf} (from {stats.get('crf')})")
+                    logger.info(
+                        f"[Final Parse] CRF verified/updated: {format_crf(final_crf)} (from {stats.get('crf')})"
+                    )
                     stats["crf"] = final_crf
             elif stats.get("crf") is None:
                 logger.warning("[Final Parse] Could not find Best CRF in main pipe output.")

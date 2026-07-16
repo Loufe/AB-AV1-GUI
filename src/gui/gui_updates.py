@@ -20,6 +20,7 @@ from src.models import ProgressEvent
 
 # Project imports
 from src.utils import (
+    format_crf,
     format_file_size,
     format_time,
     parse_eta_text,  # Add parse_eta_text import
@@ -111,8 +112,8 @@ def update_crf_display(gui, info: ProgressEvent) -> None:
     """
     if info.crf is not None:
         try:
-            crf_val = int(info.crf)
-            settings_text = f"{crf_val}, Preset {DEFAULT_ENCODING_PRESET}"
+            crf_val = float(info.crf)
+            settings_text = f"{format_crf(crf_val)}, Preset {DEFAULT_ENCODING_PRESET}"
             update_ui_safely(gui.root, lambda s=settings_text: gui.encoding_settings_label.config(text=s))
             logger.info(f"CRF update: {settings_text}")
         except (ValueError, TypeError) as e:
@@ -358,9 +359,7 @@ def update_total_row_progress(gui) -> None:
         # Update total row (values order: format, size, est_time, operation, output, status)
         update_ui_safely(
             gui.root,
-            lambda r=remaining_str, p=progress_text: gui.queue_total_tree.item(
-                "total", values=("", "", r, "", "", p)
-            ),
+            lambda r=remaining_str, p=progress_text: gui.queue_total_tree.item("total", values=("", "", r, "", "", p)),
         )
     except Exception:
         logger.exception("Error updating total row progress")

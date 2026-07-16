@@ -365,7 +365,7 @@ class FileRecord:
     # === VMAF Analysis (Layer 2 - CRF search results) ===
     vmaf_target_when_analyzed: int | None = None  # VMAF target achieved (may be lower than requested due to fallback)
     preset_when_analyzed: int | None = None  # Encoding preset used during analysis
-    best_crf: int | None = None  # CRF that gave best VMAF (from crf-search)
+    best_crf: float | None = None  # CRF that gave best VMAF (from crf-search); fractional since ab-av1 0.11
     best_vmaf_achieved: float | None = None  # Best VMAF score we could achieve (from crf-search)
     predicted_output_size: int | None = None  # Predicted output size in bytes (from crf-search)
     predicted_size_reduction: float | None = None  # Predicted size reduction % (from crf-search)
@@ -382,7 +382,7 @@ class FileRecord:
     conversion_time_sec: float | None = None  # Legacy: combined time (for old records)
     crf_search_time_sec: float | None = None  # CRF search phase (ANALYZED, CONVERTED, NOT_WORTHWHILE)
     encoding_time_sec: float | None = None  # Encoding phase (CONVERTED only)
-    final_crf: int | None = None
+    final_crf: float | None = None
     final_vmaf: float | None = None
     vmaf_target_used: int | None = None
     output_audio_codec: str | None = None
@@ -437,7 +437,7 @@ class ProgressEvent:
 
     # Quality metrics (available during/after CRF search)
     vmaf: float | None = None  # VMAF score
-    crf: int | None = None  # CRF value
+    crf: float | None = None  # CRF value; fractional since ab-av1 0.11
     vmaf_target_used: int | None = None  # Target VMAF for this attempt
     used_fallback: bool | None = None  # Whether fallback VMAF was used (unused in progress)
 
@@ -531,7 +531,7 @@ class ConversionSessionState:
 
     # === Statistics Accumulators ===
     vmaf_scores: list[float] = field(default_factory=list)
-    crf_values: list[int] = field(default_factory=list)
+    crf_values: list[float] = field(default_factory=list)
     size_reductions: list[float] = field(default_factory=list)
     total_input_bytes_success: int = 0
     total_output_bytes_success: int = 0

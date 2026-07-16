@@ -22,7 +22,7 @@ from src.gui import analysis_scanner
 from src.gui.tree_formatters import clear_sort_state, format_compact_time, format_efficiency, sort_analysis_tree
 from src.history_index import get_history_index
 from src.models import FileStatus, OperationType
-from src.utils import format_file_size
+from src.utils import format_crf, format_file_size
 
 logger = logging.getLogger(__name__)
 
@@ -405,7 +405,7 @@ def get_analysis_tree_tooltip(gui, item_id: str) -> str | None:
         if record.reduction_percent is not None:
             lines[0] += f": {record.reduction_percent:.0f}% smaller"
         if record.final_crf is not None and record.final_vmaf is not None:
-            lines.append(f"CRF {record.final_crf}, VMAF {record.final_vmaf:.1f}")
+            lines.append(f"CRF {format_crf(record.final_crf)}, VMAF {record.final_vmaf:.1f}")
         return "\n".join(lines)
 
     if record.status == FileStatus.NOT_WORTHWHILE:
@@ -420,14 +420,14 @@ def get_analysis_tree_tooltip(gui, item_id: str) -> str | None:
         # Layer 2 complete (CRF search done)
         lines = ["Ready to convert (CRF search complete)"]
         if record.best_crf is not None and record.best_vmaf_achieved is not None:
-            lines.append(f"CRF {record.best_crf} → VMAF {record.best_vmaf_achieved:.1f}")
+            lines.append(f"CRF {format_crf(record.best_crf)} → VMAF {record.best_vmaf_achieved:.1f}")
         return "\n".join(lines)
 
     # FileStatus.SCANNED - check for Layer 2 data (fallback for old records)
     if record.predicted_size_reduction is not None:
         lines = ["Ready to convert (CRF search complete)"]
         if record.best_crf is not None and record.best_vmaf_achieved is not None:
-            lines.append(f"CRF {record.best_crf} → VMAF {record.best_vmaf_achieved:.1f}")
+            lines.append(f"CRF {format_crf(record.best_crf)} → VMAF {record.best_vmaf_achieved:.1f}")
         return "\n".join(lines)
 
     if record.estimated_reduction_percent is not None:

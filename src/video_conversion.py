@@ -30,7 +30,14 @@ from src.config import DEFAULT_ENCODING_PRESET, DEFAULT_VMAF_TARGET, MIN_OUTPUT_
 from src.history_index import get_history_index
 from src.models import FileStatus, OutputMode
 from src.privacy import anonymize_filename
-from src.utils import format_file_size, format_time, get_video_info, log_conversion_result, log_video_properties
+from src.utils import (
+    format_crf,
+    format_file_size,
+    format_time,
+    get_video_info,
+    log_conversion_result,
+    log_video_properties,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -232,7 +239,7 @@ def process_video(
             use_cached_crf = True
             cached_crf = record.best_crf
             logger.info(
-                f"Using cached CRF {cached_crf} for {anonymized_input_name} "
+                f"Using cached CRF {format_crf(cached_crf)} for {anonymized_input_name} "
                 f"(VMAF {record.vmaf_target_when_analyzed}, preset {record.preset_when_analyzed})"
             )
 
@@ -299,7 +306,8 @@ def process_video(
             final_vmaf_target = result_stats.get("vmaf_target_used") if result_stats else DEFAULT_VMAF_TARGET
         logger.info(
             f"Conversion successful - Final VMAF: {final_vmaf if final_vmaf else 'N/A'}, "
-            f"Final CRF: {final_crf if final_crf else 'N/A'} (Target VMAF: {final_vmaf_target})"
+            f"Final CRF: {format_crf(final_crf) if final_crf is not None else 'N/A'} "
+            f"(Target VMAF: {final_vmaf_target})"
         )
 
         # Check VMAF achieved vs target used (use a small tolerance)

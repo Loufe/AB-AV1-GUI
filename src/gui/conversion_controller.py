@@ -57,7 +57,7 @@ from src.models import OutputMode, QueueConversionConfig, QueueItemStatus
 # Import from utils and other modules
 from src.platform_utils import allow_sleep_mode, get_windows_subprocess_startupinfo, prevent_sleep_mode
 from src.privacy import anonymize_filename
-from src.utils import format_file_size, format_time, update_ui_safely
+from src.utils import format_crf, format_file_size, format_time, update_ui_safely
 
 # Import the single-file processing function
 
@@ -814,7 +814,10 @@ def conversion_complete(gui, final_message="Queue complete"):
             f"{min(s.vmaf_scores):.1f}/{max(s.vmaf_scores):.1f}"
         )
     if s.crf_values:
-        logger.info(f"CRF (Avg/Min/Max): {statistics.mean(s.crf_values):.1f}/{min(s.crf_values)}/{max(s.crf_values)}")
+        logger.info(
+            f"CRF (Avg/Min/Max): {statistics.mean(s.crf_values):.1f}/"
+            f"{format_crf(min(s.crf_values))}/{format_crf(max(s.crf_values))}"
+        )
     if s.size_reductions:
         logger.info(
             f"Size Reduction (Avg/Min/Max): {statistics.mean(s.size_reductions):.1f}%/"

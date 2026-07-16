@@ -134,6 +134,23 @@ def format_file_size(size_bytes: int) -> str:
     return f"{size_bytes / (1024**3):.2f} GB"
 
 
+def format_crf(crf: float | None) -> str:
+    """Format a CRF value for display: whole values as "23", fractional as "23.25".
+
+    ab-av1 0.11+ searches libsvtav1 in quarter-CRF steps, so CRF values may be
+    fractional. Whole-number floats must not render as "23.0".
+
+    Args:
+        crf: CRF value (integer or fractional), or None if not yet known
+
+    Returns:
+        Compact string representation without a trailing ".0", or "?" for None
+    """
+    if crf is None:
+        return "?"
+    return f"{crf:g}"
+
+
 # --- Video and FFmpeg Utilities ---
 
 

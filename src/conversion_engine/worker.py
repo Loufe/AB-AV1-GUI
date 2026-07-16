@@ -36,7 +36,7 @@ from src.models import (
     QueueItemStatus,
 )
 from src.privacy import anonymize_filename
-from src.utils import get_video_info, update_ui_safely
+from src.utils import format_crf, get_video_info, update_ui_safely
 from src.video_conversion import calculate_output_path, process_video
 from src.video_metadata import extract_video_metadata
 
@@ -85,7 +85,7 @@ def _create_file_record(
     output_size: int | None = None,
     crf_search_time_sec: float | None = None,
     encoding_time_sec: float | None = None,
-    final_crf: int | None = None,
+    final_crf: float | None = None,
     final_vmaf: float | None = None,
     vmaf_target: int | None = None,
     output_acodec: str | None = None,
@@ -334,10 +334,7 @@ def sequential_conversion_worker(
     # Count pending items and total files across all pending queue items
     pending_items = [item for item in config.queue_items if item.status == QueueItemStatus.PENDING]
     items_total = len(pending_items)
-    total_files_in_queue = sum(
-        len(item.files) if item.is_folder else 1
-        for item in pending_items
-    )
+    total_files_in_queue = sum(len(item.files) if item.is_folder else 1 for item in pending_items)
     items_completed = 0
 
     logger.info(f"Total queue items to process: {items_total} ({total_files_in_queue} files)")
@@ -424,6 +421,7 @@ def sequential_conversion_worker(
                     stopped_file_count = len(remaining_files)
                     for remaining_file in remaining_files:
                         remaining_file.status = QueueItemStatus.STOPPED
+
                     def increment_stopped_count(n=stopped_file_count):
                         gui.session.stopped_count += n
 
@@ -555,8 +553,7 @@ def sequential_conversion_worker(
                     reason_lower = reason.lower() if reason else ""
                     tree_status = "done" if "already converted" in reason_lower else "skip"
                     update_ui_safely(
-                        gui.root,
-                        lambda fp=file_path, s=tree_status: gui.update_analysis_tree_for_completed_file(fp, s)
+                        gui.root, lambda fp=file_path, s=tree_status: gui.update_analysis_tree_for_completed_file(fp, s)
                     )
                     continue
 
@@ -630,7 +627,7 @@ def sequential_conversion_worker(
                         )
                         update_ui_safely(
                             gui.root,
-                            lambda fp=file_path, s=tree_status: gui.update_analysis_tree_for_completed_file(fp, s)
+                            lambda fp=file_path, s=tree_status: gui.update_analysis_tree_for_completed_file(fp, s),
                         )
                         continue
 
@@ -788,7 +785,9 @@ def sequential_conversion_worker(
                                 filename,
                                 "completed",
                                 {
-                                    "message": f"Analysis complete (CRF {final_crf}, VMAF {final_vmaf:.2f})",
+                                    "message": (
+                                        f"Analysis complete (CRF {format_crf(final_crf)}, VMAF {final_vmaf:.2f})"
+                                    ),
                                     "crf": final_crf,
                                     "vmaf": final_vmaf,
                                     "vmaf_target_used": final_vmaf_target,
@@ -798,13 +797,13 @@ def sequential_conversion_worker(
                             queue_item.files_succeeded += 1
                             _update_file_status(queue_item, file_index, QueueItemStatus.COMPLETED)
                             logger.info(
-                                f"Analysis complete for {anonymized_name}: CRF {final_crf}, VMAF {final_vmaf:.2f}"
+                                f"Analysis complete for {anonymized_name}: "
+                                f"CRF {format_crf(final_crf)}, VMAF {final_vmaf:.2f}"
                             )
 
                             # Update analysis tree now that history is saved
                             update_ui_safely(
-                                gui.root,
-                                lambda fp=file_path: gui.update_analysis_tree_for_completed_file(fp, "done")
+                                gui.root, lambda fp=file_path: gui.update_analysis_tree_for_completed_file(fp, "done")
                             )
 
                         except ConversionNotWorthwhileError as e:
@@ -845,8 +844,7 @@ def sequential_conversion_worker(
 
                             # Update analysis tree now that history is saved
                             update_ui_safely(
-                                gui.root,
-                                lambda fp=file_path: gui.update_analysis_tree_for_completed_file(fp, "skip")
+                                gui.root, lambda fp=file_path: gui.update_analysis_tree_for_completed_file(fp, "skip")
                             )
 
                             process_successful = False
@@ -970,8 +968,7 @@ def sequential_conversion_worker(
                             _save_file_record(record)
                             # Update analysis tree now that history is saved
                             update_ui_safely(
-                                gui.root,
-                                lambda fp=file_path: gui.update_analysis_tree_for_completed_file(fp, "done")
+                                gui.root, lambda fp=file_path: gui.update_analysis_tree_for_completed_file(fp, "done")
                             )
                         except Exception:
                             logger.exception(f"Failed to record history for {anonymized_name}")
@@ -1012,8 +1009,7 @@ def sequential_conversion_worker(
                         logger.info(f"Recorded NOT_WORTHWHILE status to history for {anonymized_name}")
                         # Update analysis tree now that history is saved
                         update_ui_safely(
-                            gui.root,
-                            lambda fp=file_path: gui.update_analysis_tree_for_completed_file(fp, "skip")
+                            gui.root, lambda fp=file_path: gui.update_analysis_tree_for_completed_file(fp, "skip")
                         )
                     except Exception:
                         logger.exception(f"Failed to record NOT_WORTHWHILE history for {anonymized_name}")
