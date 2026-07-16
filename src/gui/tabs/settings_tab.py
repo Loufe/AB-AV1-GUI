@@ -278,6 +278,9 @@ def create_settings_tab(gui):
     gui.ab_av1_update_label = ttk.Label(ab_av1_frame, text="")
     gui.ab_av1_update_label.pack(side="left")
 
+    # Update button is created lazily by dependency_manager when an update is found
+    gui.ab_av1_update_btn = None
+
     # FFmpeg version row
     ffmpeg_frame = ttk.Frame(version_frame)
     ffmpeg_frame.grid(row=2, column=0, sticky="w", padx=10, pady=(3, 5))
@@ -304,6 +307,9 @@ def create_settings_tab(gui):
     ttk.Label(ffmpeg_frame, text="FFmpeg Version:").pack(side="left", padx=(0, 5))
     gui.ffmpeg_version_label = ttk.Label(ffmpeg_frame, text=ffmpeg_display, font=FONT_SYSTEM_BOLD)
     gui.ffmpeg_version_label.pack(side="left", padx=(0, 15))
+
+    # Update button is created lazily by dependency_manager when an update is found
+    gui.ffmpeg_update_btn = None
 
     if not ffmpeg_available:
         # FFmpeg not found anywhere - show Download button only
