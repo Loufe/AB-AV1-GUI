@@ -19,7 +19,7 @@ import contextlib
 import logging
 import os
 
-from src.estimation import compute_grouped_percentiles, estimate_file_time
+from src.estimation import compute_grouped_percentiles, estimate_fresh_file_time
 from src.gui.queue_controller import (
     update_clear_completed_button_state,
     update_remove_button_state,
@@ -317,7 +317,7 @@ def _display_context(gui) -> tuple[bool, object, dict, dict[str, TimeEstimate]]:
             percentiles = percentiles_by_op.get(op_type)
             for file_item in queue_item.files:
                 if file_item.path not in file_estimates:
-                    file_estimates[file_item.path] = estimate_file_time(
+                    file_estimates[file_item.path] = estimate_fresh_file_time(
                         file_item.path, operation_type=op_type, grouped_percentiles=percentiles
                     )
 
@@ -345,7 +345,7 @@ def _build_item_values(
     size_display = _format_size_display(queue_item, record)
 
     # Format estimated time
-    est_time_display = _format_time_estimate(queue_item, record, index, percentiles_by_op, file_estimates)
+    est_time_display = _format_time_estimate(queue_item, percentiles_by_op, file_estimates)
 
     # Format status with tag
     status_display, item_tag = format_queue_status_display(
@@ -473,9 +473,7 @@ def _format_size_display(queue_item, record) -> str:
         return "—"
 
 
-def _format_time_estimate(
-    queue_item, record, index, percentiles_by_op: dict, file_estimates: dict[str, TimeEstimate]
-) -> str:
+def _format_time_estimate(queue_item, percentiles_by_op: dict, file_estimates: dict[str, TimeEstimate]) -> str:
     """Format the estimated time column display text."""
     op_type = queue_item.operation_type
     percentiles = percentiles_by_op.get(op_type)
@@ -488,7 +486,7 @@ def _format_time_estimate(
             # Use pre-computed estimate from cache
             file_estimate = file_estimates.get(file_item.path)
             if file_estimate is None:
-                file_estimate = estimate_file_time(
+                file_estimate = estimate_fresh_file_time(
                     file_item.path, operation_type=op_type, grouped_percentiles=percentiles
                 )
             if file_estimate.confidence != "none" and file_estimate.best_seconds > 0:
@@ -498,22 +496,8 @@ def _format_time_estimate(
         if total_seconds > 0:
             return format_compact_time(total_seconds, confidence=lowest_confidence)
         return "—"
-    if record:
-        # Use record data for single file estimate
-        file_estimate = estimate_file_time(
-            codec=record.video_codec,
-            duration=record.duration_sec,
-            width=record.width,
-            height=record.height,
-            operation_type=op_type,
-            grouped_percentiles=percentiles,
-        )
-        if file_estimate.confidence != "none" and file_estimate.best_seconds > 0:
-            return format_compact_time(file_estimate.best_seconds, confidence=file_estimate.confidence)
-        return "—"
     if not queue_item.is_folder:
-        # Try path-based estimate as fallback (only for files, not folders)
-        file_estimate = estimate_file_time(
+        file_estimate = estimate_fresh_file_time(
             queue_item.source_path, operation_type=op_type, grouped_percentiles=percentiles
         )
         if file_estimate.confidence != "none" and file_estimate.best_seconds > 0:
@@ -566,7 +550,7 @@ def _update_total_row(
                 # Use pre-computed estimate from cache
                 file_estimate = file_estimates.get(file_item.path)
                 if file_estimate is None:
-                    file_estimate = estimate_file_time(
+                    file_estimate = estimate_fresh_file_time(
                         file_item.path, operation_type=op_type, grouped_percentiles=percentiles
                     )
                 if file_estimate.confidence != "none" and file_estimate.best_seconds > 0:
@@ -584,19 +568,9 @@ def _update_total_row(
                     total_size_bytes += os.path.getsize(queue_item.source_path)
 
             # Time estimate
-            if record:
-                file_estimate = estimate_file_time(
-                    codec=record.video_codec,
-                    duration=record.duration_sec,
-                    width=record.width,
-                    height=record.height,
-                    operation_type=op_type,
-                    grouped_percentiles=percentiles,
-                )
-            else:
-                file_estimate = estimate_file_time(
-                    queue_item.source_path, operation_type=op_type, grouped_percentiles=percentiles
-                )
+            file_estimate = estimate_fresh_file_time(
+                queue_item.source_path, operation_type=op_type, grouped_percentiles=percentiles
+            )
             if file_estimate.confidence != "none" and file_estimate.best_seconds > 0:
                 total_est_seconds += file_estimate.best_seconds
                 if confidence_order.get(file_estimate.confidence, 3) > confidence_order.get(lowest_confidence, 0):

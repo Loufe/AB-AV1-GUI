@@ -15,6 +15,7 @@ import time
 from collections import defaultdict
 from typing import Any
 
+from src.cache_helpers import is_file_unchanged
 from src.config import MIN_SAMPLES_FOR_ESTIMATE, MIN_SAMPLES_HIGH_CONFIDENCE
 from src.history_index import get_history_index
 from src.models import OperationType, TimeEstimate
@@ -235,6 +236,39 @@ def estimate_file_time(
 
     # Tier 4: Insufficient data
     return TimeEstimate(0, 0, 0, "none", "insufficient_data")
+
+
+def estimate_fresh_file_time(
+    file_path: str, *, operation_type: OperationType | None = None, grouped_percentiles: dict | None = None
+) -> TimeEstimate:
+    """Estimate processing time from history, but only while the record is fresh.
+
+    Shared display rule for the Analysis and Queue tabs: a time estimate is shown
+    only when a history record exists AND still describes the file on disk
+    (size + mtime match). A stale record's metadata may no longer be accurate,
+    so both tabs show "—" instead of a confident-looking number.
+
+    Args:
+        file_path: Path to the file.
+        operation_type: If ANALYZE, estimates CRF search time only (no encoding).
+        grouped_percentiles: Pre-computed percentiles from compute_grouped_percentiles().
+
+    Returns:
+        TimeEstimate from the record's metadata, or "none" confidence when the
+        record is missing or stale.
+    """
+    record = get_history_index().lookup_file(file_path)
+    if record is None or not is_file_unchanged(record, file_path):
+        return TimeEstimate(0, 0, 0, "none", "no_fresh_record")
+
+    return estimate_file_time(
+        codec=record.video_codec,
+        duration=record.duration_sec,
+        width=record.width,
+        height=record.height,
+        operation_type=operation_type,
+        grouped_percentiles=grouped_percentiles,
+    )
 
 
 def estimate_current_file_eta(

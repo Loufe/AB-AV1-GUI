@@ -588,24 +588,24 @@ def update_total_from_tree(gui) -> int:
             done_count += 1
         elif record.status == FileStatus.NOT_WORTHWHILE:
             skip_count += 1
-        else:
-            # Use Layer 2 data if available, otherwise fall back to Layer 1 estimate
+        elif record.status in (FileStatus.SCANNED, FileStatus.ANALYZED):
+            convertible += 1
+            # Track if this file only has ffprobe-level analysis (no CRF search)
+            if record.predicted_size_reduction is None:
+                any_estimate = True
+            # Savings needs a reduction estimate; use Layer 2 data if available,
+            # otherwise fall back to Layer 1 estimate
             reduction_percent = record.predicted_size_reduction or record.estimated_reduction_percent
-            if record.status in (FileStatus.SCANNED, FileStatus.ANALYZED) and reduction_percent:
-                convertible += 1
-                # Track if this file only has ffprobe-level analysis (no CRF search)
-                if record.predicted_size_reduction is None:
-                    any_estimate = True
-                if record.file_size_bytes:
-                    total_savings += int(record.file_size_bytes * reduction_percent / 100)
-                file_time = estimate_file_time(
-                    codec=record.video_codec,
-                    duration=record.duration_sec,
-                    width=record.width,
-                    height=record.height,
-                    grouped_percentiles=grouped_percentiles,
-                ).best_seconds
-                total_time += file_time
+            if reduction_percent and record.file_size_bytes:
+                total_savings += int(record.file_size_bytes * reduction_percent / 100)
+            # Time needs only codec/duration/resolution - independent of savings
+            total_time += estimate_file_time(
+                codec=record.video_codec,
+                duration=record.duration_sec,
+                width=record.width,
+                height=record.height,
+                grouped_percentiles=grouped_percentiles,
+            ).best_seconds
 
     update_total_row(
         gui, total_files, convertible, done_count, skip_count, total_size, total_savings, total_time, any_estimate

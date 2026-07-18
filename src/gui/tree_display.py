@@ -184,26 +184,26 @@ def compute_analysis_display_values(
         has_layer2 = record.predicted_size_reduction is not None
         reduction_percent = record.predicted_size_reduction or record.estimated_reduction_percent
 
+        # Time needs only codec/duration/resolution - independent of the savings inputs
+        if grouped_percentiles is None:
+            grouped_percentiles = compute_grouped_percentiles()
+
+        time_estimate = estimate_file_time(
+            codec=record.video_codec,
+            duration=record.duration_sec,
+            width=record.width,
+            height=record.height,
+            grouped_percentiles=grouped_percentiles,
+        )
+        # Layer 2 = precise (no prefix), Layer 1 = use estimate confidence
+        confidence = "high" if has_layer2 else time_estimate.confidence
+        time_str = format_compact_time(time_estimate.best_seconds, confidence=confidence)
+
         if reduction_percent and record.file_size_bytes:
             file_savings = int(record.file_size_bytes * reduction_percent / 100)
             savings_str = format_file_size(file_savings)
             if not has_layer2:
                 savings_str = f"~{savings_str}"
-
-            # Use pre-computed percentiles if provided, otherwise compute
-            if grouped_percentiles is None:
-                grouped_percentiles = compute_grouped_percentiles()
-
-            time_estimate = estimate_file_time(
-                codec=record.video_codec,
-                duration=record.duration_sec,
-                width=record.width,
-                height=record.height,
-                grouped_percentiles=grouped_percentiles,
-            )
-            # Layer 2 = precise (no prefix), Layer 1 = use estimate confidence
-            confidence = "high" if has_layer2 else time_estimate.confidence
-            time_str = format_compact_time(time_estimate.best_seconds, confidence=confidence)
             eff_str = format_efficiency(file_savings, time_estimate.best_seconds)
 
     return format_str, size_str, savings_str, time_str, eff_str, tag

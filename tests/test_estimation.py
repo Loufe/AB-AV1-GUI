@@ -1,15 +1,23 @@
 # tests/test_estimation.py
 """Characterization tests for the pure math in src/estimation.py.
 
-Functions needing get_history_index() or a gui object (compute_grouped_*,
+Functions needing a real history index or a gui object (compute_grouped_*,
 estimate_pending_files_eta, estimate_remaining_time) are not covered;
 estimate_file_time is exercised only with explicit metadata and pre-computed
-percentiles so the history index is never touched.
+percentiles, and estimate_fresh_file_time with a faked-out index.
 """
 
 import time
 
-from src.estimation import compute_percentiles, estimate_current_file_eta, estimate_file_time, get_resolution_bucket
+from src.estimation import (
+    compute_percentiles,
+    estimate_current_file_eta,
+    estimate_file_time,
+    estimate_fresh_file_time,
+    get_resolution_bucket,
+)
+from src.history_index import compute_path_hash
+from src.models import FileRecord, FileStatus
 
 # ---------------------------------------------------------------------------
 # get_resolution_bucket
@@ -118,6 +126,70 @@ def test_unknown_resolution_skips_tier1():
         codec="h264", duration=600.0, grouped_percentiles={("h264", "unknown"): STATS_10, ("h264", None): STATS_5}
     )
     assert estimate.source == "codec:h264"
+
+
+# ---------------------------------------------------------------------------
+# estimate_fresh_file_time (freshness-gated display rule, issue #6)
+# ---------------------------------------------------------------------------
+
+
+class FakeIndex:
+    def __init__(self, record):
+        self._record = record
+
+    def lookup_file(self, file_path):
+        return self._record
+
+
+def make_video_file(tmp_path):
+    file_path = tmp_path / "video.mp4"
+    file_path.write_bytes(b"x" * 100)
+    return file_path
+
+
+def make_record(file_path, size_bytes, mtime):
+    return FileRecord(
+        path_hash=compute_path_hash(str(file_path)),
+        original_path=None,
+        status=FileStatus.SCANNED,
+        file_size_bytes=size_bytes,
+        file_mtime=mtime,
+        duration_sec=600.0,
+        video_codec="h264",
+        width=1920,
+        height=1080,
+    )
+
+
+def test_fresh_record_yields_estimate(tmp_path, monkeypatch):
+    file_path = make_video_file(tmp_path)
+    stat = file_path.stat()
+    record = make_record(file_path, stat.st_size, stat.st_mtime)
+    monkeypatch.setattr("src.estimation.get_history_index", lambda: FakeIndex(record))
+
+    estimate = estimate_fresh_file_time(str(file_path), grouped_percentiles={("h264", "1080p"): STATS_10})
+    assert estimate.confidence == "high"
+    assert estimate.best_seconds == 1200.0
+
+
+def test_stale_record_returns_none_confidence(tmp_path, monkeypatch):
+    file_path = make_video_file(tmp_path)
+    stat = file_path.stat()
+    record = make_record(file_path, stat.st_size + 1, stat.st_mtime)  # size no longer matches disk
+    monkeypatch.setattr("src.estimation.get_history_index", lambda: FakeIndex(record))
+
+    estimate = estimate_fresh_file_time(str(file_path), grouped_percentiles={("h264", "1080p"): STATS_10})
+    assert estimate.confidence == "none"
+    assert estimate.source == "no_fresh_record"
+
+
+def test_missing_record_returns_none_confidence(tmp_path, monkeypatch):
+    file_path = make_video_file(tmp_path)
+    monkeypatch.setattr("src.estimation.get_history_index", lambda: FakeIndex(None))
+
+    estimate = estimate_fresh_file_time(str(file_path), grouped_percentiles={("h264", "1080p"): STATS_10})
+    assert estimate.confidence == "none"
+    assert estimate.source == "no_fresh_record"
 
 
 # ---------------------------------------------------------------------------
