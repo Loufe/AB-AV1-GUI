@@ -390,6 +390,7 @@ def _build_file_values(
         file_item.status,
         stopping=stopping,
         error_message=file_item.error_message,
+        skip_reason=file_item.skip_reason,
     )
 
     return (file_format, file_size, file_est_time, "", "", file_status), file_tag

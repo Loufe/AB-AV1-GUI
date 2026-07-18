@@ -198,6 +198,7 @@ class QueueFileItem:
     status: QueueItemStatus = QueueItemStatus.PENDING
     size_bytes: int = 0
     error_message: str | None = None
+    skip_reason: str | None = None  # Why the file was skipped (distinguishes skips from successes)
 
 
 @dataclass
@@ -245,7 +246,13 @@ class QueueItem:
             "files_failed": self.files_failed,
             "last_error": self.last_error,
             "files": [
-                {"path": f.path, "status": f.status.value, "size_bytes": f.size_bytes, "error_message": f.error_message}
+                {
+                    "path": f.path,
+                    "status": f.status.value,
+                    "size_bytes": f.size_bytes,
+                    "error_message": f.error_message,
+                    "skip_reason": f.skip_reason,
+                }
                 for f in self.files
             ],
             "current_file_index": self.current_file_index,
@@ -261,6 +268,7 @@ class QueueItem:
                 status=QueueItemStatus(f.get("status", "pending")),
                 size_bytes=f.get("size_bytes", 0),
                 error_message=f.get("error_message"),
+                skip_reason=f.get("skip_reason"),
             )
             for f in files_data
         ]

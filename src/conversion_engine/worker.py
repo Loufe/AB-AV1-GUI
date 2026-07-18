@@ -58,12 +58,16 @@ logger = logging.getLogger(__name__)
 # DO NOT use update_ui_safely() for every mutation - 100+ callbacks per file would tank performance.
 
 
-def _update_file_status(queue_item, file_index: int, status: QueueItemStatus, error_msg: str | None = None) -> None:
+def _update_file_status(
+    queue_item, file_index: int, status: QueueItemStatus, error_msg: str | None = None, skip_reason: str | None = None
+) -> None:
     """Update the status of a file within a folder queue item."""
     if queue_item.is_folder and file_index < len(queue_item.files):
         queue_item.files[file_index].status = status
         if error_msg:
             queue_item.files[file_index].error_message = error_msg
+        if skip_reason:
+            queue_item.files[file_index].skip_reason = skip_reason
     elif queue_item.is_folder:
         logger.warning(f"File index {file_index} out of range for queue item with {len(queue_item.files)} files")
 
@@ -545,7 +549,9 @@ def sequential_conversion_worker(
 
                     queue_item.processed_files += 1
                     queue_item.files_skipped += 1
-                    _update_file_status(queue_item, file_index, QueueItemStatus.COMPLETED)
+                    _update_file_status(
+                        queue_item, file_index, QueueItemStatus.COMPLETED, skip_reason=reason or "Skipped"
+                    )
                     queue_status_callback(
                         queue_item.id, QueueItemStatus.CONVERTING, queue_item.processed_files, queue_item.total_files
                     )
@@ -618,7 +624,7 @@ def sequential_conversion_worker(
                         file_event_callback(filename, "skipped", reason)
                         queue_item.processed_files += 1
                         queue_item.files_skipped += 1
-                        _update_file_status(queue_item, file_index, QueueItemStatus.COMPLETED)
+                        _update_file_status(queue_item, file_index, QueueItemStatus.COMPLETED, skip_reason=reason)
                         queue_status_callback(
                             queue_item.id,
                             QueueItemStatus.CONVERTING,
@@ -675,7 +681,12 @@ def sequential_conversion_worker(
                                     logger.info(f"Skipping {anonymized_name} - already converted")
                                     file_event_callback(filename, "skipped", "Already converted")
                                     queue_item.files_skipped += 1
-                                    _update_file_status(queue_item, file_index, QueueItemStatus.COMPLETED)
+                                    _update_file_status(
+                                        queue_item,
+                                        file_index,
+                                        QueueItemStatus.COMPLETED,
+                                        skip_reason="Already converted",
+                                    )
                                     queue_item.processed_files += 1
                                     queue_status_callback(
                                         queue_item.id,
@@ -697,7 +708,12 @@ def sequential_conversion_worker(
                                         cached_record.skip_reason or "Previously marked not worthwhile",
                                     )
                                     queue_item.files_skipped += 1
-                                    _update_file_status(queue_item, file_index, QueueItemStatus.COMPLETED)
+                                    _update_file_status(
+                                        queue_item,
+                                        file_index,
+                                        QueueItemStatus.COMPLETED,
+                                        skip_reason=cached_record.skip_reason or "Previously marked not worthwhile",
+                                    )
                                     queue_item.processed_files += 1
                                     queue_status_callback(
                                         queue_item.id,
@@ -716,7 +732,12 @@ def sequential_conversion_worker(
                                     logger.info(f"Skipping {anonymized_name} - already analyzed")
                                     file_event_callback(filename, "skipped", "Already analyzed")
                                     queue_item.files_skipped += 1
-                                    _update_file_status(queue_item, file_index, QueueItemStatus.COMPLETED)
+                                    _update_file_status(
+                                        queue_item,
+                                        file_index,
+                                        QueueItemStatus.COMPLETED,
+                                        skip_reason="Already analyzed",
+                                    )
                                     queue_item.processed_files += 1
                                     queue_status_callback(
                                         queue_item.id,
@@ -840,7 +861,7 @@ def sequential_conversion_worker(
                                 },
                             )
                             queue_item.files_skipped += 1
-                            _update_file_status(queue_item, file_index, QueueItemStatus.COMPLETED)
+                            _update_file_status(queue_item, file_index, QueueItemStatus.COMPLETED, skip_reason=str(e))
 
                             # Update analysis tree now that history is saved
                             update_ui_safely(
@@ -975,7 +996,9 @@ def sequential_conversion_worker(
                 # Check if this was a NOT_WORTHWHILE skip and record to history
                 elif gui.session.last_skip_reason:
                     queue_item.files_skipped += 1
-                    _update_file_status(queue_item, file_index, QueueItemStatus.COMPLETED)
+                    _update_file_status(
+                        queue_item, file_index, QueueItemStatus.COMPLETED, skip_reason=gui.session.last_skip_reason
+                    )
 
                     # Capture skip data and timing before clearing
                     skip_reason = gui.session.last_skip_reason

@@ -93,13 +93,16 @@ def _reconcile_folder_files(item: QueueItem, index) -> None:
             item.processed_files += 1
             # Categorize outcome
             if record.status == FileStatus.NOT_WORTHWHILE:
+                file_item.skip_reason = record.skip_reason or "Not worth converting"
                 item.files_skipped += 1
             else:
+                file_item.skip_reason = None
                 item.files_succeeded += 1
         else:
             # No history record, file changed, or not in terminal state - needs processing
             file_item.status = QueueItemStatus.PENDING
             file_item.error_message = None
+            file_item.skip_reason = None
             pending_count += 1
 
     # Update total_files to match actual file list
