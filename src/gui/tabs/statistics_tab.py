@@ -18,11 +18,12 @@ from typing import TYPE_CHECKING, Any
 if TYPE_CHECKING:
     from src.gui.main_window import VideoConverterGUI
 
+from src.config import MAX_CRF_VALUE
 from src.gui.base import ToolTip
 from src.gui.charts import BarChart, LineGraph, PieChart
 from src.history_index import get_history_index
 from src.models import FileRecord
-from src.utils import format_file_size
+from src.utils import format_crf, format_file_size
 
 logger = logging.getLogger(__name__)
 
@@ -120,7 +121,7 @@ def _create_summary_panel(gui: "VideoConverterGUI", parent: ttk.Frame, row: int)
     crf_row.grid(row=2, column=0, sticky="w", pady=3)
     crf_label = ttk.Label(crf_row, text="Avg CRF Value:")
     crf_label.pack(side="left")
-    ToolTip(crf_label, "Average compression level (0-63).\nLower = higher quality encoding.")
+    ToolTip(crf_label, f"Average compression level (0-{MAX_CRF_VALUE}).\nLower = higher quality encoding.")
     gui.crf_stats_label = ttk.Label(crf_row, text="-")
     gui.crf_stats_label.pack(side="left", padx=(5, 5))
     gui.crf_range_label = ttk.Label(crf_row, text="", foreground="#666")
@@ -152,9 +153,7 @@ def _create_summary_panel(gui: "VideoConverterGUI", parent: ttk.Frame, row: int)
     throughput_label = ttk.Label(throughput_row, text="Avg Throughput:")
     throughput_label.pack(side="left")
     ToolTip(
-        throughput_label,
-        "Encoding speed in GB of source video per hour.\n"
-        "Depends on hardware and video complexity.",
+        throughput_label, "Encoding speed in GB of source video per hour.\nDepends on hardware and video complexity."
     )
     gui.throughput_stats_label = ttk.Label(throughput_row, text="-")
     gui.throughput_stats_label.pack(side="left", padx=(5, 0))
@@ -392,7 +391,7 @@ def _update_summary_labels(gui: "VideoConverterGUI", summary: dict[str, Any]) ->
             min_crf = min(crf_values)
             max_crf = max(crf_values)
             gui.crf_stats_label.config(text=f"{avg_crf:.1f}")
-            gui.crf_range_label.config(text=f"(min: {min_crf}, max: {max_crf})")
+            gui.crf_range_label.config(text=f"(min: {format_crf(min_crf)}, max: {format_crf(max_crf)})")
         except statistics.StatisticsError:
             gui.crf_stats_label.config(text="-")
             gui.crf_range_label.config(text="")

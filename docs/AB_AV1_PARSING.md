@@ -14,14 +14,17 @@ The parser (`src/ab_av1/parser.py`) handles both phases with different regex pat
 ## Phase 1: CRF Search
 
 During CRF search, ab-av1 samples the video at various CRF values to find one meeting the VMAF target.
+Since ab-av1 0.11.0, libsvtav1 is searched in quarter-CRF steps (default `--crf-increment` 0.25) over a
+default range of [5, 70], so CRF values may be fractional (e.g. `23.25`). Requires SVT-AV1 ≥ 4.0
+(older versions silently truncate fractional CRF).
 
 ### Output Format
 
 ```
 crf 30 VMAF 96.5
 crf 32 VMAF 94.2
-crf 31 VMAF 95.1
-Best CRF: 31
+crf 31.25 VMAF 95.1
+Best CRF: 31.25
 predicted video stream size 450MB (65%)
 ```
 
@@ -29,8 +32,8 @@ predicted video stream size 450MB (65%)
 
 | Pattern | Purpose | Example Match |
 |---------|---------|---------------|
-| `crf\s+(\d+)\s+VMAF\s+(\d+\.?\d*)` | Extract CRF/VMAF pairs | `crf 31 VMAF 95.1` |
-| `Best\s+CRF:\s+(\d+)` | Final CRF selection | `Best CRF: 31` |
+| `crf\s+(\d+\.?\d*)\s+VMAF\s+(\d+\.?\d*)` | Extract CRF/VMAF pairs | `crf 31.25 VMAF 95.1` |
+| `Best\s+CRF:\s+(\d+\.?\d*)` | Final CRF selection | `Best CRF: 31.25` |
 | `predicted video stream size.*?\((\d+\.?\d*)\s*%\)` | Size prediction | `(65%)` |
 
 ### Progress Heuristic
@@ -123,7 +126,7 @@ The parser maintains and updates a stats dictionary:
 | `phase` | str | `"crf-search"` or `"encoding"` |
 | `progress_quality` | float | 0-100, CRF search progress |
 | `progress_encoding` | float | 0-100, encoding progress |
-| `crf` | int | Current/best CRF value |
+| `crf` | float | Current/best CRF value (fractional since ab-av1 0.11) |
 | `vmaf` | float | Current/best VMAF score |
 | `size_reduction` | float | Predicted size reduction % |
 | `eta_text` | str | ETA string from ab-av1 |

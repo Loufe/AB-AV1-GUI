@@ -21,7 +21,7 @@ from src.gui.base import ToolTip, TreeviewHeaderTooltip
 from src.gui.constants import COLOR_STATUS_SUCCESS, COLOR_STATUS_WARNING, HISTORY_TREE_HEADINGS
 from src.history_index import get_history_index
 from src.models import FileRecord, FileStatus
-from src.utils import format_file_size, format_time
+from src.utils import format_crf, format_file_size, format_time
 
 logger = logging.getLogger(__name__)
 
@@ -273,7 +273,7 @@ def compute_history_display_values(record: FileRecord) -> tuple[str, ...]:
         output_size = format_file_size(record.output_size_bytes) if record.output_size_bytes else "—"
         reduction = f"{record.reduction_percent:.1f}%" if record.reduction_percent is not None else "—"
         vmaf = f"{record.final_vmaf:.1f}" if record.final_vmaf is not None else "—"
-        crf = str(record.final_crf) if record.final_crf is not None else "—"
+        crf = format_crf(record.final_crf) if record.final_crf is not None else "—"
     else:
         output_size = "—"
         reduction = "—"

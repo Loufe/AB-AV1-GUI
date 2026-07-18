@@ -81,6 +81,24 @@ def test_save_load_roundtrip(history_file, index):
     assert reloaded.find_by_size(SIZE_BYTES) == [record]
 
 
+def test_save_load_roundtrip_preserves_fractional_crf(history_file, index):
+    # ab-av1 0.11+ finds fractional CRFs (0.25 steps) up to 70 for libsvtav1
+    record = make_record(
+        "/videos/movie.mkv",
+        status=FileStatus.ANALYZED,
+        best_crf=68.75,
+        best_vmaf_achieved=95.5,
+        predicted_size_reduction=40.0,
+    )
+    index.upsert(record)
+    index.save()
+
+    reloaded = HistoryIndex()
+    loaded = reloaded.get(record.path_hash)
+    assert loaded is not None
+    assert loaded.best_crf == 68.75
+
+
 def test_save_is_noop_when_not_dirty(history_file, index):
     index.get("0" * 16)  # Force load without mutating
     index.save()

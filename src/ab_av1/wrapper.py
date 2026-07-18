@@ -20,7 +20,7 @@ from typing import Any
 from src.config import DEFAULT_ENCODING_PRESET, DEFAULT_VMAF_TARGET, MIN_VMAF_FALLBACK_TARGET, VMAF_FALLBACK_STEP
 from src.platform_utils import get_windows_subprocess_startupinfo
 from src.privacy import anonymize_filename
-from src.utils import format_file_size, get_video_info
+from src.utils import format_crf, format_file_size, get_video_info
 from src.vendor_manager import AB_AV1_EXE, AB_AV1_EXE_NAME, FFMPEG_DIR, get_ab_av1_path
 from src.video_metadata import extract_video_metadata
 
@@ -608,7 +608,7 @@ class AbAv1Wrapper:
 
         # --- Logging Final Stats ---
         if stats.get("crf") is not None:
-            logger.info(f"Final CRF: {stats['crf']}")
+            logger.info(f"Final CRF: {format_crf(stats['crf'])}")
         if stats.get("vmaf") is not None:
             logger.info(f"Final VMAF: {stats['vmaf']:.2f}")
         if stats.get("size_reduction") is not None:
@@ -690,7 +690,7 @@ class AbAv1Wrapper:
 
         Returns:
             Dictionary containing:
-                - best_crf: int - Optimal CRF value found
+                - best_crf: float - Optimal CRF value found (fractional since ab-av1 0.11)
                 - best_vmaf: float - VMAF score achieved at best CRF
                 - predicted_size_reduction: float - Predicted size reduction percentage
                 - predicted_output_size: int | None - Estimated output file size in bytes
@@ -861,7 +861,7 @@ class AbAv1Wrapper:
                             vmaf_suffix = f" (target: {current_vmaf_target})"
                         else:
                             vmaf_suffix = ""
-                        message = f"CRF:{stats.get('crf', '?')}, VMAF:{stats.get('vmaf', '?')}{vmaf_suffix}"
+                        message = f"CRF:{format_crf(stats.get('crf'))}, VMAF:{stats.get('vmaf', '?')}{vmaf_suffix}"
                         progress_callback(stats["progress_quality"], message)
 
                 # Close stdout
@@ -936,7 +936,7 @@ class AbAv1Wrapper:
                 }
 
                 logger.info(
-                    f"CRF search complete: CRF={result['best_crf']}, "
+                    f"CRF search complete: CRF={format_crf(result['best_crf'])}, "
                     f"VMAF={result['best_vmaf']:.2f}, "
                     f"Reduction={result.get('predicted_size_reduction', 'N/A')}%, "
                     f"Target={current_vmaf_target}"
@@ -980,7 +980,7 @@ class AbAv1Wrapper:
         self,
         input_path: str,
         output_path: str,
-        crf: int,
+        crf: float,
         preset: int | None = None,
         file_info_callback: Callable[..., Any] | None = None,
         pid_callback: Callable[..., Any] | None = None,
@@ -1083,7 +1083,7 @@ class AbAv1Wrapper:
             "--preset",
             str(preset),
             "--crf",
-            str(crf),
+            format_crf(crf),
         ]
 
         # Add hardware decoder if specified
@@ -1108,7 +1108,7 @@ class AbAv1Wrapper:
             "--preset",
             str(preset),
             "--crf",
-            str(crf),
+            format_crf(crf),
         ]
         if log_interval:
             cmd_for_log.extend(["--log-interval", log_interval])
@@ -1141,7 +1141,7 @@ class AbAv1Wrapper:
         # --- Starting Callback ---
         if self.file_info_callback:
             callback_info = {
-                "message": f"Encoding with cached CRF {crf}",
+                "message": f"Encoding with cached CRF {format_crf(crf)}",
                 "crf": crf,
                 "original_size": stats.get("original_size"),
                 "used_cached_crf": True,
@@ -1284,7 +1284,7 @@ class AbAv1Wrapper:
             raise OutputFileError(error_msg, command=cmd_str_log, error_type="missing_output_on_success")
 
         # --- Success ---
-        logger.info(f"Encode completed successfully for {anonymized_input_path} (CRF {crf})")
+        logger.info(f"Encode completed successfully for {anonymized_input_path} (CRF {format_crf(crf)})")
         stats = self.parser.parse_final_output(full_output_text, stats)
         stats["crf"] = crf  # Ensure CRF is set
 
@@ -1305,7 +1305,7 @@ class AbAv1Wrapper:
         # --- Completion Callback ---
         if self.file_info_callback:
             final_stats_for_callback = {
-                "message": f"Complete (CRF {crf}, cached)",
+                "message": f"Complete (CRF {format_crf(crf)}, cached)",
                 "crf": crf,
                 "size_reduction": stats.get("size_reduction"),
                 "output_path": output_path,

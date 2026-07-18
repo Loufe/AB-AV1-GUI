@@ -105,6 +105,41 @@ def test_best_crf_line_sets_crf_and_95_percent_quality():
     assert recorder.events[0].crf == 31
 
 
+def test_fractional_crf_vmaf_line_parses_quarter_step_value():
+    # ab-av1 0.11+ searches libsvtav1 in 0.25 CRF steps
+    parser, recorder = make_parser()
+    stats = make_stats()
+
+    parser.parse_line("crf 23.25 VMAF 96.50 (34%)", stats)
+
+    assert stats["crf"] == 23.25
+    assert stats["vmaf"] == 96.5
+    assert len(recorder.calls) == 1
+    assert recorder.events[0].message == "Detecting Quality (CRF:23.25, VMAF:96.5)"
+
+
+def test_fractional_sample_log_line_parses_crf_and_vmaf():
+    # RUST_LOG info line format fixed in ab-av1 0.11.4
+    parser, _ = make_parser()
+    stats = make_stats()
+
+    parser.parse_line("sample 3/5 crf 23.25 VMAF 95.11 (9%)", stats)
+
+    assert stats["crf"] == 23.25
+    assert stats["vmaf"] == 95.11
+
+
+def test_fractional_best_crf_line_is_not_truncated():
+    parser, recorder = make_parser()
+    stats = make_stats()
+
+    parser.parse_line("Best CRF: 23.25", stats)
+
+    assert stats["crf"] == 23.25
+    assert stats["progress_quality"] == 95.0
+    assert recorder.events[0].crf == 23.25
+
+
 def test_predicted_size_reduction_line_stores_reduction_without_callback():
     parser, recorder = make_parser()
     stats = make_stats()
@@ -335,3 +370,13 @@ def test_parse_line_without_callback_does_not_raise():
 
     assert stats["crf"] == 30
     assert stats["progress_quality"] == 95.0
+
+
+def test_parse_final_output_keeps_fractional_crf():
+    parser, _ = make_parser()
+    stats = make_stats()
+
+    parser.parse_final_output("Best CRF: 23.25\nVMAF 95.32\n", stats)
+
+    assert stats["crf"] == 23.25
+    assert stats["vmaf"] == 95.32

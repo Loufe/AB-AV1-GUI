@@ -26,7 +26,7 @@ from src.cache_helpers import mtimes_match
 from src.config import DEFAULT_REDUCTION_ESTIMATE_PERCENT
 from src.history_index import HistoryIndex, compute_filename_hash, compute_path_hash, create_alias_record
 from src.models import DECIDED_STATUSES, FileRecord, FileStatus, VideoMetadata
-from src.utils import get_video_info
+from src.utils import format_crf, get_video_info
 from src.video_metadata import extract_video_metadata
 
 logger = logging.getLogger(__name__)
@@ -512,7 +512,11 @@ def _record_to_result(file_path: str, record: FileRecord, index: HistoryIndex) -
     elif record.status == FileStatus.ANALYZED:
         # ANALYZED files need conversion but have accurate predictions (Layer 2 complete)
         status = "needs_conversion"
-        detail = f"CRF {record.best_crf} → VMAF {record.best_vmaf_achieved:.1f}" if record.best_crf else None
+        detail = (
+            f"CRF {format_crf(record.best_crf)} → VMAF {record.best_vmaf_achieved:.1f}"
+            if record.best_crf is not None
+            else None
+        )
     elif record.skip_reason:
         status = "skipped_other"
         detail = record.skip_reason

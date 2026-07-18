@@ -98,7 +98,7 @@ Populated after running CRF search (either standalone ANALYZE or as part of CONV
 |-------|------|-------------|
 | `vmaf_target_when_analyzed` | int\|null | VMAF target achieved |
 | `preset_when_analyzed` | int\|null | SVT-AV1 preset used |
-| `best_crf` | int\|null | Optimal CRF value found |
+| `best_crf` | float\|null | Optimal CRF value found (fractional since ab-av1 0.11) |
 | `best_vmaf_achieved` | float\|null | VMAF score at best CRF |
 | `predicted_output_size` | int\|null | Predicted output bytes |
 | `predicted_size_reduction` | float\|null | Accurate reduction % |
@@ -126,7 +126,7 @@ Populated after successful encoding.
 | `output_size_bytes` | int\|null | Actual output file size |
 | `reduction_percent` | float\|null | Actual size reduction |
 | `encoding_time_sec` | float\|null | Encoding phase duration |
-| `final_crf` | int\|null | CRF used for encoding |
+| `final_crf` | float\|null | CRF used for encoding (fractional since ab-av1 0.11) |
 | `final_vmaf` | float\|null | Actual VMAF achieved |
 | `vmaf_target_used` | int\|null | Target (may differ from requested due to fallback) |
 | `output_audio_codec` | string\|null | Audio codec in output |

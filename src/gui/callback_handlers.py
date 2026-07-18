@@ -17,7 +17,7 @@ from src.models import ErrorInfo, ProgressEvent, RetryInfo, SkippedInfo
 
 # Project Imports
 from src.privacy import anonymize_filename
-from src.utils import format_file_size, update_ui_safely
+from src.utils import format_crf, format_file_size, update_ui_safely
 
 logger = logging.getLogger(__name__)
 
@@ -164,9 +164,9 @@ def handle_completed(gui, filename, info) -> None:
     # Update CRF stats (thread-safe)
     if crf_value is not None:
         try:
-            crf_int = int(crf_value)
-            update_ui_safely(gui.root, lambda c=crf_int: gui.session.crf_values.append(c))
-            log_msg += f", CRF: {crf_int}"
+            crf_float = float(crf_value)
+            update_ui_safely(gui.root, lambda c=crf_float: gui.session.crf_values.append(c))
+            log_msg += f", CRF: {format_crf(crf_float)}"
         except (ValueError, TypeError):
             logger.warning(f"Invalid CRF value '{crf_value}' for stats in {anonymized_name}")
 

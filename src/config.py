@@ -60,7 +60,8 @@ VMAF_CHANGE_THRESHOLD = 0.01  # VMAF score difference to trigger update
 MIN_OUTPUT_FILE_SIZE = 1024  # Minimum bytes for valid output file (1 KB)
 
 # --- Record Validation ---
-MAX_CRF_VALUE = 63  # Maximum valid CRF value for AV1/HEVC/H264
+MAX_CRF_VALUE = 70  # Maximum valid CRF value (ab-av1 0.11+ searches svt-av1 up to CRF 70)
+MIN_SVT_AV1_MAJOR_FOR_FRACTIONAL_CRF = 4  # Older SVT-AV1 silently truncates fractional CRF values
 MAX_VMAF_VALUE = 100  # Maximum valid VMAF score
 
 # --- History File ---
