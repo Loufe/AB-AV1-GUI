@@ -23,12 +23,8 @@ class OutputFileError(AbAv1Error):
     pass
 
 
-class VMAFError(AbAv1Error):
-    pass
-
-
-class EncodingError(AbAv1Error):
-    pass
+class AbAv1CancelledError(AbAv1Error):
+    """Exception raised when a run is cancelled via a cancel/stop event."""
 
 
 class ConversionNotWorthwhileError(AbAv1Error):

@@ -168,6 +168,7 @@ class VideoConverterGUI:
         # Thread/Event primitives stay on self, not in session dataclass
         self.conversion_thread: threading.Thread | None = None
         self.stop_event: threading.Event | None = None
+        self.cancel_event: threading.Event | None = None
 
         # Initialize tk variables based on loaded config (needed *before* logging setup uses them)
         self.initialize_variables()
@@ -453,6 +454,7 @@ class VideoConverterGUI:
         # Thread primitives stay on self
         self.conversion_thread = None
         self.stop_event = threading.Event()
+        self.cancel_event = threading.Event()
 
     def initialize_button_states(self):
         """Initialize button states. Called after create_main_tab() creates buttons."""
@@ -488,6 +490,9 @@ class VideoConverterGUI:
         if self.stop_event:
             self.stop_event.set()
             logger.debug("Stop event set.")
+        if self.cancel_event:
+            self.cancel_event.set()
+            logger.debug("Cancel event set.")
         if self.conversion_thread and self.conversion_thread.is_alive():
             try:
                 logger.info("Waiting briefly for thread...")
