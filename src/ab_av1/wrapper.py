@@ -608,7 +608,7 @@ class AbAv1Wrapper:
 
         # --- Logging Final Stats ---
         if stats.get("crf") is not None:
-            logger.info(f"Final CRF: {stats['crf']}")
+            logger.info(f"Final CRF: {format_crf(stats['crf'])}")
         if stats.get("vmaf") is not None:
             logger.info(f"Final VMAF: {stats['vmaf']:.2f}")
         if stats.get("size_reduction") is not None:

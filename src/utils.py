@@ -307,6 +307,65 @@ def check_ffmpeg_availability() -> tuple:
         return True, False, None, str(e)
 
 
+def parse_svt_av1_version(output: str) -> tuple[int, int] | None:
+    """Parse the SVT-AV1 library version from its encoder startup banner.
+
+    SVT-AV1 prints a line like "Svt[info]: SVT [version]:	SVT-AV1 Encoder Lib v4.1.0-259-gec17f8382"
+    when an encode starts. The library version is not available from `ffmpeg -version`.
+
+    Args:
+        output: Combined stdout/stderr of an ffmpeg run that initialized libsvtav1
+
+    Returns:
+        (major, minor) version tuple, or None if no banner was found
+    """
+    match = re.search(r"SVT-AV1 Encoder Lib v(\d+)\.(\d+)", output)
+    if match:
+        return int(match.group(1)), int(match.group(2))
+    return None
+
+
+def get_svt_av1_version() -> tuple[int, int] | None:
+    """Probe the SVT-AV1 library version bundled with the active FFmpeg.
+
+    Runs a 1-frame null encode so libsvtav1 prints its version banner. Works for any
+    FFmpeg source (vendored, system PATH) since the banner comes from the library itself.
+
+    Returns:
+        (major, minor) version tuple, or None if FFmpeg is missing or the probe failed
+    """
+    ffmpeg_path = get_ffmpeg_path()
+    if ffmpeg_path is None:
+        return None
+    cmd = [
+        str(ffmpeg_path),
+        "-hide_banner",
+        "-f",
+        "lavfi",
+        "-i",
+        "nullsrc=s=64x64",
+        "-frames:v",
+        "1",
+        "-c:v",
+        "libsvtav1",
+        "-f",
+        "null",
+        "-",
+    ]
+    try:
+        startupinfo, _ = get_windows_subprocess_startupinfo()
+        result = subprocess.run(
+            cmd, capture_output=True, text=True, check=False, startupinfo=startupinfo, encoding="utf-8", timeout=15
+        )
+        return parse_svt_av1_version(result.stderr + result.stdout)
+    except subprocess.TimeoutExpired:
+        logger.warning("SVT-AV1 version probe timed out after 15s")
+        return None
+    except Exception:
+        logger.exception("SVT-AV1 version probe failed")
+        return None
+
+
 # GitHub API endpoints for FFmpeg builds
 FFMPEG_GYAN_GITHUB_API = "https://api.github.com/repos/GyanD/codexffmpeg/releases/latest"
 FFMPEG_BTBN_GITHUB_API = "https://api.github.com/repos/BtbN/FFmpeg-Builds/releases/latest"

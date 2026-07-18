@@ -18,6 +18,7 @@ from typing import TYPE_CHECKING, Any
 if TYPE_CHECKING:
     from src.gui.main_window import VideoConverterGUI
 
+from src.config import MAX_CRF_VALUE
 from src.gui.base import ToolTip
 from src.gui.charts import BarChart, LineGraph, PieChart
 from src.history_index import get_history_index
@@ -120,7 +121,7 @@ def _create_summary_panel(gui: "VideoConverterGUI", parent: ttk.Frame, row: int)
     crf_row.grid(row=2, column=0, sticky="w", pady=3)
     crf_label = ttk.Label(crf_row, text="Avg CRF Value:")
     crf_label.pack(side="left")
-    ToolTip(crf_label, "Average compression level (0-63).\nLower = higher quality encoding.")
+    ToolTip(crf_label, f"Average compression level (0-{MAX_CRF_VALUE}).\nLower = higher quality encoding.")
     gui.crf_stats_label = ttk.Label(crf_row, text="-")
     gui.crf_stats_label.pack(side="left", padx=(5, 5))
     gui.crf_range_label = ttk.Label(crf_row, text="", foreground="#666")

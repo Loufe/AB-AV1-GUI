@@ -16,8 +16,9 @@ from tkinter import filedialog, messagebox
 # Project imports - Replace 'convert_app' with 'src'
 # Import the checker function from its new location
 from src.ab_av1.checker import check_ab_av1_available
+from src.config import MIN_SVT_AV1_MAJOR_FOR_FRACTIONAL_CRF
 from src.history_index import get_history_path
-from src.utils import check_ffmpeg_availability
+from src.utils import check_ffmpeg_availability, get_svt_av1_version
 
 logger = logging.getLogger(__name__)
 
@@ -162,6 +163,22 @@ def check_ffmpeg(gui) -> bool:
             return False
     else:
         logger.info("FFmpeg with SVT-AV1 support detected.")
+        svt_version = get_svt_av1_version()
+        if svt_version is None:
+            logger.debug("Could not determine SVT-AV1 library version; skipping fractional CRF check.")
+        elif svt_version[0] < MIN_SVT_AV1_MAJOR_FOR_FRACTIONAL_CRF:
+            major, minor = svt_version
+            warning_msg = (
+                f"Your FFmpeg bundles SVT-AV1 {major}.{minor}, which silently truncates fractional "
+                f"CRF values (e.g. 23.25 becomes 23). ab-av1 searches in quarter-CRF steps, so encodes "
+                f"will not use the exact CRF found.\n\n"
+                f"Update FFmpeg from the Settings tab to get SVT-AV1 "
+                f"{MIN_SVT_AV1_MAJOR_FOR_FRACTIONAL_CRF}.0 or newer."
+            )
+            logger.warning(f"SVT-AV1 {major}.{minor} truncates fractional CRF; update FFmpeg from the Settings tab.")
+            messagebox.showwarning("SVT-AV1 Outdated", warning_msg)
+        else:
+            logger.info(f"SVT-AV1 library version: {svt_version[0]}.{svt_version[1]} (fractional CRF supported)")
 
     if version_info:
         logger.info(f"FFmpeg version: {version_info.splitlines()[0]}")

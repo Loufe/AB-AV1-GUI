@@ -135,7 +135,7 @@ class AbAv1Parser:
 
                 # Log extra information about this transition
                 logger.info(
-                    f"Starting encoding phase with CRF: {stats.get('crf', '?')}, "
+                    f"Starting encoding phase with CRF: {format_crf(stats.get('crf'))}, "
                     f"VMAF Target: {stats.get('vmaf_target_used', '?')}"
                 )
                 logger.info(f"Duration in seconds: {stats.get('total_duration_seconds', '?')}")
@@ -386,7 +386,7 @@ class AbAv1Parser:
                 logger.debug(
                     f"Post-Parse Stats: Phase={stats.get('phase')}, "
                     f"Qual={stats.get('progress_quality', 0):.1f}%, VMAF={stats.get('vmaf')}, "
-                    f"CRF={stats.get('crf')}, ETA={stats.get('eta_text')}, "
+                    f"CRF={format_crf(stats.get('crf'))}, ETA={stats.get('eta_text')}, "
                     f"SizeReduc={stats.get('size_reduction')}"
                 )
 
