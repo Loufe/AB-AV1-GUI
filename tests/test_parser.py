@@ -2,11 +2,14 @@
 """Characterization tests for AbAv1Parser.parse_line (src/ab_av1/parser.py).
 
 Lines are modeled on real ab-av1/ffmpeg output as documented in
-docs/AB_AV1_PARSING.md. The stats dict is seeded the same way
+docs/AB_AV1_PARSING.md. EncodeStats is seeded the same way
 AbAv1Wrapper.auto_encode() seeds it (src/ab_av1/wrapper.py).
 """
 
+from dataclasses import replace
+
 from src.ab_av1.parser import AbAv1Parser
+from src.ab_av1.stats import EncodeStats
 
 
 class CallbackRecorder:
@@ -23,32 +26,24 @@ class CallbackRecorder:
         return [info for _, _, info in self.calls]
 
 
-def make_stats(input_path: str = "/videos/movie.mp4", total_duration_seconds: float | None = 600.0) -> dict:
-    """Seed a stats dict the way AbAv1Wrapper.auto_encode() does."""
-    return {
-        "phase": "crf-search",
-        "progress_quality": 0,
-        "progress_encoding": 0,
-        "vmaf": None,
-        "crf": None,
-        "size_reduction": None,
-        "input_path": input_path,
-        "output_path": "/videos/movie.mkv",
-        "command": "",
-        "vmaf_target_used": 95,
-        "last_ffmpeg_fps": None,
-        "eta_text": None,
-        "total_duration_seconds": total_duration_seconds,
-        "last_reported_encoding_progress": -1.0,
-        "estimated_output_size": None,
-        "estimated_size_reduction": None,
-    }
+def make_stats(input_path: str = "/videos/movie.mp4", total_duration_seconds: float | None = 600.0) -> EncodeStats:
+    """Seed stats the way AbAv1Wrapper.auto_encode() does."""
+    return EncodeStats(
+        input_path=input_path,
+        output_path="/videos/movie.mkv",
+        vmaf_target_used=95,
+        total_duration_seconds=total_duration_seconds,
+    )
 
 
-def make_encoding_stats(**kwargs) -> dict:
-    """Stats dict as it looks after the parser's phase transition to encoding."""
+def make_encoding_stats(**kwargs) -> EncodeStats:
+    """Stats as they look after the parser's phase transition to encoding."""
     stats = make_stats(**kwargs)
-    stats.update({"phase": "encoding", "progress_quality": 100.0, "progress_encoding": 0.0, "crf": 30, "vmaf": 95.5})
+    stats.phase = "encoding"
+    stats.progress_quality = 100.0
+    stats.progress_encoding = 0.0
+    stats.crf = 30
+    stats.vmaf = 95.5
     return stats
 
 
@@ -68,9 +63,9 @@ def test_crf_vmaf_line_updates_stats_and_fires_progress_callback():
 
     parser.parse_line("crf 30 VMAF 96.50 (23%)", stats)
 
-    assert stats["crf"] == 30
-    assert stats["vmaf"] == 96.5
-    assert stats["progress_quality"] == 10.0
+    assert stats.crf == 30
+    assert stats.vmaf == 96.5
+    assert stats.progress_quality == 10.0
     assert len(recorder.calls) == 1
     filename, status, event = recorder.calls[0]
     assert filename == "movie.mp4"  # raw basename of input_path, kept raw for GUI display
@@ -88,7 +83,7 @@ def test_repeated_crf_vmaf_lines_cap_quality_progress_at_90():
     for i in range(12):
         parser.parse_line(f"crf {30 + i} VMAF 9{i % 10}.00", stats)
 
-    assert stats["progress_quality"] == 90.0
+    assert stats.progress_quality == 90.0
     # Callbacks only fire while progress increases: 10 -> 90 in 10% steps.
     assert len(recorder.calls) == 9
 
@@ -99,8 +94,8 @@ def test_best_crf_line_sets_crf_and_95_percent_quality():
 
     parser.parse_line("Best CRF: 31", stats)
 
-    assert stats["crf"] == 31
-    assert stats["progress_quality"] == 95.0
+    assert stats.crf == 31
+    assert stats.progress_quality == 95.0
     assert len(recorder.calls) == 1
     assert recorder.events[0].crf == 31
 
@@ -112,8 +107,8 @@ def test_fractional_crf_vmaf_line_parses_quarter_step_value():
 
     parser.parse_line("crf 23.25 VMAF 96.50 (34%)", stats)
 
-    assert stats["crf"] == 23.25
-    assert stats["vmaf"] == 96.5
+    assert stats.crf == 23.25
+    assert stats.vmaf == 96.5
     assert len(recorder.calls) == 1
     assert recorder.events[0].message == "Detecting Quality (CRF:23.25, VMAF:96.5)"
 
@@ -125,8 +120,8 @@ def test_fractional_sample_log_line_parses_crf_and_vmaf():
 
     parser.parse_line("sample 3/5 crf 23.25 VMAF 95.11 (9%)", stats)
 
-    assert stats["crf"] == 23.25
-    assert stats["vmaf"] == 95.11
+    assert stats.crf == 23.25
+    assert stats.vmaf == 95.11
 
 
 def test_fractional_best_crf_line_is_not_truncated():
@@ -135,8 +130,8 @@ def test_fractional_best_crf_line_is_not_truncated():
 
     parser.parse_line("Best CRF: 23.25", stats)
 
-    assert stats["crf"] == 23.25
-    assert stats["progress_quality"] == 95.0
+    assert stats.crf == 23.25
+    assert stats.progress_quality == 95.0
     assert recorder.events[0].crf == 23.25
 
 
@@ -147,7 +142,7 @@ def test_predicted_size_reduction_line_stores_reduction_without_callback():
     parser.parse_line("predicted video stream size 450MB (65%)", stats)
 
     # Line reports predicted size as 65% of original => 35% reduction.
-    assert stats["size_reduction"] == 35.0
+    assert stats.size_reduction == 35.0
     # Quality progress did not increase, so no callback fires.
     assert recorder.calls == []
 
@@ -155,7 +150,7 @@ def test_predicted_size_reduction_line_stores_reduction_without_callback():
 def test_unrelated_line_in_crf_search_changes_nothing():
     parser, recorder = make_parser()
     stats = make_stats()
-    before = dict(stats)
+    before = replace(stats)
 
     result = parser.parse_line("Svt[info]: SVT [version]: SVT-AV1 Encoder Lib v2.1.0", stats)
 
@@ -166,7 +161,7 @@ def test_unrelated_line_in_crf_search_changes_nothing():
 def test_empty_line_returns_stats_unchanged():
     parser, recorder = make_parser()
     stats = make_stats()
-    before = dict(stats)
+    before = replace(stats)
 
     result = parser.parse_line("   ", stats)
 
@@ -183,13 +178,15 @@ def test_empty_line_returns_stats_unchanged():
 def test_encode_log_line_triggers_phase_transition():
     parser, recorder = make_parser()
     stats = make_stats()
-    stats.update({"progress_quality": 95.0, "crf": 31, "vmaf": 95.1})
+    stats.progress_quality = 95.0
+    stats.crf = 31
+    stats.vmaf = 95.1
 
     parser.parse_line("[2024-01-01T00:00:00Z INFO ab_av1::command::encode] encoding video.mkv", stats)
 
-    assert stats["phase"] == "encoding"
-    assert stats["progress_quality"] == 100.0
-    assert stats["progress_encoding"] == 0.0
+    assert stats.phase == "encoding"
+    assert stats.progress_quality == 100.0
+    assert stats.progress_encoding == 0.0
     assert len(recorder.calls) == 1
     event = recorder.events[0]
     assert event.message == "Encoding started"
@@ -204,7 +201,7 @@ def test_starting_encoding_text_also_triggers_transition():
 
     parser.parse_line("Starting encoding", stats)
 
-    assert stats["phase"] == "encoding"
+    assert stats.phase == "encoding"
 
 
 def test_encode_log_line_ignored_when_already_encoding():
@@ -213,7 +210,7 @@ def test_encode_log_line_ignored_when_already_encoding():
 
     parser.parse_line("[2024-01-01T00:00:00Z INFO ab_av1::command::encode] encoding video.mkv", stats)
 
-    assert stats["phase"] == "encoding"
+    assert stats.phase == "encoding"
     assert recorder.calls == []
 
 
@@ -228,9 +225,9 @@ def test_sample_encode_progress_line():
 
     parser.parse_line("[2024-01-01T00:00:00Z INFO ab_av1::command::sample_encode] 45.2%, 30 fps, eta 5m 30s", stats)
 
-    assert stats["progress_encoding"] == 45.2
-    assert stats["last_ffmpeg_fps"] == 30
-    assert stats["eta_text"] == "5m 30s"
+    assert stats.progress_encoding == 45.2
+    assert stats.last_ffmpeg_fps == 30
+    assert stats.eta_text == "5m 30s"
     assert len(recorder.calls) == 1
     event = recorder.events[0]
     assert event.message == "Encoding: 45.2% (FPS: 30, ETA: 5m 30s)"
@@ -244,9 +241,9 @@ def test_main_encode_progress_line():
 
     parser.parse_line("[2024-01-01T00:00:00Z INFO ab_av1::command::encode] 45%, 30 fps, eta 5m 30s", stats)
 
-    assert stats["progress_encoding"] == 45.0
-    assert stats["last_ffmpeg_fps"] == 30
-    assert stats["eta_text"] == "5m 30s"
+    assert stats.progress_encoding == 45.0
+    assert stats.last_ffmpeg_fps == 30
+    assert stats.eta_text == "5m 30s"
     assert len(recorder.calls) == 1
     assert recorder.events[0].message == "Encoding: 45.0% (FPS: 30, ETA: 5m 30s)"
 
@@ -265,8 +262,8 @@ def test_ffmpeg_time_line_computes_progress_from_duration():
     parser.parse_line(FFMPEG_LINE, stats)
 
     # 300s of 600s => 50%
-    assert stats["progress_encoding"] == 50.0
-    assert stats["last_ffmpeg_fps"] == 25.0
+    assert stats.progress_encoding == 50.0
+    assert stats.last_ffmpeg_fps == 25.0
     assert len(recorder.calls) == 1
     event = recorder.events[0]
     assert event.message == "Encoding: 50.0% (25 fps, 1.25x)"
@@ -280,7 +277,7 @@ def test_ffmpeg_time_line_throttles_repeat_updates():
     parser.parse_line(FFMPEG_LINE, stats)
     parser.parse_line(FFMPEG_LINE, stats)  # same timestamp: < 0.1% increase
 
-    assert stats["progress_encoding"] == 50.0
+    assert stats.progress_encoding == 50.0
     assert len(recorder.calls) == 1
 
 
@@ -290,7 +287,7 @@ def test_ffmpeg_time_line_without_duration_is_ignored():
 
     parser.parse_line(FFMPEG_LINE, stats)
 
-    assert stats["progress_encoding"] == 0.0
+    assert stats.progress_encoding == 0.0
     assert recorder.calls == []
 
 
@@ -300,7 +297,7 @@ def test_ffmpeg_progress_never_exceeds_99_9():
 
     parser.parse_line("frame= 100 fps= 25.0 time=00:02:00.00 speed=1.0x", stats)
 
-    assert stats["progress_encoding"] == 99.9
+    assert stats.progress_encoding == 99.9
 
 
 # ---------------------------------------------------------------------------
@@ -314,7 +311,7 @@ def test_generic_percentage_fallback():
 
     parser.parse_line("progress: 62%", stats)
 
-    assert stats["progress_encoding"] == 62.0
+    assert stats.progress_encoding == 62.0
     assert len(recorder.calls) == 1
     assert recorder.events[0].message == "Encoding: 62.0%"
 
@@ -325,23 +322,23 @@ def test_generic_percentage_fallback_never_regresses_progress():
     # the progress bar backwards.
     parser, recorder = make_parser()
     stats = make_encoding_stats()
-    stats["progress_encoding"] = 80.0
+    stats.progress_encoding = 80.0
 
     parser.parse_line("some tool output mentioning 10%", stats)
 
-    assert stats["progress_encoding"] == 80.0
+    assert stats.progress_encoding == 80.0
     assert recorder.calls == []
 
 
 def test_ab_av1_summary_line_updates_eta_only():
     parser, recorder = make_parser()
     stats = make_encoding_stats()
-    stats["progress_encoding"] = 42.0
+    stats.progress_encoding = 42.0
 
     parser.parse_line("00:00:37 Encoding -------- (encoding, eta 36m)", stats)
 
-    assert stats["eta_text"] == "36m"
-    assert stats["progress_encoding"] == 42.0  # percentage untouched
+    assert stats.eta_text == "36m"
+    assert stats.progress_encoding == 42.0  # percentage untouched
     assert len(recorder.calls) == 1
     assert recorder.events[0].message == "Encoding: 42.0% (ETA: 36m)"
 
@@ -353,7 +350,7 @@ def test_ab_av1_summary_line_updates_eta_only():
 def test_unrelated_line_in_encoding_phase_changes_nothing():
     parser, recorder = make_parser()
     stats = make_encoding_stats()
-    before = dict(stats)
+    before = replace(stats)
 
     parser.parse_line("Svt[info]: Number of logical cores available: 16", stats)
 
@@ -368,8 +365,8 @@ def test_parse_line_without_callback_does_not_raise():
     parser.parse_line("crf 30 VMAF 96.50", stats)
     parser.parse_line("Best CRF: 30", stats)
 
-    assert stats["crf"] == 30
-    assert stats["progress_quality"] == 95.0
+    assert stats.crf == 30
+    assert stats.progress_quality == 95.0
 
 
 def test_parse_final_output_keeps_fractional_crf():
@@ -378,5 +375,5 @@ def test_parse_final_output_keeps_fractional_crf():
 
     parser.parse_final_output("Best CRF: 23.25\nVMAF 95.32\n", stats)
 
-    assert stats["crf"] == 23.25
-    assert stats["vmaf"] == 95.32
+    assert stats.crf == 23.25
+    assert stats.vmaf == 95.32

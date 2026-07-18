@@ -37,6 +37,18 @@ DEFAULT_ENCODING_PRESET = 6  # Corresponds to SVT-AV1 "--preset 6" (Balanced spe
 MIN_VMAF_FALLBACK_TARGET = 90  # Minimum VMAF target to attempt if initial target fails
 VMAF_FALLBACK_STEP = 1  # How much to decrement VMAF target on each fallback attempt
 
+# --- ab-av1 Process Management ---
+AB_AV1_OUTPUT_POLL_SEC = 1.0  # Read-loop wake interval for cancellation checks
+AB_AV1_SILENCE_TIMEOUT_SEC = 1800  # No output at debug verbosity for 30 min = hung process
+AB_AV1_EOF_WAIT_SEC = 30  # Post-EOF wait for process exit before terminating
+AB_AV1_TERMINATE_WAIT_SEC = 5  # Wait after terminate/kill before escalating
+TASKKILL_NOT_FOUND_RC = 128  # Windows taskkill exit code when the target process does not exist
+
+# ab-av1's message when no CRF meets the VMAF target (crate::Error::NoGoodCrf Display
+# impl). Matched case-insensitively as a substring so wording drift in future ab-av1
+# releases doesn't silently disable the VMAF fallback ladder.
+AB_AV1_NO_SUITABLE_CRF_MESSAGE = "Failed to find a suitable crf"
+
 # --- Progress Logging ---
 # Dynamic log interval tiers based on estimated duration (requires ab-av1 with --log-interval support)
 # Format: (max_duration_minutes, log_interval) - uses first matching tier

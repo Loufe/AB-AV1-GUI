@@ -14,7 +14,7 @@ import time
 from collections.abc import Callable  # Import Callable
 
 # Project imports
-from src.ab_av1.exceptions import ConversionNotWorthwhileError
+from src.ab_av1.exceptions import AbAv1CancelledError, ConversionNotWorthwhileError
 from src.ab_av1.wrapper import AbAv1Wrapper
 from src.cache_helpers import converted_verdict_applies, is_file_unchanged
 from src.config import DEFAULT_ENCODING_PRESET, DEFAULT_VMAF_TARGET, HISTORY_SAVE_INTERVAL_SEC, MIN_VMAF_FALLBACK_TARGET
@@ -268,6 +268,7 @@ def sequential_conversion_worker(
     gui,
     config: QueueConversionConfig,
     stop_event,
+    cancel_event,
     file_event_callback: Callable,
     queue_status_callback: Callable,
     reset_ui_callback: Callable,
@@ -284,7 +285,8 @@ def sequential_conversion_worker(
     Args:
         gui: The main GUI instance (passed for accessing settings, state, and root window).
         config: QueueConversionConfig containing queue items and conversion settings.
-        stop_event: Threading event to signal stopping.
+        stop_event: Threading event for graceful stop (finish current file, then stop).
+        cancel_event: Threading event set by force-stop; aborts the current ab-av1 run mid-process.
         file_event_callback: Callback for file conversion events (progress, errors, completion).
         queue_status_callback: Callback for updating queue tree (queue_item_id, status, processed, total).
         reset_ui_callback: Callback to reset UI details for a new file.
@@ -665,6 +667,14 @@ def sequential_conversion_worker(
 
                 # --- Process Video ---
                 process_successful = False
+                file_stopped = False  # Set when the current file's run is cancelled mid-process
+                file_decided = False  # Set when a verdict was already recorded (don't overwrite with STOPPED)
+
+                # Clear skip state left over from the previous file: it is set via
+                # root.after, so it can land after that file's post-processing already
+                # ran (synchronous clear is safe per the THREAD SAFETY NOTE above)
+                gui.session.last_skip_reason = None
+                gui.session.last_min_vmaf_attempted = None
                 output_file_path = None
                 elapsed_time_file = 0
                 output_size = 0
@@ -767,15 +777,16 @@ def sequential_conversion_worker(
                                 progress_callback=progress_cb,
                                 stop_event=stop_event,
                                 hw_decoder=hw_decoder,
+                                pid_callback=lambda pid, path=file_path: pid_storage_callback(gui, pid, path),
                             )
 
                             # Extract results from crf_search
-                            final_crf = crf_result.get("best_crf")
-                            final_vmaf = crf_result.get("best_vmaf")
-                            final_vmaf_target = crf_result.get("vmaf_target_used")
-                            predicted_output_size = crf_result.get("predicted_output_size")
-                            predicted_size_reduction = crf_result.get("predicted_size_reduction")
-                            crf_search_time = crf_result.get("crf_search_time_sec")
+                            final_crf = crf_result.best_crf
+                            final_vmaf = crf_result.best_vmaf
+                            final_vmaf_target = crf_result.vmaf_target_used
+                            predicted_output_size = crf_result.predicted_output_size
+                            predicted_size_reduction = crf_result.predicted_size_reduction
+                            crf_search_time = crf_result.crf_search_time_sec
 
                             # Update history index with Layer 2 data
                             record = _create_file_record(
@@ -824,6 +835,13 @@ def sequential_conversion_worker(
                                 gui.root, lambda fp=file_path: gui.update_analysis_tree_for_completed_file(fp, "done")
                             )
 
+                        except AbAv1CancelledError:
+                            # Stop request aborted the CRF search mid-run: the shared
+                            # stopped branch below records STOPPED and the count
+                            logger.info(f"Analysis cancelled for {anonymized_name}")
+                            file_stopped = True
+                            process_successful = False
+
                         except ConversionNotWorthwhileError as e:
                             # CRF search failed at all VMAF targets - record as NOT_WORTHWHILE
                             crf_search_elapsed = time.time() - crf_search_start
@@ -866,6 +884,7 @@ def sequential_conversion_worker(
                             )
 
                             process_successful = False
+                            file_decided = True
 
                     elif output_path is not None:
                         # CONVERT operation: Full conversion with process_video
@@ -880,6 +899,7 @@ def sequential_conversion_worker(
                             pid_callback=lambda pid, path=file_path: pid_storage_callback(gui, pid, path),
                             total_duration_seconds=input_duration,
                             hw_decoder=hw_decoder,
+                            cancel_event=cancel_event,
                         )
                         if result_tuple:
                             # Unpack tuple including timing breakdown
@@ -917,6 +937,7 @@ def sequential_conversion_worker(
                     error_msg = f"Internal processing error: {e!s}"
                     file_event_callback(filename, "failed", {"message": error_msg, "type": "processing_crash"})
                     process_successful = False
+                    file_decided = True  # ERROR recorded here; don't re-count in the post-processing chain
                     queue_item.files_failed += 1
                     queue_item.last_error = error_msg
                     _update_file_status(queue_item, file_index, QueueItemStatus.ERROR, error_msg)
@@ -990,7 +1011,13 @@ def sequential_conversion_worker(
                             )
                         except Exception:
                             logger.exception(f"Failed to record history for {anonymized_name}")
-                # Check if this was a NOT_WORTHWHILE skip and record to history
+                elif file_decided:
+                    # Verdict (e.g. ANALYZE NOT_WORTHWHILE) already recorded in the
+                    # operation branch - don't overwrite it with STOPPED or ERROR
+                    pass
+                # Check if this was a NOT_WORTHWHILE skip and record to history.
+                # A decided verdict outranks a concurrent force-stop: checked before
+                # the stopped branch so the history record isn't dropped.
                 elif gui.session.last_skip_reason:
                     queue_item.files_skipped += 1
                     _update_file_status(
@@ -1033,6 +1060,14 @@ def sequential_conversion_worker(
                         )
                     except Exception:
                         logger.exception(f"Failed to record NOT_WORTHWHILE history for {anonymized_name}")
+                elif file_stopped or cancel_event.is_set():
+                    # Force-stop (or ANALYZE stop) cancelled this file mid-run: stopped, not failed
+                    _update_file_status(queue_item, file_index, QueueItemStatus.STOPPED)
+
+                    def increment_stopped():
+                        gui.session.stopped_count += 1
+
+                    update_ui_safely(gui.root, increment_stopped)
                 else:
                     # process_video returned None due to error (not a NOT_WORTHWHILE skip)
                     # The error was already reported via callback, but we need to track it in queue item
