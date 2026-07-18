@@ -191,28 +191,26 @@ def update_folder_aggregates(
             if record.file_size_bytes:
                 total_size += record.file_size_bytes
 
-            # Check if file needs conversion and has estimates
-            # Use Layer 2 data if available, otherwise fall back to Layer 1 estimate
-            reduction_percent = record.predicted_size_reduction or record.estimated_reduction_percent
-            if record.status in (FileStatus.SCANNED, FileStatus.ANALYZED) and reduction_percent:
+            # Check if file needs conversion
+            if record.status in (FileStatus.SCANNED, FileStatus.ANALYZED):
                 # Track if this file only has ffprobe-level analysis (no CRF search)
                 if record.predicted_size_reduction is None:
                     any_estimate = True
 
-                # Calculate savings from reduction percentage
-                if record.file_size_bytes:
-                    file_savings = int(record.file_size_bytes * reduction_percent / 100)
-                    total_savings += file_savings
+                # Savings needs a reduction estimate; use Layer 2 data if
+                # available, otherwise fall back to Layer 1 estimate
+                reduction_percent = record.predicted_size_reduction or record.estimated_reduction_percent
+                if reduction_percent and record.file_size_bytes:
+                    total_savings += int(record.file_size_bytes * reduction_percent / 100)
 
-                # Get time estimate
-                file_time = estimate_file_time(
+                # Time needs only codec/duration/resolution - independent of savings
+                total_time += estimate_file_time(
                     codec=record.video_codec,
                     duration=record.duration_sec,
                     width=record.width,
                     height=record.height,
                     grouped_percentiles=grouped_percentiles,
                 ).best_seconds
-                total_time += file_time
         else:
             # Child is a subfolder - read its cached aggregates
             folder_agg = gui.folder_aggregates.get(child_id)
