@@ -63,11 +63,18 @@ def _update_file_status(
 ) -> None:
     """Update the status of a file within a folder queue item."""
     if queue_item.is_folder and file_index < len(queue_item.files):
-        queue_item.files[file_index].status = status
+        file_item = queue_item.files[file_index]
+        file_item.status = status
+        if status == QueueItemStatus.CONVERTING:
+            # Fresh processing attempt - stale outcome fields from a prior pass
+            # would mislabel the new result (e.g. a successful conversion
+            # rendered as "Skipped: ...")
+            file_item.skip_reason = None
+            file_item.error_message = None
         if error_msg:
-            queue_item.files[file_index].error_message = error_msg
+            file_item.error_message = error_msg
         if skip_reason:
-            queue_item.files[file_index].skip_reason = skip_reason
+            file_item.skip_reason = skip_reason
     elif queue_item.is_folder:
         logger.warning(f"File index {file_index} out of range for queue item with {len(queue_item.files)} files")
 
@@ -678,14 +685,12 @@ def sequential_conversion_worker(
                             # output at the input path, which would otherwise be CRF-searched)
                             if cached_record.status == FileStatus.CONVERTED:
                                 if converted_verdict_applies(cached_record, file_path):
-                                    logger.info(f"Skipping {anonymized_name} - already converted")
-                                    file_event_callback(filename, "skipped", "Already converted")
+                                    reason = "Already converted"
+                                    logger.info(f"Skipping {anonymized_name} - {reason}")
+                                    file_event_callback(filename, "skipped", reason)
                                     queue_item.files_skipped += 1
                                     _update_file_status(
-                                        queue_item,
-                                        file_index,
-                                        QueueItemStatus.COMPLETED,
-                                        skip_reason="Already converted",
+                                        queue_item, file_index, QueueItemStatus.COMPLETED, skip_reason=reason
                                     )
                                     queue_item.processed_files += 1
                                     queue_status_callback(
@@ -701,18 +706,12 @@ def sequential_conversion_worker(
                             # Skip NOT_WORTHWHILE files - already determined conversion isn't beneficial
                             elif cached_record.status == FileStatus.NOT_WORTHWHILE:
                                 if is_file_unchanged(cached_record, file_path):
+                                    reason = cached_record.skip_reason or "Previously marked not worthwhile"
                                     logger.info(f"Skipping {anonymized_name} - previously marked not worthwhile")
-                                    file_event_callback(
-                                        filename,
-                                        "skipped",
-                                        cached_record.skip_reason or "Previously marked not worthwhile",
-                                    )
+                                    file_event_callback(filename, "skipped", reason)
                                     queue_item.files_skipped += 1
                                     _update_file_status(
-                                        queue_item,
-                                        file_index,
-                                        QueueItemStatus.COMPLETED,
-                                        skip_reason=cached_record.skip_reason or "Previously marked not worthwhile",
+                                        queue_item, file_index, QueueItemStatus.COMPLETED, skip_reason=reason
                                     )
                                     queue_item.processed_files += 1
                                     queue_status_callback(
@@ -729,14 +728,12 @@ def sequential_conversion_worker(
                             # Skip ANALYZED files - already have Layer 2 data (CRF search complete)
                             elif cached_record.status == FileStatus.ANALYZED:
                                 if is_file_unchanged(cached_record, file_path):
-                                    logger.info(f"Skipping {anonymized_name} - already analyzed")
-                                    file_event_callback(filename, "skipped", "Already analyzed")
+                                    reason = "Already analyzed"
+                                    logger.info(f"Skipping {anonymized_name} - {reason}")
+                                    file_event_callback(filename, "skipped", reason)
                                     queue_item.files_skipped += 1
                                     _update_file_status(
-                                        queue_item,
-                                        file_index,
-                                        QueueItemStatus.COMPLETED,
-                                        skip_reason="Already analyzed",
+                                        queue_item, file_index, QueueItemStatus.COMPLETED, skip_reason=reason
                                     )
                                     queue_item.processed_files += 1
                                     queue_status_callback(
