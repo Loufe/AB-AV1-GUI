@@ -87,6 +87,7 @@ def format_queue_file_status(
     *,
     stopping: bool = False,
     error_message: str | None = None,
+    skip_reason: str | None = None,
 ) -> tuple[str, str]:
     """Format queue file item status for display (nested files in folder items).
 
@@ -94,6 +95,7 @@ def format_queue_file_status(
         status: The file item status.
         stopping: Whether a stop has been requested.
         error_message: Error message if status is ERROR.
+        skip_reason: Skip reason if the file completed by being skipped.
 
     Returns:
         Tuple of (display_text, tag_name).
@@ -105,6 +107,8 @@ def format_queue_file_status(
     tag = QUEUE_STATUS_TAGS.get(status, "file_pending")
 
     if status == QueueItemStatus.COMPLETED:
+        if skip_reason:
+            return f"Skipped: {skip_reason}", "file_skipped"
         return "Done", tag
     if status == QueueItemStatus.CONVERTING:
         return "Converting...", tag

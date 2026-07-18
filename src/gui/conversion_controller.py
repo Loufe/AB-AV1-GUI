@@ -52,6 +52,7 @@ from src.gui.gui_updates import (
     update_total_elapsed_time,
     update_total_remaining_time,
 )
+from src.gui.tree_display import QUEUE_STATUS_TAGS, format_queue_file_status
 from src.models import OutputMode, QueueConversionConfig, QueueItemStatus
 
 # Import from utils and other modules
@@ -123,14 +124,6 @@ def create_queue_status_callback(gui):
     Returns:
         A callback function that updates queue tree rows
     """
-    # Status tag mapping for file rows
-    file_status_tags = {
-        QueueItemStatus.PENDING: "file_pending",
-        QueueItemStatus.CONVERTING: "file_converting",
-        QueueItemStatus.COMPLETED: "file_done",
-        QueueItemStatus.STOPPED: "file_skipped",
-        QueueItemStatus.ERROR: "file_error",
-    }
 
     def queue_status_callback(queue_item_id: str, status: QueueItemStatus, processed: int, total: int):
         """Update queue tree with item status.
@@ -159,7 +152,7 @@ def create_queue_status_callback(gui):
                     gui.queue_tree.set(tree_id, "status", status_display)
 
                     # Update root queue item tags to match status
-                    tag = file_status_tags.get(status, "file_pending")
+                    tag = QUEUE_STATUS_TAGS.get(status, "file_pending")
                     gui.queue_tree.item(tree_id, tags=(tag,))
                 except Exception:
                     logger.debug(f"Could not update tree row for {queue_item_id}")
@@ -170,22 +163,13 @@ def create_queue_status_callback(gui):
                     file_tree_id = gui.get_file_tree_id(file_item.path)
                     if file_tree_id:
                         try:
-                            # Format file status text
-                            if file_item.status == QueueItemStatus.COMPLETED:
-                                file_status = "Done"
-                            elif file_item.status == QueueItemStatus.CONVERTING:
-                                file_status = "Converting..."
-                            elif file_item.status == QueueItemStatus.ERROR:
-                                file_status = file_item.error_message or "Error"
-                            elif file_item.status == QueueItemStatus.STOPPED:
-                                file_status = "Stopped"
-                            else:
-                                file_status = ""
-
-                            gui.queue_tree.set(file_tree_id, "status", file_status)
-                            gui.queue_tree.item(
-                                file_tree_id, tags=(file_status_tags.get(file_item.status, "file_pending"),)
+                            file_status, file_tag = format_queue_file_status(
+                                file_item.status,
+                                error_message=file_item.error_message,
+                                skip_reason=file_item.skip_reason,
                             )
+                            gui.queue_tree.set(file_tree_id, "status", file_status)
+                            gui.queue_tree.item(file_tree_id, tags=(file_tag,))
                         except Exception:
                             logger.debug(f"Could not update file tree row for {file_item.path}")
 
