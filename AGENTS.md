@@ -208,6 +208,7 @@ AbAv1Wrapper.auto_encode()
 - Prefer creating focused modules over expanding large files
 - **Tests** - Unit tests live under `tests/` and run via `uv run pytest`. Changes to pure logic (parsing, formatting, cache/estimation math, etc.) should come with tests. GUI and worker code is exempt until the engine/GUI boundary refactor lands
 - **No time estimates** - Never provide effort/duration estimates for tasks
+- **No unanonymized log/history access** - Never read `logs/` or `conversion_history.json` unless contents are anonymized (hashed `file_…` names). Real paths identify people; if one appears, stop and don't quote it
 
 ### Zero Backwards Compatibility Policy
 **NEVER add backwards compatibility code.** This is a single-developer project with no external consumers. Backwards compatibility is wasted effort.
