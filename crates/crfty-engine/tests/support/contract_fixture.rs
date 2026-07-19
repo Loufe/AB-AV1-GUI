@@ -13,8 +13,9 @@ use std::{
 };
 
 use crfty_core::{
-    AnalysisProfile, DEFAULT_VMAF_TARGET, ExecutionSettings, MIN_VMAF_FALLBACK_TARGET, Operation,
-    OutputTarget, QueueCommand, QueueItemId, SessionCommand, VMAF_FALLBACK_STEP,
+    AnalysisProfile, DEFAULT_VMAF_TARGET, DecodeMode, DecodePreference, ExecutionSettings,
+    MIN_VMAF_FALLBACK_TARGET, Operation, OutputTarget, QueueCommand, QueueItemId, SessionCommand,
+    VMAF_FALLBACK_STEP,
 };
 
 const CONTRACT_PRESET: u8 = 12;
@@ -71,15 +72,15 @@ fn fake_ffprobe() -> Result<(), Box<dyn Error>> {
     const PROBE: &str = r#"{
         "streams": [{
             "index": 0,
-            "codec_name": "av1",
+            "codec_name": "h264",
             "codec_type": "video",
             "codec_tag_string": "[0][0][0][0]",
             "codec_tag": "0x0000",
             "r_frame_rate": "30/1",
             "avg_frame_rate": "30/1",
             "time_base": "1/1000",
-            "width": 16,
-            "height": 16,
+            "width": 1280,
+            "height": 720,
             "pix_fmt": "yuv420p",
             "disposition": {
                 "default": 0,
@@ -107,8 +108,19 @@ fn fake_ffprobe() -> Result<(), Box<dyn Error>> {
             "probe_score": 100
         }
     }"#;
+    let verifies_staging = env::args_os().any(|argument| {
+        Path::new(&argument)
+            .file_name()
+            .and_then(|name| name.to_str())
+            .is_some_and(|name| name.ends_with(".part"))
+    });
+    let probe = if verifies_staging {
+        PROBE.replace("\"codec_name\": \"h264\"", "\"codec_name\": \"av1\"")
+    } else {
+        PROBE.to_owned()
+    };
     let mut stdout = io::stdout().lock();
-    stdout.write_all(PROBE.as_bytes())?;
+    stdout.write_all(probe.as_bytes())?;
     stdout.write_all(b"\n")?;
     Ok(())
 }
@@ -142,12 +154,14 @@ fn run_coordinator_contract(
             fallback_floor: MIN_VMAF_FALLBACK_TARGET,
             fallback_step: VMAF_FALLBACK_STEP,
             overwrite_existing: false,
+            decode_preference: DecodePreference::SoftwareOnly,
             profile: AnalysisProfile {
                 preset: CONTRACT_PRESET,
                 max_encoded_percent_basis_points: CONTRACT_MAX_ENCODED_PERCENT_BASIS_POINTS,
                 samples: Some(CONTRACT_SAMPLE_COUNT),
                 sample_duration_ms: CONTRACT_SAMPLE_DURATION_MS,
                 thorough: false,
+                decode_mode: DecodeMode::Software,
                 ab_av1_revision: "contract".to_owned(),
                 ffmpeg_revision: "contract".to_owned(),
                 encoder_revision: "contract".to_owned(),
@@ -172,8 +186,38 @@ fn run_coordinator_contract(
     accepted_reply(engine.commands.submit_session(SessionCommand::Start)?)?;
 
     let mut finished = 0_u8;
+    let mut searches = 0_u8;
+    let mut prepared_with_reuse = 0_u8;
+    let mut first_content = None;
+    let mut content_changed = false;
+    let mut first_profile = None;
+    let mut profile_changed = false;
     while finished < CONTRACT_EXPECTED_FINISHED_ITEMS {
         match engine.events.recv_timeout(CONTRACT_EVENT_TIMEOUT)? {
+            crfty_engine::driver::DriverEvent::Durable(
+                crfty_core::DurableDelta::MediaObserved { observation },
+            ) => {
+                if let Some(first) = &first_content {
+                    content_changed |= first != &observation.binding.content_key;
+                } else {
+                    first_content = Some(observation.binding.content_key.clone());
+                }
+            }
+            crfty_engine::driver::DriverEvent::Durable(
+                crfty_core::DurableDelta::ItemPrepared { spec },
+            ) => {
+                if let Some(first) = &first_profile {
+                    profile_changed |= first != &spec.execution.profile;
+                } else {
+                    first_profile = Some(spec.execution.profile.clone());
+                }
+                if spec.selected_analysis.is_some() {
+                    prepared_with_reuse = prepared_with_reuse.saturating_add(1);
+                }
+            }
+            crfty_engine::driver::DriverEvent::Durable(
+                crfty_core::DurableDelta::AnalysisRecorded { .. },
+            ) => searches = searches.saturating_add(1),
             crfty_engine::driver::DriverEvent::Durable(
                 crfty_core::DurableDelta::ItemFinished { .. },
             ) => finished = finished.saturating_add(1),
@@ -188,6 +232,12 @@ fn run_coordinator_contract(
             }
             _ => {}
         }
+    }
+    if searches != 1 {
+        return Err(format!(
+            "analysis reuse expected one search, observed {searches}; prepared reuse count {prepared_with_reuse}; content changed {content_changed}; profile changed {profile_changed}"
+        )
+        .into());
     }
     let expected = input.with_file_name("input_coordinated.mkv");
     if !expected.exists() {
@@ -547,6 +597,7 @@ fn search_request(input: &Path) -> SearchRequest {
         samples: Some(1),
         sample_duration: Duration::from_secs(1),
         thorough: false,
+        decode_mode: DecodeMode::Software,
     }
 }
 
@@ -556,6 +607,7 @@ fn encode_request(input: &Path, output: &Path) -> EncodeRequest {
         output: output.to_owned(),
         crf: 30.0,
         preset: 12,
+        decode_mode: DecodeMode::Software,
     }
 }
 

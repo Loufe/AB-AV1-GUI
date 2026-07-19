@@ -5,7 +5,7 @@ use crate::{
     reducer::{validate_output_delta, validate_terminal},
 };
 
-pub const JOURNAL_SCHEMA_VERSION: u32 = 3;
+pub const JOURNAL_SCHEMA_VERSION: u32 = 4;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct JournalEnvelope {
@@ -166,23 +166,75 @@ fn validate_replayed_delta(state: &DurableState, delta: &DurableDelta) -> Result
                 return Err("queue move references an unavailable item");
             }
         }
-        DurableDelta::ItemClaimed { spec } => {
+        DurableDelta::ItemReserved { job } => {
+            let matches_item = state.queue.iter().any(|item| {
+                item.id == job.item_id
+                    && item.input == job.input
+                    && item.operation == job.operation
+                    && item.output_target == job.output_target
+                    && matches!(item.state, QueueItemState::Queued)
+            });
+            let active = state.queue.iter().any(|item| {
+                matches!(
+                    item.state,
+                    QueueItemState::Reserved { .. }
+                        | QueueItemState::Claimed { .. }
+                        | QueueItemState::Running { .. }
+                )
+            });
+            if !matches_item || active {
+                return Err("reservation does not match an available queue item");
+            }
+        }
+        DurableDelta::MediaObserved { observation } => {
+            if observation.path_hash.0.is_empty()
+                || observation.binding.content_key.0.is_empty()
+                || observation.binding.stamp.size == 0
+                || observation.metadata.duration_ms == 0
+                || observation.metadata.width == 0
+                || observation.metadata.height == 0
+            {
+                return Err("media observation is incomplete");
+            }
+        }
+        DurableDelta::ItemPrepared { spec } => {
             spec.execution.validate()?;
             let matches_item = state.queue.iter().any(|item| {
                 item.id == spec.item_id
                     && item.input == spec.input
                     && item.operation == spec.operation
                     && item.output_target == spec.output_target
-                    && matches!(item.state, QueueItemState::Queued)
+                    && matches!(
+                        item.state,
+                        QueueItemState::Reserved {
+                            claim_id,
+                            run_id,
+                        } if claim_id == spec.claim_id && run_id == spec.run_id
+                    )
             });
-            let active = state.queue.iter().any(|item| {
-                matches!(
-                    item.state,
-                    QueueItemState::Claimed { .. } | QueueItemState::Running { .. }
-                )
+            let record = spec
+                .content_key
+                .as_ref()
+                .and_then(|key| state.records.get(key));
+            let content_exists = spec.content_key.is_none() || record.is_some();
+            let expected_skip = record.and_then(|record| {
+                match crate::evaluate_eligibility(&record.metadata, spec.operation) {
+                    crate::Eligibility::Skip(reason) => Some(reason),
+                    crate::Eligibility::Process | crate::Eligibility::Remux => None,
+                }
             });
-            if !matches_item || active || state.conversion_runs.contains_key(&spec.run_id) {
-                return Err("claim does not match an available queue item");
+            let expected_analysis = if expected_skip.is_none() {
+                record.and_then(|record| crate::select_analysis(record, &spec.execution))
+            } else {
+                None
+            };
+            if !matches_item
+                || !content_exists
+                || spec.skip_reason != expected_skip
+                || spec.selected_analysis != expected_analysis
+                || state.conversion_runs.contains_key(&spec.run_id)
+            {
+                return Err("prepared job does not match its reservation or media record");
             }
         }
         DurableDelta::ItemRunning {
@@ -211,6 +263,14 @@ fn validate_replayed_delta(state: &DurableState, delta: &DurableDelta) -> Result
             if run.analysis.is_some() {
                 return Err("analysis is already recorded");
             }
+            if run
+                .spec
+                .content_key
+                .as_ref()
+                .is_some_and(|key| !state.records.contains_key(key))
+            {
+                return Err("analysis content record is missing");
+            }
             result.validate_for(&run.spec.execution)?;
         }
         DurableDelta::ItemFinished {
@@ -219,6 +279,24 @@ fn validate_replayed_delta(state: &DurableState, delta: &DurableDelta) -> Result
             run_id,
             outcome,
         } => {
+            let reserved = state.queue.iter().any(|item| {
+                item.id == *item_id
+                    && matches!(
+                        item.state,
+                        QueueItemState::Reserved {
+                            claim_id: current_claim,
+                            run_id: current_run,
+                        } if current_claim == *claim_id && current_run == *run_id
+                    )
+            });
+            if reserved {
+                if !matches!(outcome, crate::ItemOutcome::Stopped)
+                    || state.conversion_runs.contains_key(run_id)
+                {
+                    return Err("reservation terminal is not a clean stop");
+                }
+                return Ok(());
+            }
             let Some(run) = state.conversion_runs.get(run_id) else {
                 return Err("terminal transition references a missing run");
             };

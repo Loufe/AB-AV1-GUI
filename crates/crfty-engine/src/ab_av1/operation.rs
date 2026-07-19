@@ -7,6 +7,7 @@ use std::{
 };
 
 use ab_av1::{command, ffprobe};
+use crfty_core::DecodeMode;
 use tokio_stream::StreamExt;
 
 use super::types::{
@@ -220,7 +221,7 @@ pub(crate) fn search_args(
     request: &SearchRequest,
 ) -> Result<command::crf_search::Args, JobFailure> {
     Ok(command::crf_search::Args {
-        args: common_encode_args(request.input.clone(), request.preset)?,
+        args: common_encode_args(request.input.clone(), request.preset, request.decode_mode)?,
         min_vmaf: Some(request.target_vmaf),
         min_xpsnr: None,
         max_encoded_percent: request.max_encoded_percent,
@@ -253,7 +254,7 @@ pub(crate) fn search_args(
 
 pub(crate) fn encode_args(request: &EncodeRequest) -> Result<command::encode::Args, JobFailure> {
     Ok(command::encode::Args {
-        args: common_encode_args(request.input.clone(), request.preset)?,
+        args: common_encode_args(request.input.clone(), request.preset, request.decode_mode)?,
         crf: request.crf,
         encode: command::args::EncodeToOutput {
             output: Some(request.output.clone()),
@@ -265,7 +266,17 @@ pub(crate) fn encode_args(request: &EncodeRequest) -> Result<command::encode::Ar
     })
 }
 
-fn common_encode_args(input: PathBuf, preset: u8) -> Result<command::args::Encode, JobFailure> {
+fn common_encode_args(
+    input: PathBuf,
+    preset: u8,
+    decode_mode: DecodeMode,
+) -> Result<command::args::Encode, JobFailure> {
+    let enc_input_args = match decode_mode {
+        DecodeMode::Software => Vec::new(),
+        DecodeMode::Hardware(decoder) => {
+            vec![format!("c:v={}", crate::media::decoder_name(decoder))]
+        }
+    };
     Ok(command::args::Encode {
         encoder: command::args::Encoder::from_str("libsvtav1").map_err(failure)?,
         input,
@@ -276,7 +287,7 @@ fn common_encode_args(input: PathBuf, preset: u8) -> Result<command::args::Encod
         scd: None,
         svt_args: Vec::new(),
         enc_args: Vec::new(),
-        enc_input_args: Vec::new(),
+        enc_input_args,
     })
 }
 
@@ -306,6 +317,8 @@ fn failure(error: impl fmt::Display) -> JobFailure {
 #[cfg(test)]
 mod tests {
     #![allow(clippy::expect_used)]
+
+    use crfty_core::{DecodeMode, HardwareDecoder};
 
     use super::{encode_args, search_args, set_telemetry};
     use crate::ab_av1::{EncodeRequest, EncodeTelemetry, SearchRequest, Telemetry};
@@ -344,6 +357,7 @@ mod tests {
             samples: Some(4),
             sample_duration: Duration::from_secs(12),
             thorough: true,
+            decode_mode: DecodeMode::Software,
         };
         let args = search_args(&search).expect("search arguments");
         assert_eq!(args.args.input, search.input);
@@ -355,9 +369,17 @@ mod tests {
             output: PathBuf::from("output.mkv"),
             crf: 31.5,
             preset: 7,
+            decode_mode: DecodeMode::Software,
         };
         let args = encode_args(&encode).expect("encode arguments");
         assert_eq!(args.crf, 31.5);
-        assert_eq!(args.encode.output, Some(encode.output));
+        assert_eq!(args.encode.output, Some(encode.output.clone()));
+
+        let hardware = EncodeRequest {
+            decode_mode: DecodeMode::Hardware(HardwareDecoder::H264Cuvid),
+            ..encode
+        };
+        let args = encode_args(&hardware).expect("hardware encode arguments");
+        assert_eq!(args.args.enc_input_args, vec!["c:v=h264_cuvid"]);
     }
 }

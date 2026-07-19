@@ -504,6 +504,8 @@ use std::future::Future;
 mod tests {
     use std::{path::PathBuf, time::Duration};
 
+    use crfty_core::DecodeMode;
+
     use super::{validate_encode_request, validate_search_request};
     use crate::ab_av1::{EncodeRequest, SearchRequest};
 
@@ -517,6 +519,7 @@ mod tests {
             samples: None,
             sample_duration: Duration::from_secs(20),
             thorough: false,
+            decode_mode: DecodeMode::Software,
         };
         assert!(validate_search_request(&search).is_err());
         let encode = EncodeRequest {
@@ -524,6 +527,7 @@ mod tests {
             output: PathBuf::from("output.mkv"),
             crf: f32::INFINITY,
             preset: 6,
+            decode_mode: DecodeMode::Software,
         };
         assert!(validate_encode_request(&encode).is_err());
     }

@@ -2,9 +2,10 @@ use std::path::PathBuf;
 
 use crate::state::ConversionRun;
 use crate::{
-    AnalysisResult, AppState, ClaimId, ClaimedJob, DurableDelta, ExecutionSettings, ItemOutcome,
-    JobSpec, Operation, OutputDelta, OutputTarget, QueueItem, QueueItemId, QueueItemState, RunId,
-    SessionState, Telemetry, fold,
+    AnalysisResult, AppState, ClaimId, ClaimedJob, DurableDelta, Eligibility, ExecutionSettings,
+    ItemOutcome, JobSpec, MediaObservation, Operation, OutputDelta, OutputTarget, QueueItem,
+    QueueItemId, QueueItemState, ReservedJob, RunId, SessionState, Telemetry, evaluate_eligibility,
+    fold, select_analysis,
 };
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -41,10 +42,21 @@ pub enum SessionCommand {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum WorkerCommand {
-    ClaimNext {
+    ReserveNext {
         claim_id: ClaimId,
         run_id: RunId,
+    },
+    PrepareReserved {
+        item_id: QueueItemId,
+        claim_id: ClaimId,
+        run_id: RunId,
+        observation: Option<Box<MediaObservation>>,
         execution: ExecutionSettings,
+    },
+    AbandonReservation {
+        item_id: QueueItemId,
+        claim_id: ClaimId,
+        run_id: RunId,
     },
     Started {
         item_id: QueueItemId,
@@ -95,6 +107,7 @@ pub enum Effect {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Reply {
     Accepted,
+    Reserved(Option<Box<ReservedJob>>),
     Claimed(Option<Box<ClaimedJob>>),
     Rejected { reason: String },
     DurabilityUnknown { reason: String },
@@ -268,14 +281,7 @@ fn apply_session(state: &AppState, command: SessionCommand) -> Applied {
 
 fn apply_worker(state: &AppState, command: WorkerCommand) -> Applied {
     match command {
-        WorkerCommand::ClaimNext {
-            claim_id,
-            run_id,
-            execution,
-        } => {
-            if let Err(reason) = execution.validate() {
-                return Applied::rejected(reason);
-            }
+        WorkerCommand::ReserveNext { claim_id, run_id } => {
             if state.session != SessionState::Running {
                 return Applied::rejected("session is not accepting another claim");
             }
@@ -289,23 +295,130 @@ fn apply_worker(state: &AppState, command: WorkerCommand) -> Applied {
                 .find(|item| matches!(item.state, QueueItemState::Queued))
             else {
                 let mut applied = Applied::accepted();
-                applied.reply = Reply::Claimed(None);
+                applied.reply = Reply::Reserved(None);
                 return applied;
             };
-            let spec = JobSpec {
+            let job = ReservedJob {
                 item_id: item.id,
                 claim_id,
                 run_id,
                 input: item.input.clone(),
                 operation: item.operation,
                 output_target: item.output_target.clone(),
-                execution,
             };
             let mut applied = Applied::accepted();
-            applied.durable.push(DurableDelta::ItemClaimed {
+            applied.durable.push(DurableDelta::ItemReserved {
+                job: Box::new(job.clone()),
+            });
+            applied.reply = Reply::Reserved(Some(Box::new(job)));
+            applied
+        }
+        WorkerCommand::PrepareReserved {
+            item_id,
+            claim_id,
+            run_id,
+            observation,
+            execution,
+        } => {
+            if let Err(reason) = execution.validate() {
+                return Applied::rejected(reason);
+            }
+            let Some(item) = find_item(state, item_id) else {
+                return Applied::rejected("queue item does not exist");
+            };
+            if !matches!(
+                item.state,
+                QueueItemState::Reserved {
+                    claim_id: current_claim,
+                    run_id: current_run,
+                } if current_claim == claim_id && current_run == run_id
+            ) {
+                return Applied::rejected("worker preparation has a stale reservation");
+            }
+            let content_key = observation
+                .as_ref()
+                .map(|observed| observed.binding.content_key.clone());
+            let record = content_key
+                .as_ref()
+                .and_then(|key| state.durable.records.get(key));
+            let skip_reason =
+                observation.as_ref().and_then(|observed| {
+                    match evaluate_eligibility(&observed.metadata, item.operation) {
+                        Eligibility::Skip(reason) => Some(reason),
+                        Eligibility::Process | Eligibility::Remux => None,
+                    }
+                });
+            let selected_analysis = if skip_reason.is_none() {
+                record.and_then(|known| select_analysis(known, &execution))
+            } else {
+                None
+            };
+            if let Some(selected) = &selected_analysis
+                && let Err(reason) = selected.validate_reusable_for(&execution)
+            {
+                return Applied::rejected(reason);
+            }
+            let spec = JobSpec {
+                item_id,
+                claim_id,
+                run_id,
+                input: item.input.clone(),
+                content_key,
+                operation: item.operation,
+                output_target: item.output_target.clone(),
+                execution,
+                selected_analysis,
+                skip_reason,
+            };
+            let mut applied = Applied::accepted();
+            if let Some(observation) = observation {
+                let path_changed = state
+                    .durable
+                    .paths
+                    .get(&observation.path_hash)
+                    .is_none_or(|binding| binding != &observation.binding);
+                let record_changed = state
+                    .durable
+                    .records
+                    .get(&observation.binding.content_key)
+                    .is_none_or(|record| record.metadata != observation.metadata);
+                if path_changed || record_changed {
+                    applied
+                        .durable
+                        .push(DurableDelta::MediaObserved { observation });
+                }
+            }
+            applied.durable.push(DurableDelta::ItemPrepared {
                 spec: Box::new(spec.clone()),
             });
             applied.reply = Reply::Claimed(Some(Box::new(ClaimedJob { spec })));
+            applied
+        }
+        WorkerCommand::AbandonReservation {
+            item_id,
+            claim_id,
+            run_id,
+        } => {
+            let Some(item) = find_item(state, item_id) else {
+                return Applied::rejected("queue item does not exist");
+            };
+            if !matches!(
+                item.state,
+                QueueItemState::Reserved {
+                    claim_id: current_claim,
+                    run_id: current_run,
+                } if current_claim == claim_id && current_run == run_id
+            ) || state.durable.conversion_runs.contains_key(&run_id)
+            {
+                return Applied::rejected("reservation cannot be abandoned from its current state");
+            }
+            let mut applied = Applied::accepted();
+            applied.durable.push(DurableDelta::ItemFinished {
+                item_id,
+                claim_id,
+                run_id,
+                outcome: ItemOutcome::Stopped,
+            });
             applied
         }
         WorkerCommand::Started {
@@ -483,7 +596,26 @@ pub(crate) fn validate_terminal(
                 return Err("not-worthwhile attempts are inconsistent with the claimed job");
             }
         }
-        ItemOutcome::Stopped | ItemOutcome::Skipped { .. } | ItemOutcome::Failed { .. } => {}
+        ItemOutcome::Skipped { reason } => match reason {
+            crate::SkipReason::LowResolution { .. } | crate::SkipReason::AlreadyAv1Matroska => {
+                if run.spec.skip_reason.as_ref() != Some(reason)
+                    || run.analysis.is_some()
+                    || output.is_some()
+                {
+                    return Err("policy skip does not match the prepared job");
+                }
+            }
+            crate::SkipReason::OutputExists => {
+                if run.spec.operation != Operation::Convert
+                    || run.spec.skip_reason.is_some()
+                    || run.analysis.is_none()
+                    || output.is_some()
+                {
+                    return Err("output-exists skip is incompatible with the run state");
+                }
+            }
+        },
+        ItemOutcome::Stopped | ItemOutcome::Failed { .. } => {}
     }
     Ok(())
 }
@@ -500,7 +632,10 @@ fn transition_active(
     };
     let matching = matches!(
         item.state,
-        QueueItemState::Claimed {
+        QueueItemState::Reserved {
+            claim_id: current_claim,
+            run_id: current_run,
+        } | QueueItemState::Claimed {
             claim_id: current_claim,
             run_id: current_run,
         } | QueueItemState::Running {
@@ -529,6 +664,7 @@ fn active_run(state: &AppState) -> Option<RunId> {
             QueueItemState::Claimed { run_id, .. } | QueueItemState::Running { run_id, .. } => {
                 Some(run_id)
             }
+            QueueItemState::Reserved { run_id, .. } => Some(run_id),
             QueueItemState::Queued | QueueItemState::Finished(_) => None,
         })
 }

@@ -12,10 +12,11 @@ in [issue #33](https://github.com/Loufe/AB-AV1-GUI/issues/33).
 ## Status
 
 The rewrite has its workspace foundation, pinned ab-av1 integration, and durable
-job coordinator. Queue claims, analysis/encode lifecycle, force cancellation,
-atomic journal replay, output promotion, and crash recovery are implemented and
-covered by unit and real-process contract tests. Analysis reuse, hardware decode,
-the remaining product domain, and the application shell are still to come.
+job coordinator. Queue claims, content-keyed media records, analysis reuse,
+hardware-decode selection, analysis/encode lifecycle, force cancellation, atomic
+journal replay, output promotion, and crash recovery are implemented and covered
+by unit and real-process contract tests. The remaining product domain and the
+application shell are still to come.
 
 ## Workspace
 

@@ -11,8 +11,8 @@ use std::{
 };
 
 use crfty_core::{
-    AnalysisProfile, DurableDelta, ExecutionSettings, Operation, OutputTarget, QueueCommand,
-    QueueItemId, SessionCommand, VmafTarget,
+    AnalysisProfile, DecodeMode, DecodePreference, DurableDelta, ExecutionSettings, Operation,
+    OutputTarget, QueueCommand, QueueItemId, SessionCommand, VmafTarget,
 };
 
 const REAL_CONTRACT_TARGET: VmafTarget = VmafTarget(80);
@@ -133,12 +133,14 @@ fn real_coordinator_analyzes_encodes_verifies_and_promotes() {
             fallback_floor: REAL_CONTRACT_TARGET,
             fallback_step: crfty_core::VMAF_FALLBACK_STEP,
             overwrite_existing: false,
+            decode_preference: DecodePreference::SoftwareOnly,
             profile: AnalysisProfile {
                 preset: REAL_CONTRACT_PRESET,
                 max_encoded_percent_basis_points: REAL_CONTRACT_MAX_ENCODED_PERCENT_BASIS_POINTS,
                 samples: Some(REAL_CONTRACT_SAMPLE_COUNT),
                 sample_duration_ms: REAL_CONTRACT_SAMPLE_DURATION_MS,
                 thorough: false,
+                decode_mode: DecodeMode::Software,
                 ab_av1_revision: "real-contract".to_owned(),
                 ffmpeg_revision: "real-contract".to_owned(),
                 encoder_revision: "real-contract".to_owned(),
@@ -228,6 +230,7 @@ fn search_request(input: &Path) -> SearchRequest {
         samples: Some(1),
         sample_duration: Duration::from_secs(1),
         thorough: false,
+        decode_mode: DecodeMode::Software,
     }
 }
 
@@ -237,6 +240,7 @@ fn encode_request(input: &Path, output: &Path, crf: f32, preset: u8) -> EncodeRe
         output: output.to_owned(),
         crf,
         preset,
+        decode_mode: DecodeMode::Software,
     }
 }
 

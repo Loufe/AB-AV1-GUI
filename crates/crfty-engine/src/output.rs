@@ -2,41 +2,22 @@ use std::{
     ffi::OsString,
     fmt,
     fs::OpenOptions,
-    io::{self, Read, Seek, SeekFrom},
+    io,
     path::{Path, PathBuf},
-    process::Command,
 };
-
-use blake2::{
-    Blake2bVar,
-    digest::{Update, VariableOutput},
-};
-use std::time::UNIX_EPOCH;
 
 #[cfg(unix)]
 use std::fs::File;
 
 use crfty_core::{
-    ArtifactIdentity, DestructiveIdentity, DestructiveObservation, FileSystemFacts, FileSystemId,
+    ArtifactIdentity, ContentKey, DestructiveIdentity, DestructiveObservation, FileSystemFacts,
     OutputDelta, OutputRecoveryAction, OutputState, OutputTransaction, Replacement, RunId,
     recover_output,
 };
 
-use crfty_core::ContentKey;
-use serde::Deserialize;
-
-const CONTENT_KEY_SCHEMA: &[u8] = b"ck1";
-const CONTENT_KEY_TEXT_PREFIX: &str = "ck1:";
-const CONTENT_KEY_DIGEST_BYTES: usize = 16;
-const HEX_CHARACTERS_PER_BYTE: usize = 2;
-const SAMPLE_ALIGNMENT_BYTES: u64 = 4 * 1024;
-const WHOLE_FILE_LIMIT: u64 = 4 * 1024 * 1024;
-const EDGE_SAMPLE: usize = 256 * 1024;
-const MIDDLE_SAMPLE: usize = 64 * 1024;
 const MIN_VERIFIED_OUTPUT_SIZE: u64 = 1024;
-const QUARTER_SAMPLE_NUMERATORS: [u64; 3] = [1, 2, 3];
-const SAMPLE_QUARTERS: u64 = 4;
-const MILLISECONDS_PER_SECOND: f64 = 1_000.0;
+
+use crate::media::{MediaInspector, destructive_identity};
 
 pub trait ArtifactInspector {
     fn inspect_file(&self, path: &Path) -> io::Result<DestructiveIdentity>;
@@ -480,57 +461,14 @@ fn byte_artifact_identity(path: &Path) -> io::Result<ArtifactIdentity> {
 
 #[derive(Debug, Clone)]
 pub struct MediaArtifactInspector {
-    ffprobe: PathBuf,
+    media: MediaInspector,
 }
 
 impl MediaArtifactInspector {
     pub fn new(ffprobe: PathBuf) -> Self {
-        Self { ffprobe }
-    }
-
-    fn probe(&self, path: &Path) -> io::Result<MediaHeader> {
-        let output = Command::new(&self.ffprobe)
-            .args([
-                "-v",
-                "error",
-                "-select_streams",
-                "v:0",
-                "-show_entries",
-                "stream=codec_name,width,height:format=duration",
-                "-of",
-                "json",
-            ])
-            .arg(path)
-            .output()?;
-        if !output.status.success() {
-            return Err(io::Error::new(
-                io::ErrorKind::InvalidData,
-                "ffprobe rejected media artifact",
-            ));
+        Self {
+            media: MediaInspector::new(ffprobe),
         }
-        let probe: ProbeDocument = serde_json::from_slice(&output.stdout)
-            .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error))?;
-        let stream = probe.streams.into_iter().next().ok_or_else(|| {
-            io::Error::new(io::ErrorKind::InvalidData, "media has no video stream")
-        })?;
-        let duration = probe
-            .format
-            .and_then(|format| format.duration)
-            .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidData, "duration is missing"))?
-            .parse::<f64>()
-            .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error))?;
-        if !duration.is_finite() || duration <= 0.0 {
-            return Err(io::Error::new(
-                io::ErrorKind::InvalidData,
-                "duration is not positive and finite",
-            ));
-        }
-        Ok(MediaHeader {
-            codec: stream.codec_name,
-            width: stream.width,
-            height: stream.height,
-            duration_ms: (duration * MILLISECONDS_PER_SECOND).round() as u64,
-        })
     }
 }
 
@@ -540,232 +478,10 @@ impl ArtifactInspector for MediaArtifactInspector {
     }
 
     fn inspect_media(&self, path: &Path) -> io::Result<ArtifactIdentity> {
-        let header = self.probe(path)?;
-        sampled_identity(path, &header)
+        self.media.inspect_artifact(path)
     }
 
     fn verify_output(&self, path: &Path) -> io::Result<ArtifactIdentity> {
-        let metadata = std::fs::metadata(path)?;
-        if metadata.len() < MIN_VERIFIED_OUTPUT_SIZE {
-            return Err(io::Error::new(
-                io::ErrorKind::InvalidData,
-                "output is too small to be a valid video",
-            ));
-        }
-        let header = self.probe(path)?;
-        if !header.codec.eq_ignore_ascii_case("av1") {
-            return Err(io::Error::new(
-                io::ErrorKind::InvalidData,
-                "output video codec is not AV1",
-            ));
-        }
-        sampled_identity(path, &header)
-    }
-}
-
-#[derive(Debug, Default)]
-struct MediaHeader {
-    codec: String,
-    width: u32,
-    height: u32,
-    duration_ms: u64,
-}
-
-#[derive(Deserialize)]
-struct ProbeDocument {
-    #[serde(default)]
-    streams: Vec<ProbeStream>,
-    format: Option<ProbeFormat>,
-}
-
-#[derive(Deserialize)]
-struct ProbeStream {
-    #[serde(default)]
-    codec_name: String,
-    #[serde(default)]
-    width: u32,
-    #[serde(default)]
-    height: u32,
-}
-
-#[derive(Deserialize)]
-struct ProbeFormat {
-    duration: Option<String>,
-}
-
-fn sampled_identity(path: &Path, header: &MediaHeader) -> io::Result<ArtifactIdentity> {
-    let before = std::fs::metadata(path)?;
-    let before_identity = identity_from_metadata(path, &before)?;
-    let mut file = std::fs::File::open(path)?;
-    let mut digest = Blake2bVar::new(CONTENT_KEY_DIGEST_BYTES)
-        .map_err(|error| io::Error::new(io::ErrorKind::InvalidInput, error.to_string()))?;
-    digest.update(CONTENT_KEY_SCHEMA);
-    digest.update(&before.len().to_le_bytes());
-    digest.update(&header.duration_ms.to_le_bytes());
-    digest.update(&(header.codec.len() as u64).to_le_bytes());
-    digest.update(header.codec.as_bytes());
-    digest.update(&header.width.to_le_bytes());
-    digest.update(&header.height.to_le_bytes());
-
-    if before.len() <= WHOLE_FILE_LIMIT {
-        let mut bytes = Vec::new();
-        file.read_to_end(&mut bytes)?;
-        digest.update(&bytes);
-    } else {
-        hash_region(&mut digest, &mut file, 0, EDGE_SAMPLE)?;
-        for numerator in QUARTER_SAMPLE_NUMERATORS {
-            let raw = before.len().saturating_mul(numerator) / SAMPLE_QUARTERS;
-            let offset = raw / SAMPLE_ALIGNMENT_BYTES * SAMPLE_ALIGNMENT_BYTES;
-            hash_region(&mut digest, &mut file, offset, MIDDLE_SAMPLE)?;
-        }
-        hash_region(
-            &mut digest,
-            &mut file,
-            before.len().saturating_sub(EDGE_SAMPLE as u64),
-            EDGE_SAMPLE,
-        )?;
-    }
-    let after = std::fs::metadata(path)?;
-    let after_identity = identity_from_metadata(path, &after)?;
-    if before_identity != after_identity {
-        return Err(io::Error::new(
-            io::ErrorKind::Interrupted,
-            "artifact changed while its identity was computed",
-        ));
-    }
-    let mut bytes = [0_u8; CONTENT_KEY_DIGEST_BYTES];
-    digest
-        .finalize_variable(&mut bytes)
-        .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error.to_string()))?;
-    let mut encoded = String::with_capacity(
-        CONTENT_KEY_TEXT_PREFIX.len() + bytes.len() * HEX_CHARACTERS_PER_BYTE,
-    );
-    encoded.push_str(CONTENT_KEY_TEXT_PREFIX);
-    for byte in bytes {
-        use std::fmt::Write as _;
-        write!(&mut encoded, "{byte:02x}").map_err(|error| io::Error::other(error.to_string()))?;
-    }
-    Ok(ArtifactIdentity {
-        content_key: ContentKey(encoded),
-        destructive: after_identity,
-    })
-}
-
-fn hash_region(
-    digest: &mut Blake2bVar,
-    file: &mut std::fs::File,
-    offset: u64,
-    length: usize,
-) -> io::Result<()> {
-    file.seek(SeekFrom::Start(offset))?;
-    let mut bytes = vec![0_u8; length];
-    file.read_exact(&mut bytes)?;
-    digest.update(&bytes);
-    Ok(())
-}
-
-fn destructive_identity(path: &Path) -> io::Result<DestructiveIdentity> {
-    let metadata = std::fs::metadata(path)?;
-    identity_from_metadata(path, &metadata)
-}
-
-fn identity_from_metadata(
-    path: &Path,
-    metadata: &std::fs::Metadata,
-) -> io::Result<DestructiveIdentity> {
-    let file_id = match file_id::get_file_id(path)? {
-        file_id::FileId::Inode {
-            device_id,
-            inode_number,
-        } => FileSystemId::Unix {
-            device: device_id,
-            inode: inode_number,
-        },
-        file_id::FileId::LowRes {
-            volume_serial_number,
-            file_index,
-        } => FileSystemId::WindowsLowResolution {
-            volume_serial: volume_serial_number,
-            file_index,
-        },
-        file_id::FileId::HighRes {
-            volume_serial_number,
-            file_id,
-        } => FileSystemId::WindowsHighResolution {
-            volume_serial: volume_serial_number,
-            file_id,
-        },
-    };
-    let modified_ns = metadata
-        .modified()
-        .ok()
-        .and_then(|modified| modified.duration_since(UNIX_EPOCH).ok())
-        .map(|duration| duration.as_nanos());
-    Ok(DestructiveIdentity {
-        file_id,
-        size: metadata.len(),
-        modified_ns,
-    })
-}
-
-#[cfg(test)]
-mod tests {
-    use std::{
-        fs,
-        sync::atomic::{AtomicU64, Ordering},
-    };
-
-    use super::{MediaHeader, sampled_identity};
-
-    static TEST_SEQUENCE: AtomicU64 = AtomicU64::new(0);
-
-    #[test]
-    fn ck1_matches_independent_golden_fixtures() {
-        let directory = test_directory("ck1-golden");
-        let small = directory.join("small.bin");
-        fs::write(&small, b"test").expect("small fixture");
-        let small_identity = sampled_identity(
-            &small,
-            &MediaHeader {
-                codec: "av1".to_owned(),
-                width: 16,
-                height: 9,
-                duration_ms: 1_000,
-            },
-        )
-        .expect("small content key");
-        assert_eq!(
-            small_identity.content_key.0,
-            "ck1:23ba2a7ea690c5618f0d5e2ef5413c3e"
-        );
-
-        let large = directory.join("large.bin");
-        let bytes: Vec<_> = (0..(4 * 1024 * 1024 + 12_345))
-            .map(|index| u8::try_from(index % 251).expect("bounded byte"))
-            .collect();
-        fs::write(&large, bytes).expect("large fixture");
-        let large_identity = sampled_identity(
-            &large,
-            &MediaHeader {
-                codec: "h264".to_owned(),
-                width: 1_920,
-                height: 1_080,
-                duration_ms: 98_765,
-            },
-        )
-        .expect("large content key");
-        assert_eq!(
-            large_identity.content_key.0,
-            "ck1:58736d4906c208fb16d7e4e3febba397"
-        );
-        fs::remove_dir_all(directory).expect("remove fixture directory");
-    }
-
-    fn test_directory(label: &str) -> std::path::PathBuf {
-        let sequence = TEST_SEQUENCE.fetch_add(1, Ordering::Relaxed);
-        let path =
-            std::env::temp_dir().join(format!("crfty-{label}-{}-{sequence}", std::process::id()));
-        fs::create_dir(&path).expect("fixture directory");
-        path
+        self.media.verify_av1(path, MIN_VERIFIED_OUTPUT_SIZE)
     }
 }

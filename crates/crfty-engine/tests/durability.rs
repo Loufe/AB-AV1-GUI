@@ -222,12 +222,24 @@ fn telemetry_pressure_coalesces_and_terminal_value_wins() {
     assert!(matches!(
         driver
             .commands
-            .submit(Command::Worker(WorkerCommand::ClaimNext {
+            .submit(Command::Worker(WorkerCommand::ReserveNext {
                 claim_id: ClaimId(2),
                 run_id: RunId(3),
+            }))
+            .expect("reservation reply"),
+        Reply::Reserved(Some(_))
+    ));
+    assert!(matches!(
+        driver
+            .commands
+            .submit(Command::Worker(WorkerCommand::PrepareReserved {
+                item_id: QueueItemId(1),
+                claim_id: ClaimId(2),
+                run_id: RunId(3),
+                observation: None,
                 execution: execution(),
             }))
-            .expect("claim reply"),
+            .expect("preparation reply"),
         Reply::Claimed(Some(_))
     ));
     for sequence in 0..100_000 {
@@ -372,9 +384,15 @@ fn engine_startup_recovers_an_active_partial_staging_transaction() {
             output_target: OutputTarget::Replace,
         }),
         Command::Session(SessionCommand::Start),
-        Command::Worker(WorkerCommand::ClaimNext {
+        Command::Worker(WorkerCommand::ReserveNext {
             claim_id: ClaimId(2),
             run_id: RunId(3),
+        }),
+        Command::Worker(WorkerCommand::PrepareReserved {
+            item_id: QueueItemId(1),
+            claim_id: ClaimId(2),
+            run_id: RunId(3),
+            observation: None,
             execution: settings.clone(),
         }),
         Command::Worker(WorkerCommand::Started {

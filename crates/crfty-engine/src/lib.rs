@@ -13,4 +13,5 @@ pub mod ab_av1;
 pub mod coordinator;
 pub mod driver;
 pub mod journal;
+pub mod media;
 pub mod output;
