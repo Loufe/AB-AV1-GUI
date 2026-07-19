@@ -12,22 +12,32 @@
 mod constants;
 mod job;
 mod journal;
+mod media;
 mod output;
+mod policy;
 mod reducer;
 mod state;
 
 pub use job::{
-    AnalysisAttempt, AnalysisProfile, AnalysisResult, ClaimedJob, Crf, ExecutionSettings, JobPhase,
-    JobSpec, Operation, OutputTarget, SearchMeasurement, ToolRevisions, VmafScore, VmafTarget,
+    AnalysisAttempt, AnalysisProfile, AnalysisResult, ClaimedJob, Crf, DecodeMode,
+    DecodePreference, ExecutionSettings, HardwareDecoder, JobPhase, JobSpec, Operation,
+    OutputTarget, ReservedJob, SearchMeasurement, ToolRevisions, VmafScore, VmafTarget,
 };
 pub use journal::{
     JOURNAL_SCHEMA_VERSION, JournalCorruption, JournalEnvelope, JournalReplay, encode_record,
     replay,
 };
+pub use media::{
+    FileRecord, FileStamp, MediaContainer, MediaObservation, PathBinding, PathHash, VideoCodec,
+    VideoMeta,
+};
 pub use output::{
     ArtifactIdentity, ContentKey, DestructiveIdentity, DestructiveObservation, FileSystemFacts,
     FileSystemId, OutputDelta, OutputRecoveryAction, OutputState, OutputTransaction,
     RecoveryConflict, Replacement, recover_output,
+};
+pub use policy::{
+    Eligibility, MIN_VIDEO_PIXELS, SkipReason, evaluate_eligibility, select_analysis,
 };
 pub use reducer::{
     Applied, Command, Effect, EphemeralDelta, QueueCommand, Reply, SessionCommand, SystemCommand,

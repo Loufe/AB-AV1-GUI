@@ -14,6 +14,30 @@ pub enum Operation {
     Convert,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+pub enum DecodePreference {
+    SoftwareOnly,
+    HardwarePreferred,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+pub enum HardwareDecoder {
+    H264Cuvid,
+    H264Qsv,
+    HevcCuvid,
+    HevcQsv,
+    Vp9Cuvid,
+    Vp9Qsv,
+    Av1Cuvid,
+    Av1Qsv,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+pub enum DecodeMode {
+    Software,
+    Hardware(HardwareDecoder),
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum OutputTarget {
     Replace,
@@ -35,13 +59,14 @@ pub struct VmafScore(pub u16);
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Crf(pub u32);
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 pub struct AnalysisProfile {
     pub preset: u8,
     pub max_encoded_percent_basis_points: u32,
     pub samples: Option<u64>,
     pub sample_duration_ms: u64,
     pub thorough: bool,
+    pub decode_mode: DecodeMode,
     pub ab_av1_revision: String,
     pub ffmpeg_revision: String,
     pub encoder_revision: String,
@@ -63,6 +88,7 @@ impl AnalysisProfile {
             samples: None,
             sample_duration_ms: DEFAULT_SAMPLE_DURATION_MS,
             thorough: false,
+            decode_mode: DecodeMode::Software,
             ab_av1_revision: revisions.ab_av1,
             ffmpeg_revision: revisions.ffmpeg,
             encoder_revision: revisions.encoder,
@@ -98,6 +124,7 @@ pub struct ExecutionSettings {
     pub fallback_floor: VmafTarget,
     pub fallback_step: u8,
     pub overwrite_existing: bool,
+    pub decode_preference: DecodePreference,
     pub profile: AnalysisProfile,
 }
 
@@ -109,6 +136,7 @@ impl ExecutionSettings {
             fallback_floor: MIN_VMAF_FALLBACK_TARGET,
             fallback_step: VMAF_FALLBACK_STEP,
             overwrite_existing,
+            decode_preference: DecodePreference::HardwarePreferred,
             profile,
         }
     }
@@ -188,6 +216,30 @@ impl AnalysisResult {
         }
         self.measurement.validate()
     }
+
+    pub fn validate_reusable_for(&self, execution: &ExecutionSettings) -> Result<(), &'static str> {
+        if self.profile != execution.profile {
+            return Err("analysis profile does not match the claimed job");
+        }
+        let satisfies_requested_target = self.successful_target >= execution.requested_target;
+        let repeats_same_fallback_request = self.requested_target == execution.requested_target
+            && self.fallback_floor == execution.fallback_floor
+            && self.fallback_step == execution.fallback_step;
+        if !satisfies_requested_target && !repeats_same_fallback_request {
+            return Err("analysis target and fallback provenance do not satisfy the claimed job");
+        }
+        if self.successful_target > self.requested_target
+            || self.successful_target < self.fallback_floor
+            || self.fallback_step == 0
+            || self
+                .failed_attempts
+                .iter()
+                .any(|attempt| attempt.target <= self.successful_target)
+        {
+            return Err("reused analysis has invalid fallback provenance");
+        }
+        self.measurement.validate()
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -196,9 +248,22 @@ pub struct JobSpec {
     pub claim_id: ClaimId,
     pub run_id: RunId,
     pub input: PathBuf,
+    pub content_key: Option<crate::ContentKey>,
     pub operation: Operation,
     pub output_target: OutputTarget,
     pub execution: ExecutionSettings,
+    pub selected_analysis: Option<AnalysisResult>,
+    pub skip_reason: Option<crate::SkipReason>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ReservedJob {
+    pub item_id: QueueItemId,
+    pub claim_id: ClaimId,
+    pub run_id: RunId,
+    pub input: PathBuf,
+    pub operation: Operation,
+    pub output_target: OutputTarget,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

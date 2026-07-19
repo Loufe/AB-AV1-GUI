@@ -15,7 +15,8 @@ use crfty_core::{
     DurableDelta, DurableState, Effect, ExecutionSettings, ItemOutcome, JobPhase, JobProgress,
     MAX_PERCENT_BASIS_POINTS, MAX_VMAF_SCORE, Operation, OutputDelta, OutputTarget,
     PERCENT_BASIS_POINTS_SCALE, QueueCommand, QueueItemState, Reply, RunId, SearchMeasurement,
-    SessionCommand, Telemetry, VMAF_SCORE_FIXED_SCALE, VmafScore, VmafTarget, WorkerCommand, fold,
+    SessionCommand, SkipReason, Telemetry, VMAF_SCORE_FIXED_SCALE, VmafScore, VmafTarget,
+    WorkerCommand, fold,
 };
 
 const FIRST_RUNTIME_ID: u64 = 1;
@@ -31,6 +32,7 @@ use crate::{
         Telemetry as AdapterTelemetry,
     },
     driver::{CommandSender, DriverEvent, DriverHandle, DriverStartError},
+    media::{DecodeResolver, MediaInspector},
     output::{MediaArtifactInspector, OutputManager},
 };
 
@@ -204,7 +206,8 @@ fn next_runtime_id(state: &DurableState) -> Result<u64, EngineStartError> {
         .queue
         .iter()
         .filter_map(|item| match item.state {
-            QueueItemState::Claimed { claim_id, run_id }
+            QueueItemState::Reserved { claim_id, run_id }
+            | QueueItemState::Claimed { claim_id, run_id }
             | QueueItemState::Running { claim_id, run_id } => Some(claim_id.0.max(run_id.0)),
             QueueItemState::Queued | QueueItemState::Finished(_) => None,
         })
@@ -227,12 +230,34 @@ fn recover_startup(
         .queue
         .iter()
         .filter_map(|item| match item.state {
-            QueueItemState::Claimed { claim_id, run_id }
+            QueueItemState::Reserved { claim_id, run_id }
+            | QueueItemState::Claimed { claim_id, run_id }
             | QueueItemState::Running { claim_id, run_id } => Some((item.id, claim_id, run_id)),
             QueueItemState::Queued | QueueItemState::Finished(_) => None,
         })
         .collect();
     for (item_id, claim_id, run_id) in active {
+        let reservation_only = !state.conversion_runs.contains_key(&run_id);
+        if reservation_only {
+            if accepted(
+                commands.submit(Command::Worker(WorkerCommand::AbandonReservation {
+                    item_id,
+                    claim_id,
+                    run_id,
+                })),
+            ) {
+                fold(
+                    &mut state,
+                    &DurableDelta::ItemFinished {
+                        item_id,
+                        claim_id,
+                        run_id,
+                        outcome: ItemOutcome::Stopped,
+                    },
+                );
+            }
+            continue;
+        }
         while let Some(transaction) = state.outputs.get(&run_id).cloned() {
             if transaction.is_settled() {
                 break;
@@ -348,6 +373,14 @@ impl ActiveCancellation {
         state.force_stopping = false;
         state.slot = None;
     }
+
+    fn is_force_stopping(&self) -> bool {
+        let state = match self.state.lock() {
+            Ok(state) => state,
+            Err(poisoned) => poisoned.into_inner(),
+        };
+        state.force_stopping
+    }
 }
 
 struct CancellationRegistration<'a> {
@@ -400,7 +433,10 @@ fn supervise(
                         }));
                         match result {
                             Ok(Ok(())) => {}
-                            Ok(Err(message)) => report_worker_crash(&worker_commands, &message),
+                            Ok(Err(message)) if !worker_cancellation.is_force_stopping() => {
+                                report_worker_crash(&worker_commands, &message);
+                            }
+                            Ok(Err(_)) => {}
                             Err(_) => {
                                 report_worker_crash(&worker_commands, "session worker panicked");
                             }
@@ -448,20 +484,66 @@ fn run_session(
     cancellation: &ActiveCancellation,
     ids: &AtomicU64,
 ) -> Result<(), String> {
+    let inspector = MediaInspector::new(config.media_tools.ffprobe.clone());
+    let mut decoder_resolver = DecodeResolver::new(config.media_tools.ffmpeg.clone());
     loop {
         let claim_id = ClaimId(ids.fetch_add(1, Ordering::Relaxed));
         let run_id = RunId(ids.fetch_add(1, Ordering::Relaxed));
-        let claim = commands.submit(Command::Worker(WorkerCommand::ClaimNext {
+        let reservation = commands.submit(Command::Worker(WorkerCommand::ReserveNext {
             claim_id,
             run_id,
-            execution: config.execution.clone(),
         }));
-        let job = match claim {
-            Ok(Reply::Claimed(Some(job))) => job,
-            Ok(Reply::Claimed(None) | Reply::Rejected { .. }) => break,
+        let reserved = match reservation {
+            Ok(Reply::Reserved(Some(job))) => job,
+            Ok(Reply::Reserved(None) | Reply::Rejected { .. }) => break,
             Ok(Reply::DurabilityUnknown { reason }) => return Err(reason),
-            Err(error) => return Err(format!("worker claim failed: {error}")),
-            Ok(Reply::Accepted) => return Err("claim command returned an invalid reply".to_owned()),
+            Err(error) => return Err(format!("worker reservation failed: {error}")),
+            Ok(Reply::Accepted | Reply::Claimed(_)) => {
+                return Err("reservation command returned an invalid reply".to_owned());
+            }
+        };
+        let observation = match inspector.observe(&reserved.input) {
+            Ok(observation) => Some(Box::new(observation)),
+            Err(error) => {
+                eprintln!("media preflight failed; continuing without reusable facts: {error}");
+                None
+            }
+        };
+        let mut execution = config.execution.clone();
+        execution.profile.decode_mode =
+            observation
+                .as_ref()
+                .map_or(crfty_core::DecodeMode::Software, |observed| {
+                    decoder_resolver.resolve(execution.decode_preference, &observed.metadata.codec)
+                });
+        let prepared = commands.submit(Command::Worker(WorkerCommand::PrepareReserved {
+            item_id: reserved.item_id,
+            claim_id,
+            run_id,
+            observation,
+            execution,
+        }));
+        let job = match prepared {
+            Ok(Reply::Claimed(Some(job))) => job,
+            Ok(Reply::Rejected { reason } | Reply::DurabilityUnknown { reason }) => {
+                let _reply = commands.submit(Command::Worker(WorkerCommand::AbandonReservation {
+                    item_id: reserved.item_id,
+                    claim_id,
+                    run_id,
+                }));
+                return Err(reason);
+            }
+            Err(error) => {
+                let _reply = commands.submit(Command::Worker(WorkerCommand::AbandonReservation {
+                    item_id: reserved.item_id,
+                    claim_id,
+                    run_id,
+                }));
+                return Err(format!("worker preparation failed: {error}"));
+            }
+            Ok(Reply::Accepted | Reply::Claimed(None) | Reply::Reserved(_)) => {
+                return Err("preparation command returned an invalid reply".to_owned());
+            }
         };
         require_accepted(
             "mark worker item started",
@@ -493,29 +575,45 @@ fn process_job(
         &mut telemetry_sequence,
         JobPhase::Preparing,
     );
-    let analysis = match search_with_fallback(
-        commands,
-        runtime,
-        config,
-        cancellation,
-        job,
-        &mut telemetry_sequence,
-    ) {
-        Ok(result) => result,
-        Err(outcome) => {
-            terminal(commands, job, outcome, None)?;
-            return Ok(());
-        }
+    if let Some(reason) = &job.spec.skip_reason {
+        terminal(
+            commands,
+            job,
+            ItemOutcome::Skipped {
+                reason: reason.clone(),
+            },
+            None,
+        )?;
+        return Ok(());
+    }
+    let analysis = if let Some(selected) = &job.spec.selected_analysis {
+        selected.clone()
+    } else {
+        let searched = match search_with_fallback(
+            commands,
+            runtime,
+            config,
+            cancellation,
+            job,
+            &mut telemetry_sequence,
+        ) {
+            Ok(result) => result,
+            Err(outcome) => {
+                terminal(commands, job, outcome, None)?;
+                return Ok(());
+            }
+        };
+        require_accepted(
+            "record analysis",
+            commands.submit(Command::Worker(WorkerCommand::RecordAnalysis {
+                item_id: job.spec.item_id,
+                claim_id: job.spec.claim_id,
+                run_id: job.spec.run_id,
+                result: Box::new(searched.clone()),
+            })),
+        )?;
+        searched
     };
-    require_accepted(
-        "record analysis",
-        commands.submit(Command::Worker(WorkerCommand::RecordAnalysis {
-            item_id: job.spec.item_id,
-            claim_id: job.spec.claim_id,
-            run_id: job.spec.run_id,
-            result: Box::new(analysis.clone()),
-        })),
-    )?;
     if job.spec.operation == Operation::Analyze {
         publish_phase(
             commands,
@@ -553,7 +651,7 @@ fn process_job(
             commands,
             job,
             ItemOutcome::Skipped {
-                reason: "output already exists".to_owned(),
+                reason: SkipReason::OutputExists,
             },
             None,
         )?;
@@ -594,6 +692,7 @@ fn process_job(
         output: transaction.staging.clone(),
         crf: crf_to_f32(analysis.measurement.crf),
         preset: analysis.profile.preset,
+        decode_mode: analysis.profile.decode_mode,
     };
     let handle = match runtime.start_encode(config.media_tools.clone(), request) {
         Ok(handle) => handle,
@@ -758,6 +857,7 @@ fn search_with_fallback(
             samples: execution.profile.samples,
             sample_duration: Duration::from_millis(execution.profile.sample_duration_ms),
             thorough: execution.profile.thorough,
+            decode_mode: execution.profile.decode_mode,
         };
         let handle = runtime
             .start_search(config.media_tools.clone(), request)
