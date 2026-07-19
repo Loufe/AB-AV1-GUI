@@ -34,7 +34,10 @@ cargo vet
   platform acceptance test eventually proves direct OS calls unavoidable, isolate
   them in the separately reviewed platform crate described by ADR-005.
 - Do not use `unwrap`, `expect`, unchecked indexing, `todo!`, or `unimplemented!`
-  in production code.
+  in production code. Unit-test builds narrowly allow `unwrap`, `expect`, and
+  indexing for fixture setup and direct assertion failures. Integration-test
+  crates must declare those same three Clippy allowances at their crate root;
+  unsafe remains forbidden in all test code.
 - Keep `Cargo.lock`, git dependency revisions, and structured-tool versions pinned.
   The Rust compiler itself follows the stable channel.
 - Add dependencies only with cargo-deny and cargo-vet policy updates in the same

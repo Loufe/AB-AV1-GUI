@@ -1,0 +1,13 @@
+[package]
+name = "crfty-engine"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+publish.workspace = true
+
+[dependencies]
+crfty-core = { path = "../crfty-core", version = "=3.0.0-alpha.0" }
+
+[lints]
+workspace = true

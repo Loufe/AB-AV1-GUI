@@ -1,0 +1,20 @@
+/target/
+
+# Editors and operating systems
+.idea/
+.vscode/
+*.swp
+*.swo
+.DS_Store
+Thumbs.db
+
+# Application-owned runtime data
+/logs/
+/vendor/
+*.log
+*.tmp
+*.bak
+
+# Frontend artifacts (future Tauri shell)
+/ui/node_modules/
+/ui/dist/
