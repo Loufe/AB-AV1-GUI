@@ -18,5 +18,13 @@ fn app_info() -> AppInfo {
 /// bindings-export test so the two can never drift.
 #[must_use]
 pub fn specta_builder() -> Builder<tauri::Wry> {
-    Builder::<tauri::Wry>::new().commands(collect_commands![app_info])
+    Builder::<tauri::Wry>::new()
+        .commands(collect_commands![app_info])
+        // Registered explicitly until the subscribe command references them:
+        // the frontend fold reducer builds against these before the engine
+        // bridge lands.
+        .typ::<crfty_core::DurableState>()
+        .typ::<crfty_core::DurableDelta>()
+        .typ::<crfty_core::EphemeralDelta>()
+        .typ::<crfty_core::SessionState>()
 }

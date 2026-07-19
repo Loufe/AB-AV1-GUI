@@ -41,7 +41,9 @@ pub struct Crf(pub u32);
 pub struct AnalysisProfile {
     pub preset: u8,
     pub max_encoded_percent_basis_points: u32,
+    #[specta(type = Option<crate::JsNumber>)]
     pub samples: Option<u64>,
+    #[specta(type = crate::JsNumber)]
     pub sample_duration_ms: u64,
     pub thorough: bool,
     pub ab_av1_revision: String,
@@ -135,8 +137,10 @@ impl ExecutionSettings {
 pub struct SearchMeasurement {
     pub crf: Crf,
     pub score: VmafScore,
+    #[specta(type = crate::JsNumber)]
     pub predicted_size: u64,
     pub predicted_percent_basis_points: u32,
+    #[specta(type = crate::JsNumber)]
     pub predicted_duration_ms: u64,
     pub from_cache: bool,
 }

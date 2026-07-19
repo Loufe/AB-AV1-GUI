@@ -9,15 +9,31 @@ pub struct ContentKey(pub String);
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, specta::Type)]
 pub enum FileSystemId {
-    Unix { device: u64, inode: u64 },
-    WindowsLowResolution { volume_serial: u32, file_index: u64 },
-    WindowsHighResolution { volume_serial: u64, file_id: u128 },
+    Unix {
+        #[specta(type = crate::JsNumber)]
+        device: u64,
+        #[specta(type = crate::JsNumber)]
+        inode: u64,
+    },
+    WindowsLowResolution {
+        volume_serial: u32,
+        #[specta(type = crate::JsNumber)]
+        file_index: u64,
+    },
+    WindowsHighResolution {
+        #[specta(type = crate::JsNumber)]
+        volume_serial: u64,
+        #[specta(type = crate::JsNumber)]
+        file_id: u128,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, specta::Type)]
 pub struct DestructiveIdentity {
     pub file_id: FileSystemId,
+    #[specta(type = crate::JsNumber)]
     pub size: u64,
+    #[specta(type = Option<crate::JsNumber>)]
     pub modified_ns: Option<u128>,
 }
 

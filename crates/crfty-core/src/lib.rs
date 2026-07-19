@@ -16,6 +16,14 @@ mod output;
 mod reducer;
 mod state;
 
+/// Export-only override target for `#[specta(type = ...)]` on integers wider
+/// than 32 bits. Tauri's JSON transport delivers every integer as a JavaScript
+/// `number`, so generated bindings must say `number` — never `bigint`. Values
+/// are exact below 2^53; the only fields that can exceed that bound are
+/// filesystem-identity internals the frontend treats as opaque and never sends
+/// back. Do not use this alias as a runtime type.
+pub type JsNumber = u32;
+
 pub use job::{
     AnalysisAttempt, AnalysisProfile, AnalysisResult, ClaimedJob, Crf, ExecutionSettings, JobPhase,
     JobSpec, Operation, OutputTarget, SearchMeasurement, ToolRevisions, VmafScore, VmafTarget,

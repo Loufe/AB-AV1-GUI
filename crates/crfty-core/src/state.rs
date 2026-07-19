@@ -21,7 +21,7 @@ macro_rules! numeric_id {
             Deserialize,
             specta::Type,
         )]
-        pub struct $name(pub u64);
+        pub struct $name(#[specta(type = crate::JsNumber)] pub u64);
     };
 }
 
@@ -123,6 +123,7 @@ pub enum SessionState {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, specta::Type)]
 pub struct Telemetry {
     pub run_id: RunId,
+    #[specta(type = crate::JsNumber)]
     pub sequence: u64,
     pub phase: JobPhase,
     pub progress: JobProgress,
@@ -132,7 +133,7 @@ pub struct Telemetry {
 pub enum JobProgress {
     Phase,
     SearchBasisPoints(u32),
-    EncodePositionMs(u64),
+    EncodePositionMs(#[specta(type = crate::JsNumber)] u64),
 }
 
 pub fn fold(state: &mut DurableState, delta: &DurableDelta) {

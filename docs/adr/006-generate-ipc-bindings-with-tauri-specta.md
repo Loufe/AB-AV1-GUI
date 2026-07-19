@@ -54,6 +54,15 @@ Mechanics, fixed by this record:
   fails on `git diff`. The file is excluded from oxfmt/oxlint so it stays
   byte-identical to generator output. (Handy exports only during dev runs and
   has no freshness gate; issue #33 §16 records the lesson.)
+* Integers wider than 32 bits cross the wire as TypeScript `number`, declared
+  with `#[specta(type = crfty_core::JsNumber)]` field overrides. Tauri's JSON
+  transport delivers every integer as a JavaScript number, so the honest
+  alternatives specta-typescript 0.0.12 offers — a hard export error or
+  `bigint` types whose runtime values would still be numbers — are both worse.
+  Values are exact below 2^53; ids are counters and sizes stay far under it.
+  The only fields that can exceed the bound are filesystem-identity internals
+  (`modified_ns`, Windows `file_id`), which the frontend treats as opaque and
+  never sends back.
 * The wire payload is `Snapshot | Durable | Ephemeral | Degraded | EngineFatal`,
   wrapped with a per-connection sequence number assigned by the shell forwarder.
   Driver effects never cross the boundary.
