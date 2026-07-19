@@ -1,6 +1,8 @@
 import {
   ChartColumn,
+  FlaskConical,
   FolderSearch,
+  GripVertical,
   History,
   ListVideo,
   Settings,
@@ -9,8 +11,11 @@ import {
 
 export type ViewId = "queue" | "analysis" | "history" | "statistics" | "settings";
 
-export interface ViewDefinition {
-  id: ViewId;
+/** Dev-build-only workshop views (kitchen sink, spikes). */
+export type DevViewId = "kitchen-sink" | "spike-drag";
+
+export interface ViewDefinition<Id extends string = ViewId> {
+  id: Id;
   label: string;
   icon: LucideIcon;
 }
@@ -21,4 +26,9 @@ export const VIEWS: readonly ViewDefinition[] = [
   { id: "history", label: "History", icon: History },
   { id: "statistics", label: "Statistics", icon: ChartColumn },
   { id: "settings", label: "Settings", icon: Settings },
+];
+
+export const DEV_VIEWS: readonly ViewDefinition<DevViewId>[] = [
+  { id: "kitchen-sink", label: "Kitchen sink", icon: FlaskConical },
+  { id: "spike-drag", label: "Drag spike", icon: GripVertical },
 ];

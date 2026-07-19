@@ -3,7 +3,7 @@ import { Toaster } from "sonner";
 
 import { ErrorBoundary } from "@/components/error-boundary";
 import { Sidebar } from "@/components/layout/sidebar";
-import type { ViewId } from "@/components/layout/views";
+import type { DevViewId, ViewId } from "@/components/layout/views";
 import { AnalysisView } from "@/features/analysis";
 import { HistoryView } from "@/features/history";
 import { QueueView } from "@/features/queue";
@@ -14,10 +14,24 @@ import { getTheme, setTheme, watchSystemTheme, type Theme } from "@/lib/theme";
 const THEME_ORDER: Theme[] = ["system", "light", "dark"];
 
 // Dev-only workshop (#36 D10): the DEV gate is statically replaced in
-// release builds, so the dynamic import and its chunk are eliminated.
-const KitchenSink = import.meta.env.DEV ? lazy(() => import("./dev/kitchen-sink")) : null;
+// release builds, so the dynamic imports and their chunks are eliminated.
+const DEV_COMPONENTS: Record<
+  DevViewId,
+  { label: string; Component: React.LazyExoticComponent<() => React.ReactNode> }
+> | null = import.meta.env.DEV
+  ? {
+      "kitchen-sink": {
+        label: "kitchen sink",
+        Component: lazy(() => import("./dev/kitchen-sink")),
+      },
+      "spike-drag": {
+        label: "drag spike",
+        Component: lazy(() => import("./dev/spike-drag")),
+      },
+    }
+  : null;
 
-type AppView = ViewId | "kitchen-sink";
+type AppView = ViewId | DevViewId;
 
 const VIEW_COMPONENTS: Record<ViewId, { label: string; Component: () => React.ReactNode }> = {
   queue: { label: "Queue view", Component: QueueView },
@@ -26,6 +40,10 @@ const VIEW_COMPONENTS: Record<ViewId, { label: string; Component: () => React.Re
   statistics: { label: "Statistics view", Component: StatisticsView },
   settings: { label: "Settings view", Component: SettingsView },
 };
+
+function isDevView(view: AppView): view is DevViewId {
+  return view === "kitchen-sink" || view === "spike-drag";
+}
 
 export default function App() {
   const [activeView, setActiveView] = useState<AppView>("queue");
@@ -46,26 +64,29 @@ export default function App() {
         onSelectView={setActiveView}
         theme={theme}
         onCycleTheme={cycleTheme}
-        showKitchenSink={KitchenSink !== null}
+        showDevViews={DEV_COMPONENTS !== null}
       />
       <main className="flex-1 overflow-y-auto">
-        {activeView === "kitchen-sink" && KitchenSink !== null ? (
-          <ErrorBoundary key="kitchen-sink" label="kitchen sink">
-            <Suspense fallback={null}>
-              <KitchenSink />
-            </Suspense>
-          </ErrorBoundary>
-        ) : (
-          activeView !== "kitchen-sink" &&
-          (() => {
-            const { label, Component } = VIEW_COMPONENTS[activeView];
-            return (
-              <ErrorBoundary key={activeView} label={label}>
-                <Component />
-              </ErrorBoundary>
-            );
-          })()
-        )}
+        {isDevView(activeView)
+          ? DEV_COMPONENTS !== null &&
+            (() => {
+              const { label, Component } = DEV_COMPONENTS[activeView];
+              return (
+                <ErrorBoundary key={activeView} label={label}>
+                  <Suspense fallback={null}>
+                    <Component />
+                  </Suspense>
+                </ErrorBoundary>
+              );
+            })()
+          : (() => {
+              const { label, Component } = VIEW_COMPONENTS[activeView];
+              return (
+                <ErrorBoundary key={activeView} label={label}>
+                  <Component />
+                </ErrorBoundary>
+              );
+            })()}
       </main>
       <Toaster position="bottom-right" theme={theme} />
     </div>

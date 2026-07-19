@@ -1,18 +1,20 @@
-import { FlaskConical, Monitor, Moon, Sun } from "lucide-react";
+import { Monitor, Moon, Sun } from "lucide-react";
 
-import { VIEWS, type ViewId } from "@/components/layout/views";
+import { DEV_VIEWS, VIEWS, type DevViewId, type ViewId } from "@/components/layout/views";
 import type { Theme } from "@/lib/theme";
 import { cn } from "@/lib/utils";
 
 const THEME_ICONS = { system: Monitor, light: Sun, dark: Moon } as const;
 
+type AnyViewId = ViewId | DevViewId;
+
 interface SidebarProps {
-  activeView: ViewId | "kitchen-sink";
-  onSelectView: (view: ViewId | "kitchen-sink") => void;
+  activeView: AnyViewId;
+  onSelectView: (view: AnyViewId) => void;
   theme: Theme;
   onCycleTheme: () => void;
-  /** Dev builds only: shows the kitchen-sink workshop entry. */
-  showKitchenSink: boolean;
+  /** Dev builds only: shows the workshop entries (kitchen sink, spikes). */
+  showDevViews: boolean;
 }
 
 export function Sidebar({
@@ -20,7 +22,7 @@ export function Sidebar({
   onSelectView,
   theme,
   onCycleTheme,
-  showKitchenSink,
+  showDevViews,
 }: SidebarProps) {
   const ThemeIcon = THEME_ICONS[theme];
 
@@ -30,40 +32,27 @@ export function Sidebar({
         <span className="text-lg font-medium">CRFty</span>
       </div>
       <nav className="flex flex-1 flex-col gap-0.5 px-2" aria-label="Views">
-        {VIEWS.map(({ id, label, icon: Icon }) => (
-          <button
-            key={id}
-            type="button"
-            onClick={() => onSelectView(id)}
-            aria-current={id === activeView ? "page" : undefined}
-            className={cn(
-              "flex items-center gap-2.5 rounded-md px-2.5 py-1.5 text-sm transition-colors duration-(--duration-fast)",
-              id === activeView
-                ? "bg-muted text-foreground"
-                : "text-muted-foreground hover:bg-muted/60 hover:text-foreground",
-            )}
-          >
-            <Icon className="size-4 shrink-0" aria-hidden="true" />
-            {label}
-          </button>
+        {VIEWS.map((view) => (
+          <NavButton
+            key={view.id}
+            icon={view.icon}
+            label={view.label}
+            active={view.id === activeView}
+            onClick={() => onSelectView(view.id)}
+          />
         ))}
       </nav>
-      {showKitchenSink && (
-        <div className="px-2 pb-1">
-          <button
-            type="button"
-            onClick={() => onSelectView("kitchen-sink")}
-            aria-current={activeView === "kitchen-sink" ? "page" : undefined}
-            className={cn(
-              "flex w-full items-center gap-2.5 rounded-md px-2.5 py-1.5 text-sm transition-colors duration-(--duration-fast)",
-              activeView === "kitchen-sink"
-                ? "bg-muted text-foreground"
-                : "text-muted-foreground hover:bg-muted/60 hover:text-foreground",
-            )}
-          >
-            <FlaskConical className="size-4 shrink-0" aria-hidden="true" />
-            Kitchen sink
-          </button>
+      {showDevViews && (
+        <div className="flex flex-col gap-0.5 px-2 pb-1">
+          {DEV_VIEWS.map((view) => (
+            <NavButton
+              key={view.id}
+              icon={view.icon}
+              label={view.label}
+              active={view.id === activeView}
+              onClick={() => onSelectView(view.id)}
+            />
+          ))}
         </div>
       )}
       <div className="border-t border-border p-2">
@@ -77,5 +66,34 @@ export function Sidebar({
         </button>
       </div>
     </aside>
+  );
+}
+
+function NavButton({
+  icon: Icon,
+  label,
+  active,
+  onClick,
+}: {
+  icon: React.ComponentType<{ className?: string; "aria-hidden"?: boolean | "true" }>;
+  label: string;
+  active: boolean;
+  onClick: () => void;
+}) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      aria-current={active ? "page" : undefined}
+      className={cn(
+        "flex w-full items-center gap-2.5 rounded-md px-2.5 py-1.5 text-sm transition-colors duration-(--duration-fast)",
+        active
+          ? "bg-muted text-foreground"
+          : "text-muted-foreground hover:bg-muted/60 hover:text-foreground",
+      )}
+    >
+      <Icon className="size-4 shrink-0" aria-hidden="true" />
+      {label}
+    </button>
   );
 }
