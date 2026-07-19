@@ -1,4 +1,4 @@
-import { DragDropProvider } from "@dnd-kit/react";
+import { DragDropProvider, DragOverlay } from "@dnd-kit/react";
 import { useSortable } from "@dnd-kit/react/sortable";
 import { useState } from "react";
 
@@ -10,9 +10,11 @@ import { ROW_HEIGHT, SpikeRowView } from "./row";
  * developed rewrite (pre-1.0). Virtualized sorting is an open upstream issue
  * (dnd-kit#1720), so this candidate tests the sanctioned fallback instead:
  * all 500 rows rendered plainly with a content-visibility hedge. Keyboard
- * sensor, auto-scroll, overlay feedback, and optimistic sort animation are
- * built in. Same honesty gap as legacy: invalid moves preview during the
- * drag and are only rejected on drop.
+ * sensor, auto-scroll, and optimistic sort animation are built in; the drag
+ * representation is an owned, always-mounted DragOverlay per the #33
+ * contract (folders show their file count while dragged). Same honesty gap
+ * as legacy: invalid moves preview during the drag and are only rejected on
+ * drop.
  */
 export function DndKitReactSpike() {
   const [rows, setRows] = useState<SpikeRow[]>(generateRows);
@@ -36,18 +38,33 @@ export function DndKitReactSpike() {
           <SortableRow key={row.id} row={row} index={index} />
         ))}
       </div>
+      <DragOverlay>
+        {(source) => {
+          const row = rows.find((r) => r.id === source.id);
+          if (!row) return null;
+          const fileCount =
+            row.kind === "folder" ? rows.filter((r) => r.parentId === row.id).length : 0;
+          return (
+            <SpikeRowView row={row} isOverlay>
+              {row.kind === "folder" && (
+                <span className="ml-auto text-xs text-muted-foreground">{fileCount} files</span>
+              )}
+            </SpikeRowView>
+          );
+        }}
+      </DragOverlay>
     </DragDropProvider>
   );
 }
 
 function SortableRow({ row, index }: { row: SpikeRow; index: number }) {
-  const { ref, handleRef, isDragging } = useSortable({ id: row.id, index });
+  const { ref, handleRef, isDragSource } = useSortable({ id: row.id, index });
 
   return (
     <SpikeRowView
       ref={ref}
       row={row}
-      isDragSource={isDragging}
+      isDragSource={isDragSource}
       style={{
         // Non-virtualized fallback hedge: off-screen rows skip layout/paint.
         contentVisibility: "auto",
