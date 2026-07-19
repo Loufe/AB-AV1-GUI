@@ -1,0 +1,435 @@
+use std::path::PathBuf;
+
+use crate::{
+    AppState, ClaimId, DurableDelta, ItemOutcome, OutputDelta, QueueItem, QueueItemId,
+    QueueItemState, RunId, SessionState, Telemetry, fold,
+};
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Command {
+    Queue(QueueCommand),
+    Session(SessionCommand),
+    Worker(WorkerCommand),
+    System(SystemCommand),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum QueueCommand {
+    Add {
+        item_id: QueueItemId,
+        input: PathBuf,
+    },
+    Remove {
+        item_id: QueueItemId,
+    },
+    Move {
+        item_id: QueueItemId,
+        before: Option<QueueItemId>,
+    },
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SessionCommand {
+    Start,
+    StopAfterCurrent,
+    ForceStop,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum WorkerCommand {
+    Claim {
+        item_id: QueueItemId,
+        claim_id: ClaimId,
+        run_id: RunId,
+    },
+    Started {
+        item_id: QueueItemId,
+        claim_id: ClaimId,
+        run_id: RunId,
+    },
+    Output(OutputDelta),
+    Terminal {
+        item_id: QueueItemId,
+        claim_id: ClaimId,
+        run_id: RunId,
+        outcome: ItemOutcome,
+        final_telemetry: Option<Telemetry>,
+    },
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SystemCommand {
+    Shutdown,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum EphemeralDelta {
+    SessionChanged(SessionState),
+    Telemetry(Telemetry),
+    CommandRejected { reason: String },
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Effect {
+    StartWorker,
+    KillActiveRun { run_id: RunId },
+    StopDriver,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Reply {
+    Accepted,
+    Rejected { reason: String },
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Applied {
+    pub durable: Vec<DurableDelta>,
+    pub ephemeral: Vec<EphemeralDelta>,
+    pub effects: Vec<Effect>,
+    pub reply: Reply,
+}
+
+impl Applied {
+    fn accepted() -> Self {
+        Self {
+            durable: Vec::new(),
+            ephemeral: Vec::new(),
+            effects: Vec::new(),
+            reply: Reply::Accepted,
+        }
+    }
+
+    fn rejected(reason: impl Into<String>) -> Self {
+        let reason = reason.into();
+        Self {
+            durable: Vec::new(),
+            ephemeral: vec![EphemeralDelta::CommandRejected {
+                reason: reason.clone(),
+            }],
+            effects: Vec::new(),
+            reply: Reply::Rejected { reason },
+        }
+    }
+}
+
+pub fn apply(state: &mut AppState, command: Command) -> Applied {
+    let applied = match command {
+        Command::Queue(command) => apply_queue(state, command),
+        Command::Session(command) => apply_session(state, command),
+        Command::Worker(command) => apply_worker(state, command),
+        Command::System(SystemCommand::Shutdown) => {
+            let mut applied = Applied::accepted();
+            applied.effects.push(Effect::StopDriver);
+            applied
+        }
+    };
+    for delta in &applied.durable {
+        fold(&mut state.durable, delta);
+    }
+    for delta in &applied.ephemeral {
+        match delta {
+            EphemeralDelta::SessionChanged(session) => state.session = session.clone(),
+            EphemeralDelta::Telemetry(telemetry) => {
+                state.telemetry.insert(telemetry.run_id, telemetry.clone());
+            }
+            EphemeralDelta::CommandRejected { .. } => {}
+        }
+    }
+    applied
+}
+
+fn apply_queue(state: &AppState, command: QueueCommand) -> Applied {
+    match command {
+        QueueCommand::Add { item_id, input } => {
+            if state.durable.queue.iter().any(|item| item.id == item_id) {
+                return Applied::rejected("queue item id already exists");
+            }
+            let mut applied = Applied::accepted();
+            applied.durable.push(DurableDelta::QueueAdded {
+                item: QueueItem {
+                    id: item_id,
+                    input,
+                    state: QueueItemState::Queued,
+                },
+            });
+            applied
+        }
+        QueueCommand::Remove { item_id } => {
+            let Some(item) = find_item(state, item_id) else {
+                return Applied::rejected("queue item does not exist");
+            };
+            if !matches!(
+                item.state,
+                QueueItemState::Queued | QueueItemState::Finished(_)
+            ) {
+                return Applied::rejected("active queue item cannot be removed");
+            }
+            let mut applied = Applied::accepted();
+            applied.durable.push(DurableDelta::QueueRemoved { item_id });
+            applied
+        }
+        QueueCommand::Move { item_id, before } => {
+            let Some(item) = find_item(state, item_id) else {
+                return Applied::rejected("queue item does not exist");
+            };
+            if !matches!(item.state, QueueItemState::Queued) {
+                return Applied::rejected("only queued items can be reordered");
+            }
+            if let Some(before_id) = before {
+                let Some(before_item) = find_item(state, before_id) else {
+                    return Applied::rejected("queue destination does not exist");
+                };
+                if !matches!(before_item.state, QueueItemState::Queued) {
+                    return Applied::rejected("queue destination is active or finished");
+                }
+            }
+            let mut applied = Applied::accepted();
+            applied
+                .durable
+                .push(DurableDelta::QueueMoved { item_id, before });
+            applied
+        }
+    }
+}
+
+fn apply_session(state: &AppState, command: SessionCommand) -> Applied {
+    match command {
+        SessionCommand::Start if state.session == SessionState::Idle => {
+            let mut applied = Applied::accepted();
+            applied
+                .ephemeral
+                .push(EphemeralDelta::SessionChanged(SessionState::Running));
+            applied.effects.push(Effect::StartWorker);
+            applied
+        }
+        SessionCommand::Start => Applied::rejected("session is already active"),
+        SessionCommand::StopAfterCurrent if state.session == SessionState::Running => {
+            let mut applied = Applied::accepted();
+            applied.ephemeral.push(EphemeralDelta::SessionChanged(
+                SessionState::StopAfterCurrent,
+            ));
+            applied
+        }
+        SessionCommand::StopAfterCurrent => Applied::rejected("session is not running"),
+        SessionCommand::ForceStop
+            if matches!(
+                state.session,
+                SessionState::Running | SessionState::StopAfterCurrent
+            ) =>
+        {
+            let mut applied = Applied::accepted();
+            applied
+                .ephemeral
+                .push(EphemeralDelta::SessionChanged(SessionState::ForceStopping));
+            if let Some(run_id) = active_run(state) {
+                applied.effects.push(Effect::KillActiveRun { run_id });
+            }
+            applied
+        }
+        SessionCommand::ForceStop => Applied::rejected("session is not running"),
+    }
+}
+
+fn apply_worker(state: &AppState, command: WorkerCommand) -> Applied {
+    match command {
+        WorkerCommand::Claim {
+            item_id,
+            claim_id,
+            run_id,
+        } => {
+            if state.session != SessionState::Running {
+                return Applied::rejected("session is not accepting another claim");
+            }
+            let Some(item) = find_item(state, item_id) else {
+                return Applied::rejected("queue item does not exist");
+            };
+            if !matches!(item.state, QueueItemState::Queued) {
+                return Applied::rejected("queue item is not claimable");
+            }
+            if active_run(state).is_some() {
+                return Applied::rejected("another queue item is active");
+            }
+            let mut applied = Applied::accepted();
+            applied.durable.push(DurableDelta::ItemClaimed {
+                item_id,
+                claim_id,
+                run_id,
+            });
+            applied
+        }
+        WorkerCommand::Started {
+            item_id,
+            claim_id,
+            run_id,
+        } => transition_active(state, item_id, claim_id, run_id, |applied| {
+            applied.durable.push(DurableDelta::ItemRunning {
+                item_id,
+                claim_id,
+                run_id,
+            });
+        }),
+        WorkerCommand::Output(output_delta) => {
+            let run_id = output_run_id(&output_delta);
+            if active_run(state) != Some(run_id) {
+                return Applied::rejected("output event does not belong to the active run");
+            }
+            if let Err(reason) = validate_output_delta(state, &output_delta) {
+                return Applied::rejected(reason);
+            }
+            let mut applied = Applied::accepted();
+            applied.durable.push(DurableDelta::Output(output_delta));
+            applied
+        }
+        WorkerCommand::Terminal {
+            item_id,
+            claim_id,
+            run_id,
+            outcome,
+            final_telemetry,
+        } => transition_active(state, item_id, claim_id, run_id, |applied| {
+            let unsettled = state
+                .durable
+                .outputs
+                .get(&run_id)
+                .is_some_and(|transaction| !transaction.is_settled());
+            if unsettled {
+                applied.reply = Reply::Rejected {
+                    reason: "output transaction is not settled".to_owned(),
+                };
+                applied.ephemeral.push(EphemeralDelta::CommandRejected {
+                    reason: "output transaction is not settled".to_owned(),
+                });
+                return;
+            }
+            if let Some(telemetry) = final_telemetry {
+                applied.ephemeral.push(EphemeralDelta::Telemetry(telemetry));
+            }
+            applied.durable.push(DurableDelta::ItemFinished {
+                item_id,
+                claim_id,
+                run_id,
+                outcome,
+            });
+            applied
+                .ephemeral
+                .push(EphemeralDelta::SessionChanged(SessionState::Idle));
+        }),
+    }
+}
+
+fn transition_active(
+    state: &AppState,
+    item_id: QueueItemId,
+    claim_id: ClaimId,
+    run_id: RunId,
+    update: impl FnOnce(&mut Applied),
+) -> Applied {
+    let Some(item) = find_item(state, item_id) else {
+        return Applied::rejected("queue item does not exist");
+    };
+    let matching = matches!(
+        item.state,
+        QueueItemState::Claimed {
+            claim_id: current_claim,
+            run_id: current_run,
+        } | QueueItemState::Running {
+            claim_id: current_claim,
+            run_id: current_run,
+        } if current_claim == claim_id && current_run == run_id
+    );
+    if !matching {
+        return Applied::rejected("worker event has a stale claim or run id");
+    }
+    let mut applied = Applied::accepted();
+    update(&mut applied);
+    applied
+}
+
+fn find_item(state: &AppState, item_id: QueueItemId) -> Option<&QueueItem> {
+    state.durable.queue.iter().find(|item| item.id == item_id)
+}
+
+fn active_run(state: &AppState) -> Option<RunId> {
+    state
+        .durable
+        .queue
+        .iter()
+        .find_map(|item| match item.state {
+            QueueItemState::Claimed { run_id, .. } | QueueItemState::Running { run_id, .. } => {
+                Some(run_id)
+            }
+            QueueItemState::Queued | QueueItemState::Finished(_) => None,
+        })
+}
+
+fn output_run_id(delta: &OutputDelta) -> RunId {
+    match delta {
+        OutputDelta::EncodeStarted { transaction } => transaction.run_id,
+        OutputDelta::OutputReady { run_id, .. }
+        | OutputDelta::OutputCommitted { run_id, .. }
+        | OutputDelta::RetireOriginalIntent { run_id }
+        | OutputDelta::OriginalRetired { run_id }
+        | OutputDelta::Abandoned { run_id }
+        | OutputDelta::Conflict { run_id, .. } => *run_id,
+    }
+}
+
+fn validate_output_delta(state: &AppState, delta: &OutputDelta) -> Result<(), &'static str> {
+    let run_id = output_run_id(delta);
+    let current = state.durable.outputs.get(&run_id);
+    match (current, delta) {
+        (None, OutputDelta::EncodeStarted { transaction })
+            if transaction.state == crate::OutputState::Started =>
+        {
+            Ok(())
+        }
+        (None, OutputDelta::EncodeStarted { .. }) => {
+            Err("new output transaction must begin in started state")
+        }
+        (None, _) => Err("output transaction has not started"),
+        (Some(_), OutputDelta::EncodeStarted { .. }) => {
+            Err("output transaction has already started")
+        }
+        (
+            Some(transaction),
+            OutputDelta::OutputReady {
+                staging_identity, ..
+            },
+        ) if transaction.state == crate::OutputState::Started && staging_identity.size > 0 => {
+            Ok(())
+        }
+        (Some(transaction), OutputDelta::OutputCommitted { final_identity, .. }) => {
+            match &transaction.state {
+                crate::OutputState::Ready { staging_identity }
+                    if final_identity.content_key == staging_identity.content_key
+                        && final_identity.size == staging_identity.size =>
+                {
+                    Ok(())
+                }
+                crate::OutputState::Ready { .. } => {
+                    Err("committed output does not match the ready staging artifact")
+                }
+                _ => Err("output is not ready for commit"),
+            }
+        }
+        (Some(transaction), OutputDelta::RetireOriginalIntent { .. })
+            if transaction.replacement == crate::Replacement::RetireOriginal
+                && matches!(transaction.state, crate::OutputState::Committed { .. }) =>
+        {
+            Ok(())
+        }
+        (Some(transaction), OutputDelta::OriginalRetired { .. })
+            if matches!(transaction.state, crate::OutputState::RetireIntent { .. }) =>
+        {
+            Ok(())
+        }
+        (Some(transaction), OutputDelta::Abandoned { .. })
+            if transaction.state == crate::OutputState::Started =>
+        {
+            Ok(())
+        }
+        (Some(transaction), OutputDelta::Conflict { .. }) if !transaction.is_settled() => Ok(()),
+        (Some(_), _) => Err("output event is invalid for the current ledger state"),
+    }
+}
