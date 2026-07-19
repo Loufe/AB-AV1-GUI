@@ -24,6 +24,10 @@ import {
   SelectItem,
   SelectTrigger,
   SelectValue,
+  Tooltip,
+  TooltipContent,
+  TooltipProvider,
+  TooltipTrigger,
 } from "@/components/ui";
 import {
   formatCompactTime,
@@ -87,10 +91,13 @@ const COLS =
 function StatusText({
   tone,
   icon: Icon,
+  tooltip,
   children,
 }: {
   tone: "success" | "warning" | "destructive" | "muted";
   icon?: React.ComponentType<{ className?: string }>;
+  /** Reason/remediation detail (D11: reasons ride the item, not the logs). */
+  tooltip?: React.ReactNode;
   children: React.ReactNode;
 }) {
   const toneClass = {
@@ -99,11 +106,55 @@ function StatusText({
     destructive: "text-destructive",
     muted: "text-muted-foreground",
   }[tone];
+  if (!tooltip) {
+    return (
+      <span className={cn("flex min-w-0 items-center gap-1.5", toneClass)}>
+        {Icon && <Icon className="size-3.5 shrink-0" aria-hidden="true" />}
+        <span className="truncate">{children}</span>
+      </span>
+    );
+  }
+  // Dotted underline = "more here"; the trigger is focusable so the detail
+  // is reachable by keyboard, not hover-only (D8).
   return (
-    <span className={cn("flex min-w-0 items-center gap-1.5", toneClass)}>
-      {Icon && <Icon className="size-3.5 shrink-0" aria-hidden="true" />}
-      <span className="truncate">{children}</span>
-    </span>
+    <Tooltip>
+      <TooltipTrigger
+        render={
+          <span
+            tabIndex={0}
+            className={cn("flex min-w-0 cursor-help items-center gap-1.5", toneClass)}
+          />
+        }
+      >
+        {Icon && <Icon className="size-3.5 shrink-0" aria-hidden="true" />}
+        <span className="truncate underline decoration-current/40 decoration-dotted underline-offset-2">
+          {children}
+        </span>
+      </TooltipTrigger>
+      <TooltipContent className="flex-col items-start gap-1">{tooltip}</TooltipContent>
+    </Tooltip>
+  );
+}
+
+/** Estimated times explain their basis on demand — no tilde jargon (D11). */
+const CONFIDENCE_TOOLTIP: Record<Exclude<Confidence, "exact">, string> = {
+  estimate: "Estimated from similar files you've converted (same codec and resolution).",
+  rough: "Rough estimate — little history for this codec yet, based on averages.",
+};
+
+function TimeCell({ seconds, confidence }: { seconds: number; confidence: Confidence }) {
+  const value = seconds > 0 ? formatCompactTime(seconds) : "—";
+  const className = cn("text-right tabular-nums", CONFIDENCE_CLASS[confidence]);
+  if (seconds <= 0 || confidence === "exact") {
+    return <span className={className}>{value}</span>;
+  }
+  return (
+    <Tooltip>
+      <TooltipTrigger render={<span tabIndex={0} className={cn(className, "cursor-help")} />}>
+        {value}
+      </TooltipTrigger>
+      <TooltipContent>{CONFIDENCE_TOOLTIP[confidence]}</TooltipContent>
+    </Tooltip>
   );
 }
 
@@ -130,7 +181,19 @@ const SEASON_FILES: MockFileRow[] = [
     preciseCrf: false,
     output: "Replace",
     status: (
-      <StatusText tone="success" icon={CircleCheck}>
+      <StatusText
+        tone="success"
+        icon={CircleCheck}
+        tooltip={
+          <>
+            <p className="font-medium">Converted successfully</p>
+            <p>VMAF 95.2 at CRF 24 · encoded in 1h 12m</p>
+            <p className="opacity-70">
+              {formatFileSize(3.21 * GIB)} → {formatFileSize(1.34 * GIB)} (−58%)
+            </p>
+          </>
+        }
+      >
         Done · saved {formatFileSize(1.87 * GIB)}
       </StatusText>
     ),
@@ -180,7 +243,20 @@ const SEASON_FILES: MockFileRow[] = [
     preciseCrf: false,
     output: "Replace",
     status: (
-      <StatusText tone="warning" icon={CircleSlash}>
+      <StatusText
+        tone="warning"
+        icon={CircleSlash}
+        tooltip={
+          <>
+            <p className="font-medium">Not worthwhile to convert</p>
+            <p>
+              No CRF reached VMAF 95 with meaningful savings — the search fell back to 90 before
+              giving up.
+            </p>
+            <p className="opacity-70">Lower the minimum VMAF in Settings to convert it anyway.</p>
+          </>
+        }
+      >
         Skipped · not worthwhile
       </StatusText>
     ),
@@ -195,7 +271,19 @@ const SEASON_FILES: MockFileRow[] = [
     preciseCrf: false,
     output: "Replace",
     status: (
-      <StatusText tone="destructive" icon={CircleAlert}>
+      <StatusText
+        tone="destructive"
+        icon={CircleAlert}
+        tooltip={
+          <>
+            <p className="font-medium">Input unreadable</p>
+            <p>ffprobe could not parse the container — the file may be corrupt or truncated.</p>
+            <p className="opacity-70">
+              Try remuxing it (e.g. to MKV) and re-adding. Full details are in the log.
+            </p>
+          </>
+        }
+      >
         Error · input unreadable
       </StatusText>
     ),
@@ -219,16 +307,22 @@ function FileRow({ row }: { row: MockFileRow }) {
       </span>
       <span className="truncate text-muted-foreground">{row.streams}</span>
       <span className="text-right tabular-nums">{formatFileSize(row.sizeBytes)}</span>
-      <span className={cn("text-right tabular-nums", CONFIDENCE_CLASS[row.timeConfidence])}>
-        {row.timeSec > 0 ? formatCompactTime(row.timeSec) : "—"}
-      </span>
+      <TimeCell seconds={row.timeSec} confidence={row.timeConfidence} />
       <span className="flex items-center gap-1.5">
         {row.operation}
         {row.preciseCrf && (
-          <span
-            className="size-1.5 rounded-full bg-primary"
-            title="Precise CRF cached from analysis"
-          />
+          <Tooltip>
+            <TooltipTrigger
+              render={
+                <span tabIndex={0} className="-m-1 flex size-4 items-center justify-center" />
+              }
+            >
+              <span className="size-1.5 rounded-full bg-primary" />
+            </TooltipTrigger>
+            <TooltipContent>
+              Precise CRF cached from analysis — encoding skips the quality search.
+            </TooltipContent>
+          </Tooltip>
         )}
         <ChevronDown className="size-3 text-muted-foreground" aria-hidden="true" />
       </span>
@@ -455,14 +549,17 @@ export function QueueSection() {
         (drives the properties card). Operation cells: chevron = in-cell selector, orange dot =
         precise CRF cached (replaces &quot;Analyze+Convert&quot;). Time column steps down the
         confidence ramp instead of ~/~~ tildes. Reasons ride the status cell; totals are the footer
-        row.
+        row. Dotted underline = tooltip with the full story — hover it or Tab to it (Done, Skipped,
+        Error, estimated times, and the CRF dot all carry one).
       </p>
-      <div className="rounded-lg border border-border bg-background p-4">
-        <QueuePanel />
-      </div>
-      <div className="dark rounded-lg border border-border bg-background p-4 text-foreground">
-        <QueuePanel />
-      </div>
+      <TooltipProvider>
+        <div className="rounded-lg border border-border bg-background p-4">
+          <QueuePanel />
+        </div>
+        <div className="dark rounded-lg border border-border bg-background p-4 text-foreground">
+          <QueuePanel />
+        </div>
+      </TooltipProvider>
     </Section>
   );
 }
