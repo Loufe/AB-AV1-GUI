@@ -1,3 +1,4 @@
+import { Clock, Eye, FileCheck2, Gauge, HardDrive, TrendingDown } from "lucide-react";
 import { useId } from "react";
 import { Area, AreaChart, Bar, BarChart, CartesianGrid, LabelList, XAxis, YAxis } from "recharts";
 
@@ -93,13 +94,28 @@ const FILES_CONFIG = {
   files: { label: "Files", color: "var(--chart-1)" },
 } satisfies ChartConfig;
 
-function StatCard({ label, value }: { label: string; value: string }) {
+interface Metric {
+  label: string;
+  value: string;
+  icon: React.ComponentType<{ className?: string }>;
+}
+
+/**
+ * Summary metrics as one stat strip — a single card with divider-separated
+ * cells instead of six identical boxes (denser, no repeated chrome).
+ */
+function StatStrip({ metrics }: { metrics: Metric[] }) {
   return (
-    <Card size="sm" className="gap-1">
-      <CardHeader className="gap-0.5">
-        <CardDescription>{label}</CardDescription>
-        <CardTitle className="text-xl tabular-nums">{value}</CardTitle>
-      </CardHeader>
+    <Card className="grid grid-cols-6 gap-0 divide-x divide-border py-0">
+      {metrics.map(({ label, value, icon: Icon }) => (
+        <div key={label} className="flex flex-col gap-1 px-4 py-3">
+          <div className="flex items-center gap-1.5 text-muted-foreground">
+            <Icon className="size-3.5" aria-hidden="true" />
+            <span className="truncate text-xs">{label}</span>
+          </div>
+          <span className="text-xl font-medium tabular-nums">{value}</span>
+        </div>
+      ))}
     </Card>
   );
 }
@@ -247,21 +263,21 @@ function CodecBreakdownCard() {
 }
 
 function StatsPanel() {
-  const metrics = [
-    { label: "Space saved", value: formatFileSize(SUMMARY.savedBytes) },
-    { label: "Files converted", value: SUMMARY.totalFiles.toLocaleString() },
-    { label: "Average reduction", value: `${SUMMARY.avgReductionPct}%` },
-    { label: "Throughput", value: formatEfficiency(SUMMARY.savedBytes, SUMMARY.totalTimeSec) },
-    { label: "Encode time", value: formatCompactTime(SUMMARY.totalTimeSec) },
-    { label: "Average VMAF", value: SUMMARY.avgVmaf.toFixed(1) },
+  const metrics: Metric[] = [
+    { label: "Space saved", value: formatFileSize(SUMMARY.savedBytes), icon: HardDrive },
+    { label: "Files converted", value: SUMMARY.totalFiles.toLocaleString(), icon: FileCheck2 },
+    { label: "Avg reduction", value: `${SUMMARY.avgReductionPct}%`, icon: TrendingDown },
+    {
+      label: "Throughput",
+      value: formatEfficiency(SUMMARY.savedBytes, SUMMARY.totalTimeSec),
+      icon: Gauge,
+    },
+    { label: "Encode time", value: formatCompactTime(SUMMARY.totalTimeSec), icon: Clock },
+    { label: "Avg VMAF", value: SUMMARY.avgVmaf.toFixed(1), icon: Eye },
   ];
   return (
     <div className="flex flex-col gap-4">
-      <div className="grid grid-cols-3 gap-3 xl:grid-cols-6">
-        {metrics.map((m) => (
-          <StatCard key={m.label} {...m} />
-        ))}
-      </div>
+      <StatStrip metrics={metrics} />
       <CumulativeSavingsCard />
       <div className="grid grid-cols-2 gap-4">
         <ReductionHistogramCard />
