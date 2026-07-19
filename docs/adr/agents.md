@@ -26,7 +26,7 @@ Do NOT create an ADR for:
 
 ```markdown
 ---
-status: proposed | accepted | deprecated | superseded by NNN
+status: proposed | accepted
 date: YYYY-MM-DD
 ---
 
@@ -63,10 +63,9 @@ Chosen option: "[Option N]", because [justification].
 ## Rules
 
 1. **One decision per ADR** - Keep records focused
-2. **Immutable once accepted** - Create new ADRs to supersede, don't edit accepted decisions
-3. **Status lifecycle**: `proposed` → `accepted` → optionally `deprecated` or `superseded by NNN`
-4. **Include rejected options** - Document what was considered and why it wasn't chosen
-5. **Link related ADRs** - Reference prior decisions that informed this one
+2. **Replaced means deleted** - When a new decision replaces an old one, delete the old file and let the replacement take its number (git history preserves the old record). No `deprecated`/`superseded` tombstones
+3. **Include rejected options** - Document what was considered and why it wasn't chosen
+4. **Link related ADRs** - Reference prior decisions that informed this one
 
 ## Referencing ADRs
 
