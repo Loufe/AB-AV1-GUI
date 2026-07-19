@@ -2,18 +2,24 @@ use std::path::PathBuf;
 
 use crate::state::ConversionRun;
 use crate::{
-    AnalysisResult, AppState, ClaimId, ClaimedJob, DurableDelta, ExecutionSettings, ItemOutcome,
-    JobAction, JobSpec, MediaObservation, Operation, OutputDelta, OutputTarget, QueueItem,
-    QueueItemId, QueueItemState, ReservedJob, RunId, SessionState, Telemetry, fold,
-    select_job_action,
+    AnalysisResult, AppState, ClaimId, ClaimedJob, ConfigDelta, DecodeMode, DecodePreference,
+    DurableDelta, ExecutionSettings, ItemOutcome, JobAction, JobSpec, MediaObservation, Operation,
+    OutputDelta, OutputTarget, QueueItem, QueueItemId, QueueItemState, ReservedJob, RunId,
+    SessionState, Settings, Telemetry, fold, fold_config, select_job_action,
 };
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Command {
     Queue(QueueCommand),
     Session(SessionCommand),
+    Settings(SettingsCommand),
     Worker(WorkerCommand),
     System(SystemCommand),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum SettingsCommand {
+    Set { settings: Settings },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -101,6 +107,7 @@ pub enum EphemeralDelta {
 pub enum Effect {
     StartWorker,
     KillActiveRun { run_id: RunId },
+    WriteSettings { settings: Settings },
     StopDriver,
 }
 
@@ -116,6 +123,7 @@ pub enum Reply {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Applied {
     pub durable: Vec<DurableDelta>,
+    pub config: Vec<ConfigDelta>,
     pub ephemeral: Vec<EphemeralDelta>,
     pub effects: Vec<Effect>,
     pub reply: Reply,
@@ -125,6 +133,7 @@ impl Applied {
     fn accepted() -> Self {
         Self {
             durable: Vec::new(),
+            config: Vec::new(),
             ephemeral: Vec::new(),
             effects: Vec::new(),
             reply: Reply::Accepted,
@@ -135,6 +144,7 @@ impl Applied {
         let reason = reason.into();
         Self {
             durable: Vec::new(),
+            config: Vec::new(),
             ephemeral: vec![EphemeralDelta::CommandRejected {
                 reason: reason.clone(),
             }],
@@ -148,6 +158,7 @@ pub fn apply(state: &mut AppState, command: Command) -> Applied {
     let applied = match command {
         Command::Queue(command) => apply_queue(state, command),
         Command::Session(command) => apply_session(state, command),
+        Command::Settings(command) => apply_settings(state, command),
         Command::Worker(command) => apply_worker(state, command),
         Command::System(SystemCommand::Shutdown) => {
             let mut applied = Applied::accepted();
@@ -157,6 +168,9 @@ pub fn apply(state: &mut AppState, command: Command) -> Applied {
     };
     for delta in &applied.durable {
         fold(&mut state.durable, delta);
+    }
+    for delta in &applied.config {
+        fold_config(&mut state.settings, delta);
     }
     for delta in &applied.ephemeral {
         match delta {
@@ -171,6 +185,24 @@ pub fn apply(state: &mut AppState, command: Command) -> Applied {
         }
     }
     applied
+}
+
+fn apply_settings(state: &AppState, command: SettingsCommand) -> Applied {
+    match command {
+        SettingsCommand::Set { settings } => {
+            if let Err(reason) = settings.validate() {
+                return Applied::rejected(reason);
+            }
+            let mut applied = Applied::accepted();
+            if settings != state.settings {
+                applied.config.push(ConfigDelta::SettingsChanged {
+                    settings: settings.clone(),
+                });
+            }
+            applied.effects.push(Effect::WriteSettings { settings });
+            applied
+        }
+    }
 }
 
 fn apply_queue(state: &AppState, command: QueueCommand) -> Applied {
@@ -318,8 +350,15 @@ fn apply_worker(state: &AppState, command: WorkerCommand) -> Applied {
             claim_id,
             run_id,
             observation,
-            execution,
+            mut execution,
         } => {
+            execution.overwrite_existing = state.settings.output.overwrite_existing;
+            execution.decode_preference = if state.settings.hardware_decode {
+                DecodePreference::HardwarePreferred
+            } else {
+                execution.profile.decode_mode = DecodeMode::Software;
+                DecodePreference::SoftwareOnly
+            };
             if let Err(reason) = execution.validate() {
                 return Applied::rejected(reason);
             }

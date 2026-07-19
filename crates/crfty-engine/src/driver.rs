@@ -8,11 +8,14 @@ use std::{
 };
 
 use crfty_core::{
-    AppState, Command, DurableDelta, DurableState, Effect, EphemeralDelta, QueueItemState, Reply,
-    RunId, SystemCommand, Telemetry, apply,
+    AppSnapshot, AppState, Command, ConfigDelta, DurableDelta, Effect, EphemeralDelta,
+    QueueItemState, Reply, RunId, Settings, SystemCommand, Telemetry, apply,
 };
 
-use crate::journal::{DurabilityToken, JournalError, JournalWriter};
+use crate::{
+    config::ConfigStore,
+    journal::{DurabilityToken, JournalError, JournalWriter},
+};
 
 const DRIVER_CHANNEL_CAPACITY: usize = 64;
 const COMMAND_REPLY_CHANNEL_CAPACITY: usize = 0;
@@ -20,8 +23,9 @@ const DRIVER_TICK: Duration = Duration::from_millis(20);
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum DriverEvent {
-    Snapshot(DurableState),
+    Snapshot(AppSnapshot),
     Durable(DurableDelta),
+    Config(ConfigDelta),
     Ephemeral(EphemeralDelta),
     Effect(Effect),
     Degraded { reason: String },
@@ -59,6 +63,11 @@ impl std::error::Error for SubmitError {}
 struct Envelope {
     command: Command,
     reply: mpsc::SyncSender<Reply>,
+}
+
+struct DriverPersistence {
+    journal: JournalWriter,
+    config: ConfigStore,
 }
 
 #[derive(Clone)]
@@ -100,21 +109,30 @@ pub struct DriverHandle {
 }
 
 impl DriverHandle {
-    pub fn start(journal_path: impl AsRef<Path>) -> Result<Self, DriverStartError> {
-        Self::start_inner(journal_path, None)
+    pub fn start(
+        journal_path: impl AsRef<Path>,
+        config_path: impl AsRef<Path>,
+    ) -> Result<Self, DriverStartError> {
+        Self::start_inner(journal_path, config_path, None)
     }
 
     pub(crate) fn start_with_effects(
         journal_path: impl AsRef<Path>,
+        config_path: impl AsRef<Path>,
         effects: mpsc::Sender<Effect>,
     ) -> Result<Self, DriverStartError> {
-        Self::start_inner(journal_path, Some(effects))
+        Self::start_inner(journal_path, config_path, Some(effects))
     }
 
     fn start_inner(
         journal_path: impl AsRef<Path>,
+        config_path: impl AsRef<Path>,
         effect_sink: Option<mpsc::Sender<Effect>>,
     ) -> Result<Self, DriverStartError> {
+        let config = ConfigStore::new(config_path.as_ref().to_path_buf());
+        let loaded = config
+            .load()
+            .map_err(|error| DriverStartError(format!("failed to load settings: {error}")))?;
         let (writer, replay) = JournalWriter::open(journal_path)
             .map_err(|error| DriverStartError(format!("failed to start driver: {error}")))?;
         let degraded = replay.corruption.as_ref().map(|corruption| {
@@ -125,6 +143,7 @@ impl DriverHandle {
         });
         let state = AppState {
             durable: replay.state,
+            settings: loaded.settings,
             ..AppState::default()
         };
         let (command_tx, command_rx) = mpsc::sync_channel(DRIVER_CHANNEL_CAPACITY);
@@ -136,7 +155,10 @@ impl DriverHandle {
             .spawn(move || {
                 run_driver(
                     state,
-                    writer,
+                    DriverPersistence {
+                        journal: writer,
+                        config,
+                    },
                     degraded,
                     command_rx,
                     event_tx,
@@ -193,14 +215,17 @@ impl Drop for DriverHandle {
 
 fn run_driver(
     mut state: AppState,
-    mut writer: JournalWriter,
+    mut persistence: DriverPersistence,
     degraded: Option<String>,
     receiver: mpsc::Receiver<Envelope>,
     events: mpsc::Sender<DriverEvent>,
     telemetry: Arc<Mutex<BTreeMap<RunId, Telemetry>>>,
     effect_sink: Option<mpsc::Sender<Effect>>,
 ) {
-    let _result = events.send(DriverEvent::Snapshot(state.durable.clone()));
+    let _result = events.send(DriverEvent::Snapshot(AppSnapshot {
+        durable: state.durable.clone(),
+        settings: state.settings.clone(),
+    }));
     if let Some(reason) = &degraded {
         let _result = events.send(DriverEvent::Degraded {
             reason: reason.clone(),
@@ -218,28 +243,53 @@ fn run_driver(
         emit_latest_telemetry(&state, &events, &telemetry);
         let mut batch = vec![first];
         batch.extend(receiver.try_iter());
-        let should_stop = process_batch(
-            &mut state,
-            &mut writer,
-            degraded.as_deref(),
-            batch,
-            &events,
-            effect_sink.as_ref(),
-        );
-        if should_stop {
-            break;
+        for batch in split_batch_at_settings(batch) {
+            let should_stop = process_batch(
+                &mut state,
+                &mut persistence.journal,
+                &mut persistence.config,
+                degraded.as_deref(),
+                batch,
+                &events,
+                effect_sink.as_ref(),
+            );
+            if should_stop {
+                return;
+            }
         }
     }
+}
+
+fn split_batch_at_settings(batch: Vec<Envelope>) -> Vec<Vec<Envelope>> {
+    let mut groups: Vec<Vec<Envelope>> = Vec::new();
+    for envelope in batch {
+        let settings = matches!(&envelope.command, Command::Settings(_));
+        let append = groups.last().is_some_and(|group| {
+            group
+                .first()
+                .is_some_and(|first| matches!(&first.command, Command::Settings(_)) == settings)
+        });
+        if append {
+            if let Some(group) = groups.last_mut() {
+                group.push(envelope);
+            }
+        } else {
+            groups.push(vec![envelope]);
+        }
+    }
+    groups
 }
 
 fn process_batch(
     state: &mut AppState,
     writer: &mut impl JournalSink,
+    config: &mut impl ConfigSink,
     degraded: Option<&str>,
     batch: Vec<Envelope>,
     events: &mpsc::Sender<DriverEvent>,
     effect_sink: Option<&mpsc::Sender<Effect>>,
 ) -> bool {
+    let settings_before = state.settings.clone();
     let mut durable = Vec::new();
     let mut applied_batch = Vec::with_capacity(batch.len());
     for envelope in batch {
@@ -249,6 +299,7 @@ fn process_batch(
             } else {
                 crfty_core::Applied {
                     durable: Vec::new(),
+                    config: Vec::new(),
                     ephemeral: vec![EphemeralDelta::CommandRejected {
                         reason: reason.to_owned(),
                     }],
@@ -276,7 +327,84 @@ fn process_batch(
             }
         }
     };
+    persist_settings(state, config, &settings_before, &mut applied_batch);
     emit_batch(durability, applied_batch, state, events, effect_sink)
+}
+
+trait ConfigSink {
+    fn write(&mut self, settings: &Settings) -> Result<(), String>;
+}
+
+impl ConfigSink for ConfigStore {
+    fn write(&mut self, settings: &Settings) -> Result<(), String> {
+        ConfigStore::write(self, settings).map_err(|error| error.to_string())
+    }
+}
+
+fn persist_settings(
+    state: &mut AppState,
+    config: &mut impl ConfigSink,
+    settings_before: &Settings,
+    applied_batch: &mut [(mpsc::SyncSender<Reply>, crfty_core::Applied)],
+) {
+    let final_write =
+        applied_batch
+            .iter()
+            .enumerate()
+            .rev()
+            .find_map(|(index, (_reply, applied))| {
+                let settings = applied
+                    .effects
+                    .iter()
+                    .rev()
+                    .find_map(|effect| match effect {
+                        Effect::WriteSettings { settings } => Some(settings.clone()),
+                        Effect::StartWorker | Effect::KillActiveRun { .. } | Effect::StopDriver => {
+                            None
+                        }
+                    });
+                settings.map(|settings| (index, settings))
+            });
+    let Some((final_write_index, final_settings)) = final_write else {
+        return;
+    };
+    let write_result = config.write(&final_settings);
+    let final_change =
+        (settings_before != &final_settings).then_some(ConfigDelta::SettingsChanged {
+            settings: final_settings,
+        });
+    let mut final_change = final_change;
+    for (_reply, applied) in applied_batch.iter_mut() {
+        let wrote_settings = applied
+            .effects
+            .iter()
+            .any(|effect| matches!(effect, Effect::WriteSettings { .. }));
+        applied
+            .effects
+            .retain(|effect| !matches!(effect, Effect::WriteSettings { .. }));
+        applied.config.clear();
+        if !wrote_settings {
+            continue;
+        }
+        if let Err(reason) = &write_result {
+            applied.ephemeral.push(EphemeralDelta::CommandRejected {
+                reason: reason.clone(),
+            });
+            applied.reply = Reply::Rejected {
+                reason: reason.clone(),
+            };
+        }
+    }
+    match write_result {
+        Ok(()) => {
+            if let Some(delta) = final_change.take()
+                && let Some((_reply, applied)) = applied_batch.get_mut(final_write_index)
+            {
+                applied.config.push(delta);
+            }
+        }
+        Err(_) => state.settings = settings_before.clone(),
+    }
 }
 
 trait JournalSink {
@@ -301,6 +429,9 @@ fn emit_batch(
     }
     let mut effects = Vec::new();
     for (reply, applied) in applied_batch {
+        for delta in applied.config {
+            let _result = events.send(DriverEvent::Config(delta));
+        }
         for delta in applied.ephemeral {
             let _result = events.send(DriverEvent::Ephemeral(delta));
         }
@@ -350,6 +481,7 @@ fn reconcile_effects(effects: Vec<Effect>, state: &AppState) -> Vec<Effect> {
                 }
             }
             Effect::StartWorker => {}
+            Effect::WriteSettings { .. } => {}
             Effect::KillActiveRun { .. } | Effect::StopDriver => {
                 if !reconciled.contains(&effect) {
                     reconciled.push(effect);
@@ -409,16 +541,24 @@ mod tests {
     use std::{io, path::PathBuf, sync::mpsc};
 
     use crfty_core::{
-        Command, Effect, Operation, OutputTarget, QueueCommand, QueueItemId, Reply, SessionState,
+        Command, ConfigDelta, Effect, Operation, OutputTarget, QueueCommand, QueueItemId, Reply,
+        SessionState, Settings, SettingsCommand,
     };
 
     use super::{
-        AppState, DriverEvent, Envelope, JournalError, JournalSink, process_batch,
-        reconcile_effects,
+        AppState, ConfigSink, DriverEvent, Envelope, JournalError, JournalSink, process_batch,
+        reconcile_effects, split_batch_at_settings,
     };
     use crate::journal::DurabilityToken;
 
     struct FailingJournal;
+    struct AcceptingConfig;
+
+    impl ConfigSink for AcceptingConfig {
+        fn write(&mut self, _settings: &Settings) -> Result<(), String> {
+            Ok(())
+        }
+    }
 
     impl JournalSink for FailingJournal {
         fn append(
@@ -446,6 +586,7 @@ mod tests {
         let stopped = process_batch(
             &mut state,
             &mut FailingJournal,
+            &mut AcceptingConfig,
             None,
             vec![envelope],
             &event_tx,
@@ -463,6 +604,118 @@ mod tests {
         assert!(event_rx.try_recv().is_err());
     }
 
+    struct NoopJournal;
+
+    impl JournalSink for NoopJournal {
+        fn append(
+            &mut self,
+            _deltas: &[crfty_core::DurableDelta],
+        ) -> Result<DurabilityToken, JournalError> {
+            Ok(DurabilityToken::new())
+        }
+    }
+
+    struct RecordingConfig {
+        writes: Vec<Settings>,
+        failure: Option<String>,
+    }
+
+    impl ConfigSink for RecordingConfig {
+        fn write(&mut self, settings: &Settings) -> Result<(), String> {
+            self.writes.push(settings.clone());
+            self.failure.clone().map_or(Ok(()), Err)
+        }
+    }
+
+    #[test]
+    fn settings_are_written_once_before_the_coalesced_config_event() {
+        let first = Settings {
+            hardware_decode: false,
+            ..Settings::default()
+        };
+        let mut second = first.clone();
+        second.output.overwrite_existing = true;
+        let (first_reply_tx, first_reply_rx) = mpsc::sync_channel(1);
+        let (second_reply_tx, second_reply_rx) = mpsc::sync_channel(1);
+        let batch = vec![
+            Envelope {
+                command: Command::Settings(SettingsCommand::Set { settings: first }),
+                reply: first_reply_tx,
+            },
+            Envelope {
+                command: Command::Settings(SettingsCommand::Set {
+                    settings: second.clone(),
+                }),
+                reply: second_reply_tx,
+            },
+        ];
+        let (event_tx, event_rx) = mpsc::channel();
+        let mut state = AppState::default();
+        let mut config = RecordingConfig {
+            writes: Vec::new(),
+            failure: None,
+        };
+        assert!(!process_batch(
+            &mut state,
+            &mut NoopJournal,
+            &mut config,
+            None,
+            batch,
+            &event_tx,
+            None,
+        ));
+        assert_eq!(config.writes, vec![second.clone()]);
+        assert_eq!(state.settings, second.clone());
+        assert_eq!(first_reply_rx.recv().expect("first reply"), Reply::Accepted);
+        assert_eq!(
+            second_reply_rx.recv().expect("second reply"),
+            Reply::Accepted
+        );
+        assert_eq!(
+            event_rx.recv().expect("config event"),
+            DriverEvent::Config(ConfigDelta::SettingsChanged { settings: second })
+        );
+        assert!(event_rx.try_recv().is_err());
+    }
+
+    #[test]
+    fn settings_write_failure_rolls_back_state_and_emits_no_config_delta() {
+        let changed = Settings {
+            hardware_decode: false,
+            ..Settings::default()
+        };
+        let (reply_tx, reply_rx) = mpsc::sync_channel(1);
+        let envelope = Envelope {
+            command: Command::Settings(SettingsCommand::Set { settings: changed }),
+            reply: reply_tx,
+        };
+        let (event_tx, event_rx) = mpsc::channel();
+        let mut state = AppState::default();
+        let mut config = RecordingConfig {
+            writes: Vec::new(),
+            failure: Some("config sync failed".to_owned()),
+        };
+        assert!(!process_batch(
+            &mut state,
+            &mut NoopJournal,
+            &mut config,
+            None,
+            vec![envelope],
+            &event_tx,
+            None,
+        ));
+        assert_eq!(state.settings, Settings::default());
+        assert!(matches!(
+            reply_rx.recv().expect("rejected reply"),
+            Reply::Rejected { .. }
+        ));
+        assert!(matches!(
+            event_rx.recv().expect("rejection event"),
+            DriverEvent::Ephemeral(crfty_core::EphemeralDelta::CommandRejected { .. })
+        ));
+        assert!(event_rx.try_recv().is_err());
+    }
+
     #[test]
     fn effect_reconciliation_suppresses_obsolete_start() {
         let state = AppState {
@@ -470,5 +723,31 @@ mod tests {
             ..AppState::default()
         };
         assert!(reconcile_effects(vec![Effect::StartWorker], &state).is_empty());
+    }
+
+    #[test]
+    fn settings_form_ordered_batch_barriers_but_consecutive_writes_coalesce() {
+        let envelope = |command| {
+            let (reply, _receiver) = mpsc::sync_channel(1);
+            Envelope { command, reply }
+        };
+        let settings = Settings::default();
+        let groups = split_batch_at_settings(vec![
+            envelope(Command::Queue(QueueCommand::Add {
+                item_id: QueueItemId(1),
+                input: PathBuf::from("one.mkv"),
+                operation: Operation::Convert,
+                output_target: OutputTarget::Replace,
+            })),
+            envelope(Command::Settings(SettingsCommand::Set {
+                settings: settings.clone(),
+            })),
+            envelope(Command::Settings(SettingsCommand::Set { settings })),
+            envelope(Command::Session(crfty_core::SessionCommand::Start)),
+        ]);
+        assert_eq!(groups.len(), 3);
+        assert_eq!(groups[0].len(), 1);
+        assert_eq!(groups[1].len(), 2);
+        assert_eq!(groups[2].len(), 1);
     }
 }

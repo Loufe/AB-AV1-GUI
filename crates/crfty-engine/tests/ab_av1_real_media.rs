@@ -305,6 +305,7 @@ fn generate_av1_mp4_fixture(ffmpeg: &Path, output: &Path) {
 fn real_engine_config(directory: &Path, tools: &MediaTools) -> EngineConfig {
     EngineConfig {
         journal_path: directory.join("state.jsonl"),
+        config_path: directory.join("config.json"),
         media_tools: tools.clone(),
         execution: ExecutionSettings {
             requested_target: REAL_CONTRACT_TARGET,

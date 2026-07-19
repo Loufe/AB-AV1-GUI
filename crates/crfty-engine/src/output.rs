@@ -6,9 +6,6 @@ use std::{
     path::{Path, PathBuf},
 };
 
-#[cfg(unix)]
-use std::fs::File;
-
 use crfty_core::{
     ArtifactIdentity, ContentKey, DestructiveIdentity, DestructiveObservation, FileSystemFacts,
     OutputDelta, OutputRecoveryAction, OutputState, OutputTransaction, Replacement, RunId,
@@ -17,7 +14,10 @@ use crfty_core::{
 
 const MIN_VERIFIED_OUTPUT_SIZE: u64 = 1024;
 
-use crate::media::{MediaInspector, destructive_identity};
+use crate::{
+    filesystem::sync_parent as sync_parent_directory,
+    media::{MediaInspector, destructive_identity},
+};
 
 pub trait ArtifactInspector {
     fn inspect_file(&self, path: &Path) -> io::Result<DestructiveIdentity>;
@@ -425,20 +425,9 @@ fn staging_path(final_path: &Path, run_id: RunId) -> Result<PathBuf, OutputError
     Ok(final_path.with_file_name(staging_name))
 }
 
-#[cfg(unix)]
 fn sync_parent(path: &Path) -> Result<(), OutputError> {
-    let Some(parent) = path.parent() else {
-        return Ok(());
-    };
-    File::open(parent)
-        .and_then(|directory| directory.sync_all())
-        .map_err(|error| OutputError::new("failed to synchronize parent directory", error))?;
-    Ok(())
-}
-
-#[cfg(not(unix))]
-fn sync_parent(_path: &Path) -> Result<(), OutputError> {
-    Ok(())
+    sync_parent_directory(path)
+        .map_err(|error| OutputError::new("failed to synchronize parent directory", error))
 }
 
 /// Deterministic byte inspector for tests; not a production media verifier.

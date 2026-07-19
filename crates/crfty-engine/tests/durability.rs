@@ -12,8 +12,8 @@ use crfty_core::{
     AnalysisProfile, AnalysisResult, AppState, ArtifactIdentity, ClaimId, Command, Crf,
     DestructiveIdentity, DurableDelta, DurableState, EphemeralDelta, ExecutionSettings,
     ItemOutcome, JobPhase, JobProgress, Operation, OutputDelta, OutputTarget, QueueCommand,
-    QueueItemId, Replacement, Reply, RunId, SearchMeasurement, SessionCommand, Telemetry,
-    ToolRevisions, VmafScore, WorkerCommand, apply, fold, replay,
+    QueueItemId, Replacement, Reply, RunId, SearchMeasurement, SessionCommand, Settings,
+    SettingsCommand, Telemetry, ToolRevisions, VmafScore, WorkerCommand, apply, fold, replay,
 };
 use crfty_engine::{
     ab_av1::MediaTools,
@@ -127,7 +127,8 @@ fn journal_group_commit_is_one_atomic_replay_record() {
 fn driver_persists_before_emitting_and_replays_after_restart() {
     let directory = TestDirectory::new("driver");
     let path = directory.path().join("state.jsonl");
-    let driver = DriverHandle::start(&path).expect("driver");
+    let config_path = directory.path().join("config.json");
+    let driver = DriverHandle::start(&path, &config_path).expect("driver");
     assert!(matches!(
         driver
             .events()
@@ -151,7 +152,7 @@ fn driver_persists_before_emitting_and_replays_after_restart() {
     ));
     driver.shutdown().expect("driver shutdown");
 
-    let restarted = DriverHandle::start(&path).expect("restarted driver");
+    let restarted = DriverHandle::start(&path, &config_path).expect("restarted driver");
     let DriverEvent::Snapshot(snapshot) = restarted
         .events()
         .expect("event receiver")
@@ -160,8 +161,57 @@ fn driver_persists_before_emitting_and_replays_after_restart() {
     else {
         panic!("expected replayed snapshot");
     };
-    assert_eq!(snapshot.queue.len(), 1);
-    assert_eq!(snapshot.queue[0].id, QueueItemId(7));
+    assert_eq!(snapshot.durable.queue.len(), 1);
+    assert_eq!(snapshot.durable.queue[0].id, QueueItemId(7));
+    restarted.shutdown().expect("restarted shutdown");
+}
+
+#[test]
+fn driver_persists_settings_and_restores_them_after_restart() {
+    let directory = TestDirectory::new("driver-settings");
+    let journal_path = directory.path().join("state.jsonl");
+    let config_path = directory.path().join("config.json");
+    let driver = DriverHandle::start(&journal_path, &config_path).expect("driver");
+    let _snapshot = driver
+        .events()
+        .expect("event receiver")
+        .recv()
+        .expect("initial snapshot");
+    let settings = Settings {
+        hardware_decode: false,
+        ..Settings::default()
+    };
+    assert_eq!(
+        driver
+            .commands
+            .submit(Command::Settings(SettingsCommand::Set {
+                settings: settings.clone(),
+            }))
+            .expect("settings reply"),
+        Reply::Accepted
+    );
+    assert!(matches!(
+        driver
+            .events()
+            .expect("event receiver")
+            .recv()
+            .expect("config event"),
+        DriverEvent::Config(crfty_core::ConfigDelta::SettingsChanged {
+            settings: persisted,
+        }) if persisted == settings
+    ));
+    driver.shutdown().expect("driver shutdown");
+
+    let restarted = DriverHandle::start(&journal_path, &config_path).expect("restarted driver");
+    let DriverEvent::Snapshot(snapshot) = restarted
+        .events()
+        .expect("event receiver")
+        .recv()
+        .expect("restarted snapshot")
+    else {
+        panic!("expected restarted snapshot");
+    };
+    assert_eq!(snapshot.settings, settings);
     restarted.shutdown().expect("restarted shutdown");
 }
 
@@ -170,7 +220,8 @@ fn corrupted_journal_starts_degraded_and_rejects_mutation() {
     let directory = TestDirectory::new("degraded");
     let path = directory.path().join("state.jsonl");
     fs::write(&path, b"not-json\n").expect("corrupt journal fixture");
-    let driver = DriverHandle::start(&path).expect("degraded driver");
+    let driver =
+        DriverHandle::start(&path, directory.path().join("config.json")).expect("degraded driver");
     assert!(matches!(
         driver
             .events()
@@ -199,7 +250,7 @@ fn corrupted_journal_starts_degraded_and_rejects_mutation() {
 fn telemetry_pressure_coalesces_and_terminal_value_wins() {
     let directory = TestDirectory::new("telemetry");
     let path = directory.path().join("state.jsonl");
-    let driver = DriverHandle::start(path).expect("driver");
+    let driver = DriverHandle::start(path, directory.path().join("config.json")).expect("driver");
     let _snapshot = driver
         .events()
         .expect("event receiver")
@@ -442,6 +493,7 @@ fn engine_startup_recovers_an_active_partial_staging_transaction() {
     let executable = std::env::current_exe().expect("test executable");
     let engine = EngineRuntime::start(EngineConfig {
         journal_path,
+        config_path: directory.path().join("config.json"),
         media_tools: MediaTools {
             ffmpeg: executable.clone(),
             ffprobe: executable,
@@ -454,7 +506,7 @@ fn engine_startup_recovers_an_active_partial_staging_transaction() {
     };
     assert!(
         matches!(
-            snapshot.queue.first().expect("queue item").state,
+            snapshot.durable.queue.first().expect("queue item").state,
             crfty_core::QueueItemState::Finished(ItemOutcome::Stopped)
         ),
         "unexpected recovered snapshot: {snapshot:?}"

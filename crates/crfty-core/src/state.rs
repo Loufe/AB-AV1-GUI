@@ -4,7 +4,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::{
     AnalysisAttempt, AnalysisResult, ContentKey, FileRecord, JobPhase, JobSpec, MediaObservation,
-    Operation, OutputDelta, OutputTarget, PathBinding, PathHash, ReservedJob, SkipReason,
+    Operation, OutputDelta, OutputTarget, PathBinding, PathHash, ReservedJob, Settings, SkipReason,
 };
 
 macro_rules! numeric_id {
@@ -109,8 +109,20 @@ pub struct DurableState {
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct AppState {
     pub durable: DurableState,
+    pub settings: Settings,
     pub session: SessionState,
     pub telemetry: BTreeMap<RunId, Telemetry>,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AppSnapshot {
+    pub durable: DurableState,
+    pub settings: Settings,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub enum ConfigDelta {
+    SettingsChanged { settings: Settings },
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -135,6 +147,12 @@ pub enum JobProgress {
     Phase,
     SearchBasisPoints(u32),
     OutputPositionMs(u64),
+}
+
+pub fn fold_config(state: &mut Settings, delta: &ConfigDelta) {
+    match delta {
+        ConfigDelta::SettingsChanged { settings } => *state = settings.clone(),
+    }
 }
 
 pub fn fold(state: &mut DurableState, delta: &DurableDelta) {

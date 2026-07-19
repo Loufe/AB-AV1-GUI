@@ -16,6 +16,7 @@ mod media;
 mod output;
 mod policy;
 mod reducer;
+mod settings;
 mod state;
 
 pub use job::{
@@ -41,12 +42,17 @@ pub use policy::{
     select_job_action,
 };
 pub use reducer::{
-    Applied, Command, Effect, EphemeralDelta, QueueCommand, Reply, SessionCommand, SystemCommand,
-    WorkerCommand, apply,
+    Applied, Command, Effect, EphemeralDelta, QueueCommand, Reply, SessionCommand, SettingsCommand,
+    SystemCommand, WorkerCommand, apply,
+};
+pub use settings::{
+    DEFAULT_OUTPUT_SUFFIX, DefaultOutputMode, OutputSettings, PrivacySettings, Settings,
+    VideoExtension,
 };
 pub use state::{
-    AppState, ClaimId, DurableDelta, DurableState, ItemOutcome, JobProgress, JournalSequence,
-    QueueItem, QueueItemId, QueueItemState, RunId, SessionState, Telemetry, fold,
+    AppSnapshot, AppState, ClaimId, ConfigDelta, DurableDelta, DurableState, ItemOutcome,
+    JobProgress, JournalSequence, QueueItem, QueueItemId, QueueItemState, RunId, SessionState,
+    Telemetry, fold, fold_config,
 };
 
 #[cfg(test)]

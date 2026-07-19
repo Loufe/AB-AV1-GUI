@@ -156,6 +156,7 @@ fn run_coordinator_contract(
     };
     let engine = EngineRuntime::start(EngineConfig {
         journal_path: output_dir.join("coordinator.jsonl"),
+        config_path: output_dir.join("config.json"),
         media_tools: tools,
         execution: ExecutionSettings {
             requested_target: DEFAULT_VMAF_TARGET,

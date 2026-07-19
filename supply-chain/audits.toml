@@ -1,4 +1,8 @@
 
 # cargo-vet audits file
 
-[audits]
+[[audits.tempfile]]
+who = "OpenAI Codex"
+criteria = "safe-to-deploy"
+version = "3.27.0"
+notes = "Reviewed production source and all unsafe blocks. CRFty uses the no-default-features build only for short-lived, same-directory NamedTempFile creation and atomic persist; exclusive creation prevents clobbering, and the application syncs file contents and the parent directory around replacement. The predictable-name caveat without getrandom is limited to denial of creation by another process running with access to the user's private application-data directory, not file overwrite or disclosure."

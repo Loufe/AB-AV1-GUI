@@ -11,12 +11,12 @@ use std::{
 };
 
 use crfty_core::{
-    AnalysisAttempt, AnalysisResult, CRF_FIXED_SCALE, ClaimId, ClaimedJob, Command, Crf,
-    DurableDelta, DurableState, Effect, ExecutionSettings, ItemOutcome, JobAction, JobPhase,
+    AnalysisAttempt, AnalysisResult, AppSnapshot, CRF_FIXED_SCALE, ClaimId, ClaimedJob, Command,
+    Crf, DurableDelta, DurableState, Effect, ExecutionSettings, ItemOutcome, JobAction, JobPhase,
     JobProgress, MAX_PERCENT_BASIS_POINTS, MAX_VMAF_SCORE, OutputDelta, OutputTarget,
     OutputTransaction, PERCENT_BASIS_POINTS_SCALE, QueueCommand, QueueItemState, Replacement,
-    Reply, RunId, SearchMeasurement, SessionCommand, SkipReason, Telemetry, VMAF_SCORE_FIXED_SCALE,
-    VmafScore, VmafTarget, WorkerCommand, fold,
+    Reply, RunId, SearchMeasurement, SessionCommand, SettingsCommand, SkipReason, Telemetry,
+    VMAF_SCORE_FIXED_SCALE, VmafScore, VmafTarget, WorkerCommand, fold,
 };
 
 const FIRST_RUNTIME_ID: u64 = 1;
@@ -63,6 +63,7 @@ use crate::{
 #[derive(Debug, Clone)]
 pub struct EngineConfig {
     pub journal_path: PathBuf,
+    pub config_path: PathBuf,
     pub media_tools: MediaTools,
     pub execution: ExecutionSettings,
 }
@@ -97,8 +98,9 @@ impl EngineRuntime {
                 .map_err(|error| EngineStartError(format!("failed to start encoder: {error}")))?,
         );
         let (effect_tx, effect_rx) = mpsc::channel();
-        let mut driver = DriverHandle::start_with_effects(&config.journal_path, effect_tx)
-            .map_err(map_driver_start)?;
+        let mut driver =
+            DriverHandle::start_with_effects(&config.journal_path, &config.config_path, effect_tx)
+                .map_err(map_driver_start)?;
         let driver_events = driver
             .take_events()
             .ok_or_else(|| EngineStartError("driver event receiver is missing".to_owned()))?;
@@ -115,11 +117,14 @@ impl EngineRuntime {
                 )));
             }
         };
-        let recovered = recover_startup(&driver.commands, &config.media_tools, initial);
+        let recovered = recover_startup(&driver.commands, &config.media_tools, initial.durable);
         let next_runtime_id = next_runtime_id(&recovered)?;
         let (public_event_tx, public_event_rx) = mpsc::channel();
         public_event_tx
-            .send(DriverEvent::Snapshot(recovered))
+            .send(DriverEvent::Snapshot(AppSnapshot {
+                durable: recovered,
+                settings: initial.settings,
+            }))
             .map_err(|error| {
                 EngineStartError(format!("failed to emit startup snapshot: {error}"))
             })?;
@@ -212,6 +217,13 @@ impl UserCommandSender {
         command: SessionCommand,
     ) -> Result<Reply, crate::driver::SubmitError> {
         self.inner.submit(Command::Session(command))
+    }
+
+    pub fn submit_settings(
+        &self,
+        command: SettingsCommand,
+    ) -> Result<Reply, crate::driver::SubmitError> {
+        self.inner.submit(Command::Settings(command))
     }
 }
 
@@ -497,6 +509,13 @@ fn supervise(
                 }
             }
             Effect::KillActiveRun { run_id } => cancellation.force(Some(run_id)),
+            Effect::WriteSettings { .. } => {
+                report_worker_crash(
+                    &commands,
+                    "driver leaked a settings effect to the supervisor",
+                );
+                break;
+            }
             Effect::StopDriver => {
                 cancellation.force(None);
                 break;

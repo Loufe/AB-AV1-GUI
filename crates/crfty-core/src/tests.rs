@@ -6,15 +6,15 @@ use crate::reducer::validate_terminal;
 
 use crate::{
     AnalysisProfile, AnalysisResult, AppState, ArtifactIdentity, ClaimId, Command, ContentKey, Crf,
-    DestructiveIdentity, DestructiveObservation, DurableDelta, Effect, Eligibility,
-    ExecutionSettings, FileRecord, FileStamp, FileSystemFacts, FileSystemId, ItemOutcome,
-    JOURNAL_SCHEMA_VERSION, JobAction, JobPhase, JobProgress, JournalEnvelope, JournalSequence,
-    MediaContainer, MediaObservation, Operation, OutputDelta, OutputRecoveryAction, OutputState,
-    OutputTarget, OutputTransaction, PathBinding, PathHash, QueueCommand, QueueItemId,
-    QueueItemState, Replacement, Reply, RunId, SearchMeasurement, SessionCommand, SessionState,
-    SkipReason, Telemetry, ToolRevisions, VideoCodec, VideoMeta, VmafScore, VmafTarget,
-    WorkerCommand, apply, encode_record, evaluate_eligibility, recover_output, replay,
-    select_analysis, select_job_action,
+    DecodeMode, DecodePreference, DefaultOutputMode, DestructiveIdentity, DestructiveObservation,
+    DurableDelta, Effect, Eligibility, ExecutionSettings, FileRecord, FileStamp, FileSystemFacts,
+    FileSystemId, ItemOutcome, JOURNAL_SCHEMA_VERSION, JobAction, JobPhase, JobProgress,
+    JournalEnvelope, JournalSequence, MediaContainer, MediaObservation, Operation, OutputDelta,
+    OutputRecoveryAction, OutputState, OutputTarget, OutputTransaction, PathBinding, PathHash,
+    QueueCommand, QueueItemId, QueueItemState, Replacement, Reply, RunId, SearchMeasurement,
+    SessionCommand, SessionState, Settings, SettingsCommand, SkipReason, Telemetry, ToolRevisions,
+    VideoCodec, VideoMeta, VmafScore, VmafTarget, WorkerCommand, apply, encode_record,
+    evaluate_eligibility, recover_output, replay, select_analysis, select_job_action,
 };
 
 fn execution() -> ExecutionSettings {
@@ -46,6 +46,84 @@ fn analysis() -> AnalysisResult {
         },
         profile: execution.profile,
     }
+}
+
+#[test]
+fn settings_defaults_validate_and_inactive_values_remain_remembered() {
+    let defaults = Settings::default();
+    assert!(defaults.validate().is_ok());
+    assert_eq!(defaults.scan_extensions.len(), 4);
+    assert!(defaults.hardware_decode);
+    assert!(!defaults.privacy.anonymize_logs);
+    assert!(!defaults.privacy.anonymize_history);
+
+    let mut remembered = defaults;
+    remembered.output.suffix.clear();
+    remembered.output.separate_folder = None;
+    assert!(remembered.validate().is_ok());
+
+    remembered.output.default_mode = DefaultOutputMode::Suffix;
+    assert_eq!(
+        remembered.validate(),
+        Err("default output suffix must not be empty in suffix mode")
+    );
+    remembered.output.default_mode = DefaultOutputMode::SeparateFolder;
+    assert_eq!(
+        remembered.validate(),
+        Err("default separate output folder is required in separate-folder mode")
+    );
+}
+
+#[test]
+fn settings_change_is_typed_config_state_with_a_write_effect() {
+    let mut state = AppState::default();
+    let mut settings = state.settings.clone();
+    settings.output.overwrite_existing = true;
+    settings.hardware_decode = false;
+    let applied = apply(
+        &mut state,
+        Command::Settings(SettingsCommand::Set {
+            settings: settings.clone(),
+        }),
+    );
+    assert_eq!(applied.reply, Reply::Accepted);
+    assert_eq!(applied.config.len(), 1);
+    assert_eq!(
+        applied.effects,
+        vec![Effect::WriteSettings {
+            settings: settings.clone(),
+        }]
+    );
+    assert_eq!(state.settings, settings);
+
+    let current = state.settings.clone();
+    let unchanged = apply(
+        &mut state,
+        Command::Settings(SettingsCommand::Set { settings: current }),
+    );
+    assert!(unchanged.config.is_empty());
+    assert_eq!(unchanged.effects.len(), 1);
+}
+
+#[test]
+fn settings_control_job_overwrite_and_hardware_decode_policy() {
+    let mut state = AppState::default();
+    state.settings.output.overwrite_existing = true;
+    state.settings.hardware_decode = false;
+    let _added = apply(&mut state, add_command(QueueItemId(1), "video.mkv"));
+    let _started = apply(&mut state, Command::Session(SessionCommand::Start));
+    let mut requested = execution();
+    requested.profile.decode_mode = DecodeMode::Hardware(crate::HardwareDecoder::H264Qsv);
+    let prepared = reserve_and_prepare(&mut state, ClaimId(2), RunId(3), requested);
+    let Reply::Claimed(Some(job)) = prepared.reply else {
+        panic!("expected claimed job");
+    };
+    assert!(job.spec.execution.overwrite_existing);
+    assert_eq!(
+        job.spec.execution.decode_preference,
+        DecodePreference::SoftwareOnly
+    );
+    assert_eq!(job.spec.execution.profile.decode_mode, DecodeMode::Software);
 }
 
 fn add_command(item_id: QueueItemId, input: impl Into<PathBuf>) -> Command {

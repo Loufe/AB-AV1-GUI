@@ -10,6 +10,7 @@
 //! user-interface frameworks.
 
 pub mod ab_av1;
+pub mod config;
 pub mod coordinator;
 pub mod driver;
 pub mod journal;
@@ -17,4 +18,5 @@ pub mod media;
 pub mod output;
 pub mod remux;
 
+mod filesystem;
 mod process;
