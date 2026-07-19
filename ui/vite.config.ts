@@ -7,6 +7,15 @@ import { defineConfig } from "vite";
 
 export default defineConfig({
   plugins: [react(), tailwindcss()],
+  server: {
+    // Dev runs under WSL2 against /mnt/c, where native file-change events
+    // don't cross the Windows filesystem boundary — without polling, edits
+    // leave stale transforms in the module cache and HMR never fires.
+    watch: {
+      usePolling: true,
+      interval: 300,
+    },
+  },
   resolve: {
     alias: {
       "@": path.resolve(__dirname, "./src"),
