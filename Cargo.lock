@@ -338,6 +338,7 @@ version = "3.0.0-alpha.0"
 dependencies = [
  "ab-av1",
  "blake2",
+ "command-group",
  "crfty-core",
  "file-id",
  "serde",

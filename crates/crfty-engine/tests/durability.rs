@@ -247,7 +247,7 @@ fn telemetry_pressure_coalesces_and_terminal_value_wins() {
             run_id: RunId(3),
             sequence,
             phase: JobPhase::Encoding,
-            progress: JobProgress::EncodePositionMs(sequence),
+            progress: JobProgress::OutputPositionMs(sequence),
         });
     }
     std::thread::sleep(Duration::from_millis(30));
@@ -266,7 +266,7 @@ fn telemetry_pressure_coalesces_and_terminal_value_wins() {
                     run_id: RunId(3),
                     sequence: terminal_sequence,
                     phase: JobPhase::Finalizing,
-                    progress: JobProgress::EncodePositionMs(100),
+                    progress: JobProgress::OutputPositionMs(100),
                 }),
             }))
             .expect("terminal reply"),
@@ -290,12 +290,18 @@ fn output_recovery_promotes_and_retires_original() {
     fs::write(&input, b"original-content").expect("input fixture");
     let manager = OutputManager::new(FixtureByteInspector);
     let started = manager
-        .prepare(RunId(5), &input, &final_path, Replacement::RetireOriginal)
+        .prepare(
+            RunId(5),
+            &input,
+            &final_path,
+            Replacement::RetireOriginal,
+            false,
+        )
         .expect("prepare output");
     let mut state = DurableState::default();
     fold_output(
         &mut state,
-        OutputDelta::EncodeStarted {
+        OutputDelta::OutputStarted {
             transaction: Box::new(started),
         },
     );
@@ -342,7 +348,13 @@ fn invalid_partial_staging_is_cleaned_without_media_validation() {
     fs::write(&input, b"input bytes").expect("input fixture");
     let manager = OutputManager::new(RejectingMediaInspector);
     let started = manager
-        .prepare(RunId(77), &input, &final_path, Replacement::RetireOriginal)
+        .prepare(
+            RunId(77),
+            &input,
+            &final_path,
+            Replacement::RetireOriginal,
+            false,
+        )
         .expect("prepare output");
     fs::write(&started.staging, b"not a valid media container").expect("partial staging");
     let intent = manager
@@ -369,7 +381,13 @@ fn engine_startup_recovers_an_active_partial_staging_transaction() {
     fs::write(&input, b"input bytes").expect("input fixture");
     let manager = OutputManager::new(FixtureByteInspector);
     let transaction = manager
-        .prepare(RunId(3), &input, &final_path, Replacement::RetireOriginal)
+        .prepare(
+            RunId(3),
+            &input,
+            &final_path,
+            Replacement::RetireOriginal,
+            false,
+        )
         .expect("prepare transaction");
     fs::write(&transaction.staging, b"crash-left partial bytes").expect("partial staging");
 
@@ -406,7 +424,7 @@ fn engine_startup_recovers_an_active_partial_staging_transaction() {
             run_id: RunId(3),
             result: Box::new(fixture_analysis(&settings)),
         }),
-        Command::Worker(WorkerCommand::Output(OutputDelta::EncodeStarted {
+        Command::Worker(WorkerCommand::Output(OutputDelta::OutputStarted {
             transaction: Box::new(transaction.clone()),
         })),
     ] {
@@ -491,14 +509,20 @@ fn abandonment_intent_authorizes_only_the_observed_partial_staging() {
     fs::write(&input, b"original").expect("input fixture");
     let manager = OutputManager::new(FixtureByteInspector);
     let started = manager
-        .prepare(RunId(20), &input, &final_path, Replacement::KeepOriginal)
+        .prepare(
+            RunId(20),
+            &input,
+            &final_path,
+            Replacement::KeepOriginal,
+            false,
+        )
         .expect("prepare");
     fs::write(&started.staging, b"partial-encode").expect("partial staging");
     let intent = manager.abandon_intent(&started).expect("abandon intent");
     let mut state = DurableState::default();
     fold_output(
         &mut state,
-        OutputDelta::EncodeStarted {
+        OutputDelta::OutputStarted {
             transaction: Box::new(started),
         },
     );
@@ -519,12 +543,18 @@ fn recovery_recognizes_crashes_after_rename_and_delete() {
     fs::write(&input, b"original").expect("input fixture");
     let manager = OutputManager::new(FixtureByteInspector);
     let started = manager
-        .prepare(RunId(8), &input, &final_path, Replacement::RetireOriginal)
+        .prepare(
+            RunId(8),
+            &input,
+            &final_path,
+            Replacement::RetireOriginal,
+            false,
+        )
         .expect("prepare");
     let mut state = DurableState::default();
     fold_output(
         &mut state,
-        OutputDelta::EncodeStarted {
+        OutputDelta::OutputStarted {
             transaction: Box::new(started),
         },
     );
@@ -564,12 +594,12 @@ fn same_path_replacement_preserves_hardlink_sibling() {
     fs::hard_link(&input, &sibling).expect("hardlink sibling");
     let manager = OutputManager::new(FixtureByteInspector);
     let started = manager
-        .prepare(RunId(11), &input, &input, Replacement::KeepOriginal)
+        .prepare(RunId(11), &input, &input, Replacement::KeepOriginal, false)
         .expect("prepare same-path replacement");
     let mut state = DurableState::default();
     fold_output(
         &mut state,
-        OutputDelta::EncodeStarted {
+        OutputDelta::OutputStarted {
             transaction: Box::new(started),
         },
     );
@@ -589,6 +619,28 @@ fn same_path_replacement_preserves_hardlink_sibling() {
 }
 
 #[test]
+fn output_preparation_enforces_overwrite_policy_before_staging() {
+    let directory = TestDirectory::new("overwrite-policy");
+    let input = directory.path().join("input.mkv");
+    let final_path = directory.path().join("output.mkv");
+    fs::write(&input, b"input").expect("input fixture");
+    fs::write(&final_path, b"existing").expect("existing output fixture");
+    let manager = OutputManager::new(FixtureByteInspector);
+    let error = manager
+        .prepare(
+            RunId(30),
+            &input,
+            &final_path,
+            Replacement::KeepOriginal,
+            false,
+        )
+        .expect_err("overwrite-disabled preparation must fail");
+    assert!(error.is_destination_exists());
+    assert_eq!(fs::read(&final_path).expect("existing output"), b"existing");
+    assert!(!directory.path().join(".output.mkv.crfty-30.part").exists());
+}
+
+#[test]
 fn changed_destination_becomes_conflict_without_deletion() {
     let directory = TestDirectory::new("destination-conflict");
     let input = directory.path().join("input.mkv");
@@ -597,12 +649,18 @@ fn changed_destination_becomes_conflict_without_deletion() {
     fs::write(&final_path, b"preimage").expect("destination fixture");
     let manager = OutputManager::new(FixtureByteInspector);
     let started = manager
-        .prepare(RunId(12), &input, &final_path, Replacement::KeepOriginal)
+        .prepare(
+            RunId(12),
+            &input,
+            &final_path,
+            Replacement::KeepOriginal,
+            true,
+        )
         .expect("prepare");
     let mut state = DurableState::default();
     fold_output(
         &mut state,
-        OutputDelta::EncodeStarted {
+        OutputDelta::OutputStarted {
             transaction: Box::new(started),
         },
     );

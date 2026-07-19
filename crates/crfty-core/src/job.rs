@@ -243,6 +243,37 @@ impl AnalysisResult {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub enum JobAction {
+    Analyze {
+        selected_analysis: Option<Box<AnalysisResult>>,
+    },
+    Encode {
+        selected_analysis: Option<Box<AnalysisResult>>,
+    },
+    Remux,
+    Skip {
+        reason: crate::SkipReason,
+    },
+}
+
+impl JobAction {
+    #[must_use]
+    pub fn selected_analysis(&self) -> Option<&AnalysisResult> {
+        match self {
+            Self::Analyze { selected_analysis } | Self::Encode { selected_analysis } => {
+                selected_analysis.as_deref()
+            }
+            Self::Remux | Self::Skip { .. } => None,
+        }
+    }
+
+    #[must_use]
+    pub const fn produces_output(&self) -> bool {
+        matches!(self, Self::Encode { .. } | Self::Remux)
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct JobSpec {
     pub item_id: QueueItemId,
     pub claim_id: ClaimId,
@@ -252,8 +283,7 @@ pub struct JobSpec {
     pub operation: Operation,
     pub output_target: OutputTarget,
     pub execution: ExecutionSettings,
-    pub selected_analysis: Option<AnalysisResult>,
-    pub skip_reason: Option<crate::SkipReason>,
+    pub action: JobAction,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

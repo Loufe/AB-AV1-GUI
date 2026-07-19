@@ -2,10 +2,10 @@ use std::path::PathBuf;
 
 use crate::state::ConversionRun;
 use crate::{
-    AnalysisResult, AppState, ClaimId, ClaimedJob, DurableDelta, Eligibility, ExecutionSettings,
-    ItemOutcome, JobSpec, MediaObservation, Operation, OutputDelta, OutputTarget, QueueItem,
-    QueueItemId, QueueItemState, ReservedJob, RunId, SessionState, Telemetry, evaluate_eligibility,
-    fold, select_analysis,
+    AnalysisResult, AppState, ClaimId, ClaimedJob, DurableDelta, ExecutionSettings, ItemOutcome,
+    JobAction, JobSpec, MediaObservation, Operation, OutputDelta, OutputTarget, QueueItem,
+    QueueItemId, QueueItemState, ReservedJob, RunId, SessionState, Telemetry, fold,
+    select_job_action,
 };
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -341,19 +341,12 @@ fn apply_worker(state: &AppState, command: WorkerCommand) -> Applied {
             let record = content_key
                 .as_ref()
                 .and_then(|key| state.durable.records.get(key));
-            let skip_reason =
-                observation.as_ref().and_then(|observed| {
-                    match evaluate_eligibility(&observed.metadata, item.operation) {
-                        Eligibility::Skip(reason) => Some(reason),
-                        Eligibility::Process | Eligibility::Remux => None,
-                    }
-                });
-            let selected_analysis = if skip_reason.is_none() {
-                record.and_then(|known| select_analysis(known, &execution))
-            } else {
-                None
-            };
-            if let Some(selected) = &selected_analysis
+            let metadata = observation
+                .as_ref()
+                .map(|observed| &observed.metadata)
+                .or_else(|| record.map(|known| &known.metadata));
+            let action = select_job_action(metadata, record, item.operation, &execution);
+            if let Some(selected) = action.selected_analysis()
                 && let Err(reason) = selected.validate_reusable_for(&execution)
             {
                 return Applied::rejected(reason);
@@ -367,8 +360,7 @@ fn apply_worker(state: &AppState, command: WorkerCommand) -> Applied {
                 operation: item.operation,
                 output_target: item.output_target.clone(),
                 execution,
-                selected_analysis,
-                skip_reason,
+                action,
             };
             let mut applied = Applied::accepted();
             if let Some(observation) = observation {
@@ -551,7 +543,7 @@ pub(crate) fn validate_terminal(
 ) -> Result<(), &'static str> {
     match outcome {
         ItemOutcome::Analyzed => {
-            if run.spec.operation != Operation::Analyze
+            if !matches!(run.spec.action, JobAction::Analyze { .. })
                 || run.analysis.is_none()
                 || output.is_some()
             {
@@ -559,24 +551,19 @@ pub(crate) fn validate_terminal(
             }
         }
         ItemOutcome::Converted => {
-            if run.spec.operation != Operation::Convert || run.analysis.is_none() {
+            if !matches!(run.spec.action, JobAction::Encode { .. }) || run.analysis.is_none() {
                 return Err("converted outcome requires a converted run with durable analysis");
             }
-            let Some(transaction) = output else {
-                return Err("converted outcome requires an output transaction");
-            };
-            let successful = matches!(
-                (&transaction.replacement, &transaction.state),
-                (
-                    crate::Replacement::KeepOriginal,
-                    crate::OutputState::Committed { .. }
-                ) | (
-                    crate::Replacement::RetireOriginal,
-                    crate::OutputState::Retired { .. }
-                )
-            );
-            if !successful {
+            if !has_successful_output(output) {
                 return Err("converted outcome requires a successfully settled output");
+            }
+        }
+        ItemOutcome::Remuxed => {
+            if !matches!(run.spec.action, JobAction::Remux) || run.analysis.is_some() {
+                return Err("remuxed outcome requires a remux run without analysis");
+            }
+            if !has_successful_output(output) {
+                return Err("remuxed outcome requires a successfully settled output");
             }
         }
         ItemOutcome::NotWorthwhile { attempts } => {
@@ -598,7 +585,7 @@ pub(crate) fn validate_terminal(
         }
         ItemOutcome::Skipped { reason } => match reason {
             crate::SkipReason::LowResolution { .. } | crate::SkipReason::AlreadyAv1Matroska => {
-                if run.spec.skip_reason.as_ref() != Some(reason)
+                if !matches!(&run.spec.action, JobAction::Skip { reason: expected } if expected == reason)
                     || run.analysis.is_some()
                     || output.is_some()
                 {
@@ -606,11 +593,7 @@ pub(crate) fn validate_terminal(
                 }
             }
             crate::SkipReason::OutputExists => {
-                if run.spec.operation != Operation::Convert
-                    || run.spec.skip_reason.is_some()
-                    || run.analysis.is_none()
-                    || output.is_some()
-                {
+                if !run.spec.action.produces_output() || output.is_some() {
                     return Err("output-exists skip is incompatible with the run state");
                 }
             }
@@ -618,6 +601,21 @@ pub(crate) fn validate_terminal(
         ItemOutcome::Stopped | ItemOutcome::Failed { .. } => {}
     }
     Ok(())
+}
+
+fn has_successful_output(output: Option<&crate::OutputTransaction>) -> bool {
+    output.is_some_and(|transaction| {
+        matches!(
+            (&transaction.replacement, &transaction.state),
+            (
+                crate::Replacement::KeepOriginal,
+                crate::OutputState::Committed { .. }
+            ) | (
+                crate::Replacement::RetireOriginal,
+                crate::OutputState::Retired { .. }
+            )
+        )
+    })
 }
 
 fn transition_active(
@@ -671,7 +669,7 @@ fn active_run(state: &AppState) -> Option<RunId> {
 
 fn output_run_id(delta: &OutputDelta) -> RunId {
     match delta {
-        OutputDelta::EncodeStarted { transaction } => transaction.run_id,
+        OutputDelta::OutputStarted { transaction } => transaction.run_id,
         OutputDelta::OutputReady { run_id, .. }
         | OutputDelta::OutputCommitted { run_id, .. }
         | OutputDelta::RetireOriginalIntent { run_id }
@@ -689,23 +687,25 @@ pub(crate) fn validate_output_delta(
     let run_id = output_run_id(delta);
     let current = state.durable.outputs.get(&run_id);
     match (current, delta) {
-        (None, OutputDelta::EncodeStarted { transaction })
+        (None, OutputDelta::OutputStarted { transaction })
             if transaction.state == crate::OutputState::Started
                 && state
                     .durable
                     .conversion_runs
                     .get(&run_id)
-                    .is_some_and(|run| {
-                        run.spec.operation == Operation::Convert && run.analysis.is_some()
+                    .is_some_and(|run| match run.spec.action {
+                        JobAction::Encode { .. } => run.analysis.is_some(),
+                        JobAction::Remux => run.analysis.is_none(),
+                        JobAction::Analyze { .. } | JobAction::Skip { .. } => false,
                     }) =>
         {
             Ok(())
         }
-        (None, OutputDelta::EncodeStarted { .. }) => {
+        (None, OutputDelta::OutputStarted { .. }) => {
             Err("new output transaction must begin in started state")
         }
         (None, _) => Err("output transaction has not started"),
-        (Some(_), OutputDelta::EncodeStarted { .. }) => {
+        (Some(_), OutputDelta::OutputStarted { .. }) => {
             Err("output transaction has already started")
         }
         (

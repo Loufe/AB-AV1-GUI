@@ -22,8 +22,9 @@ const CONTRACT_PRESET: u8 = 12;
 const CONTRACT_MAX_ENCODED_PERCENT_BASIS_POINTS: u32 = 50_000;
 const CONTRACT_SAMPLE_COUNT: u64 = 1;
 const CONTRACT_SAMPLE_DURATION_MS: u64 = 1_000;
-const CONTRACT_EXPECTED_FINISHED_ITEMS: u8 = 2;
+const CONTRACT_EXPECTED_FINISHED_ITEMS: u8 = 4;
 const CONTRACT_EVENT_TIMEOUT: Duration = Duration::from_secs(10);
+const NOISY_STDERR_BYTES: usize = 32 * 1024;
 use crfty_engine::ab_av1::{
     AbAv1Runtime, EncodeOutcome, EncodeRequest, FaultInjection, JobHandle, JobTerminal, MediaTools,
     SearchRequest, StartJobError,
@@ -114,7 +115,14 @@ fn fake_ffprobe() -> Result<(), Box<dyn Error>> {
             .and_then(|name| name.to_str())
             .is_some_and(|name| name.ends_with(".part"))
     });
-    let probe = if verifies_staging {
+    let probes_av1 = env::args_os().any(|argument| {
+        let argument = argument.to_string_lossy();
+        argument.contains("already-av1.mp4")
+            || argument.contains("incompatible-av1.mp4")
+            || argument.contains("input_coordinated.mkv")
+            || argument.contains("already-av1_remuxed.mkv")
+    });
+    let probe = if verifies_staging || probes_av1 {
         PROBE.replace("\"codec_name\": \"h264\"", "\"codec_name\": \"av1\"")
     } else {
         PROBE.to_owned()
@@ -175,12 +183,32 @@ fn run_coordinator_contract(
         operation: Operation::Analyze,
         output_target: OutputTarget::Replace,
     })?)?;
+    let incompatible_input = output_dir.join("incompatible-av1.mp4");
+    fs::copy(&input, &incompatible_input)?;
+    accepted_reply(engine.commands.submit_queue(QueueCommand::Add {
+        item_id: QueueItemId(4),
+        input: incompatible_input,
+        operation: Operation::Convert,
+        output_target: OutputTarget::Suffix {
+            suffix: "_must-fail".to_owned(),
+        },
+    })?)?;
     accepted_reply(engine.commands.submit_queue(QueueCommand::Add {
         item_id: QueueItemId(2),
         input: input.clone(),
         operation: Operation::Convert,
         output_target: OutputTarget::Suffix {
             suffix: "_coordinated".to_owned(),
+        },
+    })?)?;
+    let remux_input = output_dir.join("already-av1.mp4");
+    fs::copy(&input, &remux_input)?;
+    accepted_reply(engine.commands.submit_queue(QueueCommand::Add {
+        item_id: QueueItemId(3),
+        input: remux_input.clone(),
+        operation: Operation::Convert,
+        output_target: OutputTarget::Suffix {
+            suffix: "_remuxed".to_owned(),
         },
     })?)?;
     accepted_reply(engine.commands.submit_session(SessionCommand::Start)?)?;
@@ -192,6 +220,8 @@ fn run_coordinator_contract(
     let mut content_changed = false;
     let mut first_profile = None;
     let mut profile_changed = false;
+    let mut remuxed = 0_u8;
+    let mut remux_failures = 0_u8;
     while finished < CONTRACT_EXPECTED_FINISHED_ITEMS {
         match engine.events.recv_timeout(CONTRACT_EVENT_TIMEOUT)? {
             crfty_engine::driver::DriverEvent::Durable(
@@ -211,16 +241,28 @@ fn run_coordinator_contract(
                 } else {
                     first_profile = Some(spec.execution.profile.clone());
                 }
-                if spec.selected_analysis.is_some() {
+                if spec.action.selected_analysis().is_some() {
                     prepared_with_reuse = prepared_with_reuse.saturating_add(1);
+                }
+                if matches!(spec.action, crfty_core::JobAction::Remux) {
+                    remuxed = remuxed.saturating_add(1);
                 }
             }
             crfty_engine::driver::DriverEvent::Durable(
                 crfty_core::DurableDelta::AnalysisRecorded { .. },
             ) => searches = searches.saturating_add(1),
             crfty_engine::driver::DriverEvent::Durable(
-                crfty_core::DurableDelta::ItemFinished { .. },
-            ) => finished = finished.saturating_add(1),
+                crfty_core::DurableDelta::ItemFinished {
+                    item_id, outcome, ..
+                },
+            ) => {
+                if item_id == QueueItemId(4)
+                    && matches!(outcome, crfty_core::ItemOutcome::Failed { .. })
+                {
+                    remux_failures = remux_failures.saturating_add(1);
+                }
+                finished = finished.saturating_add(1);
+            }
             crfty_engine::driver::DriverEvent::Ephemeral(
                 crfty_core::EphemeralDelta::CommandRejected { reason },
             ) => return Err(format!("coordinator command rejected: {reason}").into()),
@@ -239,13 +281,23 @@ fn run_coordinator_contract(
         )
         .into());
     }
+    if remuxed != 2
+        || !remux_input
+            .with_file_name("already-av1_remuxed.mkv")
+            .exists()
+    {
+        return Err("coordinator did not complete the typed remux job".into());
+    }
+    if remux_failures != 1 || output_dir.join("incompatible-av1_must-fail.mkv").exists() {
+        return Err("failed remux did not remain a terminal lossless failure".into());
+    }
     let expected = input.with_file_name("input_coordinated.mkv");
     if !expected.exists() {
         return Err(format!("coordinator did not promote {}", expected.display()).into());
     }
     wait_for_idle(&engine)?;
     accepted_reply(engine.commands.submit_queue(QueueCommand::Add {
-        item_id: QueueItemId(3),
+        item_id: QueueItemId(5),
         input: input.clone(),
         operation: Operation::Convert,
         output_target: OutputTarget::Suffix {
@@ -326,6 +378,16 @@ fn accepted_reply(reply: crfty_core::Reply) -> Result<(), Box<dyn Error>> {
 
 fn fake_ffmpeg() -> Result<(), Box<dyn Error>> {
     let arguments: Vec<OsString> = env::args_os().skip(1).collect();
+    let structured_remux = arguments.windows(2).any(|pair| {
+        pair.first().is_some_and(|argument| argument == "-progress")
+            && pair.get(1).is_some_and(|argument| argument == "pipe:1")
+    }) && arguments.windows(2).any(|pair| {
+        pair.first().is_some_and(|argument| argument == "-c")
+            && pair.get(1).is_some_and(|argument| argument == "copy")
+    });
+    if structured_remux {
+        return fake_remux(&arguments);
+    }
     let scoring = arguments
         .iter()
         .any(|argument| argument.to_string_lossy().contains("libvmaf"));
@@ -363,6 +425,50 @@ fn fake_ffmpeg() -> Result<(), Box<dyn Error>> {
     eprintln!(
         "video:1kB audio:2kB subtitle:0kB other streams:1kB global headers:0kB muxing overhead: 0.0%"
     );
+    Ok(())
+}
+
+fn fake_remux(arguments: &[OsString]) -> Result<(), Box<dyn Error>> {
+    let input = arguments
+        .windows(2)
+        .find_map(|pair| {
+            pair.first()
+                .is_some_and(|argument| argument == "-i")
+                .then(|| pair.get(1))
+                .flatten()
+        })
+        .map(PathBuf::from)
+        .ok_or("remux input argument is missing")?;
+    let output = arguments
+        .last()
+        .map(PathBuf::from)
+        .ok_or("remux output argument is missing")?;
+    if input.to_string_lossy().contains("incompatible") {
+        if input.to_string_lossy().contains("noisy") {
+            eprintln!("{}", "x".repeat(NOISY_STDERR_BYTES));
+        }
+        eprintln!("fixture container rejected an incompatible stream");
+        return Err("fixture remux failed".into());
+    }
+    fs::write(&output, vec![0_u8; 4096])?;
+    println!("out_time_us=1000000");
+    println!("progress=continue");
+    io::stdout().flush()?;
+
+    if output.to_string_lossy().contains("cancel") {
+        if output.to_string_lossy().contains("descendant") {
+            let heartbeat = output.with_extension("heartbeat");
+            let _child = Command::new(env::current_exe()?)
+                .arg("heartbeat")
+                .arg(heartbeat)
+                .spawn()?;
+        }
+        thread::sleep(Duration::from_secs(30));
+    }
+
+    println!("out_time_us=2000000");
+    println!("progress=end");
+    io::stdout().flush()?;
     Ok(())
 }
 

@@ -4,7 +4,7 @@ use std::{
     fs::Metadata,
     io::{self, Read, Seek, SeekFrom},
     path::{Path, PathBuf},
-    process::{Command, Stdio},
+    process::Command,
     time::UNIX_EPOCH,
 };
 
@@ -18,6 +18,8 @@ use crfty_core::{
     VideoCodec, VideoMeta,
 };
 use serde::Deserialize;
+
+use crate::process;
 
 const CONTENT_KEY_SCHEMA: &[u8] = b"ck1";
 const CONTENT_KEY_TEXT_PREFIX: &str = "ck1:";
@@ -129,7 +131,8 @@ impl MediaInspector {
     }
 
     fn probe(&self, path: &Path) -> io::Result<VideoMeta> {
-        let output = Command::new(&self.ffprobe)
+        let mut command = Command::new(&self.ffprobe);
+        command
             .args([
                 "-v",
                 "error",
@@ -140,8 +143,8 @@ impl MediaInspector {
                 "-of",
                 "json",
             ])
-            .arg(path)
-            .output()?;
+            .arg(path);
+        let output = process::output(&mut command)?;
         if !output.status.success() {
             return Err(io::Error::new(
                 io::ErrorKind::InvalidData,
@@ -226,14 +229,11 @@ fn decoder_candidates(codec: &VideoCodec) -> &'static [HardwareDecoder] {
 }
 
 fn decoder_is_available(ffmpeg: &Path, decoder: &HardwareDecoder) -> bool {
-    Command::new(ffmpeg)
+    let mut command = Command::new(ffmpeg);
+    command
         .args(["-v", "error", "-hide_banner", "-h"])
-        .arg(format!("decoder={}", decoder_name(*decoder)))
-        .stdin(Stdio::null())
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .status()
-        .is_ok_and(|status| status.success())
+        .arg(format!("decoder={}", decoder_name(*decoder)));
+    process::status(&mut command).is_ok_and(|status| status.success())
 }
 
 pub(crate) fn destructive_identity(path: &Path) -> io::Result<DestructiveIdentity> {

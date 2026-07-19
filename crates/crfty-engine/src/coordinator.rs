@@ -12,11 +12,11 @@ use std::{
 
 use crfty_core::{
     AnalysisAttempt, AnalysisResult, CRF_FIXED_SCALE, ClaimId, ClaimedJob, Command, Crf,
-    DurableDelta, DurableState, Effect, ExecutionSettings, ItemOutcome, JobPhase, JobProgress,
-    MAX_PERCENT_BASIS_POINTS, MAX_VMAF_SCORE, Operation, OutputDelta, OutputTarget,
-    PERCENT_BASIS_POINTS_SCALE, QueueCommand, QueueItemState, Reply, RunId, SearchMeasurement,
-    SessionCommand, SkipReason, Telemetry, VMAF_SCORE_FIXED_SCALE, VmafScore, VmafTarget,
-    WorkerCommand, fold,
+    DurableDelta, DurableState, Effect, ExecutionSettings, ItemOutcome, JobAction, JobPhase,
+    JobProgress, MAX_PERCENT_BASIS_POINTS, MAX_VMAF_SCORE, OutputDelta, OutputTarget,
+    OutputTransaction, PERCENT_BASIS_POINTS_SCALE, QueueCommand, QueueItemState, Replacement,
+    Reply, RunId, SearchMeasurement, SessionCommand, SkipReason, Telemetry, VMAF_SCORE_FIXED_SCALE,
+    VmafScore, VmafTarget, WorkerCommand, fold,
 };
 
 const FIRST_RUNTIME_ID: u64 = 1;
@@ -24,6 +24,26 @@ const ADAPTER_REPORT_POLL_INTERVAL: Duration = Duration::from_millis(20);
 const NORMALIZED_PROGRESS_MIN: f32 = 0.0;
 const NORMALIZED_PROGRESS_MAX: f32 = 1.0;
 const OUTPUT_CONTAINER_EXTENSION: &str = "mkv";
+
+type MediaOutputManager = OutputManager<MediaArtifactInspector>;
+
+struct OutputDestination {
+    final_path: PathBuf,
+    replacement: Replacement,
+}
+
+struct PreparedOutput {
+    manager: MediaOutputManager,
+    transaction: OutputTransaction,
+}
+
+#[derive(Clone, Copy)]
+struct JobServices<'a> {
+    commands: &'a CommandSender,
+    runtime: &'a AbAv1Runtime,
+    config: &'a EngineConfig,
+    cancellation: &'a ActiveCancellation,
+}
 
 use crate::{
     ab_av1::{
@@ -34,6 +54,10 @@ use crate::{
     driver::{CommandSender, DriverEvent, DriverHandle, DriverStartError},
     media::{DecodeResolver, MediaInspector},
     output::{MediaArtifactInspector, OutputManager},
+    remux::{
+        self, RemuxCancellationHandle, RemuxHandle, RemuxReport, RemuxRequest, RemuxTelemetry,
+        RemuxTerminal,
+    },
 };
 
 #[derive(Debug, Clone)]
@@ -310,7 +334,22 @@ struct ActiveCancellation {
 
 struct CancellationState {
     force_stopping: bool,
-    slot: Option<(RunId, CancellationHandle)>,
+    slot: Option<(RunId, ActiveJobCancellation)>,
+}
+
+#[derive(Clone)]
+enum ActiveJobCancellation {
+    AbAv1(CancellationHandle),
+    Remux(RemuxCancellationHandle),
+}
+
+impl ActiveJobCancellation {
+    fn cancel(&self) {
+        match self {
+            Self::AbAv1(handle) => handle.cancel(CancelMode::Force),
+            Self::Remux(handle) => handle.cancel(),
+        }
+    }
 }
 
 impl ActiveCancellation {
@@ -323,14 +362,18 @@ impl ActiveCancellation {
         }
     }
 
-    fn register(&self, run_id: RunId, handle: CancellationHandle) -> CancellationRegistration<'_> {
+    fn register(
+        &self,
+        run_id: RunId,
+        handle: ActiveJobCancellation,
+    ) -> CancellationRegistration<'_> {
         let mut state = match self.state.lock() {
             Ok(state) => state,
             Err(poisoned) => poisoned.into_inner(),
         };
         state.slot = Some((run_id, handle.clone()));
         if state.force_stopping {
-            handle.cancel(CancelMode::Force);
+            handle.cancel();
         }
         CancellationRegistration {
             cancellation: self,
@@ -361,7 +404,7 @@ impl ActiveCancellation {
         if let Some((active, handle)) = state.slot.as_ref()
             && run_id.is_none_or(|expected| expected == *active)
         {
-            handle.cancel(CancelMode::Force);
+            handle.cancel();
         }
     }
 
@@ -569,24 +612,51 @@ fn process_job(
     job: &ClaimedJob,
 ) -> Result<(), String> {
     let mut telemetry_sequence = 0_u64;
+    let services = JobServices {
+        commands,
+        runtime,
+        config,
+        cancellation,
+    };
     publish_phase(
         commands,
         job.spec.run_id,
         &mut telemetry_sequence,
         JobPhase::Preparing,
     );
-    if let Some(reason) = &job.spec.skip_reason {
-        terminal(
-            commands,
-            job,
-            ItemOutcome::Skipped {
-                reason: reason.clone(),
-            },
-            None,
-        )?;
-        return Ok(());
+    match &job.spec.action {
+        JobAction::Skip { reason } => {
+            terminal(
+                commands,
+                job,
+                ItemOutcome::Skipped {
+                    reason: reason.clone(),
+                },
+                None,
+            )?;
+            return Ok(());
+        }
+        JobAction::Remux => {
+            let Some(destination) = resolve_output_destination(commands, job)? else {
+                return Ok(());
+            };
+            let Some(output) = begin_output(commands, config, job, destination)? else {
+                return Ok(());
+            };
+            return run_remux(services, job, output, &mut telemetry_sequence);
+        }
+        JobAction::Analyze { .. } | JobAction::Encode { .. } => {}
     }
-    let analysis = if let Some(selected) = &job.spec.selected_analysis {
+
+    let destination = if matches!(job.spec.action, JobAction::Encode { .. }) {
+        let Some(destination) = resolve_output_destination(commands, job)? else {
+            return Ok(());
+        };
+        Some(destination)
+    } else {
+        None
+    };
+    let analysis = if let Some(selected) = job.spec.action.selected_analysis() {
         selected.clone()
     } else {
         let searched = match search_with_fallback(
@@ -614,7 +684,7 @@ fn process_job(
         )?;
         searched
     };
-    if job.spec.operation == Operation::Analyze {
+    if matches!(job.spec.action, JobAction::Analyze { .. }) {
         publish_phase(
             commands,
             job.spec.run_id,
@@ -625,11 +695,242 @@ fn process_job(
         return Ok(());
     }
 
+    let Some(destination) = destination else {
+        return Err("encode job has no resolved output destination".to_owned());
+    };
+    let Some(output) = begin_output(commands, config, job, destination)? else {
+        return Ok(());
+    };
+    run_encode(services, job, output, analysis, &mut telemetry_sequence)
+}
+
+fn run_encode(
+    services: JobServices<'_>,
+    job: &ClaimedJob,
+    output: PreparedOutput,
+    analysis: AnalysisResult,
+    telemetry_sequence: &mut u64,
+) -> Result<(), String> {
+    let PreparedOutput {
+        manager,
+        transaction,
+    } = output;
+    let request = EncodeRequest {
+        input: job.spec.input.clone(),
+        output: transaction.staging.clone(),
+        crf: crf_to_f32(analysis.measurement.crf),
+        preset: analysis.profile.preset,
+        decode_mode: analysis.profile.decode_mode,
+    };
+    let handle = match services
+        .runtime
+        .start_encode(services.config.media_tools.clone(), request)
+    {
+        Ok(handle) => handle,
+        Err(error) => {
+            abandon_output(
+                &manager,
+                services.commands,
+                job,
+                &transaction,
+                ItemOutcome::Failed {
+                    message: error.to_string(),
+                },
+                None,
+            )?;
+            return Ok(());
+        }
+    };
+    let report = wait_for_report(
+        services.commands,
+        job.spec.run_id,
+        handle,
+        services.cancellation,
+        JobPhase::Encoding,
+        telemetry_sequence,
+    );
+    match report {
+        Ok(JobReport {
+            terminal: JobTerminal::Completed(_),
+            final_telemetry,
+        }) => finish_successful_output(
+            services.commands,
+            job,
+            manager,
+            transaction,
+            ItemOutcome::Converted,
+            final_telemetry.as_ref().map(telemetry_progress),
+            telemetry_sequence,
+        )?,
+        Ok(JobReport {
+            terminal: JobTerminal::Cancelled,
+            final_telemetry,
+        }) => abandon_output(
+            &manager,
+            services.commands,
+            job,
+            &transaction,
+            ItemOutcome::Stopped,
+            map_progress(
+                job.spec.run_id,
+                telemetry_sequence,
+                JobPhase::Encoding,
+                final_telemetry.as_ref().map(telemetry_progress),
+            ),
+        )?,
+        Ok(report) => abandon_output(
+            &manager,
+            services.commands,
+            job,
+            &transaction,
+            ItemOutcome::Failed {
+                message: format!("encode failed: {:?}", report.terminal),
+            },
+            map_progress(
+                job.spec.run_id,
+                telemetry_sequence,
+                JobPhase::Encoding,
+                report.final_telemetry.as_ref().map(telemetry_progress),
+            ),
+        )?,
+        Err(message) => abandon_output(
+            &manager,
+            services.commands,
+            job,
+            &transaction,
+            ItemOutcome::Failed { message },
+            None,
+        )?,
+    }
+    Ok(())
+}
+
+fn run_remux(
+    services: JobServices<'_>,
+    job: &ClaimedJob,
+    output: PreparedOutput,
+    telemetry_sequence: &mut u64,
+) -> Result<(), String> {
+    let PreparedOutput {
+        manager,
+        transaction,
+    } = output;
+    let handle = match remux::start(RemuxRequest {
+        ffmpeg: services.config.media_tools.ffmpeg.clone(),
+        input: job.spec.input.clone(),
+        output: transaction.staging.clone(),
+    }) {
+        Ok(handle) => handle,
+        Err(error) => {
+            abandon_output(
+                &manager,
+                services.commands,
+                job,
+                &transaction,
+                ItemOutcome::Failed {
+                    message: error.to_string(),
+                },
+                None,
+            )?;
+            return Ok(());
+        }
+    };
+    let report = wait_for_remux_report(
+        services.commands,
+        job.spec.run_id,
+        handle,
+        services.cancellation,
+        telemetry_sequence,
+    );
+    match report {
+        Ok(RemuxReport {
+            terminal: RemuxTerminal::Completed(_),
+            final_telemetry,
+        }) => finish_successful_output(
+            services.commands,
+            job,
+            manager,
+            transaction,
+            ItemOutcome::Remuxed,
+            final_telemetry.map(remux_progress),
+            telemetry_sequence,
+        )?,
+        Ok(RemuxReport {
+            terminal: RemuxTerminal::Cancelled,
+            final_telemetry,
+        }) => abandon_output(
+            &manager,
+            services.commands,
+            job,
+            &transaction,
+            ItemOutcome::Stopped,
+            map_progress(
+                job.spec.run_id,
+                telemetry_sequence,
+                JobPhase::Encoding,
+                final_telemetry.map(remux_progress),
+            ),
+        )?,
+        Ok(RemuxReport {
+            terminal: RemuxTerminal::Failed(failure),
+            final_telemetry,
+        }) => {
+            let message = if failure.stderr_tail.trim().is_empty() {
+                failure.message
+            } else {
+                format!(
+                    "{}; FFmpeg stderr: {}",
+                    failure.message,
+                    failure.stderr_tail.trim()
+                )
+            };
+            abandon_output(
+                &manager,
+                services.commands,
+                job,
+                &transaction,
+                ItemOutcome::Failed { message },
+                map_progress(
+                    job.spec.run_id,
+                    telemetry_sequence,
+                    JobPhase::Encoding,
+                    final_telemetry.map(remux_progress),
+                ),
+            )?;
+        }
+        Err(message) => abandon_output(
+            &manager,
+            services.commands,
+            job,
+            &transaction,
+            ItemOutcome::Failed { message },
+            None,
+        )?,
+    }
+    Ok(())
+}
+
+fn abandon_output(
+    manager: &MediaOutputManager,
+    commands: &CommandSender,
+    job: &ClaimedJob,
+    transaction: &OutputTransaction,
+    outcome: ItemOutcome,
+    final_telemetry: Option<Telemetry>,
+) -> Result<(), String> {
+    settle_abandoned(manager, commands, transaction)?;
+    terminal(commands, job, outcome, final_telemetry)
+}
+
+fn resolve_output_destination(
+    commands: &CommandSender,
+    job: &ClaimedJob,
+) -> Result<Option<OutputDestination>, String> {
     let (final_path, replacement) = match resolve_output(job) {
         Ok(resolved) => resolved,
         Err(message) => {
             terminal(commands, job, ItemOutcome::Failed { message }, None)?;
-            return Ok(());
+            return Ok(None);
         }
     };
     if let Some(parent) = final_path.parent()
@@ -643,7 +944,7 @@ fn process_job(
             },
             None,
         )?;
-        return Ok(());
+        return Ok(None);
     }
     if final_path.exists() && !job.spec.execution.overwrite_existing && final_path != job.spec.input
     {
@@ -655,27 +956,55 @@ fn process_job(
             },
             None,
         )?;
-        return Ok(());
+        return Ok(None);
     }
+    Ok(Some(OutputDestination {
+        final_path,
+        replacement,
+    }))
+}
+
+fn begin_output(
+    commands: &CommandSender,
+    config: &EngineConfig,
+    job: &ClaimedJob,
+    destination: OutputDestination,
+) -> Result<Option<PreparedOutput>, String> {
     let manager = OutputManager::new(MediaArtifactInspector::new(
         config.media_tools.ffprobe.clone(),
     ));
-    let mut transaction =
-        match manager.prepare(job.spec.run_id, &job.spec.input, &final_path, replacement) {
-            Ok(transaction) => transaction,
-            Err(error) => {
-                terminal(
-                    commands,
-                    job,
-                    ItemOutcome::Failed {
-                        message: error.to_string(),
-                    },
-                    None,
-                )?;
-                return Ok(());
-            }
-        };
-    let started = OutputDelta::EncodeStarted {
+    let transaction = match manager.prepare(
+        job.spec.run_id,
+        &job.spec.input,
+        &destination.final_path,
+        destination.replacement,
+        job.spec.execution.overwrite_existing,
+    ) {
+        Ok(transaction) => transaction,
+        Err(error) if error.is_destination_exists() => {
+            terminal(
+                commands,
+                job,
+                ItemOutcome::Skipped {
+                    reason: SkipReason::OutputExists,
+                },
+                None,
+            )?;
+            return Ok(None);
+        }
+        Err(error) => {
+            terminal(
+                commands,
+                job,
+                ItemOutcome::Failed {
+                    message: error.to_string(),
+                },
+                None,
+            )?;
+            return Ok(None);
+        }
+    };
+    let started = OutputDelta::OutputStarted {
         transaction: Box::new(transaction.clone()),
     };
     if let Err(error) = submit_output(commands, started) {
@@ -686,16 +1015,29 @@ fn process_job(
             )),
         };
     }
+    Ok(Some(PreparedOutput {
+        manager,
+        transaction,
+    }))
+}
 
-    let request = EncodeRequest {
-        input: job.spec.input.clone(),
-        output: transaction.staging.clone(),
-        crf: crf_to_f32(analysis.measurement.crf),
-        preset: analysis.profile.preset,
-        decode_mode: analysis.profile.decode_mode,
-    };
-    let handle = match runtime.start_encode(config.media_tools.clone(), request) {
-        Ok(handle) => handle,
+fn finish_successful_output(
+    commands: &CommandSender,
+    job: &ClaimedJob,
+    manager: MediaOutputManager,
+    mut transaction: OutputTransaction,
+    outcome: ItemOutcome,
+    final_progress: Option<JobProgress>,
+    telemetry_sequence: &mut u64,
+) -> Result<(), String> {
+    publish_phase(
+        commands,
+        job.spec.run_id,
+        telemetry_sequence,
+        JobPhase::Verifying,
+    );
+    let ready = match manager.mark_ready(&transaction) {
+        Ok(ready) => ready,
         Err(error) => {
             settle_abandoned(&manager, commands, &transaction)?;
             terminal(
@@ -704,136 +1046,62 @@ fn process_job(
                 ItemOutcome::Failed {
                     message: error.to_string(),
                 },
-                None,
+                map_progress(
+                    job.spec.run_id,
+                    telemetry_sequence,
+                    JobPhase::Verifying,
+                    final_progress,
+                ),
             )?;
             return Ok(());
         }
     };
-    let report = wait_for_report(
+    submit_output(commands, ready.clone())?;
+    fold_transaction(&mut transaction, ready);
+    publish_phase(
         commands,
         job.spec.run_id,
-        handle,
-        cancellation,
-        JobPhase::Encoding,
-        &mut telemetry_sequence,
+        telemetry_sequence,
+        JobPhase::Finalizing,
     );
-    match report {
-        Ok(JobReport {
-            terminal: JobTerminal::Completed(_),
-            final_telemetry,
-        }) => {
-            publish_phase(
-                commands,
-                job.spec.run_id,
-                &mut telemetry_sequence,
-                JobPhase::Verifying,
-            );
-            let ready = match manager.mark_ready(&transaction) {
-                Ok(ready) => ready,
-                Err(error) => {
-                    settle_abandoned(&manager, commands, &transaction)?;
-                    terminal(
-                        commands,
-                        job,
-                        ItemOutcome::Failed {
-                            message: error.to_string(),
-                        },
-                        map_telemetry(
-                            job.spec.run_id,
-                            &mut telemetry_sequence,
-                            JobPhase::Verifying,
-                            final_telemetry,
-                        ),
-                    )?;
-                    return Ok(());
-                }
-            };
-            submit_output(commands, ready.clone())?;
-            fold_transaction(&mut transaction, ready);
-            publish_phase(
-                commands,
-                job.spec.run_id,
-                &mut telemetry_sequence,
-                JobPhase::Finalizing,
-            );
-            while !transaction.is_settled() {
-                let next = match manager.recover_once(&transaction) {
-                    Ok(Some(next)) => next,
-                    Ok(None) => {
-                        return Err("output recovery made no progress before settlement".to_owned());
-                    }
-                    Err(error) => {
-                        settle_conflict(commands, job.spec.run_id, error.to_string())?;
-                        terminal(
-                            commands,
-                            job,
-                            ItemOutcome::Failed {
-                                message: error.to_string(),
-                            },
-                            map_telemetry(
-                                job.spec.run_id,
-                                &mut telemetry_sequence,
-                                JobPhase::Finalizing,
-                                final_telemetry,
-                            ),
-                        )?;
-                        return Ok(());
-                    }
-                };
-                submit_output(commands, next.clone())?;
-                fold_transaction(&mut transaction, next);
+    while !transaction.is_settled() {
+        let next = match manager.recover_once(&transaction) {
+            Ok(Some(next)) => next,
+            Ok(None) => {
+                return Err("output recovery made no progress before settlement".to_owned());
             }
-            terminal(
-                commands,
-                job,
-                ItemOutcome::Converted,
-                map_telemetry(
-                    job.spec.run_id,
-                    &mut telemetry_sequence,
-                    JobPhase::Finalizing,
-                    final_telemetry,
-                ),
-            )?;
-        }
-        Ok(JobReport {
-            terminal: JobTerminal::Cancelled,
-            final_telemetry,
-        }) => {
-            settle_abandoned(&manager, commands, &transaction)?;
-            terminal(
-                commands,
-                job,
-                ItemOutcome::Stopped,
-                map_telemetry(
-                    job.spec.run_id,
-                    &mut telemetry_sequence,
-                    JobPhase::Encoding,
-                    final_telemetry,
-                ),
-            )?;
-        }
-        Ok(report) => {
-            settle_abandoned(&manager, commands, &transaction)?;
-            terminal(
-                commands,
-                job,
-                ItemOutcome::Failed {
-                    message: format!("encode failed: {:?}", report.terminal),
-                },
-                map_telemetry(
-                    job.spec.run_id,
-                    &mut telemetry_sequence,
-                    JobPhase::Encoding,
-                    report.final_telemetry,
-                ),
-            )?;
-        }
-        Err(message) => {
-            settle_abandoned(&manager, commands, &transaction)?;
-            terminal(commands, job, ItemOutcome::Failed { message }, None)?;
-        }
+            Err(error) => {
+                settle_conflict(commands, job.spec.run_id, error.to_string())?;
+                terminal(
+                    commands,
+                    job,
+                    ItemOutcome::Failed {
+                        message: error.to_string(),
+                    },
+                    map_progress(
+                        job.spec.run_id,
+                        telemetry_sequence,
+                        JobPhase::Finalizing,
+                        final_progress,
+                    ),
+                )?;
+                return Ok(());
+            }
+        };
+        submit_output(commands, next.clone())?;
+        fold_transaction(&mut transaction, next);
     }
-    Ok(())
+    terminal(
+        commands,
+        job,
+        outcome,
+        map_progress(
+            job.spec.run_id,
+            telemetry_sequence,
+            JobPhase::Finalizing,
+            final_progress,
+        ),
+    )
 }
 
 fn search_with_fallback(
@@ -929,7 +1197,10 @@ fn wait_for_report<T>(
     phase: JobPhase,
     telemetry_sequence: &mut u64,
 ) -> Result<JobReport<T>, String> {
-    let _registration = cancellation.register(run_id, handle.cancellation_handle());
+    let _registration = cancellation.register(
+        run_id,
+        ActiveJobCancellation::AbAv1(handle.cancellation_handle()),
+    );
     let mut last_progress = None;
     loop {
         match handle.try_report().map_err(|error| error.to_string())? {
@@ -956,6 +1227,41 @@ fn wait_for_report<T>(
     }
 }
 
+fn wait_for_remux_report(
+    commands: &CommandSender,
+    run_id: RunId,
+    mut handle: RemuxHandle,
+    cancellation: &ActiveCancellation,
+    telemetry_sequence: &mut u64,
+) -> Result<RemuxReport, String> {
+    let _registration = cancellation.register(
+        run_id,
+        ActiveJobCancellation::Remux(handle.cancellation_handle()),
+    );
+    let mut last_progress = None;
+    loop {
+        match handle.try_report().map_err(|error| error.to_string())? {
+            Some(report) => return Ok(report),
+            None => {
+                if let Some(update) = handle.latest_telemetry() {
+                    let progress = remux_progress(update);
+                    if last_progress.as_ref() != Some(&progress) {
+                        *telemetry_sequence = telemetry_sequence.saturating_add(1);
+                        commands.publish_telemetry(Telemetry {
+                            run_id,
+                            sequence: *telemetry_sequence,
+                            phase: JobPhase::Encoding,
+                            progress: progress.clone(),
+                        });
+                        last_progress = Some(progress);
+                    }
+                }
+                thread::sleep(ADAPTER_REPORT_POLL_INTERVAL);
+            }
+        }
+    }
+}
+
 fn telemetry_progress(telemetry: &AdapterTelemetry) -> JobProgress {
     match telemetry {
         AdapterTelemetry::Search(search) => JobProgress::SearchBasisPoints(
@@ -964,10 +1270,14 @@ fn telemetry_progress(telemetry: &AdapterTelemetry) -> JobProgress {
                 .clamp(NORMALIZED_PROGRESS_MIN, NORMALIZED_PROGRESS_MAX)
                 * MAX_PERCENT_BASIS_POINTS as f32) as u32,
         ),
-        AdapterTelemetry::Encode(encode) => JobProgress::EncodePositionMs(
+        AdapterTelemetry::Encode(encode) => JobProgress::OutputPositionMs(
             encode.position.as_millis().try_into().unwrap_or(u64::MAX),
         ),
     }
+}
+
+fn remux_progress(telemetry: RemuxTelemetry) -> JobProgress {
+    JobProgress::OutputPositionMs(telemetry.position_ms)
 }
 
 fn measurement(outcome: SearchOutcome) -> Result<SearchMeasurement, String> {
@@ -1183,19 +1493,19 @@ fn terminal(
     )
 }
 
-fn map_telemetry(
+fn map_progress(
     run_id: RunId,
     sequence: &mut u64,
     phase: JobPhase,
-    telemetry: Option<AdapterTelemetry>,
+    progress: Option<JobProgress>,
 ) -> Option<Telemetry> {
-    telemetry.map(|telemetry| {
+    progress.map(|progress| {
         *sequence = sequence.saturating_add(1);
         Telemetry {
             run_id,
             sequence: *sequence,
             phase,
-            progress: telemetry_progress(&telemetry),
+            progress,
         }
     })
 }
@@ -1235,7 +1545,8 @@ mod tests {
     use crfty_core::{OutputTarget, Replacement};
 
     use super::{
-        ActiveCancellation, resolve_output_for, validate_suffix, validate_windows_file_name,
+        ActiveCancellation, ActiveJobCancellation, resolve_output_for, validate_suffix,
+        validate_windows_file_name,
     };
     use crate::ab_av1::{CancelMode, CancellationHandle};
     use crfty_core::RunId;
@@ -1281,7 +1592,7 @@ mod tests {
         let cancellation = ActiveCancellation::new();
         cancellation.force(None);
         let (handle, receiver) = CancellationHandle::fixture();
-        let _registration = cancellation.register(RunId(7), handle);
+        let _registration = cancellation.register(RunId(7), ActiveJobCancellation::AbAv1(handle));
         assert_eq!(*receiver.borrow(), Some(CancelMode::Force));
     }
 }

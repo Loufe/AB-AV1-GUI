@@ -52,6 +52,12 @@ impl OutputError {
     fn new(context: &'static str, source: io::Error) -> Self {
         Self { context, source }
     }
+
+    #[must_use]
+    pub fn is_destination_exists(&self) -> bool {
+        self.context == "output destination already exists"
+            && self.source.kind() == io::ErrorKind::AlreadyExists
+    }
 }
 
 impl fmt::Display for OutputError {
@@ -81,6 +87,7 @@ impl<I: ArtifactInspector> OutputManager<I> {
         input: &Path,
         final_path: &Path,
         replacement: Replacement,
+        overwrite_existing: bool,
     ) -> Result<OutputTransaction, OutputError> {
         let input_identity = self
             .inspector
@@ -89,6 +96,12 @@ impl<I: ArtifactInspector> OutputManager<I> {
         let final_preimage = observe_file(&self.inspector, final_path)
             .map_err(|error| OutputError::new("failed to inspect output destination", error))?
             .into_identity();
+        if !overwrite_existing && final_path != input && final_preimage.is_some() {
+            return Err(OutputError::new(
+                "output destination already exists",
+                io::Error::new(io::ErrorKind::AlreadyExists, "overwrite is disabled"),
+            ));
+        }
         if replacement == Replacement::RetireOriginal
             && final_preimage.as_ref() == Some(&input_identity)
         {
