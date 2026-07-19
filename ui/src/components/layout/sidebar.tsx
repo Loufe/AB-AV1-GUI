@@ -15,6 +15,8 @@ interface SidebarProps {
   onCycleTheme: () => void;
   /** Dev builds only: shows the workshop entries (kitchen sink, spikes). */
   showDevViews: boolean;
+  /** Shell version under Tauri; null in plain browser dev. */
+  appVersion: string | null;
 }
 
 export function Sidebar({
@@ -23,6 +25,7 @@ export function Sidebar({
   theme,
   onCycleTheme,
   showDevViews,
+  appVersion,
 }: SidebarProps) {
   const ThemeIcon = THEME_ICONS[theme];
 
@@ -64,6 +67,9 @@ export function Sidebar({
           <ThemeIcon className="size-4 shrink-0" aria-hidden="true" />
           Theme: {theme}
         </button>
+        {appVersion !== null && (
+          <p className="px-2.5 pt-1 text-xs text-muted-foreground">v{appVersion}</p>
+        )}
       </div>
     </aside>
   );

@@ -16,11 +16,16 @@ ground-up Rust rewrite of the Python application retained on `main`.
 - `crfty-core` is pure domain code. It must not depend on filesystem, process,
   clock, async runtime, or UI crates.
 - `crfty-engine` owns processes and filesystem I/O but must not depend on Tauri.
-- The future Tauri shell is a thin command and event bridge with no domain logic.
+- `crfty-shell` is a thin command and event bridge with no domain logic
+  (ADR-001, ADR-006). Run it with `pnpm tauri:dev` from `ui/`; on Linux the
+  webkit2gtk prerequisites in `.github/workflows/rust.yml` must be installed.
 - Mutable application state has one owner: the synchronous driver/reducer.
-- The frontend never hand-authors IPC or domain types — all cross-boundary types
-  come generated from Rust (issue #33). Until bindings exist, views ship static
-  empty states and design work lives in the dev-gated kitchen sink.
+- The frontend never hand-authors IPC or domain types — all cross-boundary
+  types come generated from Rust (issue #33) into `ui/src/lib/bindings.ts` by
+  the shell's `export_bindings` test. The file is committed, never edited by
+  hand, and freshness-gated in CI. Views ship static empty states until the
+  fold-reducer/store workstream consumes the stream; design work lives in the
+  dev-gated kitchen sink.
 
 ## Commands
 

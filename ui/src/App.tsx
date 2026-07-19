@@ -9,6 +9,7 @@ import { HistoryView } from "@/features/history";
 import { QueueView } from "@/features/queue";
 import { SettingsView } from "@/features/settings";
 import { StatisticsView } from "@/features/statistics";
+import { fetchAppVersion, isTauri, subscribeStream } from "@/lib/ipc";
 import { getTheme, setTheme, watchSystemTheme, type Theme } from "@/lib/theme";
 
 const THEME_ORDER: Theme[] = ["system", "light", "dark"];
@@ -48,8 +49,28 @@ function isDevView(view: AppView): view is DevViewId {
 export default function App() {
   const [activeView, setActiveView] = useState<AppView>("queue");
   const [theme, setThemeState] = useState<Theme>(getTheme);
+  const [appVersion, setAppVersion] = useState<string | null>(null);
 
   useEffect(() => watchSystemTheme(), []);
+
+  // IPC smoke wiring: under Tauri, open the event stream and show the shell
+  // version. The fold reducer that consumes these events is the next
+  // workstream; until then deltas land in the console.
+  useEffect(() => {
+    if (!isTauri()) {
+      return;
+    }
+    subscribeStream((event) => {
+      console.debug("shell event", event.seq, event.payload);
+    }).catch((error: unknown) => {
+      console.error("failed to subscribe to the shell event stream", error);
+    });
+    fetchAppVersion()
+      .then(setAppVersion)
+      .catch((error: unknown) => {
+        console.error("failed to fetch the shell version", error);
+      });
+  }, []);
 
   const cycleTheme = () => {
     const next = THEME_ORDER[(THEME_ORDER.indexOf(theme) + 1) % THEME_ORDER.length];
@@ -65,6 +86,7 @@ export default function App() {
         theme={theme}
         onCycleTheme={cycleTheme}
         showDevViews={DEV_COMPONENTS !== null}
+        appVersion={appVersion}
       />
       <main className="flex-1 overflow-y-auto">
         {isDevView(activeView)
