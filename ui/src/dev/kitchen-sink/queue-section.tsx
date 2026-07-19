@@ -97,7 +97,7 @@ function StatusText({
 }: {
   tone: "success" | "warning" | "destructive" | "muted";
   icon?: React.ComponentType<{ className?: string }>;
-  /** Reason/remediation detail (D11: reasons ride the item, not the logs). */
+  /** One line of facts the row doesn't show (D11: reasons ride the item). */
   tooltip?: React.ReactNode;
   children: React.ReactNode;
 }) {
@@ -132,37 +132,8 @@ function StatusText({
           {children}
         </span>
       </TooltipTrigger>
-      <TooltipContent variant="rich">{tooltip}</TooltipContent>
+      <TooltipContent>{tooltip}</TooltipContent>
     </Tooltip>
-  );
-}
-
-/**
- * Rich-tooltip skeleton: toned icon + title header, structured body, and the
- * remediation as a separated footer row — data as label/value, not prose.
- */
-function ReasonTooltip({
-  icon: Icon,
-  toneClass,
-  title,
-  action,
-  children,
-}: {
-  icon: React.ComponentType<{ className?: string }>;
-  toneClass: string;
-  title: string;
-  action?: string;
-  children?: React.ReactNode;
-}) {
-  return (
-    <>
-      <p className={cn("flex items-center gap-1.5 font-medium", toneClass)}>
-        <Icon className="size-3.5 shrink-0" aria-hidden="true" />
-        {title}
-      </p>
-      {children}
-      {action && <p className="mt-2 border-t border-border pt-2 text-muted-foreground">{action}</p>}
-    </>
   );
 }
 
@@ -214,22 +185,7 @@ const SEASON_FILES: MockFileRow[] = [
       <StatusText
         tone="success"
         icon={CircleCheck}
-        tooltip={
-          <ReasonTooltip icon={CircleCheck} toneClass="text-success" title="Converted">
-            <div className="mt-2 grid grid-cols-[auto_1fr] gap-x-4 gap-y-1">
-              <span className="text-muted-foreground">VMAF</span>
-              <span className="tabular-nums">95.2</span>
-              <span className="text-muted-foreground">CRF</span>
-              <span className="tabular-nums">{formatCrf(24)}</span>
-              <span className="text-muted-foreground">Time</span>
-              <span className="tabular-nums">{formatCompactTime(4320)}</span>
-              <span className="text-muted-foreground">Size</span>
-              <span className="tabular-nums">
-                {formatFileSize(3.21 * GIB)} → {formatFileSize(1.34 * GIB)} · −58%
-              </span>
-            </div>
-          </ReasonTooltip>
-        }
+        tooltip={`VMAF 95.2 · CRF ${formatCrf(24)} · ${formatCompactTime(4320)}`}
       >
         Done · saved {formatFileSize(1.87 * GIB)}
       </StatusText>
@@ -283,18 +239,7 @@ const SEASON_FILES: MockFileRow[] = [
       <StatusText
         tone="warning"
         icon={CircleSlash}
-        tooltip={
-          <ReasonTooltip
-            icon={CircleSlash}
-            toneClass="text-warning"
-            title="Not worthwhile"
-            action="Lower the VMAF floor in Settings to convert anyway."
-          >
-            <p className="mt-1 text-muted-foreground">
-              No quality level down to the VMAF 90 floor saved meaningful space.
-            </p>
-          </ReasonTooltip>
-        }
+        tooltip="Best attempt saved 3% at the VMAF 90 floor"
       >
         Skipped · not worthwhile
       </StatusText>
@@ -313,18 +258,7 @@ const SEASON_FILES: MockFileRow[] = [
       <StatusText
         tone="destructive"
         icon={CircleAlert}
-        tooltip={
-          <ReasonTooltip
-            icon={CircleAlert}
-            toneClass="text-destructive"
-            title="Input unreadable"
-            action="Remux to MKV and re-add. Full details in the log."
-          >
-            <p className="mt-1 text-muted-foreground">
-              ffprobe could not parse this file — likely corrupt or truncated.
-            </p>
-          </ReasonTooltip>
-        }
+        tooltip={<span className="font-mono">ffprobe: moov atom not found</span>}
       >
         Error · input unreadable
       </StatusText>
@@ -451,7 +385,7 @@ function QueueTable() {
       <div className={cn("border-b border-border py-1 text-xs text-muted-foreground", COLS)}>
         <span />
         <span>Name</span>
-        <span>Format</span>
+        <span>Input format</span>
         <span className="text-right">Size</span>
         <span className="text-right">Time</span>
         <span>Operation</span>
@@ -589,8 +523,7 @@ export function QueueSection() {
         (drives the properties card). Operation cells: chevron = in-cell selector, orange dot =
         precise CRF cached (replaces &quot;Analyze+Convert&quot;). Time column steps down the
         confidence ramp instead of ~/~~ tildes. Reasons ride the status cell; totals are the footer
-        row. Dotted underline = tooltip with the full story — hover it or Tab to it (Done, Skipped,
-        Error, estimated times, and the CRF dot all carry one).
+        row. Dotted underline = tooltip (hover or Tab) with the facts the row doesn&apos;t show.
       </p>
       <TooltipProvider>
         <div className="rounded-lg border border-border bg-background p-4">
