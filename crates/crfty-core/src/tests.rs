@@ -2,17 +2,19 @@ use std::path::PathBuf;
 
 use proptest::prelude::*;
 
+use crate::reducer::validate_terminal;
+
 use crate::{
     AnalysisProfile, AnalysisResult, AppState, ArtifactIdentity, ClaimId, Command, ContentKey, Crf,
     DestructiveIdentity, DestructiveObservation, DurableDelta, Effect, Eligibility,
     ExecutionSettings, FileRecord, FileStamp, FileSystemFacts, FileSystemId, ItemOutcome,
-    JOURNAL_SCHEMA_VERSION, JobPhase, JobProgress, JournalEnvelope, JournalSequence,
+    JOURNAL_SCHEMA_VERSION, JobAction, JobPhase, JobProgress, JournalEnvelope, JournalSequence,
     MediaContainer, MediaObservation, Operation, OutputDelta, OutputRecoveryAction, OutputState,
     OutputTarget, OutputTransaction, PathBinding, PathHash, QueueCommand, QueueItemId,
     QueueItemState, Replacement, Reply, RunId, SearchMeasurement, SessionCommand, SessionState,
     SkipReason, Telemetry, ToolRevisions, VideoCodec, VideoMeta, VmafScore, VmafTarget,
     WorkerCommand, apply, encode_record, evaluate_eligibility, recover_output, replay,
-    select_analysis,
+    select_analysis, select_job_action,
 };
 
 fn execution() -> ExecutionSettings {
@@ -143,7 +145,7 @@ fn reducer_enforces_session_claim_and_terminal_ordering() {
                 run_id: RunId(3),
                 sequence: 20,
                 phase: JobPhase::Encoding,
-                progress: JobProgress::EncodePositionMs(100),
+                progress: JobProgress::OutputPositionMs(100),
             }),
         }),
     );
@@ -262,7 +264,7 @@ fn durable_analysis_is_selected_for_the_same_content_and_profile() {
     let Reply::Claimed(Some(job)) = prepared.reply else {
         panic!("expected prepared reused job");
     };
-    assert_eq!(job.spec.selected_analysis, Some(analysis()));
+    assert_eq!(job.spec.action.selected_analysis(), Some(&analysis()));
 }
 
 #[test]
@@ -292,6 +294,25 @@ fn policy_uses_post_rotation_pixel_floor_and_typed_av1_decisions() {
         evaluate_eligibility(&metadata, Operation::Convert),
         Eligibility::Remux
     );
+    let record = FileRecord::new(metadata.clone());
+    assert_eq!(
+        select_job_action(
+            Some(&metadata),
+            Some(&record),
+            Operation::Convert,
+            &execution()
+        ),
+        JobAction::Remux
+    );
+    assert!(matches!(
+        select_job_action(
+            Some(&metadata),
+            Some(&record),
+            Operation::Analyze,
+            &execution()
+        ),
+        JobAction::Analyze { .. }
+    ));
 }
 
 #[test]
@@ -418,7 +439,7 @@ fn terminal_is_rejected_until_output_ledger_is_settled() {
     started.run_id = RunId(3);
     let output = apply(
         &mut state,
-        Command::Worker(WorkerCommand::Output(OutputDelta::EncodeStarted {
+        Command::Worker(WorkerCommand::Output(OutputDelta::OutputStarted {
             transaction: Box::new(started),
         })),
     );
@@ -456,7 +477,7 @@ fn converted_requires_a_successfully_committed_output() {
     assert_eq!(
         apply(
             &mut state,
-            Command::Worker(WorkerCommand::Output(OutputDelta::EncodeStarted {
+            Command::Worker(WorkerCommand::Output(OutputDelta::OutputStarted {
                 transaction: Box::new(started),
             })),
         )
@@ -485,6 +506,49 @@ fn converted_requires_a_successfully_committed_output() {
         }),
     );
     assert!(matches!(conflicted.reply, Reply::Rejected { .. }));
+}
+
+#[test]
+fn remuxed_requires_a_remux_action_and_committed_output() {
+    let mut state = AppState::default();
+    let _added = apply(&mut state, add_command(QueueItemId(1), "video.mp4"));
+    let _started = apply(&mut state, Command::Session(SessionCommand::Start));
+    let _reserved = apply(
+        &mut state,
+        Command::Worker(WorkerCommand::ReserveNext {
+            claim_id: ClaimId(2),
+            run_id: RunId(3),
+        }),
+    );
+    let mut observation = media_observation("remux-content");
+    observation.metadata.codec = VideoCodec::Av1;
+    observation.metadata.container = MediaContainer::Other("mov,mp4".to_owned());
+    let prepared = apply(
+        &mut state,
+        Command::Worker(WorkerCommand::PrepareReserved {
+            item_id: QueueItemId(1),
+            claim_id: ClaimId(2),
+            run_id: RunId(3),
+            observation: Some(Box::new(observation)),
+            execution: execution(),
+        }),
+    );
+    assert!(matches!(prepared.reply, Reply::Claimed(Some(_))));
+    let run = state
+        .durable
+        .conversion_runs
+        .get(&RunId(3))
+        .expect("prepared remux run");
+    assert_eq!(run.spec.action, JobAction::Remux);
+    let mut output = transaction(
+        OutputState::Committed {
+            final_identity: identity("remux-output", 20),
+        },
+        Replacement::KeepOriginal,
+    );
+    output.run_id = RunId(3);
+    assert!(validate_terminal(run, Some(&output), &ItemOutcome::Remuxed).is_ok());
+    assert!(validate_terminal(run, Some(&output), &ItemOutcome::Converted).is_err());
 }
 
 #[test]
@@ -572,7 +636,7 @@ fn output_ledger_rejects_skipped_and_mismatched_transitions() {
     started.run_id = RunId(3);
     let accepted = apply(
         &mut state,
-        Command::Worker(WorkerCommand::Output(OutputDelta::EncodeStarted {
+        Command::Worker(WorkerCommand::Output(OutputDelta::OutputStarted {
             transaction: Box::new(started),
         })),
     );

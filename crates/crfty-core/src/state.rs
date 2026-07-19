@@ -43,6 +43,7 @@ pub enum QueueItemState {
 pub enum ItemOutcome {
     Analyzed,
     Converted,
+    Remuxed,
     NotWorthwhile { attempts: Vec<AnalysisAttempt> },
     Stopped,
     Skipped { reason: SkipReason },
@@ -133,7 +134,7 @@ pub struct Telemetry {
 pub enum JobProgress {
     Phase,
     SearchBasisPoints(u32),
-    EncodePositionMs(u64),
+    OutputPositionMs(u64),
 }
 
 pub fn fold(state: &mut DurableState, delta: &DurableDelta) {
@@ -178,7 +179,7 @@ pub fn fold(state: &mut DurableState, delta: &DurableDelta) {
                 spec.run_id,
                 ConversionRun {
                     spec: spec.as_ref().clone(),
-                    analysis: spec.selected_analysis.clone(),
+                    analysis: spec.action.selected_analysis().cloned(),
                     output_content_key: None,
                     outcome: None,
                 },
@@ -218,7 +219,7 @@ pub fn fold(state: &mut DurableState, delta: &DurableDelta) {
                 QueueItemState::Finished(outcome.clone()),
             );
             if let Some(run) = state.conversion_runs.get_mut(run_id) {
-                if matches!(outcome, ItemOutcome::Converted)
+                if matches!(outcome, ItemOutcome::Converted | ItemOutcome::Remuxed)
                     && let Some(transaction) = state.outputs.get(run_id)
                 {
                     run.output_content_key = match &transaction.state {

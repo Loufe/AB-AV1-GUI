@@ -20,7 +20,7 @@ mod state;
 
 pub use job::{
     AnalysisAttempt, AnalysisProfile, AnalysisResult, ClaimedJob, Crf, DecodeMode,
-    DecodePreference, ExecutionSettings, HardwareDecoder, JobPhase, JobSpec, Operation,
+    DecodePreference, ExecutionSettings, HardwareDecoder, JobAction, JobPhase, JobSpec, Operation,
     OutputTarget, ReservedJob, SearchMeasurement, ToolRevisions, VmafScore, VmafTarget,
 };
 pub use journal::{
@@ -38,6 +38,7 @@ pub use output::{
 };
 pub use policy::{
     Eligibility, MIN_VIDEO_PIXELS, SkipReason, evaluate_eligibility, select_analysis,
+    select_job_action,
 };
 pub use reducer::{
     Applied, Command, Effect, EphemeralDelta, QueueCommand, Reply, SessionCommand, SystemCommand,

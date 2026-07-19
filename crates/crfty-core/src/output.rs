@@ -91,7 +91,7 @@ impl OutputTransaction {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum OutputDelta {
-    EncodeStarted {
+    OutputStarted {
         transaction: Box<OutputTransaction>,
     },
     OutputReady {
@@ -124,7 +124,7 @@ pub enum OutputDelta {
 impl OutputDelta {
     pub(crate) fn fold_into(&self, outputs: &mut BTreeMap<RunId, OutputTransaction>) {
         match self {
-            Self::EncodeStarted { transaction } => {
+            Self::OutputStarted { transaction } => {
                 outputs.insert(transaction.run_id, transaction.as_ref().clone());
             }
             Self::OutputReady {

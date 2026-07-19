@@ -1,7 +1,8 @@
 use serde::{Deserialize, Serialize};
 
 use crate::{
-    AnalysisResult, ExecutionSettings, FileRecord, MediaContainer, Operation, VideoCodec, VideoMeta,
+    AnalysisResult, ExecutionSettings, FileRecord, JobAction, MediaContainer, Operation,
+    VideoCodec, VideoMeta,
 };
 
 pub const MIN_VIDEO_PIXELS: u64 = 921_600;
@@ -63,4 +64,28 @@ pub fn select_analysis(
                     .then(|| result.clone())
             })
         })
+}
+
+#[must_use]
+pub fn select_job_action(
+    metadata: Option<&VideoMeta>,
+    record: Option<&FileRecord>,
+    operation: Operation,
+    execution: &ExecutionSettings,
+) -> JobAction {
+    if let Some(metadata) = metadata {
+        match evaluate_eligibility(metadata, operation) {
+            Eligibility::Remux => return JobAction::Remux,
+            Eligibility::Skip(reason) => return JobAction::Skip { reason },
+            Eligibility::Process => {}
+        }
+    }
+
+    let selected_analysis = record
+        .and_then(|known| select_analysis(known, execution))
+        .map(Box::new);
+    match operation {
+        Operation::Analyze => JobAction::Analyze { selected_analysis },
+        Operation::Convert => JobAction::Encode { selected_analysis },
+    }
 }

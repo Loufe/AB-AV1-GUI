@@ -5,7 +5,7 @@ use crate::{
     reducer::{validate_output_delta, validate_terminal},
 };
 
-pub const JOURNAL_SCHEMA_VERSION: u32 = 4;
+pub const JOURNAL_SCHEMA_VERSION: u32 = 5;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct JournalEnvelope {
@@ -217,21 +217,15 @@ fn validate_replayed_delta(state: &DurableState, delta: &DurableDelta) -> Result
                 .as_ref()
                 .and_then(|key| state.records.get(key));
             let content_exists = spec.content_key.is_none() || record.is_some();
-            let expected_skip = record.and_then(|record| {
-                match crate::evaluate_eligibility(&record.metadata, spec.operation) {
-                    crate::Eligibility::Skip(reason) => Some(reason),
-                    crate::Eligibility::Process | crate::Eligibility::Remux => None,
-                }
-            });
-            let expected_analysis = if expected_skip.is_none() {
-                record.and_then(|record| crate::select_analysis(record, &spec.execution))
-            } else {
-                None
-            };
+            let expected_action = crate::select_job_action(
+                record.map(|known| &known.metadata),
+                record,
+                spec.operation,
+                &spec.execution,
+            );
             if !matches_item
                 || !content_exists
-                || spec.skip_reason != expected_skip
-                || spec.selected_analysis != expected_analysis
+                || spec.action != expected_action
                 || state.conversion_runs.contains_key(&spec.run_id)
             {
                 return Err("prepared job does not match its reservation or media record");
