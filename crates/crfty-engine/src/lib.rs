@@ -8,3 +8,5 @@
 //!
 //! This crate may depend on [`crfty_core`] but cannot depend on Tauri or other
 //! user-interface frameworks.
+
+pub mod ab_av1;

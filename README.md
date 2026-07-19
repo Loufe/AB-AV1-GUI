@@ -11,14 +11,16 @@ in [issue #33](https://github.com/Loufe/AB-AV1-GUI/issues/33).
 
 ## Status
 
-The rewrite is at its foundation stage. The workspace establishes dependency and
-safety boundaries; it does not yet contain application behavior or a user
-interface.
+The rewrite has its workspace foundation and first engine integration. The
+engine embeds a pinned ab-av1 revision behind CRFty-owned request, telemetry,
+result, cancellation, and cleanup types. Domain behavior and the user interface
+have not been implemented yet.
 
 ## Workspace
 
 - `crates/crfty-core`: pure domain logic; no processes, filesystem, clock, or UI
-- `crates/crfty-engine`: process and filesystem integration; no Tauri dependency
+- `crates/crfty-engine`: process and filesystem integration, including the
+  isolated ab-av1 adapter; no Tauri dependency
 - Tauri shell and web UI: added only after the engine boundary is proven
 
 ## Development
