@@ -125,7 +125,10 @@ impl<I: ArtifactInspector> OutputManager<I> {
                 io::Error::new(io::ErrorKind::InvalidInput, "invalid output state"),
             ));
         }
-        let staging = File::open(&transaction.staging)
+        let staging = OpenOptions::new()
+            .read(true)
+            .write(true)
+            .open(&transaction.staging)
             .map_err(|error| OutputError::new("failed to open staging file", error))?;
         staging
             .sync_all()
