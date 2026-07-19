@@ -554,36 +554,22 @@
   "formatStreamDisplay": [
     {
       "videoCodec": "h264",
-      "audioCodecs": [
-        "aac"
-      ],
+      "audioCodecs": ["aac"],
       "expected": "H264 / AAC"
     },
     {
       "videoCodec": "hevc",
-      "audioCodecs": [
-        "aac",
-        "ac3"
-      ],
+      "audioCodecs": ["aac", "ac3"],
       "expected": "HEVC / AAC, AC3"
     },
     {
       "videoCodec": "h264",
-      "audioCodecs": [
-        "aac",
-        "ac3",
-        "dts"
-      ],
+      "audioCodecs": ["aac", "ac3", "dts"],
       "expected": "H264 / AAC, AC3, DTS"
     },
     {
       "videoCodec": "h264",
-      "audioCodecs": [
-        "aac",
-        "aac",
-        "aac",
-        "aac"
-      ],
+      "audioCodecs": ["aac", "aac", "aac", "aac"],
       "expected": "H264 / 4 audio"
     },
     {
@@ -593,21 +579,12 @@
     },
     {
       "videoCodec": null,
-      "audioCodecs": [
-        "opus"
-      ],
+      "audioCodecs": ["opus"],
       "expected": "? / OPUS"
     },
     {
       "videoCodec": "mpeg4",
-      "audioCodecs": [
-        "aac",
-        "aac",
-        "aac",
-        "aac",
-        "aac",
-        "aac"
-      ],
+      "audioCodecs": ["aac", "aac", "aac", "aac", "aac", "aac"],
       "expected": "MPEG4 / 6 audio"
     },
     {

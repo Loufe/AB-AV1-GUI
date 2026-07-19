@@ -1,19 +1,19 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useState } from "react";
 
-import { getTheme, setTheme, watchSystemTheme, type Theme } from './lib/theme'
+import { getTheme, setTheme, watchSystemTheme, type Theme } from "./lib/theme";
 
-const THEME_ORDER: Theme[] = ['system', 'light', 'dark']
+const THEME_ORDER: Theme[] = ["system", "light", "dark"];
 
 export default function App() {
-  const [theme, setThemeState] = useState<Theme>(getTheme)
+  const [theme, setThemeState] = useState<Theme>(getTheme);
 
-  useEffect(() => watchSystemTheme(), [])
+  useEffect(() => watchSystemTheme(), []);
 
   const cycleTheme = () => {
-    const next = THEME_ORDER[(THEME_ORDER.indexOf(theme) + 1) % THEME_ORDER.length]
-    setTheme(next)
-    setThemeState(next)
-  }
+    const next = THEME_ORDER[(THEME_ORDER.indexOf(theme) + 1) % THEME_ORDER.length];
+    setTheme(next);
+    setThemeState(next);
+  };
 
   return (
     <div className="flex h-full flex-col">
@@ -29,10 +29,10 @@ export default function App() {
       </header>
       <main className="flex-1 overflow-auto p-4">
         <p className="text-sm text-muted-foreground">
-          UI scaffold — design tokens and formatter ports. Views land once the
-          generated bindings exist.
+          UI scaffold — design tokens and formatter ports. Views land once the generated bindings
+          exist.
         </p>
       </main>
     </div>
-  )
+  );
 }

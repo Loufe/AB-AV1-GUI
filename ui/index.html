@@ -7,12 +7,12 @@
     <script>
       // No-flash theme boot: must run before first paint and stay in sync
       // with src/lib/theme.ts.
-      const theme = localStorage.getItem('crfty-theme')
+      const theme = localStorage.getItem("crfty-theme");
       if (
-        theme === 'dark' ||
-        (theme !== 'light' && matchMedia('(prefers-color-scheme: dark)').matches)
+        theme === "dark" ||
+        (theme !== "light" && matchMedia("(prefers-color-scheme: dark)").matches)
       ) {
-        document.documentElement.classList.add('dark')
+        document.documentElement.classList.add("dark");
       }
     </script>
   </head>

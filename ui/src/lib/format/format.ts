@@ -8,58 +8,55 @@
  * "—"; the Python original returned "-" only there, "—" everywhere else.
  */
 
-export type TimeConfidence = 'high' | 'precise' | 'medium' | 'low' | 'none'
+export type TimeConfidence = "high" | "precise" | "medium" | "low" | "none";
 
 /** GB/h at or above this renders without decimals. */
-export const EFFICIENCY_DECIMAL_THRESHOLD = 10
+export const EFFICIENCY_DECIMAL_THRESHOLD = 10;
 
-const EM_DASH = '—'
-const GIB = 1024 ** 3
+const EM_DASH = "—";
+const GIB = 1024 ** 3;
 
 /**
  * Compact duration for tree rows, e.g. "2h 15m", "~45m", "~~< 1m".
  * Confidence prefixes: none for exact/unknown, "~" for a similar-file
  * estimate, "~~" for a statistical codec/duration estimate.
  */
-export function formatCompactTime(
-  seconds: number,
-  confidence: TimeConfidence = 'none',
-): string {
-  if (!Number.isFinite(seconds) || seconds <= 0) return EM_DASH
-  const hours = Math.floor(seconds / 3600)
-  const minutes = Math.floor((seconds % 3600) / 60)
-  const prefix = confidence === 'medium' ? '~' : confidence === 'low' ? '~~' : ''
-  if (hours > 0) return `${prefix}${hours}h ${minutes}m`
-  if (minutes > 0) return `${prefix}${minutes}m`
-  return `${prefix}< 1m`
+export function formatCompactTime(seconds: number, confidence: TimeConfidence = "none"): string {
+  if (!Number.isFinite(seconds) || seconds <= 0) return EM_DASH;
+  const hours = Math.floor(seconds / 3600);
+  const minutes = Math.floor((seconds % 3600) / 60);
+  const prefix = confidence === "medium" ? "~" : confidence === "low" ? "~~" : "";
+  if (hours > 0) return `${prefix}${hours}h ${minutes}m`;
+  if (minutes > 0) return `${prefix}${minutes}m`;
+  return `${prefix}< 1m`;
 }
 
 /** Savings-per-time as "2.5 GB/h" (one decimal below 10, none at or above). */
 export function formatEfficiency(savingsBytes: number, timeSeconds: number): string {
-  if (savingsBytes <= 0 || timeSeconds <= 0) return EM_DASH
-  const gbPerHr = savingsBytes / GIB / (timeSeconds / 3600)
-  if (gbPerHr >= EFFICIENCY_DECIMAL_THRESHOLD) return `${gbPerHr.toFixed(0)} GB/h`
-  return `${gbPerHr.toFixed(1)} GB/h`
+  if (savingsBytes <= 0 || timeSeconds <= 0) return EM_DASH;
+  const gbPerHr = savingsBytes / GIB / (timeSeconds / 3600);
+  if (gbPerHr >= EFFICIENCY_DECIMAL_THRESHOLD) return `${gbPerHr.toFixed(0)} GB/h`;
+  return `${gbPerHr.toFixed(1)} GB/h`;
 }
 
 /** Clock-style duration: "h:mm:ss" above an hour, "m:ss" below. */
 export function formatTime(seconds: number): string {
-  if (!Number.isFinite(seconds) || seconds < 0) return '--:--:--'
-  const hours = Math.floor(seconds / 3600)
-  const minutes = Math.floor((seconds % 3600) / 60)
-  const secs = Math.floor(seconds % 60)
-  const ss = String(secs).padStart(2, '0')
-  if (hours > 0) return `${hours}:${String(minutes).padStart(2, '0')}:${ss}`
-  return `${minutes}:${ss}`
+  if (!Number.isFinite(seconds) || seconds < 0) return "--:--:--";
+  const hours = Math.floor(seconds / 3600);
+  const minutes = Math.floor((seconds % 3600) / 60);
+  const secs = Math.floor(seconds % 60);
+  const ss = String(secs).padStart(2, "0");
+  if (hours > 0) return `${hours}:${String(minutes).padStart(2, "0")}:${ss}`;
+  return `${minutes}:${ss}`;
 }
 
 /** Byte count with binary units: "512 B", "1.50 KB", "2.34 GB". */
 export function formatFileSize(sizeBytes: number): string {
-  if (!Number.isFinite(sizeBytes) || sizeBytes < 0) return EM_DASH
-  if (sizeBytes < 1024) return `${Math.trunc(sizeBytes)} B`
-  if (sizeBytes < 1024 ** 2) return `${(sizeBytes / 1024).toFixed(2)} KB`
-  if (sizeBytes < GIB) return `${(sizeBytes / 1024 ** 2).toFixed(2)} MB`
-  return `${(sizeBytes / GIB).toFixed(2)} GB`
+  if (!Number.isFinite(sizeBytes) || sizeBytes < 0) return EM_DASH;
+  if (sizeBytes < 1024) return `${Math.trunc(sizeBytes)} B`;
+  if (sizeBytes < 1024 ** 2) return `${(sizeBytes / 1024).toFixed(2)} KB`;
+  if (sizeBytes < GIB) return `${(sizeBytes / 1024 ** 2).toFixed(2)} MB`;
+  return `${(sizeBytes / GIB).toFixed(2)} GB`;
 }
 
 /**
@@ -67,26 +64,26 @@ export function formatFileSize(sizeBytes: number): string {
  * searches in quarter-CRF steps, so fractional values are real.
  */
 export function formatCrf(crf: number | null): string {
-  if (crf === null) return '?'
-  return String(Number.parseFloat(crf.toPrecision(6)))
+  if (crf === null) return "?";
+  return String(Number.parseFloat(crf.toPrecision(6)));
 }
 
 /** Audio streams beyond this count collapse to "N audio". */
-const MAX_AUDIO_STREAMS_TO_LIST = 3
+const MAX_AUDIO_STREAMS_TO_LIST = 3;
 
 /** Stream summary for the format column: "H264 / AAC, AC3", "AV1 / no audio". */
 export function formatStreamDisplay(
   videoCodec: string | null,
   audioCodecs: readonly string[],
 ): string {
-  const video = (videoCodec ?? '?').toUpperCase()
-  let audio: string
+  const video = (videoCodec ?? "?").toUpperCase();
+  let audio: string;
   if (audioCodecs.length === 0) {
-    audio = 'no audio'
+    audio = "no audio";
   } else if (audioCodecs.length <= MAX_AUDIO_STREAMS_TO_LIST) {
-    audio = audioCodecs.map((c) => c.toUpperCase()).join(', ')
+    audio = audioCodecs.map((c) => c.toUpperCase()).join(", ");
   } else {
-    audio = `${audioCodecs.length} audio`
+    audio = `${audioCodecs.length} audio`;
   }
-  return `${video} / ${audio}`
+  return `${video} / ${audio}`;
 }
