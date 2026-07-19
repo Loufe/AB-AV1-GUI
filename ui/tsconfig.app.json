@@ -9,6 +9,9 @@
     "skipLibCheck": true,
     "strict": true,
     "resolveJsonModule": true,
+    "paths": {
+      "@/*": ["./src/*"]
+    },
 
     /* Bundler mode */
     "moduleResolution": "bundler",
