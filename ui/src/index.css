@@ -1,0 +1,146 @@
+@import "tailwindcss";
+@import "tw-animate-css";
+
+@custom-variant dark (&:where(.dark, .dark *));
+
+/*
+ * CRFty design tokens (issue #36, D2/D3).
+ * Raw values live in :root/.dark and @theme inline references them — literal
+ * colors in a plain @theme would be inlined at build time and break runtime
+ * theme switching.
+ * Identity: orange primary (#36 visual-identity decision); warning is yellow,
+ * kept hue-distinct from primary, and warning state is never color-alone
+ * (always paired with a glyph — WCAG 1.4.1). `accent` carries shadcn's
+ * hover-wash semantics, not the identity color.
+ */
+:root {
+  --background: oklch(0.97 0 0);
+  --surface: oklch(0.99 0 0);
+  --elevated: oklch(1 0 0);
+  --overlay: oklch(1 0 0);
+  --foreground: oklch(0.22 0 0);
+  --muted: oklch(0.93 0 0);
+  --muted-foreground: oklch(0.5 0 0);
+  --border: oklch(0.88 0 0);
+  --ring: oklch(0.6 0.14 55);
+  --primary: oklch(0.62 0.16 55);
+  --primary-foreground: oklch(0.99 0 0);
+  --accent: oklch(0.94 0 0);
+  --accent-foreground: oklch(0.22 0 0);
+  --destructive: oklch(0.55 0.19 25);
+  --destructive-foreground: oklch(0.99 0 0);
+  --success: oklch(0.55 0.14 150);
+  --warning: oklch(0.6 0.13 98);
+}
+
+/* Dark surfaces step up ~4% luminance per elevation level, separated by
+ * borders rather than shadows; base is near-black, text off-white. */
+.dark {
+  --background: oklch(0.18 0 0);
+  --surface: oklch(0.22 0 0);
+  --elevated: oklch(0.26 0 0);
+  --overlay: oklch(0.3 0 0);
+  --foreground: oklch(0.92 0 0);
+  --muted: oklch(0.26 0 0);
+  --muted-foreground: oklch(0.65 0 0);
+  --border: oklch(0.3 0 0);
+  --ring: oklch(0.72 0.14 60);
+  --primary: oklch(0.72 0.15 60);
+  --primary-foreground: oklch(0.16 0 0);
+  --accent: oklch(0.28 0 0);
+  --accent-foreground: oklch(0.92 0 0);
+  --destructive: oklch(0.65 0.17 25);
+  --destructive-foreground: oklch(0.16 0 0);
+  --success: oklch(0.68 0.13 150);
+  --warning: oklch(0.8 0.14 100);
+}
+
+@theme inline {
+  --color-background: var(--background);
+  --color-surface: var(--surface);
+  --color-elevated: var(--elevated);
+  --color-overlay: var(--overlay);
+  --color-foreground: var(--foreground);
+  --color-muted: var(--muted);
+  --color-muted-foreground: var(--muted-foreground);
+  --color-border: var(--border);
+  --color-ring: var(--ring);
+  --color-primary: var(--primary);
+  --color-primary-foreground: var(--primary-foreground);
+  --color-accent: var(--accent);
+  --color-accent-foreground: var(--accent-foreground);
+  --color-destructive: var(--destructive);
+  --color-destructive-foreground: var(--destructive-foreground);
+  --color-success: var(--success);
+  --color-warning: var(--warning);
+
+  /* shadcn component vocabulary, resolved against the elevation tier —
+   * the tier stays the single source of truth (#36 D2). */
+  --color-card: var(--surface);
+  --color-card-foreground: var(--foreground);
+  --color-popover: var(--overlay);
+  --color-popover-foreground: var(--foreground);
+  --color-input: var(--border);
+  --color-secondary: var(--muted);
+  --color-secondary-foreground: var(--foreground);
+
+  /* Type ramp: 14px base, ~1.125 modular steps rounded to whole pixels. */
+  --text-xs: 11px;
+  --text-xs--line-height: 1.45;
+  --text-sm: 12px;
+  --text-sm--line-height: 1.45;
+  --text-base: 14px;
+  --text-base--line-height: 1.5;
+  --text-lg: 16px;
+  --text-lg--line-height: 1.5;
+  --text-xl: 18px;
+  --text-xl--line-height: 1.4;
+  --text-2xl: 20px;
+  --text-2xl--line-height: 1.35;
+
+  --font-sans: system-ui, "Segoe UI", sans-serif;
+  --font-mono: ui-monospace, "Cascadia Mono", Consolas, monospace;
+
+  /* Motion durations come only from this set. */
+  --duration-fast: 100ms;
+  --duration-base: 150ms;
+  --duration-slow: 250ms;
+}
+
+@layer base {
+  html,
+  body,
+  #root {
+    height: 100%;
+  }
+
+  /* Desktop feel: chrome is non-selectable with a default cursor; content
+   * areas opt back in via .selectable. */
+  body {
+    @apply bg-background font-sans text-base text-foreground;
+    cursor: default;
+    overflow: hidden;
+    overscroll-behavior: none;
+    user-select: none;
+  }
+
+  .selectable,
+  .selectable * {
+    cursor: auto;
+    user-select: text;
+  }
+
+  :focus-visible {
+    outline: 2px solid var(--ring);
+    outline-offset: 1px;
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    *,
+    *::before,
+    *::after {
+      animation-duration: 0.01ms !important;
+      transition-duration: 0.01ms !important;
+    }
+  }
+}
