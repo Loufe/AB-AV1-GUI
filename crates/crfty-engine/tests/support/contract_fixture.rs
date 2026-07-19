@@ -113,7 +113,7 @@ fn fake_ffprobe() -> Result<(), Box<dyn Error>> {
         Path::new(&argument)
             .file_name()
             .and_then(|name| name.to_str())
-            .is_some_and(|name| name.ends_with(".part"))
+            .is_some_and(|name| name.contains(".part."))
     });
     let probes_av1 = env::args_os().any(|argument| {
         let argument = argument.to_string_lossy();

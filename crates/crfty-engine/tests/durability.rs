@@ -298,6 +298,7 @@ fn output_recovery_promotes_and_retires_original() {
             false,
         )
         .expect("prepare output");
+    assert!(started.staging.ends_with(".input.crfty-5.part.mkv"));
     let mut state = DurableState::default();
     fold_output(
         &mut state,
@@ -637,7 +638,7 @@ fn output_preparation_enforces_overwrite_policy_before_staging() {
         .expect_err("overwrite-disabled preparation must fail");
     assert!(error.is_destination_exists());
     assert_eq!(fs::read(&final_path).expect("existing output"), b"existing");
-    assert!(!directory.path().join(".output.mkv.crfty-30.part").exists());
+    assert!(!directory.path().join(".output.crfty-30.part.mkv").exists());
 }
 
 #[test]

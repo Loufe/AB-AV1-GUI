@@ -406,15 +406,22 @@ fn require_observation<I: ArtifactInspector>(
 }
 
 fn staging_path(final_path: &Path, run_id: RunId) -> Result<PathBuf, OutputError> {
-    let Some(file_name) = final_path.file_name() else {
+    let Some(file_stem) = final_path.file_stem() else {
         return Err(OutputError::new(
             "final path has no file name",
             io::Error::new(io::ErrorKind::InvalidInput, "missing file name"),
         ));
     };
+    let Some(extension) = final_path.extension() else {
+        return Err(OutputError::new(
+            "final path has no container extension",
+            io::Error::new(io::ErrorKind::InvalidInput, "missing container extension"),
+        ));
+    };
     let mut staging_name = OsString::from(".");
-    staging_name.push(file_name);
-    staging_name.push(format!(".crfty-{}.part", run_id.0));
+    staging_name.push(file_stem);
+    staging_name.push(format!(".crfty-{}.part.", run_id.0));
+    staging_name.push(extension);
     Ok(final_path.with_file_name(staging_name))
 }
 

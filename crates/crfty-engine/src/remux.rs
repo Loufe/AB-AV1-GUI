@@ -382,7 +382,7 @@ fn spawn_stderr_reader(stderr: std::process::ChildStderr) -> thread::JoinHandle<
     thread::spawn(move || {
         let mut reader = BufReader::new(stderr);
         let mut buffer = vec![0_u8; STDERR_READ_BUFFER_BYTES];
-        let mut tail = VecDeque::with_capacity(MAX_STDERR_TAIL_BYTES);
+        let mut tail: VecDeque<u8> = VecDeque::with_capacity(MAX_STDERR_TAIL_BYTES);
         loop {
             match reader.read(&mut buffer) {
                 Ok(0) => break,
