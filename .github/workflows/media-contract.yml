@@ -1,0 +1,84 @@
+name: Native media contract
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [rewrite]
+    paths:
+      - Cargo.lock
+      - crates/crfty-engine/Cargo.toml
+      - crates/crfty-engine/src/ab_av1/**
+      - crates/crfty-engine/tests/**
+      - .github/workflows/media-contract.yml
+  pull_request:
+    branches: [rewrite]
+    paths:
+      - Cargo.lock
+      - crates/crfty-engine/Cargo.toml
+      - crates/crfty-engine/src/ab_av1/**
+      - crates/crfty-engine/tests/**
+      - .github/workflows/media-contract.yml
+
+permissions:
+  contents: read
+
+jobs:
+  media-contract:
+    name: Real FFmpeg (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+      - name: Install stable Rust
+        run: rustup toolchain install stable --profile minimal
+      - name: Select stable Rust
+        run: rustup default stable
+      - name: Cache pinned FFmpeg
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9
+        with:
+          path: .ci/ffmpeg
+          key: ffmpeg-${{ runner.os }}-autobuild-2026-07-19-13-12
+      - name: Install pinned FFmpeg on Linux
+        if: runner.os == 'Linux'
+        shell: bash
+        run: |
+          if [[ ! -x .ci/ffmpeg/bin/ffmpeg ]]; then
+            archive="$RUNNER_TEMP/ffmpeg.tar.xz"
+            curl --fail --location --retry 3 --output "$archive" "https://github.com/BtbN/FFmpeg-Builds/releases/download/autobuild-2026-07-19-13-12/ffmpeg-n8.1.2-22-g94138f6973-linux64-gpl-8.1.tar.xz"
+            echo "166375e7f8b1f6963949a61a83ffffe858eba742f6326180b8ff3bc58b205c72  $archive" | sha256sum --check
+            mkdir -p .ci/ffmpeg
+            tar --extract --xz --file "$archive" --directory .ci/ffmpeg --strip-components=1
+          fi
+      - name: Install pinned FFmpeg on Windows
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          if (-not (Test-Path .ci/ffmpeg/bin/ffmpeg.exe)) {
+            $archive = Join-Path $env:RUNNER_TEMP 'ffmpeg.zip'
+            $extract = Join-Path $env:RUNNER_TEMP 'ffmpeg-extract'
+            Invoke-WebRequest -Uri 'https://github.com/BtbN/FFmpeg-Builds/releases/download/autobuild-2026-07-19-13-12/ffmpeg-n8.1.2-22-g94138f6973-win64-gpl-8.1.zip' -OutFile $archive
+            $actual = (Get-FileHash -Algorithm SHA256 $archive).Hash.ToLowerInvariant()
+            if ($actual -ne '9db2860af5d1c536ed7fcb7ed84fa4ef80d188d1396d1cdf8cad180137510f3f') {
+              throw "FFmpeg checksum mismatch: $actual"
+            }
+            Expand-Archive -Path $archive -DestinationPath $extract
+            New-Item -ItemType Directory -Force -Path .ci/ffmpeg | Out-Null
+            $root = Get-ChildItem -Path $extract -Directory | Select-Object -First 1
+            Move-Item -Path (Join-Path $root.FullName '*') -Destination .ci/ffmpeg
+          }
+      - name: Run real-media contract on Linux
+        if: runner.os == 'Linux'
+        env:
+          CRFTY_FFMPEG: ${{ github.workspace }}/.ci/ffmpeg/bin/ffmpeg
+          CRFTY_FFPROBE: ${{ github.workspace }}/.ci/ffmpeg/bin/ffprobe
+        run: cargo test -p crfty-engine --all-features --locked --test ab_av1_real_media -- --ignored --nocapture
+      - name: Run real-media contract on Windows
+        if: runner.os == 'Windows'
+        env:
+          CRFTY_FFMPEG: ${{ github.workspace }}/.ci/ffmpeg/bin/ffmpeg.exe
+          CRFTY_FFPROBE: ${{ github.workspace }}/.ci/ffmpeg/bin/ffprobe.exe
+        run: cargo test -p crfty-engine --all-features --locked --test ab_av1_real_media -- --ignored --nocapture
