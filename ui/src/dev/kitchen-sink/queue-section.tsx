@@ -31,6 +31,7 @@ import {
 } from "@/components/ui";
 import {
   formatCompactTime,
+  formatCrf,
   formatFileSize,
   formatStreamDisplay,
   formatTime,
@@ -131,15 +132,44 @@ function StatusText({
           {children}
         </span>
       </TooltipTrigger>
-      <TooltipContent className="flex-col items-start gap-1">{tooltip}</TooltipContent>
+      <TooltipContent variant="rich">{tooltip}</TooltipContent>
     </Tooltip>
+  );
+}
+
+/**
+ * Rich-tooltip skeleton: toned icon + title header, structured body, and the
+ * remediation as a separated footer row — data as label/value, not prose.
+ */
+function ReasonTooltip({
+  icon: Icon,
+  toneClass,
+  title,
+  action,
+  children,
+}: {
+  icon: React.ComponentType<{ className?: string }>;
+  toneClass: string;
+  title: string;
+  action?: string;
+  children?: React.ReactNode;
+}) {
+  return (
+    <>
+      <p className={cn("flex items-center gap-1.5 font-medium", toneClass)}>
+        <Icon className="size-3.5 shrink-0" aria-hidden="true" />
+        {title}
+      </p>
+      {children}
+      {action && <p className="mt-2 border-t border-border pt-2 text-muted-foreground">{action}</p>}
+    </>
   );
 }
 
 /** Estimated times explain their basis on demand — no tilde jargon (D11). */
 const CONFIDENCE_TOOLTIP: Record<Exclude<Confidence, "exact">, string> = {
-  estimate: "Estimated from similar files you've converted (same codec and resolution).",
-  rough: "Rough estimate — little history for this codec yet, based on averages.",
+  estimate: "Based on similar files you've converted",
+  rough: "Rough guess — no history for this codec yet",
 };
 
 function TimeCell({ seconds, confidence }: { seconds: number; confidence: Confidence }) {
@@ -185,13 +215,20 @@ const SEASON_FILES: MockFileRow[] = [
         tone="success"
         icon={CircleCheck}
         tooltip={
-          <>
-            <p className="font-medium">Converted successfully</p>
-            <p>VMAF 95.2 at CRF 24 · encoded in 1h 12m</p>
-            <p className="opacity-70">
-              {formatFileSize(3.21 * GIB)} → {formatFileSize(1.34 * GIB)} (−58%)
-            </p>
-          </>
+          <ReasonTooltip icon={CircleCheck} toneClass="text-success" title="Converted">
+            <div className="mt-2 grid grid-cols-[auto_1fr] gap-x-4 gap-y-1">
+              <span className="text-muted-foreground">VMAF</span>
+              <span className="tabular-nums">95.2</span>
+              <span className="text-muted-foreground">CRF</span>
+              <span className="tabular-nums">{formatCrf(24)}</span>
+              <span className="text-muted-foreground">Time</span>
+              <span className="tabular-nums">{formatCompactTime(4320)}</span>
+              <span className="text-muted-foreground">Size</span>
+              <span className="tabular-nums">
+                {formatFileSize(3.21 * GIB)} → {formatFileSize(1.34 * GIB)} · −58%
+              </span>
+            </div>
+          </ReasonTooltip>
         }
       >
         Done · saved {formatFileSize(1.87 * GIB)}
@@ -247,14 +284,16 @@ const SEASON_FILES: MockFileRow[] = [
         tone="warning"
         icon={CircleSlash}
         tooltip={
-          <>
-            <p className="font-medium">Not worthwhile to convert</p>
-            <p>
-              No CRF reached VMAF 95 with meaningful savings — the search fell back to 90 before
-              giving up.
+          <ReasonTooltip
+            icon={CircleSlash}
+            toneClass="text-warning"
+            title="Not worthwhile"
+            action="Lower the VMAF floor in Settings to convert anyway."
+          >
+            <p className="mt-1 text-muted-foreground">
+              No quality level down to the VMAF 90 floor saved meaningful space.
             </p>
-            <p className="opacity-70">Lower the minimum VMAF in Settings to convert it anyway.</p>
-          </>
+          </ReasonTooltip>
         }
       >
         Skipped · not worthwhile
@@ -275,13 +314,16 @@ const SEASON_FILES: MockFileRow[] = [
         tone="destructive"
         icon={CircleAlert}
         tooltip={
-          <>
-            <p className="font-medium">Input unreadable</p>
-            <p>ffprobe could not parse the container — the file may be corrupt or truncated.</p>
-            <p className="opacity-70">
-              Try remuxing it (e.g. to MKV) and re-adding. Full details are in the log.
+          <ReasonTooltip
+            icon={CircleAlert}
+            toneClass="text-destructive"
+            title="Input unreadable"
+            action="Remux to MKV and re-add. Full details in the log."
+          >
+            <p className="mt-1 text-muted-foreground">
+              ffprobe could not parse this file — likely corrupt or truncated.
             </p>
-          </>
+          </ReasonTooltip>
         }
       >
         Error · input unreadable
@@ -319,9 +361,7 @@ function FileRow({ row }: { row: MockFileRow }) {
             >
               <span className="size-1.5 rounded-full bg-primary" />
             </TooltipTrigger>
-            <TooltipContent>
-              Precise CRF cached from analysis — encoding skips the quality search.
-            </TooltipContent>
+            <TooltipContent>Precise CRF cached — skips the quality search</TooltipContent>
           </Tooltip>
         )}
         <ChevronDown className="size-3 text-muted-foreground" aria-hidden="true" />
