@@ -1,12 +1,15 @@
 use std::{
     ffi::OsString,
     fmt,
-    fs::{File, OpenOptions},
+    fs::OpenOptions,
     io,
     path::{Path, PathBuf},
 };
 
 use std::time::UNIX_EPOCH;
+
+#[cfg(unix)]
+use std::fs::File;
 
 use crfty_core::{
     ArtifactIdentity, ArtifactObservation, FileSystemFacts, OutputDelta, OutputRecoveryAction,
