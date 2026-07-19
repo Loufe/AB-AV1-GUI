@@ -1,0 +1,321 @@
+//! Bridges the engine's event stream and command surface to the webview.
+//!
+//! One forwarder thread drains `EngineRuntime::events`, folds durable deltas
+//! into a read model with `crfty_core::fold`, and pushes wire events into the
+//! subscribed channel. Every send happens under the same lock as the fold, so
+//! the stream order the frontend observes is exactly the fold order (ADR-006).
+//! The engine channel keeps draining when no webview is subscribed.
+
+use std::sync::{
+    Arc, Mutex, MutexGuard,
+    atomic::{AtomicU64, Ordering},
+    mpsc,
+};
+
+use crfty_core::{
+    AnalysisProfile, DurableDelta, DurableState, EphemeralDelta, ExecutionSettings, QueueCommand,
+    QueueItemId, Reply, SessionCommand, SessionState, ToolRevisions, fold,
+};
+use crfty_engine::{
+    coordinator::{EngineConfig, EngineRuntime, UserCommandSender},
+    driver::DriverEvent,
+};
+use serde::Serialize;
+use tauri::{Manager, ipc::Channel};
+
+const JOURNAL_FILE_NAME: &str = "journal.jsonl";
+/// Real tool revisions arrive with the vendor subsystem; until then analysis
+/// provenance records a placeholder (core only requires non-empty strings).
+const INTERIM_TOOL_REVISION: &str = "unknown";
+
+#[derive(Debug, Clone, Serialize, specta::Type)]
+pub struct ShellEvent {
+    pub seq: u32,
+    pub payload: StreamPayload,
+}
+
+#[derive(Debug, Clone, Serialize, specta::Type)]
+pub enum StreamPayload {
+    Snapshot(DurableState),
+    Durable(DurableDelta),
+    Ephemeral(EphemeralDelta),
+    Degraded { reason: String },
+    EngineFatal { message: String },
+}
+
+#[derive(Debug, Clone, Serialize, specta::Type)]
+pub struct CommandError {
+    pub code: String,
+    pub message: String,
+}
+
+impl CommandError {
+    fn new(code: &str, message: impl Into<String>) -> Self {
+        Self {
+            code: code.to_owned(),
+            message: message.into(),
+        }
+    }
+
+    fn engine_unavailable(message: impl Into<String>) -> Self {
+        Self::new("engine_unavailable", message)
+    }
+}
+
+#[derive(Debug, Clone)]
+enum Health {
+    Ok,
+    Degraded { reason: String },
+    Fatal { message: String },
+}
+
+struct StreamState {
+    model: DurableState,
+    session: SessionState,
+    health: Health,
+    subscriber: Option<Channel<ShellEvent>>,
+    seq: u32,
+}
+
+impl StreamState {
+    fn new(health: Health) -> Self {
+        Self {
+            model: DurableState::default(),
+            session: SessionState::Idle,
+            health,
+            subscriber: None,
+            seq: 0,
+        }
+    }
+
+    fn emit(&mut self, payload: StreamPayload) {
+        let Some(channel) = &self.subscriber else {
+            return;
+        };
+        let event = ShellEvent {
+            seq: self.seq,
+            payload,
+        };
+        self.seq = self.seq.wrapping_add(1);
+        if let Err(error) = channel.send(event) {
+            eprintln!("dropping stream subscriber after failed send: {error}");
+            self.subscriber = None;
+        }
+    }
+}
+
+pub struct Bridge {
+    stream: Arc<Mutex<StreamState>>,
+    commands: Option<UserCommandSender>,
+    next_item_id: Arc<AtomicU64>,
+    // Kept alive for the process lifetime: dropping the runtime shuts the
+    // engine down. The Mutex only exists to make the receiver-bearing runtime
+    // Sync for managed state.
+    _engine: Mutex<Option<EngineRuntime>>,
+}
+
+impl Bridge {
+    pub fn start(app: &tauri::AppHandle) -> Self {
+        match Self::try_start(app) {
+            Ok(bridge) => bridge,
+            Err(reason) => {
+                eprintln!("engine unavailable: {reason}");
+                Self {
+                    stream: Arc::new(Mutex::new(StreamState::new(Health::Degraded { reason }))),
+                    commands: None,
+                    next_item_id: Arc::new(AtomicU64::new(1)),
+                    _engine: Mutex::new(None),
+                }
+            }
+        }
+    }
+
+    fn try_start(app: &tauri::AppHandle) -> Result<Self, String> {
+        let data_dir = app
+            .path()
+            .app_data_dir()
+            .map_err(|error| format!("no application data directory: {error}"))?;
+        std::fs::create_dir_all(&data_dir)
+            .map_err(|error| format!("failed to create application data directory: {error}"))?;
+        let media_tools = discover_media_tools()?;
+        let revisions = ToolRevisions {
+            ab_av1: INTERIM_TOOL_REVISION.to_owned(),
+            ffmpeg: INTERIM_TOOL_REVISION.to_owned(),
+            encoder: INTERIM_TOOL_REVISION.to_owned(),
+        };
+        let config = EngineConfig {
+            journal_path: data_dir.join(JOURNAL_FILE_NAME),
+            media_tools,
+            execution: ExecutionSettings::production(AnalysisProfile::production(revisions), false),
+        };
+        let mut runtime = EngineRuntime::start(config).map_err(|error| error.to_string())?;
+        let events = std::mem::replace(&mut runtime.events, mpsc::channel().1);
+        let stream = Arc::new(Mutex::new(StreamState::new(Health::Ok)));
+        let next_item_id = Arc::new(AtomicU64::new(1));
+        let forwarder_stream = Arc::clone(&stream);
+        let forwarder_ids = Arc::clone(&next_item_id);
+        std::thread::Builder::new()
+            .name("crfty-shell-forwarder".to_owned())
+            .spawn(move || forward(events, &forwarder_stream, &forwarder_ids))
+            .map_err(|error| format!("failed to start stream forwarder: {error}"))?;
+        Ok(Self {
+            stream,
+            commands: Some(runtime.commands.clone()),
+            next_item_id,
+            _engine: Mutex::new(Some(runtime)),
+        })
+    }
+
+    /// Installs the webview's channel and replays current state into it:
+    /// snapshot first, then the session state (which a fresh connection would
+    /// otherwise only learn on its next transition), then any standing
+    /// degradation. All under the stream lock, so no delta interleaves.
+    pub fn subscribe(&self, channel: Channel<ShellEvent>) {
+        let mut stream = lock_stream(&self.stream);
+        stream.subscriber = Some(channel);
+        stream.seq = 0;
+        let snapshot = stream.model.clone();
+        stream.emit(StreamPayload::Snapshot(snapshot));
+        let session = stream.session.clone();
+        stream.emit(StreamPayload::Ephemeral(EphemeralDelta::SessionChanged(
+            session,
+        )));
+        match stream.health.clone() {
+            Health::Ok => {}
+            Health::Degraded { reason } => stream.emit(StreamPayload::Degraded { reason }),
+            Health::Fatal { message } => stream.emit(StreamPayload::EngineFatal { message }),
+        }
+    }
+
+    pub fn allocate_item_id(&self) -> QueueItemId {
+        QueueItemId(self.next_item_id.fetch_add(1, Ordering::Relaxed))
+    }
+
+    pub fn submit_queue(&self, command: QueueCommand) -> Result<(), CommandError> {
+        let commands = self.commands()?;
+        map_reply(commands.submit_queue(command))
+    }
+
+    pub fn submit_session(&self, command: SessionCommand) -> Result<(), CommandError> {
+        let commands = self.commands()?;
+        map_reply(commands.submit_session(command))
+    }
+
+    fn commands(&self) -> Result<&UserCommandSender, CommandError> {
+        self.commands.as_ref().ok_or_else(|| {
+            let stream = lock_stream(&self.stream);
+            match &stream.health {
+                Health::Degraded { reason } => CommandError::engine_unavailable(reason.clone()),
+                Health::Fatal { message } => CommandError::engine_unavailable(message.clone()),
+                Health::Ok => CommandError::engine_unavailable("engine is not running"),
+            }
+        })
+    }
+}
+
+fn forward(
+    events: mpsc::Receiver<DriverEvent>,
+    stream: &Arc<Mutex<StreamState>>,
+    next_item_id: &AtomicU64,
+) {
+    while let Ok(event) = events.recv() {
+        let mut state = lock_stream(stream);
+        match event {
+            DriverEvent::Snapshot(model) => {
+                seed_item_ids(next_item_id, &model);
+                state.model = model.clone();
+                state.emit(StreamPayload::Snapshot(model));
+            }
+            DriverEvent::Durable(delta) => {
+                fold(&mut state.model, &delta);
+                if let DurableDelta::QueueAdded { item } = &delta {
+                    next_item_id.fetch_max(item.id.0.saturating_add(1), Ordering::Relaxed);
+                }
+                state.emit(StreamPayload::Durable(delta));
+            }
+            DriverEvent::Ephemeral(delta) => {
+                if let EphemeralDelta::SessionChanged(session) = &delta {
+                    state.session = session.clone();
+                }
+                state.emit(StreamPayload::Ephemeral(delta));
+            }
+            // Effects are instructions to the engine's own supervisor and
+            // never cross the IPC boundary (ADR-006).
+            DriverEvent::Effect(_) => {}
+            DriverEvent::Degraded { reason } => {
+                state.health = Health::Degraded {
+                    reason: reason.clone(),
+                };
+                state.emit(StreamPayload::Degraded { reason });
+            }
+            DriverEvent::Fatal { message } => {
+                state.health = Health::Fatal {
+                    message: message.clone(),
+                };
+                state.emit(StreamPayload::EngineFatal { message });
+            }
+        }
+    }
+}
+
+fn seed_item_ids(next_item_id: &AtomicU64, model: &DurableState) {
+    let maximum = model.queue.iter().map(|item| item.id.0).max().unwrap_or(0);
+    next_item_id.fetch_max(maximum.saturating_add(1), Ordering::Relaxed);
+}
+
+fn lock_stream<'a>(stream: &'a Arc<Mutex<StreamState>>) -> MutexGuard<'a, StreamState> {
+    match stream.lock() {
+        Ok(guard) => guard,
+        Err(poisoned) => poisoned.into_inner(),
+    }
+}
+
+fn map_reply(reply: Result<Reply, crfty_engine::driver::SubmitError>) -> Result<(), CommandError> {
+    match reply {
+        Ok(Reply::Accepted) => Ok(()),
+        Ok(Reply::Rejected { reason }) => Err(CommandError::new("rejected", reason)),
+        Ok(Reply::DurabilityUnknown { reason }) => {
+            Err(CommandError::new("durability_unknown", reason))
+        }
+        Ok(Reply::Claimed(_)) => Err(CommandError::new(
+            "internal",
+            "driver returned a worker reply to a user command",
+        )),
+        Err(error) => Err(CommandError::engine_unavailable(error.to_string())),
+    }
+}
+
+/// Interim tool discovery until the vendor subsystem lands: explicit
+/// `CRFTY_FFMPEG`/`CRFTY_FFPROBE` paths win, then a PATH search.
+fn discover_media_tools() -> Result<crfty_engine::ab_av1::MediaTools, String> {
+    Ok(crfty_engine::ab_av1::MediaTools {
+        ffmpeg: discover_tool("CRFTY_FFMPEG", "ffmpeg")?,
+        ffprobe: discover_tool("CRFTY_FFPROBE", "ffprobe")?,
+    })
+}
+
+fn discover_tool(env_var: &str, binary: &str) -> Result<std::path::PathBuf, String> {
+    if let Some(configured) = std::env::var_os(env_var) {
+        let path = std::path::PathBuf::from(configured);
+        return if path.is_file() {
+            Ok(path)
+        } else {
+            Err(format!(
+                "{env_var} is set but does not point at a file: {}",
+                path.display()
+            ))
+        };
+    }
+    let file_name = if cfg!(windows) {
+        format!("{binary}.exe")
+    } else {
+        binary.to_owned()
+    };
+    std::env::var_os("PATH")
+        .map(|paths| std::env::split_paths(&paths).collect::<Vec<_>>())
+        .unwrap_or_default()
+        .into_iter()
+        .map(|directory| directory.join(&file_name))
+        .find(|candidate| candidate.is_file())
+        .ok_or_else(|| format!("{binary} was not found via {env_var} or PATH"))
+}
