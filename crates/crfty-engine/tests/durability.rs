@@ -9,29 +9,29 @@ use std::{
 };
 
 use crfty_core::{
-    AnalysisProfile, ClaimId, Command, DurableDelta, DurableState, EphemeralDelta,
-    ExecutionSettings, ItemOutcome, JobPhase, Operation, OutputDelta, OutputTarget, QueueCommand,
-    QueueItemId, Replacement, Reply, RunId, SessionCommand, Telemetry, ToolRevisions,
-    WorkerCommand, fold, replay,
+    AnalysisProfile, AnalysisResult, AppState, ArtifactIdentity, ClaimId, Command, Crf,
+    DestructiveIdentity, DurableDelta, DurableState, EphemeralDelta, ExecutionSettings,
+    ItemOutcome, JobPhase, JobProgress, Operation, OutputDelta, OutputTarget, QueueCommand,
+    QueueItemId, Replacement, Reply, RunId, SearchMeasurement, SessionCommand, Telemetry,
+    ToolRevisions, VmafScore, WorkerCommand, apply, fold, replay,
 };
 use crfty_engine::{
+    ab_av1::MediaTools,
+    coordinator::{EngineConfig, EngineRuntime},
     driver::{DriverEvent, DriverHandle},
     journal::JournalWriter,
-    output::{FixtureByteInspector, OutputManager},
+    output::{ArtifactInspector, FixtureByteInspector, OutputManager},
 };
 
 static TEMP_SEQUENCE: AtomicU64 = AtomicU64::new(0);
 
 fn execution() -> ExecutionSettings {
     ExecutionSettings::production(
-        AnalysisProfile::production(
-            ToolRevisions {
-                ab_av1: "fixture".to_owned(),
-                ffmpeg: "fixture".to_owned(),
-                encoder: "fixture".to_owned(),
-            },
-            true,
-        ),
+        AnalysisProfile::production(ToolRevisions {
+            ab_av1: "fixture".to_owned(),
+            ffmpeg: "fixture".to_owned(),
+            encoder: "fixture".to_owned(),
+        }),
         false,
     )
 }
@@ -94,6 +94,33 @@ fn journal_lock_is_exclusive_and_records_replay() {
     let replayed = replay(&fs::read(path).expect("journal bytes"));
     assert!(replayed.corruption.is_none());
     assert_eq!(replayed.state.queue.len(), 1);
+}
+
+#[test]
+fn journal_group_commit_is_one_atomic_replay_record() {
+    let directory = TestDirectory::new("journal-batch");
+    let path = directory.path().join("state.jsonl");
+    let (mut writer, _initial) = JournalWriter::open(&path).expect("journal writer");
+    let deltas: Vec<_> = [QueueItemId(1), QueueItemId(2)]
+        .into_iter()
+        .map(|id| DurableDelta::QueueAdded {
+            item: crfty_core::QueueItem {
+                id,
+                input: PathBuf::from(format!("video-{}.mkv", id.0)),
+                operation: Operation::Convert,
+                output_target: OutputTarget::Replace,
+                state: crfty_core::QueueItemState::Queued,
+            },
+        })
+        .collect();
+    let (records, _token) = writer.append_batch(&deltas).expect("journal batch");
+    assert_eq!(records.len(), 1);
+    drop(writer);
+    let bytes = fs::read(path).expect("journal bytes");
+    assert_eq!(bytes.iter().filter(|byte| **byte == b'\n').count(), 1);
+    let replayed = replay(&bytes);
+    assert!(replayed.corruption.is_none());
+    assert_eq!(replayed.state.queue.len(), 2);
 }
 
 #[test]
@@ -208,7 +235,7 @@ fn telemetry_pressure_coalesces_and_terminal_value_wins() {
             run_id: RunId(3),
             sequence,
             phase: JobPhase::Encoding,
-            completed_units: sequence,
+            progress: JobProgress::EncodePositionMs(sequence),
         });
     }
     std::thread::sleep(Duration::from_millis(30));
@@ -227,7 +254,7 @@ fn telemetry_pressure_coalesces_and_terminal_value_wins() {
                     run_id: RunId(3),
                     sequence: terminal_sequence,
                     phase: JobPhase::Finalizing,
-                    completed_units: 100,
+                    progress: JobProgress::EncodePositionMs(100),
                 }),
             }))
             .expect("terminal reply"),
@@ -293,6 +320,149 @@ fn output_recovery_promotes_and_retires_original() {
     fold_output(&mut state, retired);
     assert!(!input.exists());
     assert!(current(&state, RunId(5)).is_settled());
+}
+
+#[test]
+fn invalid_partial_staging_is_cleaned_without_media_validation() {
+    let directory = TestDirectory::new("invalid-partial");
+    let input = directory.path().join("input.mp4");
+    let final_path = directory.path().join("input.mkv");
+    fs::write(&input, b"input bytes").expect("input fixture");
+    let manager = OutputManager::new(RejectingMediaInspector);
+    let started = manager
+        .prepare(RunId(77), &input, &final_path, Replacement::RetireOriginal)
+        .expect("prepare output");
+    fs::write(&started.staging, b"not a valid media container").expect("partial staging");
+    let intent = manager
+        .abandon_intent(&started)
+        .expect("identity-only abandonment intent");
+    let mut state = DurableState::default();
+    state.outputs.insert(started.run_id, started.clone());
+    fold(&mut state, &DurableDelta::Output(intent));
+    let abandoning = state.outputs.get(&started.run_id).expect("transaction");
+    let abandoned = manager
+        .recover_once(abandoning)
+        .expect("identity-only cleanup")
+        .expect("abandoned delta");
+    assert!(matches!(abandoned, OutputDelta::Abandoned { .. }));
+    assert!(!started.staging.exists());
+}
+
+#[test]
+fn engine_startup_recovers_an_active_partial_staging_transaction() {
+    let directory = TestDirectory::new("engine-startup-recovery");
+    let journal_path = directory.path().join("state.jsonl");
+    let input = directory.path().join("input.mp4");
+    let final_path = directory.path().join("input.mkv");
+    fs::write(&input, b"input bytes").expect("input fixture");
+    let manager = OutputManager::new(FixtureByteInspector);
+    let transaction = manager
+        .prepare(RunId(3), &input, &final_path, Replacement::RetireOriginal)
+        .expect("prepare transaction");
+    fs::write(&transaction.staging, b"crash-left partial bytes").expect("partial staging");
+
+    let settings = execution();
+    let mut state = AppState::default();
+    let mut durable = Vec::new();
+    for command in [
+        Command::Queue(QueueCommand::Add {
+            item_id: QueueItemId(1),
+            input: input.clone(),
+            operation: Operation::Convert,
+            output_target: OutputTarget::Replace,
+        }),
+        Command::Session(SessionCommand::Start),
+        Command::Worker(WorkerCommand::ClaimNext {
+            claim_id: ClaimId(2),
+            run_id: RunId(3),
+            execution: settings.clone(),
+        }),
+        Command::Worker(WorkerCommand::Started {
+            item_id: QueueItemId(1),
+            claim_id: ClaimId(2),
+            run_id: RunId(3),
+        }),
+        Command::Worker(WorkerCommand::RecordAnalysis {
+            item_id: QueueItemId(1),
+            claim_id: ClaimId(2),
+            run_id: RunId(3),
+            result: Box::new(fixture_analysis(&settings)),
+        }),
+        Command::Worker(WorkerCommand::Output(OutputDelta::EncodeStarted {
+            transaction: Box::new(transaction.clone()),
+        })),
+    ] {
+        let applied = apply(&mut state, command);
+        assert!(!matches!(applied.reply, Reply::Rejected { .. }));
+        durable.extend(applied.durable);
+    }
+    let (mut writer, _replay) = JournalWriter::open(&journal_path).expect("journal writer");
+    writer
+        .append_batch(&durable)
+        .expect("recovery fixture batch");
+    drop(writer);
+
+    let executable = std::env::current_exe().expect("test executable");
+    let engine = EngineRuntime::start(EngineConfig {
+        journal_path,
+        media_tools: MediaTools {
+            ffmpeg: executable.clone(),
+            ffprobe: executable,
+        },
+        execution: settings,
+    })
+    .expect("engine startup recovery");
+    let DriverEvent::Snapshot(snapshot) = engine.events.recv().expect("recovered snapshot") else {
+        panic!("expected recovered snapshot");
+    };
+    assert!(
+        matches!(
+            snapshot.queue.first().expect("queue item").state,
+            crfty_core::QueueItemState::Finished(ItemOutcome::Stopped)
+        ),
+        "unexpected recovered snapshot: {snapshot:?}"
+    );
+    assert!(!transaction.staging.exists());
+    engine.shutdown().expect("engine shutdown");
+}
+
+fn fixture_analysis(settings: &ExecutionSettings) -> AnalysisResult {
+    AnalysisResult {
+        requested_target: settings.requested_target,
+        successful_target: settings.requested_target,
+        fallback_floor: settings.fallback_floor,
+        fallback_step: settings.fallback_step,
+        failed_attempts: Vec::new(),
+        measurement: SearchMeasurement {
+            crf: Crf(30_000),
+            score: VmafScore(9_500),
+            predicted_size: 1_000,
+            predicted_percent_basis_points: 5_000,
+            predicted_duration_ms: 60_000,
+            from_cache: false,
+        },
+        profile: settings.profile.clone(),
+    }
+}
+
+#[derive(Debug, Clone, Copy)]
+struct RejectingMediaInspector;
+
+impl ArtifactInspector for RejectingMediaInspector {
+    fn inspect_file(&self, path: &Path) -> std::io::Result<DestructiveIdentity> {
+        FixtureByteInspector.inspect_file(path)
+    }
+
+    fn inspect_media(&self, _path: &Path) -> std::io::Result<ArtifactIdentity> {
+        Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            "fixture rejects media",
+        ))
+    }
+
+    fn verify_output(&self, path: &Path) -> std::io::Result<ArtifactIdentity> {
+        self.inspect_media(path)
+    }
 }
 
 #[test]

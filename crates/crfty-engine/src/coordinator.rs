@@ -3,7 +3,7 @@ use std::{
     path::PathBuf,
     sync::{
         Arc, Mutex,
-        atomic::{AtomicBool, AtomicU64, Ordering},
+        atomic::{AtomicU64, Ordering},
         mpsc,
     },
     thread,
@@ -12,18 +12,16 @@ use std::{
 
 use crfty_core::{
     AnalysisAttempt, AnalysisResult, CRF_FIXED_SCALE, ClaimId, ClaimedJob, Command, Crf,
-    DurableDelta, DurableState, Effect, ExecutionSettings, ItemOutcome, JobPhase, MAX_VMAF_SCORE,
-    Operation, OutputDelta, OutputTarget, PERCENT_BASIS_POINTS_SCALE, QueueItemState, Reply, RunId,
-    SearchMeasurement, Telemetry, VMAF_SCORE_FIXED_SCALE, VmafScore, VmafTarget, WorkerCommand,
-    fold,
+    DurableDelta, DurableState, Effect, ExecutionSettings, ItemOutcome, JobPhase, JobProgress,
+    MAX_PERCENT_BASIS_POINTS, MAX_VMAF_SCORE, Operation, OutputDelta, OutputTarget,
+    PERCENT_BASIS_POINTS_SCALE, QueueCommand, QueueItemState, Reply, RunId, SearchMeasurement,
+    SessionCommand, Telemetry, VMAF_SCORE_FIXED_SCALE, VmafScore, VmafTarget, WorkerCommand, fold,
 };
 
 const FIRST_RUNTIME_ID: u64 = 1;
 const ADAPTER_REPORT_POLL_INTERVAL: Duration = Duration::from_millis(20);
-const NORMALIZED_PROGRESS_UNITS: f32 = 10_000.0;
 const NORMALIZED_PROGRESS_MIN: f32 = 0.0;
 const NORMALIZED_PROGRESS_MAX: f32 = 1.0;
-const TERMINAL_TELEMETRY_SEQUENCE: u64 = u64::MAX;
 const OUTPUT_CONTAINER_EXTENSION: &str = "mkv";
 
 use crate::{
@@ -55,7 +53,7 @@ impl fmt::Display for EngineStartError {
 impl std::error::Error for EngineStartError {}
 
 pub struct EngineRuntime {
-    pub commands: CommandSender,
+    pub commands: UserCommandSender,
     pub events: mpsc::Receiver<DriverEvent>,
     driver: Option<DriverHandle>,
     supervisor: Option<thread::JoinHandle<()>>,
@@ -65,6 +63,9 @@ pub struct EngineRuntime {
 
 impl EngineRuntime {
     pub fn start(config: EngineConfig) -> Result<Self, EngineStartError> {
+        config.execution.validate().map_err(|reason| {
+            EngineStartError(format!("invalid engine execution settings: {reason}"))
+        })?;
         let runtime = Arc::new(
             AbAv1Runtime::start()
                 .map_err(|error| EngineStartError(format!("failed to start encoder: {error}")))?,
@@ -113,8 +114,8 @@ impl EngineRuntime {
                 }
             })
             .map_err(|error| EngineStartError(format!("failed to start event bridge: {error}")))?;
-        let commands = driver.commands.clone();
-        let supervisor_commands = commands.clone();
+        let internal_commands = driver.commands.clone();
+        let supervisor_commands = internal_commands.clone();
         let supervisor_runtime = Arc::clone(&runtime);
         let supervisor = thread::Builder::new()
             .name("crfty-job-supervisor".to_owned())
@@ -129,7 +130,9 @@ impl EngineRuntime {
             })
             .map_err(|error| EngineStartError(format!("failed to start coordinator: {error}")))?;
         Ok(Self {
-            commands,
+            commands: UserCommandSender {
+                inner: internal_commands,
+            },
             events: public_event_rx,
             driver: Some(driver),
             supervisor: Some(supervisor),
@@ -165,6 +168,24 @@ impl EngineRuntime {
                 .map_err(|error| EngineStartError(format!("encoder shutdown failed: {error}")))?;
         }
         Ok(())
+    }
+}
+
+#[derive(Clone)]
+pub struct UserCommandSender {
+    inner: CommandSender,
+}
+
+impl UserCommandSender {
+    pub fn submit_queue(&self, command: QueueCommand) -> Result<Reply, crate::driver::SubmitError> {
+        self.inner.submit(Command::Queue(command))
+    }
+
+    pub fn submit_session(
+        &self,
+        command: SessionCommand,
+    ) -> Result<Reply, crate::driver::SubmitError> {
+        self.inner.submit(Command::Session(command))
     }
 }
 
@@ -259,42 +280,84 @@ fn recover_startup(
 
 #[derive(Clone)]
 struct ActiveCancellation {
-    force_stopping: Arc<AtomicBool>,
-    slot: Arc<Mutex<Option<(RunId, CancellationHandle)>>>,
+    state: Arc<Mutex<CancellationState>>,
+}
+
+struct CancellationState {
+    force_stopping: bool,
+    slot: Option<(RunId, CancellationHandle)>,
 }
 
 impl ActiveCancellation {
-    fn register(&self, run_id: RunId, handle: CancellationHandle) {
-        if self.force_stopping.load(Ordering::Acquire) {
+    fn new() -> Self {
+        Self {
+            state: Arc::new(Mutex::new(CancellationState {
+                force_stopping: false,
+                slot: None,
+            })),
+        }
+    }
+
+    fn register(&self, run_id: RunId, handle: CancellationHandle) -> CancellationRegistration<'_> {
+        let mut state = match self.state.lock() {
+            Ok(state) => state,
+            Err(poisoned) => poisoned.into_inner(),
+        };
+        state.slot = Some((run_id, handle.clone()));
+        if state.force_stopping {
             handle.cancel(CancelMode::Force);
         }
-        match self.slot.lock() {
-            Ok(mut slot) => *slot = Some((run_id, handle)),
-            Err(poisoned) => *poisoned.into_inner() = Some((run_id, handle)),
+        CancellationRegistration {
+            cancellation: self,
+            run_id,
         }
     }
 
     fn clear(&self, run_id: RunId) {
-        let mut slot = match self.slot.lock() {
-            Ok(slot) => slot,
+        let mut state = match self.state.lock() {
+            Ok(state) => state,
             Err(poisoned) => poisoned.into_inner(),
         };
-        if slot.as_ref().is_some_and(|(active, _)| *active == run_id) {
-            *slot = None;
+        if state
+            .slot
+            .as_ref()
+            .is_some_and(|(active, _)| *active == run_id)
+        {
+            state.slot = None;
         }
     }
 
     fn force(&self, run_id: Option<RunId>) {
-        self.force_stopping.store(true, Ordering::Release);
-        let slot = match self.slot.lock() {
-            Ok(slot) => slot,
+        let mut state = match self.state.lock() {
+            Ok(state) => state,
             Err(poisoned) => poisoned.into_inner(),
         };
-        if let Some((active, handle)) = slot.as_ref()
+        state.force_stopping = true;
+        if let Some((active, handle)) = state.slot.as_ref()
             && run_id.is_none_or(|expected| expected == *active)
         {
             handle.cancel(CancelMode::Force);
         }
+    }
+
+    fn reset(&self) {
+        let mut state = match self.state.lock() {
+            Ok(state) => state,
+            Err(poisoned) => poisoned.into_inner(),
+        };
+        state.force_stopping = false;
+        state.slot = None;
+    }
+}
+
+struct CancellationRegistration<'a> {
+    cancellation: &'a ActiveCancellation,
+    run_id: RunId,
+}
+
+impl Drop for CancellationRegistration<'_> {
+    fn drop(&mut self) {
+        self.cancellation.clear(self.run_id);
     }
 }
 
@@ -305,36 +368,54 @@ fn supervise(
     config: EngineConfig,
     next_runtime_id: u64,
 ) {
-    let cancellation = ActiveCancellation {
-        force_stopping: Arc::new(AtomicBool::new(false)),
-        slot: Arc::new(Mutex::new(None)),
-    };
+    let cancellation = ActiveCancellation::new();
     let next_id = Arc::new(AtomicU64::new(next_runtime_id));
     let mut worker: Option<thread::JoinHandle<()>> = None;
     while let Ok(effect) = effects.recv() {
         match effect {
             Effect::StartWorker => {
-                if let Some(previous) = worker.take() {
-                    let _result = previous.join();
+                if let Some(previous) = worker.take()
+                    && previous.join().is_err()
+                {
+                    report_worker_crash(&commands, "previous session worker panicked");
+                    break;
                 }
-                cancellation.force_stopping.store(false, Ordering::Release);
+                cancellation.reset();
                 let worker_commands = commands.clone();
                 let worker_runtime = Arc::clone(&runtime);
                 let worker_config = config.clone();
                 let worker_cancellation = cancellation.clone();
                 let worker_ids = Arc::clone(&next_id);
-                worker = thread::Builder::new()
+                let spawned = thread::Builder::new()
                     .name("crfty-session-worker".to_owned())
                     .spawn(move || {
-                        run_session(
-                            &worker_commands,
-                            &worker_runtime,
-                            &worker_config,
-                            &worker_cancellation,
-                            &worker_ids,
+                        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                            run_session(
+                                &worker_commands,
+                                &worker_runtime,
+                                &worker_config,
+                                &worker_cancellation,
+                                &worker_ids,
+                            )
+                        }));
+                        match result {
+                            Ok(Ok(())) => {}
+                            Ok(Err(message)) => report_worker_crash(&worker_commands, &message),
+                            Err(_) => {
+                                report_worker_crash(&worker_commands, "session worker panicked");
+                            }
+                        }
+                    });
+                match spawned {
+                    Ok(handle) => worker = Some(handle),
+                    Err(error) => {
+                        report_worker_crash(
+                            &commands,
+                            &format!("failed to spawn session worker: {error}"),
                         );
-                    })
-                    .ok();
+                        break;
+                    }
+                }
             }
             Effect::KillActiveRun { run_id } => cancellation.force(Some(run_id)),
             Effect::StopDriver => {
@@ -343,8 +424,20 @@ fn supervise(
             }
         }
     }
-    if let Some(worker) = worker {
-        let _result = worker.join();
+    if let Some(worker) = worker
+        && worker.join().is_err()
+    {
+        report_worker_crash(&commands, "session worker panicked during shutdown");
+    }
+}
+
+fn report_worker_crash(commands: &CommandSender, message: &str) {
+    match commands.submit(Command::Worker(WorkerCommand::Crashed {
+        message: message.to_owned(),
+    })) {
+        Ok(Reply::Accepted) => {}
+        Ok(reply) => eprintln!("failed to report worker crash ({message}): {reply:?}"),
+        Err(error) => eprintln!("failed to report worker crash ({message}): {error}"),
     }
 }
 
@@ -354,7 +447,7 @@ fn run_session(
     config: &EngineConfig,
     cancellation: &ActiveCancellation,
     ids: &AtomicU64,
-) {
+) -> Result<(), String> {
     loop {
         let claim_id = ClaimId(ids.fetch_add(1, Ordering::Relaxed));
         let run_id = RunId(ids.fetch_add(1, Ordering::Relaxed));
@@ -365,19 +458,25 @@ fn run_session(
         }));
         let job = match claim {
             Ok(Reply::Claimed(Some(job))) => job,
-            Ok(Reply::Claimed(None) | Reply::Rejected { .. }) | Err(_) => break,
-            Ok(Reply::Accepted) => break,
+            Ok(Reply::Claimed(None) | Reply::Rejected { .. }) => break,
+            Ok(Reply::DurabilityUnknown { reason }) => return Err(reason),
+            Err(error) => return Err(format!("worker claim failed: {error}")),
+            Ok(Reply::Accepted) => return Err("claim command returned an invalid reply".to_owned()),
         };
-        if !accepted(commands.submit(Command::Worker(WorkerCommand::Started {
-            item_id: job.spec.item_id,
-            claim_id,
-            run_id,
-        }))) {
-            break;
-        }
-        process_job(commands, runtime, config, cancellation, &job);
+        require_accepted(
+            "mark worker item started",
+            commands.submit(Command::Worker(WorkerCommand::Started {
+                item_id: job.spec.item_id,
+                claim_id,
+                run_id,
+            })),
+        )?;
+        process_job(commands, runtime, config, cancellation, &job)?;
     }
-    let _reply = commands.submit(Command::Worker(WorkerCommand::Finished));
+    require_accepted(
+        "finish worker session",
+        commands.submit(Command::Worker(WorkerCommand::Finished)),
+    )
 }
 
 fn process_job(
@@ -386,7 +485,7 @@ fn process_job(
     config: &EngineConfig,
     cancellation: &ActiveCancellation,
     job: &ClaimedJob,
-) {
+) -> Result<(), String> {
     let mut telemetry_sequence = 0_u64;
     publish_phase(
         commands,
@@ -404,20 +503,19 @@ fn process_job(
     ) {
         Ok(result) => result,
         Err(outcome) => {
-            terminal(commands, job, outcome, None);
-            return;
+            terminal(commands, job, outcome, None)?;
+            return Ok(());
         }
     };
-    if !accepted(
+    require_accepted(
+        "record analysis",
         commands.submit(Command::Worker(WorkerCommand::RecordAnalysis {
             item_id: job.spec.item_id,
             claim_id: job.spec.claim_id,
             run_id: job.spec.run_id,
             result: Box::new(analysis.clone()),
         })),
-    ) {
-        return;
-    }
+    )?;
     if job.spec.operation == Operation::Analyze {
         publish_phase(
             commands,
@@ -425,15 +523,15 @@ fn process_job(
             &mut telemetry_sequence,
             JobPhase::Finalizing,
         );
-        terminal(commands, job, ItemOutcome::Analyzed, None);
-        return;
+        terminal(commands, job, ItemOutcome::Analyzed, None)?;
+        return Ok(());
     }
 
     let (final_path, replacement) = match resolve_output(job) {
         Ok(resolved) => resolved,
         Err(message) => {
-            terminal(commands, job, ItemOutcome::Failed { message }, None);
-            return;
+            terminal(commands, job, ItemOutcome::Failed { message }, None)?;
+            return Ok(());
         }
     };
     if let Some(parent) = final_path.parent()
@@ -446,8 +544,8 @@ fn process_job(
                 message: format!("failed to create output directory: {error}"),
             },
             None,
-        );
-        return;
+        )?;
+        return Ok(());
     }
     if final_path.exists() && !job.spec.execution.overwrite_existing && final_path != job.spec.input
     {
@@ -458,8 +556,8 @@ fn process_job(
                 reason: "output already exists".to_owned(),
             },
             None,
-        );
-        return;
+        )?;
+        return Ok(());
     }
     let manager = OutputManager::new(MediaArtifactInspector::new(
         config.media_tools.ffprobe.clone(),
@@ -475,16 +573,20 @@ fn process_job(
                         message: error.to_string(),
                     },
                     None,
-                );
-                return;
+                )?;
+                return Ok(());
             }
         };
     let started = OutputDelta::EncodeStarted {
         transaction: Box::new(transaction.clone()),
     };
-    if !submit_output(commands, started) {
-        let _cleanup = manager.discard_unjournaled(&transaction);
-        return;
+    if let Err(error) = submit_output(commands, started) {
+        return match manager.discard_unjournaled(&transaction) {
+            Ok(()) => Err(error),
+            Err(cleanup) => Err(format!(
+                "{error}; unjournaled staging cleanup failed: {cleanup}"
+            )),
+        };
     }
 
     let request = EncodeRequest {
@@ -496,7 +598,7 @@ fn process_job(
     let handle = match runtime.start_encode(config.media_tools.clone(), request) {
         Ok(handle) => handle,
         Err(error) => {
-            settle_abandoned(&manager, commands, &transaction);
+            settle_abandoned(&manager, commands, &transaction)?;
             terminal(
                 commands,
                 job,
@@ -504,8 +606,8 @@ fn process_job(
                     message: error.to_string(),
                 },
                 None,
-            );
-            return;
+            )?;
+            return Ok(());
         }
     };
     let report = wait_for_report(
@@ -530,7 +632,7 @@ fn process_job(
             let ready = match manager.mark_ready(&transaction) {
                 Ok(ready) => ready,
                 Err(error) => {
-                    settle_abandoned(&manager, commands, &transaction);
+                    settle_abandoned(&manager, commands, &transaction)?;
                     terminal(
                         commands,
                         job,
@@ -539,17 +641,15 @@ fn process_job(
                         },
                         map_telemetry(
                             job.spec.run_id,
-                            TERMINAL_TELEMETRY_SEQUENCE,
+                            &mut telemetry_sequence,
                             JobPhase::Verifying,
                             final_telemetry,
                         ),
-                    );
-                    return;
+                    )?;
+                    return Ok(());
                 }
             };
-            if !submit_output(commands, ready.clone()) {
-                return;
-            }
+            submit_output(commands, ready.clone())?;
             fold_transaction(&mut transaction, ready);
             publish_phase(
                 commands,
@@ -560,9 +660,11 @@ fn process_job(
             while !transaction.is_settled() {
                 let next = match manager.recover_once(&transaction) {
                     Ok(Some(next)) => next,
-                    Ok(None) => break,
+                    Ok(None) => {
+                        return Err("output recovery made no progress before settlement".to_owned());
+                    }
                     Err(error) => {
-                        settle_conflict(commands, job.spec.run_id, error.to_string());
+                        settle_conflict(commands, job.spec.run_id, error.to_string())?;
                         terminal(
                             commands,
                             job,
@@ -571,17 +673,15 @@ fn process_job(
                             },
                             map_telemetry(
                                 job.spec.run_id,
-                                TERMINAL_TELEMETRY_SEQUENCE,
+                                &mut telemetry_sequence,
                                 JobPhase::Finalizing,
                                 final_telemetry,
                             ),
-                        );
-                        return;
+                        )?;
+                        return Ok(());
                     }
                 };
-                if !submit_output(commands, next.clone()) {
-                    return;
-                }
+                submit_output(commands, next.clone())?;
                 fold_transaction(&mut transaction, next);
             }
             terminal(
@@ -590,31 +690,31 @@ fn process_job(
                 ItemOutcome::Converted,
                 map_telemetry(
                     job.spec.run_id,
-                    TERMINAL_TELEMETRY_SEQUENCE,
+                    &mut telemetry_sequence,
                     JobPhase::Finalizing,
                     final_telemetry,
                 ),
-            );
+            )?;
         }
         Ok(JobReport {
             terminal: JobTerminal::Cancelled,
             final_telemetry,
         }) => {
-            settle_abandoned(&manager, commands, &transaction);
+            settle_abandoned(&manager, commands, &transaction)?;
             terminal(
                 commands,
                 job,
                 ItemOutcome::Stopped,
                 map_telemetry(
                     job.spec.run_id,
-                    TERMINAL_TELEMETRY_SEQUENCE,
+                    &mut telemetry_sequence,
                     JobPhase::Encoding,
                     final_telemetry,
                 ),
-            );
+            )?;
         }
         Ok(report) => {
-            settle_abandoned(&manager, commands, &transaction);
+            settle_abandoned(&manager, commands, &transaction)?;
             terminal(
                 commands,
                 job,
@@ -623,17 +723,18 @@ fn process_job(
                 },
                 map_telemetry(
                     job.spec.run_id,
-                    TERMINAL_TELEMETRY_SEQUENCE,
+                    &mut telemetry_sequence,
                     JobPhase::Encoding,
                     report.final_telemetry,
                 ),
-            );
+            )?;
         }
         Err(message) => {
-            settle_abandoned(&manager, commands, &transaction);
-            terminal(commands, job, ItemOutcome::Failed { message }, None);
+            settle_abandoned(&manager, commands, &transaction)?;
+            terminal(commands, job, ItemOutcome::Failed { message }, None)?;
         }
     }
+    Ok(())
 }
 
 fn search_with_fallback(
@@ -674,21 +775,27 @@ fn search_with_fallback(
         .map_err(|message| ItemOutcome::Failed { message })?;
         match report.terminal {
             JobTerminal::Completed(outcome) => {
+                let measured =
+                    measurement(outcome).map_err(|message| ItemOutcome::Failed { message })?;
                 return Ok(AnalysisResult {
                     requested_target: execution.requested_target,
                     successful_target: VmafTarget(target),
                     fallback_floor: execution.fallback_floor,
                     fallback_step: execution.fallback_step,
                     failed_attempts,
-                    measurement: measurement(outcome),
+                    measurement: measured,
                     profile: execution.profile.clone(),
                 });
             }
             JobTerminal::Failed(failure) => match failure.kind {
-                JobFailureKind::NoGoodCrf { last } => failed_attempts.push(AnalysisAttempt {
-                    target: VmafTarget(target),
-                    last_measurement: Some(measurement(last)),
-                }),
+                JobFailureKind::NoGoodCrf { last } => {
+                    let measured =
+                        measurement(last).map_err(|message| ItemOutcome::Failed { message })?;
+                    failed_attempts.push(AnalysisAttempt {
+                        target: VmafTarget(target),
+                        last_measurement: Some(measured),
+                    });
+                }
                 JobFailureKind::Other => {
                     return Err(ItemOutcome::Failed {
                         message: failure.message,
@@ -722,22 +829,26 @@ fn wait_for_report<T>(
     phase: JobPhase,
     telemetry_sequence: &mut u64,
 ) -> Result<JobReport<T>, String> {
-    cancellation.register(run_id, handle.cancellation_handle());
+    let _registration = cancellation.register(run_id, handle.cancellation_handle());
+    let mut last_progress = None;
     loop {
         match handle.try_report().map_err(|error| error.to_string())? {
             Some(report) => {
-                cancellation.clear(run_id);
                 return Ok(report);
             }
             None => {
                 if let Some(update) = handle.latest_telemetry() {
-                    *telemetry_sequence = telemetry_sequence.saturating_add(1);
-                    commands.publish_telemetry(Telemetry {
-                        run_id,
-                        sequence: *telemetry_sequence,
-                        phase,
-                        completed_units: telemetry_units(&update),
-                    });
+                    let progress = telemetry_progress(&update);
+                    if last_progress.as_ref() != Some(&progress) {
+                        *telemetry_sequence = telemetry_sequence.saturating_add(1);
+                        commands.publish_telemetry(Telemetry {
+                            run_id,
+                            sequence: *telemetry_sequence,
+                            phase,
+                            progress: progress.clone(),
+                        });
+                        last_progress = Some(progress);
+                    }
                 }
                 thread::sleep(ADAPTER_REPORT_POLL_INTERVAL);
             }
@@ -745,20 +856,36 @@ fn wait_for_report<T>(
     }
 }
 
-fn telemetry_units(telemetry: &AdapterTelemetry) -> u64 {
+fn telemetry_progress(telemetry: &AdapterTelemetry) -> JobProgress {
     match telemetry {
-        AdapterTelemetry::Search(search) => {
+        AdapterTelemetry::Search(search) => JobProgress::SearchBasisPoints(
             (search
                 .progress
                 .clamp(NORMALIZED_PROGRESS_MIN, NORMALIZED_PROGRESS_MAX)
-                * NORMALIZED_PROGRESS_UNITS) as u64
-        }
-        AdapterTelemetry::Encode(encode) => encode.position.as_millis() as u64,
+                * MAX_PERCENT_BASIS_POINTS as f32) as u32,
+        ),
+        AdapterTelemetry::Encode(encode) => JobProgress::EncodePositionMs(
+            encode.position.as_millis().try_into().unwrap_or(u64::MAX),
+        ),
     }
 }
 
-fn measurement(outcome: SearchOutcome) -> SearchMeasurement {
-    SearchMeasurement {
+fn measurement(outcome: SearchOutcome) -> Result<SearchMeasurement, String> {
+    if !outcome.crf.is_finite()
+        || outcome.crf < 0.0
+        || !outcome.vmaf.is_finite()
+        || !(0.0..=f32::from(MAX_VMAF_SCORE)).contains(&outcome.vmaf)
+        || !outcome.predicted_percent.is_finite()
+        || outcome.predicted_percent < 0.0
+    {
+        return Err("ab-av1 returned a non-finite or out-of-range analysis value".to_owned());
+    }
+    let scaled_crf = outcome.crf * CRF_FIXED_SCALE as f32;
+    let scaled_percent = outcome.predicted_percent * f64::from(PERCENT_BASIS_POINTS_SCALE);
+    if scaled_crf > u32::MAX as f32 || scaled_percent > f64::from(u32::MAX) {
+        return Err("ab-av1 returned an analysis value too large to persist".to_owned());
+    }
+    Ok(SearchMeasurement {
         crf: Crf((outcome.crf * CRF_FIXED_SCALE as f32).round().max(0.0) as u32),
         score: VmafScore(
             (outcome.vmaf * f32::from(VMAF_SCORE_FIXED_SCALE))
@@ -769,13 +896,10 @@ fn measurement(outcome: SearchOutcome) -> SearchMeasurement {
                 ) as u16,
         ),
         predicted_size: outcome.predicted_size,
-        predicted_percent_basis_points: (outcome.predicted_percent
-            * f64::from(PERCENT_BASIS_POINTS_SCALE))
-        .round()
-        .clamp(0.0, f64::from(u32::MAX)) as u32,
+        predicted_percent_basis_points: scaled_percent.round() as u32,
         predicted_duration_ms: outcome.predicted_duration.as_millis() as u64,
         from_cache: outcome.from_cache,
-    }
+    })
 }
 
 fn crf_to_f32(crf: Crf) -> f32 {
@@ -783,30 +907,42 @@ fn crf_to_f32(crf: Crf) -> f32 {
 }
 
 fn resolve_output(job: &ClaimedJob) -> Result<(PathBuf, crfty_core::Replacement), String> {
-    let input = &job.spec.input;
+    resolve_output_for(&job.spec.input, &job.spec.output_target)
+}
+
+fn resolve_output_for(
+    input: &std::path::Path,
+    output_target: &OutputTarget,
+) -> Result<(PathBuf, crfty_core::Replacement), String> {
     let stem = input
         .file_stem()
         .ok_or_else(|| "input has no file stem".to_owned())?;
-    match &job.spec.output_target {
-        OutputTarget::Replace => Ok((
-            input.with_extension(OUTPUT_CONTAINER_EXTENSION),
-            if input
-                .extension()
-                .is_some_and(|extension| extension.eq_ignore_ascii_case(OUTPUT_CONTAINER_EXTENSION))
-            {
-                crfty_core::Replacement::KeepOriginal
-            } else {
-                crfty_core::Replacement::RetireOriginal
-            },
-        )),
+    match output_target {
+        OutputTarget::Replace => {
+            Ok((
+                if input.extension().is_some_and(|extension| {
+                    extension.eq_ignore_ascii_case(OUTPUT_CONTAINER_EXTENSION)
+                }) {
+                    input.to_path_buf()
+                } else {
+                    input.with_extension(OUTPUT_CONTAINER_EXTENSION)
+                },
+                if input.extension().is_some_and(|extension| {
+                    extension.eq_ignore_ascii_case(OUTPUT_CONTAINER_EXTENSION)
+                }) {
+                    crfty_core::Replacement::KeepOriginal
+                } else {
+                    crfty_core::Replacement::RetireOriginal
+                },
+            ))
+        }
         OutputTarget::Suffix { suffix } => {
-            if suffix.is_empty() {
-                return Err("output suffix cannot be empty".to_owned());
-            }
+            validate_suffix(suffix)?;
             let mut name = stem.to_os_string();
             name.push(suffix);
             name.push(".");
             name.push(OUTPUT_CONTAINER_EXTENSION);
+            validate_windows_file_name(&name)?;
             Ok((
                 input.with_file_name(name),
                 crfty_core::Replacement::KeepOriginal,
@@ -816,13 +952,21 @@ fn resolve_output(job: &ClaimedJob) -> Result<(PathBuf, crfty_core::Replacement)
             directory,
             source_root,
         } => {
-            let relative_parent = source_root.as_ref().and_then(|root| {
-                input
+            let relative_parent = match source_root {
+                Some(root) => input
                     .parent()
-                    .and_then(|parent| parent.strip_prefix(root).ok())
-            });
-            let parent =
-                relative_parent.map_or_else(|| directory.clone(), |path| directory.join(path));
+                    .ok_or_else(|| "input has no parent directory".to_owned())?
+                    .strip_prefix(root)
+                    .map_err(|_| "input is outside the configured source root".to_owned())?,
+                None => std::path::Path::new(""),
+            };
+            if relative_parent
+                .components()
+                .any(|component| !matches!(component, std::path::Component::Normal(_)))
+            {
+                return Err("source-relative output path is not safely contained".to_owned());
+            }
+            let parent = directory.join(relative_parent);
             Ok((
                 parent.join(stem).with_extension(OUTPUT_CONTAINER_EXTENSION),
                 crfty_core::Replacement::KeepOriginal,
@@ -831,38 +975,83 @@ fn resolve_output(job: &ClaimedJob) -> Result<(PathBuf, crfty_core::Replacement)
     }
 }
 
-fn submit_output(commands: &CommandSender, delta: OutputDelta) -> bool {
-    accepted(commands.submit(Command::Worker(WorkerCommand::Output(delta))))
+fn validate_suffix(suffix: &str) -> Result<(), String> {
+    if suffix.is_empty() {
+        return Err("output suffix cannot be empty".to_owned());
+    }
+    if suffix.chars().any(|character| {
+        character.is_control()
+            || matches!(
+                character,
+                '/' | '\\' | ':' | '<' | '>' | '"' | '|' | '?' | '*'
+            )
+    }) {
+        return Err(
+            "output suffix contains a path separator or invalid filename character".to_owned(),
+        );
+    }
+    if suffix.ends_with(['.', ' ']) {
+        return Err("output suffix cannot end in a dot or space".to_owned());
+    }
+    Ok(())
 }
 
-fn settle_conflict(commands: &CommandSender, run_id: RunId, reason: String) {
-    let _accepted = submit_output(commands, OutputDelta::Conflict { run_id, reason });
+fn validate_windows_file_name(name: &std::ffi::OsStr) -> Result<(), String> {
+    let Some(name) = name.to_str() else {
+        return Ok(());
+    };
+    let stem = name
+        .split('.')
+        .next()
+        .unwrap_or_default()
+        .to_ascii_uppercase();
+    let reserved = matches!(stem.as_str(), "CON" | "PRN" | "AUX" | "NUL")
+        || stem
+            .strip_prefix("COM")
+            .or_else(|| stem.strip_prefix("LPT"))
+            .is_some_and(|number| {
+                number.len() == 1 && matches!(number.as_bytes().first(), Some(b'1'..=b'9'))
+            });
+    if reserved {
+        Err("output filename is reserved by Windows".to_owned())
+    } else {
+        Ok(())
+    }
+}
+
+fn submit_output(commands: &CommandSender, delta: OutputDelta) -> Result<(), String> {
+    require_accepted(
+        "record output transition",
+        commands.submit(Command::Worker(WorkerCommand::Output(delta))),
+    )
+}
+
+fn settle_conflict(commands: &CommandSender, run_id: RunId, reason: String) -> Result<(), String> {
+    submit_output(commands, OutputDelta::Conflict { run_id, reason })
 }
 
 fn settle_abandoned(
     manager: &OutputManager<MediaArtifactInspector>,
     commands: &CommandSender,
     transaction: &crfty_core::OutputTransaction,
-) {
+) -> Result<(), String> {
     let intent = match manager.abandon_intent(transaction) {
         Ok(intent) => intent,
         Err(error) => {
-            settle_conflict(commands, transaction.run_id, error.to_string());
-            return;
+            return settle_conflict(commands, transaction.run_id, error.to_string());
         }
     };
-    if !submit_output(commands, intent.clone()) {
-        return;
-    }
+    submit_output(commands, intent.clone())?;
     let mut abandoning = transaction.clone();
     fold_transaction(&mut abandoning, intent);
     match manager.recover_once(&abandoning) {
         Ok(Some(abandoned)) => {
-            let _accepted = submit_output(commands, abandoned);
+            submit_output(commands, abandoned)?;
         }
         Ok(None) => {}
-        Err(error) => settle_conflict(commands, transaction.run_id, error.to_string()),
+        Err(error) => settle_conflict(commands, transaction.run_id, error.to_string())?,
     }
+    Ok(())
 }
 
 fn fold_transaction(transaction: &mut crfty_core::OutputTransaction, delta: OutputDelta) {
@@ -881,27 +1070,33 @@ fn terminal(
     job: &ClaimedJob,
     outcome: ItemOutcome,
     final_telemetry: Option<Telemetry>,
-) {
-    let _reply = commands.submit(Command::Worker(WorkerCommand::Terminal {
-        item_id: job.spec.item_id,
-        claim_id: job.spec.claim_id,
-        run_id: job.spec.run_id,
-        outcome,
-        final_telemetry,
-    }));
+) -> Result<(), String> {
+    require_accepted(
+        "record terminal outcome",
+        commands.submit(Command::Worker(WorkerCommand::Terminal {
+            item_id: job.spec.item_id,
+            claim_id: job.spec.claim_id,
+            run_id: job.spec.run_id,
+            outcome,
+            final_telemetry,
+        })),
+    )
 }
 
 fn map_telemetry(
     run_id: RunId,
-    sequence: u64,
+    sequence: &mut u64,
     phase: JobPhase,
     telemetry: Option<AdapterTelemetry>,
 ) -> Option<Telemetry> {
-    telemetry.map(|telemetry| Telemetry {
-        run_id,
-        sequence,
-        phase,
-        completed_units: telemetry_units(&telemetry),
+    telemetry.map(|telemetry| {
+        *sequence = sequence.saturating_add(1);
+        Telemetry {
+            run_id,
+            sequence: *sequence,
+            phase,
+            progress: telemetry_progress(&telemetry),
+        }
     })
 }
 
@@ -911,10 +1106,82 @@ fn publish_phase(commands: &CommandSender, run_id: RunId, sequence: &mut u64, ph
         run_id,
         sequence: *sequence,
         phase,
-        completed_units: 0,
+        progress: JobProgress::Phase,
     });
 }
 
 fn accepted(reply: Result<Reply, crate::driver::SubmitError>) -> bool {
     matches!(reply, Ok(Reply::Accepted))
+}
+
+fn require_accepted(
+    context: &str,
+    reply: Result<Reply, crate::driver::SubmitError>,
+) -> Result<(), String> {
+    match reply {
+        Ok(Reply::Accepted) => Ok(()),
+        Ok(Reply::Rejected { reason } | Reply::DurabilityUnknown { reason }) => {
+            Err(format!("{context}: {reason}"))
+        }
+        Ok(other) => Err(format!("{context}: invalid driver reply {other:?}")),
+        Err(error) => Err(format!("{context}: {error}")),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::path::{Path, PathBuf};
+
+    use crfty_core::{OutputTarget, Replacement};
+
+    use super::{
+        ActiveCancellation, resolve_output_for, validate_suffix, validate_windows_file_name,
+    };
+    use crate::ab_av1::{CancelMode, CancellationHandle};
+    use crfty_core::RunId;
+
+    #[test]
+    fn suffix_is_a_filename_fragment_not_a_path() {
+        for invalid in [
+            "",
+            "../escape",
+            "\\escape",
+            "bad:name",
+            "bad?name",
+            "trailing.",
+            "space ",
+        ] {
+            assert!(validate_suffix(invalid).is_err(), "accepted {invalid:?}");
+        }
+        assert!(validate_suffix("_av1").is_ok());
+        assert!(validate_windows_file_name(std::ffi::OsStr::new("CON.mkv")).is_err());
+        assert!(validate_windows_file_name(std::ffi::OsStr::new("LPT9.mkv")).is_err());
+    }
+
+    #[test]
+    fn replace_preserves_case_equivalent_mkv_path() {
+        let input = Path::new("Movie.MKV");
+        let (output, replacement) =
+            resolve_output_for(input, &OutputTarget::Replace).expect("replace path");
+        assert_eq!(output, input);
+        assert_eq!(replacement, Replacement::KeepOriginal);
+    }
+
+    #[test]
+    fn separate_output_rejects_input_outside_source_root() {
+        let target = OutputTarget::SeparateFolder {
+            directory: PathBuf::from("output"),
+            source_root: Some(PathBuf::from("library")),
+        };
+        assert!(resolve_output_for(Path::new("elsewhere/movie.mkv"), &target).is_err());
+    }
+
+    #[test]
+    fn force_before_registration_cannot_miss_the_child() {
+        let cancellation = ActiveCancellation::new();
+        cancellation.force(None);
+        let (handle, receiver) = CancellationHandle::fixture();
+        let _registration = cancellation.register(RunId(7), handle);
+        assert_eq!(*receiver.borrow(), Some(CancelMode::Force));
+    }
 }

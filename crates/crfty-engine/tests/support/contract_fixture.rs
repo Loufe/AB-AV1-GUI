@@ -13,9 +13,8 @@ use std::{
 };
 
 use crfty_core::{
-    AnalysisProfile, Command as CoreCommand, DEFAULT_VMAF_TARGET, ExecutionSettings,
-    MIN_VMAF_FALLBACK_TARGET, Operation, OutputTarget, QueueCommand, QueueItemId, SessionCommand,
-    VMAF_FALLBACK_STEP,
+    AnalysisProfile, DEFAULT_VMAF_TARGET, ExecutionSettings, MIN_VMAF_FALLBACK_TARGET, Operation,
+    OutputTarget, QueueCommand, QueueItemId, SessionCommand, VMAF_FALLBACK_STEP,
 };
 
 const CONTRACT_PRESET: u8 = 12;
@@ -149,7 +148,6 @@ fn run_coordinator_contract(
                 samples: Some(CONTRACT_SAMPLE_COUNT),
                 sample_duration_ms: CONTRACT_SAMPLE_DURATION_MS,
                 thorough: false,
-                hardware_decode: false,
                 ab_av1_revision: "contract".to_owned(),
                 ffmpeg_revision: "contract".to_owned(),
                 encoder_revision: "contract".to_owned(),
@@ -157,51 +155,115 @@ fn run_coordinator_contract(
         },
     })?;
     let _snapshot = engine.events.recv()?;
-    accepted_reply(
-        engine
-            .commands
-            .submit(CoreCommand::Queue(QueueCommand::Add {
-                item_id: QueueItemId(1),
-                input: input.clone(),
-                operation: Operation::Analyze,
-                output_target: OutputTarget::Replace,
-            }))?,
-    )?;
-    accepted_reply(
-        engine
-            .commands
-            .submit(CoreCommand::Queue(QueueCommand::Add {
-                item_id: QueueItemId(2),
-                input: input.clone(),
-                operation: Operation::Convert,
-                output_target: OutputTarget::Suffix {
-                    suffix: "_coordinated".to_owned(),
-                },
-            }))?,
-    )?;
-    accepted_reply(
-        engine
-            .commands
-            .submit(CoreCommand::Session(SessionCommand::Start))?,
-    )?;
+    accepted_reply(engine.commands.submit_queue(QueueCommand::Add {
+        item_id: QueueItemId(1),
+        input: input.clone(),
+        operation: Operation::Analyze,
+        output_target: OutputTarget::Replace,
+    })?)?;
+    accepted_reply(engine.commands.submit_queue(QueueCommand::Add {
+        item_id: QueueItemId(2),
+        input: input.clone(),
+        operation: Operation::Convert,
+        output_target: OutputTarget::Suffix {
+            suffix: "_coordinated".to_owned(),
+        },
+    })?)?;
+    accepted_reply(engine.commands.submit_session(SessionCommand::Start)?)?;
 
     let mut finished = 0_u8;
     while finished < CONTRACT_EXPECTED_FINISHED_ITEMS {
-        if matches!(
-            engine.events.recv_timeout(CONTRACT_EVENT_TIMEOUT)?,
+        match engine.events.recv_timeout(CONTRACT_EVENT_TIMEOUT)? {
             crfty_engine::driver::DriverEvent::Durable(
-                crfty_core::DurableDelta::ItemFinished { .. }
+                crfty_core::DurableDelta::ItemFinished { .. },
+            ) => finished = finished.saturating_add(1),
+            crfty_engine::driver::DriverEvent::Ephemeral(
+                crfty_core::EphemeralDelta::CommandRejected { reason },
+            ) => return Err(format!("coordinator command rejected: {reason}").into()),
+            crfty_engine::driver::DriverEvent::Ephemeral(
+                crfty_core::EphemeralDelta::WorkerCrashed { message },
             )
-        ) {
-            finished = finished.saturating_add(1);
+            | crfty_engine::driver::DriverEvent::Fatal { message } => {
+                return Err(format!("coordinator worker failed: {message}").into());
+            }
+            _ => {}
         }
     }
     let expected = input.with_file_name("input_coordinated.mkv");
     if !expected.exists() {
         return Err(format!("coordinator did not promote {}", expected.display()).into());
     }
+    wait_for_idle(&engine)?;
+    accepted_reply(engine.commands.submit_queue(QueueCommand::Add {
+        item_id: QueueItemId(3),
+        input: input.clone(),
+        operation: Operation::Convert,
+        output_target: OutputTarget::Suffix {
+            suffix: "_cancelled".to_owned(),
+        },
+    })?)?;
+    accepted_reply(engine.commands.submit_session(SessionCommand::Start)?)?;
+    wait_for_encoding(&engine)?;
+    accepted_reply(engine.commands.submit_session(SessionCommand::ForceStop)?)?;
+    wait_for_stopped(&engine)?;
+    if input.with_file_name("input_cancelled.mkv").exists() {
+        return Err("force-stopped coordinator promoted an output".into());
+    }
+    let partial_remains = fs::read_dir(&output_dir)?.any(|entry| {
+        entry.ok().is_some_and(|entry| {
+            entry
+                .path()
+                .extension()
+                .is_some_and(|extension| extension == "part")
+        })
+    });
+    if partial_remains {
+        return Err("force-stopped coordinator left a staging file".into());
+    }
     engine.shutdown()?;
     Ok(())
+}
+
+fn wait_for_idle(engine: &EngineRuntime) -> Result<(), Box<dyn Error>> {
+    loop {
+        match engine.events.recv_timeout(CONTRACT_EVENT_TIMEOUT)? {
+            crfty_engine::driver::DriverEvent::Ephemeral(
+                crfty_core::EphemeralDelta::SessionChanged(crfty_core::SessionState::Idle),
+            ) => return Ok(()),
+            crfty_engine::driver::DriverEvent::Fatal { message } => return Err(message.into()),
+            _ => {}
+        }
+    }
+}
+
+fn wait_for_encoding(engine: &EngineRuntime) -> Result<(), Box<dyn Error>> {
+    loop {
+        match engine.events.recv_timeout(CONTRACT_EVENT_TIMEOUT)? {
+            crfty_engine::driver::DriverEvent::Ephemeral(
+                crfty_core::EphemeralDelta::Telemetry(crfty_core::Telemetry {
+                    phase: crfty_core::JobPhase::Encoding,
+                    ..
+                }),
+            ) => return Ok(()),
+            crfty_engine::driver::DriverEvent::Fatal { message } => return Err(message.into()),
+            _ => {}
+        }
+    }
+}
+
+fn wait_for_stopped(engine: &EngineRuntime) -> Result<(), Box<dyn Error>> {
+    loop {
+        match engine.events.recv_timeout(CONTRACT_EVENT_TIMEOUT)? {
+            crfty_engine::driver::DriverEvent::Durable(
+                crfty_core::DurableDelta::ItemFinished {
+                    outcome: crfty_core::ItemOutcome::Stopped,
+                    ..
+                },
+            ) => return Ok(()),
+            crfty_engine::driver::DriverEvent::Fatal { message } => return Err(message.into()),
+            _ => {}
+        }
+    }
 }
 
 fn accepted_reply(reply: crfty_core::Reply) -> Result<(), Box<dyn Error>> {

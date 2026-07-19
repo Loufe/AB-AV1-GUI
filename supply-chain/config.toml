@@ -63,8 +63,16 @@ criteria = "safe-to-deploy"
 version = "2.13.1"
 criteria = "safe-to-deploy"
 
+[[exemptions.blake2]]
+version = "0.10.6"
+criteria = "safe-to-deploy"
+
 [[exemptions.blake3]]
 version = "1.8.5"
+criteria = "safe-to-deploy"
+
+[[exemptions.block-buffer]]
+version = "0.10.4"
 criteria = "safe-to-deploy"
 
 [[exemptions.bumpalo]]
@@ -139,8 +147,16 @@ criteria = "safe-to-deploy"
 version = "0.8.22"
 criteria = "safe-to-deploy"
 
+[[exemptions.crypto-common]]
+version = "0.1.7"
+criteria = "safe-to-deploy"
+
 [[exemptions.deranged]]
 version = "0.5.8"
+criteria = "safe-to-deploy"
+
+[[exemptions.digest]]
+version = "0.10.7"
 criteria = "safe-to-deploy"
 
 [[exemptions.dirs]]
@@ -165,6 +181,10 @@ criteria = "safe-to-deploy"
 
 [[exemptions.ffprobe]]
 version = "0.4.0"
+criteria = "safe-to-deploy"
+
+[[exemptions.file-id]]
+version = "0.2.3"
 criteria = "safe-to-deploy"
 
 [[exemptions.find-msvc-tools]]
@@ -193,6 +213,10 @@ criteria = "safe-to-deploy"
 
 [[exemptions.fxhash]]
 version = "0.2.1"
+criteria = "safe-to-deploy"
+
+[[exemptions.generic-array]]
+version = "0.14.7"
 criteria = "safe-to-deploy"
 
 [[exemptions.getrandom]]
@@ -415,6 +439,10 @@ criteria = "safe-to-deploy"
 version = "0.11.1"
 criteria = "safe-to-deploy"
 
+[[exemptions.subtle]]
+version = "2.6.1"
+criteria = "safe-to-deploy"
+
 [[exemptions.syn]]
 version = "2.0.119"
 criteria = "safe-to-deploy"
@@ -459,6 +487,10 @@ criteria = "safe-to-deploy"
 version = "0.1.18"
 criteria = "safe-to-deploy"
 
+[[exemptions.typenum]]
+version = "1.20.1"
+criteria = "safe-to-deploy"
+
 [[exemptions.unarray]]
 version = "0.1.4"
 criteria = "safe-to-run"
@@ -477,6 +509,10 @@ criteria = "safe-to-deploy"
 
 [[exemptions.utf8parse]]
 version = "0.2.2"
+criteria = "safe-to-deploy"
+
+[[exemptions.version_check]]
+version = "0.9.5"
 criteria = "safe-to-deploy"
 
 [[exemptions.wasi]]
@@ -528,7 +564,47 @@ version = "0.2.1"
 criteria = "safe-to-deploy"
 
 [[exemptions.windows-sys]]
+version = "0.60.2"
+criteria = "safe-to-deploy"
+
+[[exemptions.windows-sys]]
 version = "0.61.2"
+criteria = "safe-to-deploy"
+
+[[exemptions.windows-targets]]
+version = "0.53.5"
+criteria = "safe-to-deploy"
+
+[[exemptions.windows_aarch64_gnullvm]]
+version = "0.53.1"
+criteria = "safe-to-deploy"
+
+[[exemptions.windows_aarch64_msvc]]
+version = "0.53.1"
+criteria = "safe-to-deploy"
+
+[[exemptions.windows_i686_gnu]]
+version = "0.53.1"
+criteria = "safe-to-deploy"
+
+[[exemptions.windows_i686_gnullvm]]
+version = "0.53.1"
+criteria = "safe-to-deploy"
+
+[[exemptions.windows_i686_msvc]]
+version = "0.53.1"
+criteria = "safe-to-deploy"
+
+[[exemptions.windows_x86_64_gnu]]
+version = "0.53.1"
+criteria = "safe-to-deploy"
+
+[[exemptions.windows_x86_64_gnullvm]]
+version = "0.53.1"
+criteria = "safe-to-deploy"
+
+[[exemptions.windows_x86_64_msvc]]
+version = "0.53.1"
 criteria = "safe-to-deploy"
 
 [[exemptions.wit-bindgen]]

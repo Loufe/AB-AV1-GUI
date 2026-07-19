@@ -113,7 +113,6 @@ impl JobFailure {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum CancelMode {
-    Graceful,
     Force,
 }
 
@@ -155,6 +154,7 @@ pub enum StartJobError {
     Busy,
     ShuttingDown,
     InvalidTool { name: &'static str, path: PathBuf },
+    InvalidRequest { reason: String },
 }
 
 impl fmt::Display for StartJobError {
@@ -168,6 +168,9 @@ impl fmt::Display for StartJobError {
                     "{name} is not an absolute executable file: {}",
                     path.display()
                 )
+            }
+            Self::InvalidRequest { reason } => {
+                write!(formatter, "invalid ab-av1 request: {reason}")
             }
         }
     }

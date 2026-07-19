@@ -115,7 +115,14 @@ pub struct Telemetry {
     pub run_id: RunId,
     pub sequence: u64,
     pub phase: JobPhase,
-    pub completed_units: u64,
+    pub progress: JobProgress,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum JobProgress {
+    Phase,
+    SearchBasisPoints(u32),
+    EncodePositionMs(u64),
 }
 
 pub fn fold(state: &mut DurableState, delta: &DurableDelta) {

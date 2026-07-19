@@ -3,25 +3,22 @@ use std::path::PathBuf;
 use proptest::prelude::*;
 
 use crate::{
-    AnalysisProfile, AnalysisResult, AppState, ArtifactIdentity, ArtifactObservation, ClaimId,
-    Command, ContentKey, Crf, DurableDelta, Effect, ExecutionSettings, FileSystemFacts,
-    ItemOutcome, JOURNAL_SCHEMA_VERSION, JobPhase, JournalEnvelope, JournalSequence, Operation,
-    OutputDelta, OutputRecoveryAction, OutputState, OutputTarget, OutputTransaction, QueueCommand,
-    QueueItemId, QueueItemState, Replacement, Reply, RunId, SearchMeasurement, SessionCommand,
-    SessionState, Telemetry, ToolRevisions, VmafScore, WorkerCommand, apply, encode_record,
-    recover_output, replay,
+    AnalysisProfile, AnalysisResult, AppState, ArtifactIdentity, ClaimId, Command, ContentKey, Crf,
+    DestructiveIdentity, DestructiveObservation, DurableDelta, Effect, ExecutionSettings,
+    FileSystemFacts, FileSystemId, ItemOutcome, JOURNAL_SCHEMA_VERSION, JobPhase, JobProgress,
+    JournalEnvelope, JournalSequence, Operation, OutputDelta, OutputRecoveryAction, OutputState,
+    OutputTarget, OutputTransaction, QueueCommand, QueueItemId, QueueItemState, Replacement, Reply,
+    RunId, SearchMeasurement, SessionCommand, SessionState, Telemetry, ToolRevisions, VmafScore,
+    WorkerCommand, apply, encode_record, recover_output, replay,
 };
 
 fn execution() -> ExecutionSettings {
     ExecutionSettings::production(
-        AnalysisProfile::production(
-            ToolRevisions {
-                ab_av1: "test-ab-av1".to_owned(),
-                ffmpeg: "test-ffmpeg".to_owned(),
-                encoder: "test-svt".to_owned(),
-            },
-            true,
-        ),
+        AnalysisProfile::production(ToolRevisions {
+            ab_av1: "test-ab-av1".to_owned(),
+            ffmpeg: "test-ffmpeg".to_owned(),
+            encoder: "test-svt".to_owned(),
+        }),
         false,
     )
 }
@@ -58,9 +55,18 @@ fn add_command(item_id: QueueItemId, input: impl Into<PathBuf>) -> Command {
 fn identity(name: &str, size: u64) -> ArtifactIdentity {
     ArtifactIdentity {
         content_key: ContentKey(name.to_owned()),
+        destructive: destructive(name, size),
+    }
+}
+
+fn destructive(name: &str, size: u64) -> DestructiveIdentity {
+    DestructiveIdentity {
+        file_id: FileSystemId::Unix {
+            device: 1,
+            inode: u64::from(name.as_bytes().first().copied().unwrap_or_default()),
+        },
         size,
         modified_ns: Some(u128::from(size)),
-        file_id: Some(format!("file-{name}")),
     }
 }
 
@@ -68,9 +74,9 @@ fn transaction(state: OutputState, replacement: Replacement) -> OutputTransactio
     OutputTransaction {
         run_id: RunId(9),
         input: PathBuf::from("input.mkv"),
-        input_identity: identity("input", 10),
+        input_identity: destructive("input", 10),
         staging: PathBuf::from(".output.mkv.crfty-9.part"),
-        initial_staging_identity: identity("empty", 0),
+        initial_staging_identity: destructive("empty", 0),
         final_path: PathBuf::from("output.mkv"),
         final_preimage: None,
         replacement,
@@ -120,7 +126,7 @@ fn reducer_enforces_session_claim_and_terminal_ordering() {
                 run_id: RunId(3),
                 sequence: 20,
                 phase: JobPhase::Encoding,
-                completed_units: 100,
+                progress: JobProgress::EncodePositionMs(100),
             }),
         }),
     );
@@ -129,14 +135,7 @@ fn reducer_enforces_session_claim_and_terminal_ordering() {
     let finished = apply(&mut state, Command::Worker(WorkerCommand::Finished));
     assert_eq!(finished.reply, Reply::Accepted);
     assert_eq!(state.session, SessionState::Idle);
-    assert_eq!(
-        state
-            .telemetry
-            .get(&RunId(3))
-            .expect("terminal telemetry")
-            .sequence,
-        20
-    );
+    assert!(!state.telemetry.contains_key(&RunId(3)));
 }
 
 #[test]
@@ -219,6 +218,75 @@ fn terminal_is_rejected_until_output_ledger_is_settled() {
 }
 
 #[test]
+fn converted_requires_a_successfully_committed_output() {
+    let mut state = active_state();
+    let without_output = apply(
+        &mut state,
+        Command::Worker(WorkerCommand::Terminal {
+            item_id: QueueItemId(1),
+            claim_id: ClaimId(2),
+            run_id: RunId(3),
+            outcome: ItemOutcome::Converted,
+            final_telemetry: None,
+        }),
+    );
+    assert!(matches!(without_output.reply, Reply::Rejected { .. }));
+
+    let mut started = transaction(OutputState::Started, Replacement::KeepOriginal);
+    started.run_id = RunId(3);
+    assert_eq!(
+        apply(
+            &mut state,
+            Command::Worker(WorkerCommand::Output(OutputDelta::EncodeStarted {
+                transaction: Box::new(started),
+            })),
+        )
+        .reply,
+        Reply::Accepted
+    );
+    assert_eq!(
+        apply(
+            &mut state,
+            Command::Worker(WorkerCommand::Output(OutputDelta::Conflict {
+                run_id: RunId(3),
+                reason: "fixture conflict".to_owned(),
+            })),
+        )
+        .reply,
+        Reply::Accepted
+    );
+    let conflicted = apply(
+        &mut state,
+        Command::Worker(WorkerCommand::Terminal {
+            item_id: QueueItemId(1),
+            claim_id: ClaimId(2),
+            run_id: RunId(3),
+            outcome: ItemOutcome::Converted,
+            final_telemetry: None,
+        }),
+    );
+    assert!(matches!(conflicted.reply, Reply::Rejected { .. }));
+}
+
+#[test]
+fn claim_rejects_invalid_execution_settings() {
+    let mut state = AppState::default();
+    let _added = apply(&mut state, add_command(QueueItemId(1), "video.mkv"));
+    let _started = apply(&mut state, Command::Session(SessionCommand::Start));
+    let mut invalid = execution();
+    invalid.fallback_step = 0;
+    let claimed = apply(
+        &mut state,
+        Command::Worker(WorkerCommand::ClaimNext {
+            claim_id: ClaimId(2),
+            run_id: RunId(3),
+            execution: invalid,
+        }),
+    );
+    assert!(matches!(claimed.reply, Reply::Rejected { .. }));
+}
+
+#[test]
 fn output_ledger_rejects_skipped_and_mismatched_transitions() {
     let mut state = active_state();
     let skipped = apply(
@@ -263,12 +331,12 @@ fn journal_ignores_only_an_unterminated_final_record() {
     let first = JournalEnvelope {
         schema_version: JOURNAL_SCHEMA_VERSION,
         sequence: JournalSequence(0),
-        delta: delta.clone(),
+        deltas: vec![delta.clone()],
     };
     let second = JournalEnvelope {
         schema_version: JOURNAL_SCHEMA_VERSION,
         sequence: JournalSequence(1),
-        delta,
+        deltas: vec![delta],
     };
     let mut bytes = encode_record(&first).expect("first record");
     let mut torn = encode_record(&second).expect("second record");
@@ -286,7 +354,7 @@ fn journal_degrades_on_nonfinal_corruption() {
     let first = JournalEnvelope {
         schema_version: JOURNAL_SCHEMA_VERSION,
         sequence: JournalSequence(0),
-        delta: DurableDelta::QueueAdded {
+        deltas: vec![DurableDelta::QueueAdded {
             item: crate::QueueItem {
                 id: QueueItemId(1),
                 input: PathBuf::from("one.mkv"),
@@ -294,7 +362,7 @@ fn journal_degrades_on_nonfinal_corruption() {
                 output_target: OutputTarget::Replace,
                 state: QueueItemState::Queued,
             },
-        },
+        }],
     };
     let mut bytes = encode_record(&first).expect("first record");
     bytes.extend(b"not-json\n");
@@ -306,16 +374,73 @@ fn journal_degrades_on_nonfinal_corruption() {
 }
 
 #[test]
+fn replay_rejects_semantically_impossible_durable_transition() {
+    let envelope = JournalEnvelope {
+        schema_version: JOURNAL_SCHEMA_VERSION,
+        sequence: JournalSequence(0),
+        deltas: vec![DurableDelta::ItemRunning {
+            item_id: QueueItemId(1),
+            claim_id: ClaimId(2),
+            run_id: RunId(3),
+        }],
+    };
+    let replayed = replay(&encode_record(&envelope).expect("journal record"));
+    assert!(replayed.corruption.is_some());
+    assert!(replayed.state.queue.is_empty());
+}
+
+#[test]
+fn replay_rejects_an_entire_semantically_invalid_batch() {
+    let envelope = JournalEnvelope {
+        schema_version: JOURNAL_SCHEMA_VERSION,
+        sequence: JournalSequence(0),
+        deltas: vec![
+            DurableDelta::QueueAdded {
+                item: crate::QueueItem {
+                    id: QueueItemId(1),
+                    input: PathBuf::from("video.mkv"),
+                    operation: Operation::Convert,
+                    output_target: OutputTarget::Replace,
+                    state: QueueItemState::Queued,
+                },
+            },
+            DurableDelta::ItemRunning {
+                item_id: QueueItemId(1),
+                claim_id: ClaimId(2),
+                run_id: RunId(3),
+            },
+        ],
+    };
+    let replayed = replay(&encode_record(&envelope).expect("journal record"));
+    assert!(replayed.corruption.is_some());
+    assert!(replayed.state.queue.is_empty());
+}
+
+#[test]
 fn recovery_covers_every_destructive_boundary() {
     let started = transaction(OutputState::Started, Replacement::KeepOriginal);
     let started_facts = FileSystemFacts {
-        staging: ArtifactObservation::Present(identity("empty", 0)),
-        final_path: ArtifactObservation::Absent,
-        original: ArtifactObservation::Present(identity("input", 10)),
+        staging: DestructiveObservation::Present(destructive("empty", 0)),
+        final_path: DestructiveObservation::Absent,
+        original: DestructiveObservation::Present(destructive("input", 10)),
+        staging_artifact: None,
+        final_artifact: None,
     };
     assert!(matches!(
         recover_output(&started, &started_facts),
-        OutputRecoveryAction::DeleteStaging { .. }
+        OutputRecoveryAction::Append(OutputDelta::AbandonStagingIntent { .. })
+    ));
+    let changed_partial = FileSystemFacts {
+        staging: DestructiveObservation::Present(DestructiveIdentity {
+            size: 123,
+            modified_ns: Some(456),
+            ..destructive("empty", 0)
+        }),
+        ..started_facts.clone()
+    };
+    assert!(matches!(
+        recover_output(&started, &changed_partial),
+        OutputRecoveryAction::Append(OutputDelta::AbandonStagingIntent { .. })
     ));
 
     let ready_identity = identity("encoded", 7);
@@ -326,18 +451,22 @@ fn recovery_covers_every_destructive_boundary() {
         Replacement::KeepOriginal,
     );
     let before_rename = FileSystemFacts {
-        staging: ArtifactObservation::Present(ready_identity.clone()),
-        final_path: ArtifactObservation::Absent,
-        original: ArtifactObservation::Present(identity("input", 10)),
+        staging: DestructiveObservation::Present(ready_identity.destructive.clone()),
+        final_path: DestructiveObservation::Absent,
+        original: DestructiveObservation::Present(destructive("input", 10)),
+        staging_artifact: Some(ready_identity.clone()),
+        final_artifact: None,
     };
     assert!(matches!(
         recover_output(&ready, &before_rename),
         OutputRecoveryAction::Promote { .. }
     ));
     let after_rename = FileSystemFacts {
-        staging: ArtifactObservation::Absent,
-        final_path: ArtifactObservation::Present(ready_identity.clone()),
-        original: ArtifactObservation::Present(identity("input", 10)),
+        staging: DestructiveObservation::Absent,
+        final_path: DestructiveObservation::Present(ready_identity.destructive.clone()),
+        original: DestructiveObservation::Present(destructive("input", 10)),
+        staging_artifact: None,
+        final_artifact: Some(ready_identity.clone()),
     };
     assert!(matches!(
         recover_output(&ready, &after_rename),
@@ -355,7 +484,7 @@ fn recovery_covers_every_destructive_boundary() {
         OutputRecoveryAction::DeleteOriginal { .. }
     ));
     let after_delete = FileSystemFacts {
-        original: ArtifactObservation::Absent,
+        original: DestructiveObservation::Absent,
         ..after_rename
     };
     assert!(matches!(
@@ -389,7 +518,7 @@ proptest! {
             let envelope = JournalEnvelope {
                 schema_version: JOURNAL_SCHEMA_VERSION,
                 sequence: JournalSequence(u64::try_from(sequence).expect("small sequence")),
-                delta,
+                deltas: vec![delta],
             };
             bytes.extend(encode_record(&envelope).expect("serializable delta"));
         }

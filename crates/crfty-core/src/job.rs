@@ -4,8 +4,8 @@ use serde::{Deserialize, Serialize};
 
 use crate::{
     ClaimId, DEFAULT_ENCODING_PRESET, DEFAULT_MAX_ENCODED_PERCENT_BASIS_POINTS,
-    DEFAULT_SAMPLE_DURATION_MS, DEFAULT_VMAF_TARGET, MIN_VMAF_FALLBACK_TARGET, QueueItemId, RunId,
-    VMAF_FALLBACK_STEP,
+    DEFAULT_SAMPLE_DURATION_MS, DEFAULT_VMAF_TARGET, MAX_ENCODING_PRESET, MAX_VMAF_SCORE,
+    MIN_VMAF_FALLBACK_TARGET, QueueItemId, RunId, VMAF_FALLBACK_STEP, VMAF_SCORE_FIXED_SCALE,
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -42,7 +42,6 @@ pub struct AnalysisProfile {
     pub samples: Option<u64>,
     pub sample_duration_ms: u64,
     pub thorough: bool,
-    pub hardware_decode: bool,
     pub ab_av1_revision: String,
     pub ffmpeg_revision: String,
     pub encoder_revision: String,
@@ -57,18 +56,39 @@ pub struct ToolRevisions {
 
 impl AnalysisProfile {
     #[must_use]
-    pub fn production(revisions: ToolRevisions, hardware_decode: bool) -> Self {
+    pub fn production(revisions: ToolRevisions) -> Self {
         Self {
             preset: DEFAULT_ENCODING_PRESET,
             max_encoded_percent_basis_points: DEFAULT_MAX_ENCODED_PERCENT_BASIS_POINTS,
             samples: None,
             sample_duration_ms: DEFAULT_SAMPLE_DURATION_MS,
             thorough: false,
-            hardware_decode,
             ab_av1_revision: revisions.ab_av1,
             ffmpeg_revision: revisions.ffmpeg,
             encoder_revision: revisions.encoder,
         }
+    }
+
+    pub fn validate(&self) -> Result<(), &'static str> {
+        if self.preset > MAX_ENCODING_PRESET {
+            return Err("encoding preset is outside the supported range");
+        }
+        if self.max_encoded_percent_basis_points == 0 {
+            return Err("maximum encoded percent must be positive");
+        }
+        if self.samples == Some(0) {
+            return Err("sample count must be positive when specified");
+        }
+        if self.sample_duration_ms == 0 {
+            return Err("sample duration must be positive");
+        }
+        if self.ab_av1_revision.is_empty()
+            || self.ffmpeg_revision.is_empty()
+            || self.encoder_revision.is_empty()
+        {
+            return Err("tool revisions must not be empty");
+        }
+        Ok(())
     }
 }
 
@@ -92,6 +112,21 @@ impl ExecutionSettings {
             profile,
         }
     }
+
+    pub fn validate(&self) -> Result<(), &'static str> {
+        if u16::from(self.requested_target.0) > MAX_VMAF_SCORE
+            || u16::from(self.fallback_floor.0) > MAX_VMAF_SCORE
+        {
+            return Err("VMAF targets must be in 0..=100");
+        }
+        if self.fallback_floor > self.requested_target {
+            return Err("VMAF fallback floor exceeds the requested target");
+        }
+        if self.fallback_step == 0 {
+            return Err("VMAF fallback step must be positive");
+        }
+        self.profile.validate()
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -102,6 +137,15 @@ pub struct SearchMeasurement {
     pub predicted_percent_basis_points: u32,
     pub predicted_duration_ms: u64,
     pub from_cache: bool,
+}
+
+impl SearchMeasurement {
+    pub fn validate(&self) -> Result<(), &'static str> {
+        if self.score.0 > MAX_VMAF_SCORE.saturating_mul(VMAF_SCORE_FIXED_SCALE) {
+            return Err("VMAF score is outside the supported range");
+        }
+        Ok(())
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -121,6 +165,31 @@ pub struct AnalysisResult {
     pub profile: AnalysisProfile,
 }
 
+impl AnalysisResult {
+    pub fn validate_for(&self, execution: &ExecutionSettings) -> Result<(), &'static str> {
+        if self.requested_target != execution.requested_target
+            || self.fallback_floor != execution.fallback_floor
+            || self.fallback_step != execution.fallback_step
+            || self.profile != execution.profile
+        {
+            return Err("analysis provenance does not match the claimed job");
+        }
+        if self.successful_target > self.requested_target
+            || self.successful_target < self.fallback_floor
+        {
+            return Err("successful VMAF target is outside the requested fallback range");
+        }
+        if self
+            .failed_attempts
+            .iter()
+            .any(|attempt| attempt.target <= self.successful_target)
+        {
+            return Err("failed analysis attempts are inconsistent with the successful target");
+        }
+        self.measurement.validate()
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct JobSpec {
     pub item_id: QueueItemId,
@@ -130,7 +199,6 @@ pub struct JobSpec {
     pub operation: Operation,
     pub output_target: OutputTarget,
     pub execution: ExecutionSettings,
-    pub selected_analysis: Option<AnalysisResult>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

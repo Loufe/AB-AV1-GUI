@@ -25,23 +25,24 @@ pub use journal::{
     replay,
 };
 pub use output::{
-    ArtifactIdentity, ArtifactObservation, ContentKey, FileSystemFacts, OutputDelta,
-    OutputRecoveryAction, OutputState, OutputTransaction, RecoveryConflict, Replacement,
-    recover_output,
+    ArtifactIdentity, ContentKey, DestructiveIdentity, DestructiveObservation, FileSystemFacts,
+    FileSystemId, OutputDelta, OutputRecoveryAction, OutputState, OutputTransaction,
+    RecoveryConflict, Replacement, recover_output,
 };
 pub use reducer::{
     Applied, Command, Effect, EphemeralDelta, QueueCommand, Reply, SessionCommand, SystemCommand,
     WorkerCommand, apply,
 };
 pub use state::{
-    AppState, ClaimId, DurableDelta, DurableState, ItemOutcome, JournalSequence, QueueItem,
-    QueueItemId, QueueItemState, RunId, SessionState, Telemetry, fold,
+    AppState, ClaimId, DurableDelta, DurableState, ItemOutcome, JobProgress, JournalSequence,
+    QueueItem, QueueItemId, QueueItemState, RunId, SessionState, Telemetry, fold,
 };
 
 #[cfg(test)]
 mod tests;
 pub use constants::{
     CRF_FIXED_SCALE, DEFAULT_ENCODING_PRESET, DEFAULT_MAX_ENCODED_PERCENT_BASIS_POINTS,
-    DEFAULT_SAMPLE_DURATION_MS, DEFAULT_VMAF_TARGET, MAX_VMAF_SCORE, MIN_VMAF_FALLBACK_TARGET,
-    PERCENT_BASIS_POINTS_SCALE, VMAF_FALLBACK_STEP, VMAF_SCORE_FIXED_SCALE,
+    DEFAULT_SAMPLE_DURATION_MS, DEFAULT_VMAF_TARGET, MAX_ENCODING_PRESET, MAX_PERCENT_BASIS_POINTS,
+    MAX_VMAF_SCORE, MIN_VMAF_FALLBACK_TARGET, PERCENT_BASIS_POINTS_SCALE, VMAF_FALLBACK_STEP,
+    VMAF_SCORE_FIXED_SCALE,
 };
