@@ -1,8 +1,9 @@
 use std::path::PathBuf;
 
 use crate::{
-    AppState, ClaimId, DurableDelta, ItemOutcome, OutputDelta, QueueItem, QueueItemId,
-    QueueItemState, RunId, SessionState, Telemetry, fold,
+    AnalysisResult, AppState, ClaimId, ClaimedJob, DurableDelta, ExecutionSettings, ItemOutcome,
+    JobSpec, Operation, OutputDelta, OutputTarget, QueueItem, QueueItemId, QueueItemState, RunId,
+    SessionState, Telemetry, fold,
 };
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -18,6 +19,8 @@ pub enum QueueCommand {
     Add {
         item_id: QueueItemId,
         input: PathBuf,
+        operation: Operation,
+        output_target: OutputTarget,
     },
     Remove {
         item_id: QueueItemId,
@@ -37,10 +40,10 @@ pub enum SessionCommand {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum WorkerCommand {
-    Claim {
-        item_id: QueueItemId,
+    ClaimNext {
         claim_id: ClaimId,
         run_id: RunId,
+        execution: ExecutionSettings,
     },
     Started {
         item_id: QueueItemId,
@@ -48,6 +51,12 @@ pub enum WorkerCommand {
         run_id: RunId,
     },
     Output(OutputDelta),
+    RecordAnalysis {
+        item_id: QueueItemId,
+        claim_id: ClaimId,
+        run_id: RunId,
+        result: Box<AnalysisResult>,
+    },
     Terminal {
         item_id: QueueItemId,
         claim_id: ClaimId,
@@ -55,6 +64,7 @@ pub enum WorkerCommand {
         outcome: ItemOutcome,
         final_telemetry: Option<Telemetry>,
     },
+    Finished,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -79,6 +89,7 @@ pub enum Effect {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Reply {
     Accepted,
+    Claimed(Option<Box<ClaimedJob>>),
     Rejected { reason: String },
 }
 
@@ -141,7 +152,12 @@ pub fn apply(state: &mut AppState, command: Command) -> Applied {
 
 fn apply_queue(state: &AppState, command: QueueCommand) -> Applied {
     match command {
-        QueueCommand::Add { item_id, input } => {
+        QueueCommand::Add {
+            item_id,
+            input,
+            operation,
+            output_target,
+        } => {
             if state.durable.queue.iter().any(|item| item.id == item_id) {
                 return Applied::rejected("queue item id already exists");
             }
@@ -150,6 +166,8 @@ fn apply_queue(state: &AppState, command: QueueCommand) -> Applied {
                 item: QueueItem {
                     id: item_id,
                     input,
+                    operation,
+                    output_target,
                     state: QueueItemState::Queued,
                 },
             });
@@ -233,29 +251,42 @@ fn apply_session(state: &AppState, command: SessionCommand) -> Applied {
 
 fn apply_worker(state: &AppState, command: WorkerCommand) -> Applied {
     match command {
-        WorkerCommand::Claim {
-            item_id,
+        WorkerCommand::ClaimNext {
             claim_id,
             run_id,
+            execution,
         } => {
             if state.session != SessionState::Running {
                 return Applied::rejected("session is not accepting another claim");
             }
-            let Some(item) = find_item(state, item_id) else {
-                return Applied::rejected("queue item does not exist");
-            };
-            if !matches!(item.state, QueueItemState::Queued) {
-                return Applied::rejected("queue item is not claimable");
-            }
             if active_run(state).is_some() {
                 return Applied::rejected("another queue item is active");
             }
-            let mut applied = Applied::accepted();
-            applied.durable.push(DurableDelta::ItemClaimed {
-                item_id,
+            let Some(item) = state
+                .durable
+                .queue
+                .iter()
+                .find(|item| matches!(item.state, QueueItemState::Queued))
+            else {
+                let mut applied = Applied::accepted();
+                applied.reply = Reply::Claimed(None);
+                return applied;
+            };
+            let spec = JobSpec {
+                item_id: item.id,
                 claim_id,
                 run_id,
+                input: item.input.clone(),
+                operation: item.operation,
+                output_target: item.output_target.clone(),
+                execution,
+                selected_analysis: None,
+            };
+            let mut applied = Applied::accepted();
+            applied.durable.push(DurableDelta::ItemClaimed {
+                spec: Box::new(spec.clone()),
             });
+            applied.reply = Reply::Claimed(Some(Box::new(ClaimedJob { spec })));
             applied
         }
         WorkerCommand::Started {
@@ -281,6 +312,36 @@ fn apply_worker(state: &AppState, command: WorkerCommand) -> Applied {
             applied.durable.push(DurableDelta::Output(output_delta));
             applied
         }
+        WorkerCommand::RecordAnalysis {
+            item_id,
+            claim_id,
+            run_id,
+            result,
+        } => transition_active(state, item_id, claim_id, run_id, |applied| {
+            let Some(run) = state.durable.conversion_runs.get(&run_id) else {
+                applied.reply = Reply::Rejected {
+                    reason: "conversion run does not exist".to_owned(),
+                };
+                return;
+            };
+            if run.analysis.is_some() {
+                applied.reply = Reply::Rejected {
+                    reason: "analysis is already recorded".to_owned(),
+                };
+                return;
+            }
+            if result.profile != run.spec.execution.profile
+                || result.requested_target != run.spec.execution.requested_target
+            {
+                applied.reply = Reply::Rejected {
+                    reason: "analysis does not match the claimed job".to_owned(),
+                };
+                return;
+            }
+            applied
+                .durable
+                .push(DurableDelta::AnalysisRecorded { run_id, result });
+        }),
         WorkerCommand::Terminal {
             item_id,
             claim_id,
@@ -302,6 +363,19 @@ fn apply_worker(state: &AppState, command: WorkerCommand) -> Applied {
                 });
                 return;
             }
+            let analysis_present = state
+                .durable
+                .conversion_runs
+                .get(&run_id)
+                .is_some_and(|run| run.analysis.is_some());
+            if matches!(outcome, ItemOutcome::Analyzed | ItemOutcome::Converted)
+                && !analysis_present
+            {
+                applied.reply = Reply::Rejected {
+                    reason: "successful outcome requires durable analysis".to_owned(),
+                };
+                return;
+            }
             if let Some(telemetry) = final_telemetry {
                 applied.ephemeral.push(EphemeralDelta::Telemetry(telemetry));
             }
@@ -311,10 +385,20 @@ fn apply_worker(state: &AppState, command: WorkerCommand) -> Applied {
                 run_id,
                 outcome,
             });
+        }),
+        WorkerCommand::Finished => {
+            if active_run(state).is_some() {
+                return Applied::rejected("worker cannot finish while an item is active");
+            }
+            if state.session == SessionState::Idle {
+                return Applied::rejected("session is not active");
+            }
+            let mut applied = Applied::accepted();
             applied
                 .ephemeral
                 .push(EphemeralDelta::SessionChanged(SessionState::Idle));
-        }),
+            applied
+        }
     }
 }
 
@@ -370,6 +454,7 @@ fn output_run_id(delta: &OutputDelta) -> RunId {
         | OutputDelta::OutputCommitted { run_id, .. }
         | OutputDelta::RetireOriginalIntent { run_id }
         | OutputDelta::OriginalRetired { run_id }
+        | OutputDelta::AbandonStagingIntent { run_id, .. }
         | OutputDelta::Abandoned { run_id }
         | OutputDelta::Conflict { run_id, .. } => *run_id,
     }
@@ -380,7 +465,14 @@ fn validate_output_delta(state: &AppState, delta: &OutputDelta) -> Result<(), &'
     let current = state.durable.outputs.get(&run_id);
     match (current, delta) {
         (None, OutputDelta::EncodeStarted { transaction })
-            if transaction.state == crate::OutputState::Started =>
+            if transaction.state == crate::OutputState::Started
+                && state
+                    .durable
+                    .conversion_runs
+                    .get(&run_id)
+                    .is_some_and(|run| {
+                        run.spec.operation == Operation::Convert && run.analysis.is_some()
+                    }) =>
         {
             Ok(())
         }
@@ -424,8 +516,14 @@ fn validate_output_delta(state: &AppState, delta: &OutputDelta) -> Result<(), &'
         {
             Ok(())
         }
+        (
+            Some(transaction),
+            OutputDelta::AbandonStagingIntent {
+                staging_identity, ..
+            },
+        ) if transaction.state == crate::OutputState::Started => Ok(()),
         (Some(transaction), OutputDelta::Abandoned { .. })
-            if transaction.state == crate::OutputState::Started =>
+            if matches!(transaction.state, crate::OutputState::AbandonIntent { .. }) =>
         {
             Ok(())
         }

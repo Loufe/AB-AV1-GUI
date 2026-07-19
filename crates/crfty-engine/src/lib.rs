@@ -10,6 +10,8 @@
 //! user-interface frameworks.
 
 pub mod ab_av1;
+mod blake2b;
+pub mod coordinator;
 pub mod driver;
 pub mod journal;
 pub mod output;

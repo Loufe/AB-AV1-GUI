@@ -2,7 +2,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::{DurableDelta, DurableState, JournalSequence, fold};
 
-pub const JOURNAL_SCHEMA_VERSION: u32 = 1;
+pub const JOURNAL_SCHEMA_VERSION: u32 = 2;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct JournalEnvelope {

@@ -47,6 +47,7 @@ pub enum OutputState {
     Committed { final_identity: ArtifactIdentity },
     RetireIntent { final_identity: ArtifactIdentity },
     Retired { final_identity: ArtifactIdentity },
+    AbandonIntent { staging_identity: ArtifactIdentity },
     Abandoned,
     Conflict { reason: String },
 }
@@ -82,6 +83,10 @@ pub enum OutputDelta {
     },
     OriginalRetired {
         run_id: RunId,
+    },
+    AbandonStagingIntent {
+        run_id: RunId,
+        staging_identity: ArtifactIdentity,
     },
     Abandoned {
         run_id: RunId,
@@ -147,6 +152,16 @@ impl OutputDelta {
                     update_state(outputs, *run_id, OutputState::Retired { final_identity });
                 }
             }
+            Self::AbandonStagingIntent {
+                run_id,
+                staging_identity,
+            } => update_state(
+                outputs,
+                *run_id,
+                OutputState::AbandonIntent {
+                    staging_identity: staging_identity.clone(),
+                },
+            ),
             Self::Abandoned { run_id } => update_state(outputs, *run_id, OutputState::Abandoned),
             Self::Conflict { run_id, reason } => update_state(
                 outputs,
@@ -219,9 +234,31 @@ pub fn recover_output(
         OutputState::RetireIntent { final_identity } => {
             recover_retire_intent(transaction, final_identity, facts)
         }
+        OutputState::AbandonIntent { staging_identity } => {
+            recover_abandon_intent(transaction, staging_identity, facts)
+        }
         OutputState::Retired { .. } | OutputState::Abandoned | OutputState::Conflict { .. } => {
             OutputRecoveryAction::None
         }
+    }
+}
+
+fn recover_abandon_intent(
+    transaction: &OutputTransaction,
+    staging_identity: &ArtifactIdentity,
+    facts: &FileSystemFacts,
+) -> OutputRecoveryAction {
+    match &facts.staging {
+        ArtifactObservation::Absent => OutputRecoveryAction::Append(OutputDelta::Abandoned {
+            run_id: transaction.run_id,
+        }),
+        ArtifactObservation::Present(actual) if actual == staging_identity => {
+            OutputRecoveryAction::DeleteStaging {
+                path: transaction.staging.clone(),
+                expected: staging_identity.clone(),
+            }
+        }
+        ArtifactObservation::Present(_) => conflict("staging changed after abandonment intent"),
     }
 }
 

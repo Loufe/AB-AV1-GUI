@@ -9,9 +9,10 @@ use std::{
 };
 
 use crfty_core::{
-    ClaimId, Command, DurableDelta, DurableState, EphemeralDelta, ItemOutcome, OutputDelta,
-    QueueCommand, QueueItemId, Replacement, Reply, RunId, SessionCommand, Telemetry, WorkerCommand,
-    fold, replay,
+    AnalysisProfile, ClaimId, Command, DurableDelta, DurableState, EphemeralDelta,
+    ExecutionSettings, ItemOutcome, JobPhase, Operation, OutputDelta, OutputTarget, QueueCommand,
+    QueueItemId, Replacement, Reply, RunId, SessionCommand, Telemetry, ToolRevisions,
+    WorkerCommand, fold, replay,
 };
 use crfty_engine::{
     driver::{DriverEvent, DriverHandle},
@@ -20,6 +21,29 @@ use crfty_engine::{
 };
 
 static TEMP_SEQUENCE: AtomicU64 = AtomicU64::new(0);
+
+fn execution() -> ExecutionSettings {
+    ExecutionSettings::production(
+        AnalysisProfile::production(
+            ToolRevisions {
+                ab_av1: "fixture".to_owned(),
+                ffmpeg: "fixture".to_owned(),
+                encoder: "fixture".to_owned(),
+            },
+            true,
+        ),
+        false,
+    )
+}
+
+fn add(item_id: QueueItemId) -> Command {
+    Command::Queue(QueueCommand::Add {
+        item_id,
+        input: PathBuf::from("video.mkv"),
+        operation: Operation::Convert,
+        output_target: OutputTarget::Replace,
+    })
+}
 
 struct TestDirectory(PathBuf);
 
@@ -60,6 +84,8 @@ fn journal_lock_is_exclusive_and_records_replay() {
         item: crfty_core::QueueItem {
             id: QueueItemId(1),
             input: PathBuf::from("video.mkv"),
+            operation: Operation::Convert,
+            output_target: OutputTarget::Replace,
             state: crfty_core::QueueItemState::Queued,
         },
     };
@@ -76,25 +102,34 @@ fn driver_persists_before_emitting_and_replays_after_restart() {
     let path = directory.path().join("state.jsonl");
     let driver = DriverHandle::start(&path).expect("driver");
     assert!(matches!(
-        driver.events.recv().expect("snapshot"),
+        driver
+            .events()
+            .expect("event receiver")
+            .recv()
+            .expect("snapshot"),
         DriverEvent::Snapshot(_)
     ));
     let reply = driver
         .commands
-        .submit(Command::Queue(QueueCommand::Add {
-            item_id: QueueItemId(7),
-            input: PathBuf::from("video.mkv"),
-        }))
+        .submit(add(QueueItemId(7)))
         .expect("driver reply");
     assert_eq!(reply, Reply::Accepted);
     assert!(matches!(
-        driver.events.recv().expect("durable event"),
+        driver
+            .events()
+            .expect("event receiver")
+            .recv()
+            .expect("durable event"),
         DriverEvent::Durable(DurableDelta::QueueAdded { .. })
     ));
     driver.shutdown().expect("driver shutdown");
 
     let restarted = DriverHandle::start(&path).expect("restarted driver");
-    let DriverEvent::Snapshot(snapshot) = restarted.events.recv().expect("replayed snapshot")
+    let DriverEvent::Snapshot(snapshot) = restarted
+        .events()
+        .expect("event receiver")
+        .recv()
+        .expect("replayed snapshot")
     else {
         panic!("expected replayed snapshot");
     };
@@ -110,19 +145,24 @@ fn corrupted_journal_starts_degraded_and_rejects_mutation() {
     fs::write(&path, b"not-json\n").expect("corrupt journal fixture");
     let driver = DriverHandle::start(&path).expect("degraded driver");
     assert!(matches!(
-        driver.events.recv().expect("snapshot"),
+        driver
+            .events()
+            .expect("event receiver")
+            .recv()
+            .expect("snapshot"),
         DriverEvent::Snapshot(_)
     ));
     assert!(matches!(
-        driver.events.recv().expect("degraded event"),
+        driver
+            .events()
+            .expect("event receiver")
+            .recv()
+            .expect("degraded event"),
         DriverEvent::Degraded { .. }
     ));
     let reply = driver
         .commands
-        .submit(Command::Queue(QueueCommand::Add {
-            item_id: QueueItemId(1),
-            input: PathBuf::from("video.mkv"),
-        }))
+        .submit(add(QueueItemId(1)))
         .expect("rejection reply");
     assert!(matches!(reply, Reply::Rejected { .. }));
     driver.shutdown().expect("degraded shutdown");
@@ -133,14 +173,15 @@ fn telemetry_pressure_coalesces_and_terminal_value_wins() {
     let directory = TestDirectory::new("telemetry");
     let path = directory.path().join("state.jsonl");
     let driver = DriverHandle::start(path).expect("driver");
-    let _snapshot = driver.events.recv().expect("snapshot");
+    let _snapshot = driver
+        .events()
+        .expect("event receiver")
+        .recv()
+        .expect("snapshot");
     assert_eq!(
         driver
             .commands
-            .submit(Command::Queue(QueueCommand::Add {
-                item_id: QueueItemId(1),
-                input: PathBuf::from("video.mkv"),
-            }))
+            .submit(add(QueueItemId(1)))
             .expect("add reply"),
         Reply::Accepted
     );
@@ -151,21 +192,22 @@ fn telemetry_pressure_coalesces_and_terminal_value_wins() {
             .expect("start reply"),
         Reply::Accepted
     );
-    assert_eq!(
+    assert!(matches!(
         driver
             .commands
-            .submit(Command::Worker(WorkerCommand::Claim {
-                item_id: QueueItemId(1),
+            .submit(Command::Worker(WorkerCommand::ClaimNext {
                 claim_id: ClaimId(2),
                 run_id: RunId(3),
+                execution: execution(),
             }))
             .expect("claim reply"),
-        Reply::Accepted
-    );
+        Reply::Claimed(Some(_))
+    ));
     for sequence in 0..100_000 {
         driver.commands.publish_telemetry(Telemetry {
             run_id: RunId(3),
             sequence,
+            phase: JobPhase::Encoding,
             completed_units: sequence,
         });
     }
@@ -178,10 +220,13 @@ fn telemetry_pressure_coalesces_and_terminal_value_wins() {
                 item_id: QueueItemId(1),
                 claim_id: ClaimId(2),
                 run_id: RunId(3),
-                outcome: ItemOutcome::Completed,
+                outcome: ItemOutcome::Failed {
+                    message: "fixture".to_owned(),
+                },
                 final_telemetry: Some(Telemetry {
                     run_id: RunId(3),
                     sequence: terminal_sequence,
+                    phase: JobPhase::Finalizing,
                     completed_units: 100,
                 }),
             }))
@@ -189,7 +234,7 @@ fn telemetry_pressure_coalesces_and_terminal_value_wins() {
         Reply::Accepted
     );
     let mut maximum = 0;
-    while let Ok(event) = driver.events.try_recv() {
+    while let Ok(event) = driver.events().expect("event receiver").try_recv() {
         if let DriverEvent::Ephemeral(EphemeralDelta::Telemetry(update)) = event {
             maximum = maximum.max(update.sequence);
         }
@@ -248,6 +293,34 @@ fn output_recovery_promotes_and_retires_original() {
     fold_output(&mut state, retired);
     assert!(!input.exists());
     assert!(current(&state, RunId(5)).is_settled());
+}
+
+#[test]
+fn abandonment_intent_authorizes_only_the_observed_partial_staging() {
+    let directory = TestDirectory::new("abandon");
+    let input = directory.path().join("input.mkv");
+    let final_path = directory.path().join("output.mkv");
+    fs::write(&input, b"original").expect("input fixture");
+    let manager = OutputManager::new(FixtureByteInspector);
+    let started = manager
+        .prepare(RunId(20), &input, &final_path, Replacement::KeepOriginal)
+        .expect("prepare");
+    fs::write(&started.staging, b"partial-encode").expect("partial staging");
+    let intent = manager.abandon_intent(&started).expect("abandon intent");
+    let mut state = DurableState::default();
+    fold_output(
+        &mut state,
+        OutputDelta::EncodeStarted {
+            transaction: Box::new(started),
+        },
+    );
+    fold_output(&mut state, intent);
+    let abandoned = manager
+        .recover_once(&current(&state, RunId(20)))
+        .expect("abandon recovery")
+        .expect("abandoned delta");
+    assert!(matches!(abandoned, OutputDelta::Abandoned { .. }));
+    assert!(!current(&state, RunId(20)).staging.exists());
 }
 
 #[test]

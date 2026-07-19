@@ -3,12 +3,57 @@ use std::path::PathBuf;
 use proptest::prelude::*;
 
 use crate::{
-    AppState, ArtifactIdentity, ArtifactObservation, ClaimId, Command, ContentKey, DurableDelta,
-    Effect, FileSystemFacts, ItemOutcome, JOURNAL_SCHEMA_VERSION, JournalEnvelope, JournalSequence,
-    OutputDelta, OutputRecoveryAction, OutputState, OutputTransaction, QueueCommand, QueueItemId,
-    QueueItemState, Replacement, Reply, RunId, SessionCommand, SessionState, Telemetry,
-    WorkerCommand, apply, encode_record, recover_output, replay,
+    AnalysisProfile, AnalysisResult, AppState, ArtifactIdentity, ArtifactObservation, ClaimId,
+    Command, ContentKey, Crf, DurableDelta, Effect, ExecutionSettings, FileSystemFacts,
+    ItemOutcome, JOURNAL_SCHEMA_VERSION, JobPhase, JournalEnvelope, JournalSequence, Operation,
+    OutputDelta, OutputRecoveryAction, OutputState, OutputTarget, OutputTransaction, QueueCommand,
+    QueueItemId, QueueItemState, Replacement, Reply, RunId, SearchMeasurement, SessionCommand,
+    SessionState, Telemetry, ToolRevisions, VmafScore, WorkerCommand, apply, encode_record,
+    recover_output, replay,
 };
+
+fn execution() -> ExecutionSettings {
+    ExecutionSettings::production(
+        AnalysisProfile::production(
+            ToolRevisions {
+                ab_av1: "test-ab-av1".to_owned(),
+                ffmpeg: "test-ffmpeg".to_owned(),
+                encoder: "test-svt".to_owned(),
+            },
+            true,
+        ),
+        false,
+    )
+}
+
+fn analysis() -> AnalysisResult {
+    let execution = execution();
+    AnalysisResult {
+        requested_target: execution.requested_target,
+        successful_target: execution.requested_target,
+        fallback_floor: execution.fallback_floor,
+        fallback_step: execution.fallback_step,
+        failed_attempts: Vec::new(),
+        measurement: SearchMeasurement {
+            crf: Crf(30_000),
+            score: VmafScore(9_500),
+            predicted_size: 1_000,
+            predicted_percent_basis_points: 5_000,
+            predicted_duration_ms: 60_000,
+            from_cache: false,
+        },
+        profile: execution.profile,
+    }
+}
+
+fn add_command(item_id: QueueItemId, input: impl Into<PathBuf>) -> Command {
+    Command::Queue(QueueCommand::Add {
+        item_id,
+        input: input.into(),
+        operation: Operation::Convert,
+        output_target: OutputTarget::Replace,
+    })
+}
 
 fn identity(name: &str, size: u64) -> ArtifactIdentity {
     ArtifactIdentity {
@@ -36,25 +81,19 @@ fn transaction(state: OutputState, replacement: Replacement) -> OutputTransactio
 #[test]
 fn reducer_enforces_session_claim_and_terminal_ordering() {
     let mut state = AppState::default();
-    let add = apply(
-        &mut state,
-        Command::Queue(QueueCommand::Add {
-            item_id: QueueItemId(1),
-            input: PathBuf::from("video.mkv"),
-        }),
-    );
+    let add = apply(&mut state, add_command(QueueItemId(1), "video.mkv"));
     assert_eq!(add.reply, Reply::Accepted);
     let start = apply(&mut state, Command::Session(SessionCommand::Start));
     assert_eq!(start.effects, vec![Effect::StartWorker]);
     let claim = apply(
         &mut state,
-        Command::Worker(WorkerCommand::Claim {
-            item_id: QueueItemId(1),
+        Command::Worker(WorkerCommand::ClaimNext {
             claim_id: ClaimId(2),
             run_id: RunId(3),
+            execution: execution(),
         }),
     );
-    assert_eq!(claim.reply, Reply::Accepted);
+    assert!(matches!(claim.reply, Reply::Claimed(Some(_))));
     let stale = apply(
         &mut state,
         Command::Worker(WorkerCommand::Started {
@@ -74,15 +113,21 @@ fn reducer_enforces_session_claim_and_terminal_ordering() {
             item_id: QueueItemId(1),
             claim_id: ClaimId(2),
             run_id: RunId(3),
-            outcome: ItemOutcome::Completed,
+            outcome: ItemOutcome::Failed {
+                message: "fixture".to_owned(),
+            },
             final_telemetry: Some(Telemetry {
                 run_id: RunId(3),
                 sequence: 20,
+                phase: JobPhase::Encoding,
                 completed_units: 100,
             }),
         }),
     );
     assert_eq!(terminal.reply, Reply::Accepted);
+    assert_eq!(state.session, SessionState::Running);
+    let finished = apply(&mut state, Command::Worker(WorkerCommand::Finished));
+    assert_eq!(finished.reply, Reply::Accepted);
     assert_eq!(state.session, SessionState::Idle);
     assert_eq!(
         state
@@ -92,6 +137,44 @@ fn reducer_enforces_session_claim_and_terminal_ordering() {
             .sequence,
         20
     );
+}
+
+#[test]
+fn claim_next_is_atomic_and_uses_current_queue_order() {
+    let mut state = AppState::default();
+    let _first = apply(&mut state, add_command(QueueItemId(1), "first.mkv"));
+    let _second = apply(&mut state, add_command(QueueItemId(2), "second.mkv"));
+    let moved = apply(
+        &mut state,
+        Command::Queue(QueueCommand::Move {
+            item_id: QueueItemId(2),
+            before: Some(QueueItemId(1)),
+        }),
+    );
+    assert_eq!(moved.reply, Reply::Accepted);
+    let _started = apply(&mut state, Command::Session(SessionCommand::Start));
+    let claimed = apply(
+        &mut state,
+        Command::Worker(WorkerCommand::ClaimNext {
+            claim_id: ClaimId(10),
+            run_id: RunId(11),
+            execution: execution(),
+        }),
+    );
+    let Reply::Claimed(Some(job)) = claimed.reply else {
+        panic!("expected an atomic claim");
+    };
+    assert_eq!(job.spec.item_id, QueueItemId(2));
+
+    let competing = apply(
+        &mut state,
+        Command::Worker(WorkerCommand::ClaimNext {
+            claim_id: ClaimId(12),
+            run_id: RunId(13),
+            execution: execution(),
+        }),
+    );
+    assert!(matches!(competing.reply, Reply::Rejected { .. }));
 }
 
 #[test]
@@ -128,7 +211,7 @@ fn terminal_is_rejected_until_output_ledger_is_settled() {
             item_id: QueueItemId(1),
             claim_id: ClaimId(2),
             run_id: RunId(3),
-            outcome: ItemOutcome::Interrupted,
+            outcome: ItemOutcome::Stopped,
             final_telemetry: None,
         }),
     );
@@ -172,6 +255,8 @@ fn journal_ignores_only_an_unterminated_final_record() {
         item: crate::QueueItem {
             id: QueueItemId(1),
             input: PathBuf::from("one.mkv"),
+            operation: Operation::Convert,
+            output_target: OutputTarget::Replace,
             state: QueueItemState::Queued,
         },
     };
@@ -205,6 +290,8 @@ fn journal_degrades_on_nonfinal_corruption() {
             item: crate::QueueItem {
                 id: QueueItemId(1),
                 input: PathBuf::from("one.mkv"),
+                operation: Operation::Convert,
+                output_target: OutputTarget::Replace,
                 state: QueueItemState::Queued,
             },
         },
@@ -286,10 +373,7 @@ proptest! {
             let item_id = QueueItemId(u64::try_from(index).expect("small generated index"));
             let added = apply(
                 &mut live,
-                Command::Queue(QueueCommand::Add {
-                    item_id,
-                    input: PathBuf::from(format!("video-{index}.mkv")),
-                }),
+                add_command(item_id, PathBuf::from(format!("video-{index}.mkv"))),
             );
             emitted.extend(added.durable);
             if remove {
@@ -317,20 +401,31 @@ proptest! {
 
 fn active_state() -> AppState {
     let mut state = AppState::default();
-    let _added = apply(
-        &mut state,
-        Command::Queue(QueueCommand::Add {
-            item_id: QueueItemId(1),
-            input: PathBuf::from("video.mkv"),
-        }),
-    );
+    let _added = apply(&mut state, add_command(QueueItemId(1), "video.mkv"));
     let _started = apply(&mut state, Command::Session(SessionCommand::Start));
     let _claimed = apply(
         &mut state,
-        Command::Worker(WorkerCommand::Claim {
+        Command::Worker(WorkerCommand::ClaimNext {
+            claim_id: ClaimId(2),
+            run_id: RunId(3),
+            execution: execution(),
+        }),
+    );
+    let _running = apply(
+        &mut state,
+        Command::Worker(WorkerCommand::Started {
             item_id: QueueItemId(1),
             claim_id: ClaimId(2),
             run_id: RunId(3),
+        }),
+    );
+    let _analysis = apply(
+        &mut state,
+        Command::Worker(WorkerCommand::RecordAnalysis {
+            item_id: QueueItemId(1),
+            claim_id: ClaimId(2),
+            run_id: RunId(3),
+            result: Box::new(analysis()),
         }),
     );
     state

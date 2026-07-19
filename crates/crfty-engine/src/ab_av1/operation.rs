@@ -10,9 +10,12 @@ use ab_av1::{command, ffprobe};
 use tokio_stream::StreamExt;
 
 use super::types::{
-    EncodeOutcome, EncodeRequest, EncodeTelemetry, JobFailure, JobTerminal, MediaTools,
+    CancelMode, EncodeOutcome, EncodeRequest, EncodeTelemetry, JobFailure, JobTerminal, MediaTools,
     SearchOutcome, SearchRequest, SearchTelemetry, SearchWork, StreamSizes, Telemetry,
 };
+
+const DEFAULT_SAMPLE_EVERY: Duration = Duration::from_secs(12 * 60);
+const DEFAULT_XPSNR_FPS: f32 = 60.0;
 
 #[cfg(feature = "contract-test-fixture")]
 use super::runtime::FaultInjection;
@@ -20,7 +23,7 @@ use super::runtime::FaultInjection;
 pub(crate) async fn run_search(
     tools: MediaTools,
     request: SearchRequest,
-    cancellation: tokio::sync::watch::Receiver<bool>,
+    cancellation: tokio::sync::watch::Receiver<Option<CancelMode>>,
     telemetry: Arc<Mutex<Option<Telemetry>>>,
 ) -> JobTerminal<SearchOutcome> {
     let tools = ab_av1::ToolPaths {
@@ -37,7 +40,7 @@ pub(crate) async fn run_search(
 pub(crate) async fn run_encode(
     tools: MediaTools,
     request: EncodeRequest,
-    cancellation: tokio::sync::watch::Receiver<bool>,
+    cancellation: tokio::sync::watch::Receiver<Option<CancelMode>>,
     telemetry: Arc<Mutex<Option<Telemetry>>>,
     #[cfg(feature = "contract-test-fixture")] fault: FaultInjection,
 ) -> JobTerminal<EncodeOutcome> {
@@ -66,10 +69,10 @@ enum OperationError {
 
 async fn search(
     request: SearchRequest,
-    mut cancellation: tokio::sync::watch::Receiver<bool>,
+    mut cancellation: tokio::sync::watch::Receiver<Option<CancelMode>>,
     telemetry: Arc<Mutex<Option<Telemetry>>>,
 ) -> Result<SearchOutcome, OperationError> {
-    if *cancellation.borrow() {
+    if cancellation.borrow().is_some() {
         return Err(OperationError::Cancelled);
     }
     let probe = Arc::new(ffprobe::probe(&request.input));
@@ -85,7 +88,7 @@ async fn search(
     loop {
         tokio::select! {
             changed = cancellation.changed() => {
-                if changed.is_err() || *cancellation.borrow() {
+                if changed.is_err() || cancellation.borrow().is_some() {
                     return Err(OperationError::Cancelled);
                 }
             }
@@ -118,6 +121,21 @@ async fn search(
                     });
                 }
                 Some(Ok(_)) => {}
+                Some(Err(command::crf_search::Error::NoGoodCrf { last })) => {
+                    let Some(vmaf) = last.enc.vmaf_score else {
+                        return Err(OperationError::Failed(JobFailure::new(
+                            "failed CRF search omitted its final VMAF score",
+                        )));
+                    };
+                    return Err(OperationError::Failed(JobFailure::no_good_crf(SearchOutcome {
+                        crf: last.crf,
+                        vmaf,
+                        predicted_size: last.enc.predicted_encode_size,
+                        predicted_percent: last.enc.encode_percent,
+                        predicted_duration: last.enc.predicted_encode_time,
+                        from_cache: last.enc.from_cache,
+                    })));
+                }
                 Some(Err(error)) => return Err(OperationError::Failed(failure(error))),
                 None => return outcome.ok_or_else(|| OperationError::Failed(JobFailure::new(
                     "quality search ended without a result",
@@ -129,11 +147,11 @@ async fn search(
 
 async fn encode(
     request: EncodeRequest,
-    mut cancellation: tokio::sync::watch::Receiver<bool>,
+    mut cancellation: tokio::sync::watch::Receiver<Option<CancelMode>>,
     telemetry: Arc<Mutex<Option<Telemetry>>>,
     #[cfg(feature = "contract-test-fixture")] fault: FaultInjection,
 ) -> Result<EncodeOutcome, OperationError> {
-    if *cancellation.borrow() {
+    if cancellation.borrow().is_some() {
         return Err(OperationError::Cancelled);
     }
     let probe = Arc::new(ffprobe::probe(&request.input));
@@ -143,7 +161,7 @@ async fn encode(
     loop {
         tokio::select! {
             changed = cancellation.changed() => {
-                if changed.is_err() || *cancellation.borrow() {
+                if changed.is_err() || cancellation.borrow().is_some() {
                     return Err(OperationError::Cancelled);
                 }
             }
@@ -214,7 +232,7 @@ pub(crate) fn search_args(
         cache: true,
         sample: command::args::Sample {
             samples: request.samples,
-            sample_every: Duration::from_secs(12 * 60),
+            sample_every: DEFAULT_SAMPLE_EVERY,
             min_samples: None,
             sample_duration: request.sample_duration,
             keep: false,
@@ -226,7 +244,7 @@ pub(crate) fn search_args(
             reference_vfilter: None,
         },
         xpsnr: command::args::Xpsnr {
-            xpsnr_fps: 60.0,
+            xpsnr_fps: DEFAULT_XPSNR_FPS,
             xpsnr_pix_format: None,
         },
         verbose: Default::default(),

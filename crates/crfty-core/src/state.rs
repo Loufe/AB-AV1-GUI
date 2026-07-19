@@ -2,7 +2,9 @@ use std::{collections::BTreeMap, path::PathBuf};
 
 use serde::{Deserialize, Serialize};
 
-use crate::OutputDelta;
+use crate::{
+    AnalysisAttempt, AnalysisResult, JobPhase, JobSpec, Operation, OutputDelta, OutputTarget,
+};
 
 macro_rules! numeric_id {
     ($name:ident) => {
@@ -22,6 +24,8 @@ numeric_id!(JournalSequence);
 pub struct QueueItem {
     pub id: QueueItemId,
     pub input: PathBuf,
+    pub operation: Operation,
+    pub output_target: OutputTarget,
     pub state: QueueItemState,
 }
 
@@ -35,9 +39,19 @@ pub enum QueueItemState {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum ItemOutcome {
-    Completed,
-    Interrupted,
+    Analyzed,
+    Converted,
+    NotWorthwhile { attempts: Vec<AnalysisAttempt> },
+    Stopped,
+    Skipped { reason: String },
     Failed { message: String },
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ConversionRun {
+    pub spec: JobSpec,
+    pub analysis: Option<AnalysisResult>,
+    pub outcome: Option<ItemOutcome>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -53,14 +67,16 @@ pub enum DurableDelta {
         before: Option<QueueItemId>,
     },
     ItemClaimed {
-        item_id: QueueItemId,
-        claim_id: ClaimId,
-        run_id: RunId,
+        spec: Box<JobSpec>,
     },
     ItemRunning {
         item_id: QueueItemId,
         claim_id: ClaimId,
         run_id: RunId,
+    },
+    AnalysisRecorded {
+        run_id: RunId,
+        result: Box<AnalysisResult>,
     },
     ItemFinished {
         item_id: QueueItemId,
@@ -75,6 +91,7 @@ pub enum DurableDelta {
 pub struct DurableState {
     pub queue: Vec<QueueItem>,
     pub outputs: BTreeMap<RunId, crate::OutputTransaction>,
+    pub conversion_runs: BTreeMap<RunId, ConversionRun>,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -97,6 +114,7 @@ pub enum SessionState {
 pub struct Telemetry {
     pub run_id: RunId,
     pub sequence: u64,
+    pub phase: JobPhase,
     pub completed_units: u64,
 }
 
@@ -109,18 +127,24 @@ pub fn fold(state: &mut DurableState, delta: &DurableDelta) {
         DurableDelta::QueueMoved { item_id, before } => {
             move_item(&mut state.queue, *item_id, *before)
         }
-        DurableDelta::ItemClaimed {
-            item_id,
-            claim_id,
-            run_id,
-        } => set_item_state(
-            &mut state.queue,
-            *item_id,
-            QueueItemState::Claimed {
-                claim_id: *claim_id,
-                run_id: *run_id,
-            },
-        ),
+        DurableDelta::ItemClaimed { spec } => {
+            set_item_state(
+                &mut state.queue,
+                spec.item_id,
+                QueueItemState::Claimed {
+                    claim_id: spec.claim_id,
+                    run_id: spec.run_id,
+                },
+            );
+            state.conversion_runs.insert(
+                spec.run_id,
+                ConversionRun {
+                    spec: spec.as_ref().clone(),
+                    analysis: None,
+                    outcome: None,
+                },
+            );
+        }
         DurableDelta::ItemRunning {
             item_id,
             claim_id,
@@ -133,13 +157,26 @@ pub fn fold(state: &mut DurableState, delta: &DurableDelta) {
                 run_id: *run_id,
             },
         ),
+        DurableDelta::AnalysisRecorded { run_id, result } => {
+            if let Some(run) = state.conversion_runs.get_mut(run_id) {
+                run.analysis = Some(result.as_ref().clone());
+            }
+        }
         DurableDelta::ItemFinished {
-            item_id, outcome, ..
-        } => set_item_state(
-            &mut state.queue,
-            *item_id,
-            QueueItemState::Finished(outcome.clone()),
-        ),
+            item_id,
+            run_id,
+            outcome,
+            ..
+        } => {
+            set_item_state(
+                &mut state.queue,
+                *item_id,
+                QueueItemState::Finished(outcome.clone()),
+            );
+            if let Some(run) = state.conversion_runs.get_mut(run_id) {
+                run.outcome = Some(outcome.clone());
+            }
+        }
         DurableDelta::Output(delta) => delta.fold_into(&mut state.outputs),
     }
 }

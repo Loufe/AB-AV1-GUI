@@ -42,6 +42,35 @@ fn native_runtime_process_contract() {
     fs::remove_dir_all(&directory).expect("remove contract directory");
 }
 
+#[test]
+fn job_coordinator_process_contract() {
+    let fixture = PathBuf::from(env!("CARGO_BIN_EXE_crfty-contract-fixture"));
+    let directory = env::temp_dir().join(format!(
+        "crfty-coordinator-contract-{}-{}",
+        std::process::id(),
+        unique_suffix()
+    ));
+    let tools = directory.join("tools");
+    fs::create_dir_all(&tools).expect("create contract directories");
+    let input = directory.join("input.mkv");
+    fs::write(&input, vec![1_u8; 8192]).expect("create input fixture");
+    let ffmpeg = copy_tool(&fixture, &tools, "ffmpeg");
+    let ffprobe = copy_tool(&fixture, &tools, "ffprobe");
+    let status = Command::new(&fixture)
+        .arg("coordinate")
+        .arg(&input)
+        .arg(&directory)
+        .arg(&ffmpeg)
+        .arg(&ffprobe)
+        .env("XDG_CACHE_HOME", directory.join("cache"))
+        .env("LOCALAPPDATA", directory.join("cache"))
+        .status()
+        .expect("run coordinator contract fixture");
+    assert!(status.success(), "coordinator contract failed: {status}");
+    assert!(directory.join("input_coordinated.mkv").exists());
+    fs::remove_dir_all(directory).expect("remove contract directory");
+}
+
 fn copy_tool(fixture: &Path, directory: &Path, name: &str) -> PathBuf {
     let destination = match fixture.extension() {
         Some(extension) => directory.join(name).with_extension(extension),

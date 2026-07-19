@@ -2,8 +2,9 @@ use std::{
     ffi::OsString,
     fmt,
     fs::OpenOptions,
-    io,
+    io::{self, Read, Seek, SeekFrom},
     path::{Path, PathBuf},
+    process::Command,
 };
 
 use std::time::UNIX_EPOCH;
@@ -17,6 +18,21 @@ use crfty_core::{
 };
 
 use crfty_core::ContentKey;
+use serde::Deserialize;
+
+use crate::blake2b::Blake2b128;
+
+const CONTENT_KEY_SCHEMA: &[u8] = b"ck1\0";
+const CONTENT_KEY_TEXT_PREFIX: &str = "ck1:";
+const HEX_CHARACTERS_PER_BYTE: usize = 2;
+const SAMPLE_ALIGNMENT_BYTES: u64 = 4 * 1024;
+const WHOLE_FILE_LIMIT: u64 = 4 * 1024 * 1024;
+const EDGE_SAMPLE: usize = 256 * 1024;
+const MIDDLE_SAMPLE: usize = 64 * 1024;
+const MIN_VERIFIED_OUTPUT_SIZE: u64 = 1024;
+const QUARTER_SAMPLE_NUMERATORS: [u64; 3] = [1, 2, 3];
+const SAMPLE_QUARTERS: u64 = 4;
+const MILLISECONDS_PER_SECOND: f64 = 1_000.0;
 
 pub trait ArtifactInspector {
     fn inspect(&self, path: &Path) -> io::Result<ArtifactIdentity>;
@@ -141,6 +157,45 @@ impl<I: ArtifactInspector> OutputManager<I> {
             .verify_output(&transaction.staging)
             .map_err(|error| OutputError::new("staging output verification failed", error))?;
         Ok(OutputDelta::OutputReady {
+            run_id: transaction.run_id,
+            staging_identity,
+        })
+    }
+
+    pub fn discard_unjournaled(&self, transaction: &OutputTransaction) -> Result<(), OutputError> {
+        if transaction.state != OutputState::Started {
+            return Err(OutputError::new(
+                "unjournaled output is not in started state",
+                io::Error::new(io::ErrorKind::InvalidInput, "invalid output state"),
+            ));
+        }
+        require_identity(
+            &self.inspector,
+            &transaction.staging,
+            &transaction.initial_staging_identity,
+            "new staging file changed before journal acknowledgement",
+        )?;
+        std::fs::remove_file(&transaction.staging).map_err(|error| {
+            OutputError::new("failed to remove unjournaled staging file", error)
+        })?;
+        sync_parent(&transaction.staging)
+    }
+
+    pub fn abandon_intent(
+        &self,
+        transaction: &OutputTransaction,
+    ) -> Result<OutputDelta, OutputError> {
+        if transaction.state != OutputState::Started {
+            return Err(OutputError::new(
+                "output transaction cannot be abandoned from its current state",
+                io::Error::new(io::ErrorKind::InvalidInput, "invalid output state"),
+            ));
+        }
+        let staging_identity = self
+            .inspector
+            .inspect(&transaction.staging)
+            .map_err(|error| OutputError::new("failed to inspect abandoned staging", error))?;
+        Ok(OutputDelta::AbandonStagingIntent {
             run_id: transaction.run_id,
             staging_identity,
         })
@@ -376,6 +431,196 @@ fn byte_identity(path: &Path) -> io::Result<ArtifactIdentity> {
         modified_ns,
         file_id: platform_file_id(&metadata),
     })
+}
+
+#[derive(Debug, Clone)]
+pub struct MediaArtifactInspector {
+    ffprobe: PathBuf,
+}
+
+impl MediaArtifactInspector {
+    pub fn new(ffprobe: PathBuf) -> Self {
+        Self { ffprobe }
+    }
+
+    fn probe(&self, path: &Path) -> io::Result<MediaHeader> {
+        let output = Command::new(&self.ffprobe)
+            .args([
+                "-v",
+                "error",
+                "-select_streams",
+                "v:0",
+                "-show_entries",
+                "stream=codec_name,width,height:format=duration",
+                "-of",
+                "json",
+            ])
+            .arg(path)
+            .output()?;
+        if !output.status.success() {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                "ffprobe rejected media artifact",
+            ));
+        }
+        let probe: ProbeDocument = serde_json::from_slice(&output.stdout)
+            .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error))?;
+        let stream = probe.streams.into_iter().next().ok_or_else(|| {
+            io::Error::new(io::ErrorKind::InvalidData, "media has no video stream")
+        })?;
+        let duration = probe
+            .format
+            .and_then(|format| format.duration)
+            .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidData, "duration is missing"))?
+            .parse::<f64>()
+            .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error))?;
+        if !duration.is_finite() || duration <= 0.0 {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                "duration is not positive and finite",
+            ));
+        }
+        Ok(MediaHeader {
+            codec: stream.codec_name,
+            width: stream.width,
+            height: stream.height,
+            duration_ms: (duration * MILLISECONDS_PER_SECOND).round() as u64,
+        })
+    }
+}
+
+impl ArtifactInspector for MediaArtifactInspector {
+    fn inspect(&self, path: &Path) -> io::Result<ArtifactIdentity> {
+        let metadata = std::fs::metadata(path)?;
+        let header = if metadata.len() == 0 {
+            MediaHeader::default()
+        } else {
+            self.probe(path)?
+        };
+        sampled_identity(path, &header)
+    }
+
+    fn verify_output(&self, path: &Path) -> io::Result<ArtifactIdentity> {
+        let metadata = std::fs::metadata(path)?;
+        if metadata.len() < MIN_VERIFIED_OUTPUT_SIZE {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                "output is too small to be a valid video",
+            ));
+        }
+        let header = self.probe(path)?;
+        if !header.codec.eq_ignore_ascii_case("av1") {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                "output video codec is not AV1",
+            ));
+        }
+        sampled_identity(path, &header)
+    }
+}
+
+#[derive(Debug, Default)]
+struct MediaHeader {
+    codec: String,
+    width: u32,
+    height: u32,
+    duration_ms: u64,
+}
+
+#[derive(Deserialize)]
+struct ProbeDocument {
+    #[serde(default)]
+    streams: Vec<ProbeStream>,
+    format: Option<ProbeFormat>,
+}
+
+#[derive(Deserialize)]
+struct ProbeStream {
+    #[serde(default)]
+    codec_name: String,
+    #[serde(default)]
+    width: u32,
+    #[serde(default)]
+    height: u32,
+}
+
+#[derive(Deserialize)]
+struct ProbeFormat {
+    duration: Option<String>,
+}
+
+fn sampled_identity(path: &Path, header: &MediaHeader) -> io::Result<ArtifactIdentity> {
+    let before = std::fs::metadata(path)?;
+    let mut file = std::fs::File::open(path)?;
+    let mut digest = Blake2b128::new();
+    digest.update(CONTENT_KEY_SCHEMA);
+    digest.update(&before.len().to_le_bytes());
+    digest.update(&header.duration_ms.to_le_bytes());
+    digest.update(&header.width.to_le_bytes());
+    digest.update(&header.height.to_le_bytes());
+    digest.update(&(header.codec.len() as u64).to_le_bytes());
+    digest.update(header.codec.as_bytes());
+
+    if before.len() <= WHOLE_FILE_LIMIT {
+        let mut bytes = Vec::new();
+        file.read_to_end(&mut bytes)?;
+        digest.update(&bytes);
+    } else {
+        hash_region(&mut digest, &mut file, 0, EDGE_SAMPLE)?;
+        for numerator in QUARTER_SAMPLE_NUMERATORS {
+            let raw = before.len().saturating_mul(numerator) / SAMPLE_QUARTERS;
+            let offset = raw / SAMPLE_ALIGNMENT_BYTES * SAMPLE_ALIGNMENT_BYTES;
+            hash_region(&mut digest, &mut file, offset, MIDDLE_SAMPLE)?;
+        }
+        hash_region(
+            &mut digest,
+            &mut file,
+            before.len().saturating_sub(EDGE_SAMPLE as u64),
+            EDGE_SAMPLE,
+        )?;
+    }
+    let after = std::fs::metadata(path)?;
+    if before.len() != after.len() || before.modified().ok() != after.modified().ok() {
+        return Err(io::Error::new(
+            io::ErrorKind::Interrupted,
+            "artifact changed while its identity was computed",
+        ));
+    }
+    let bytes = digest.finalize();
+    let mut encoded = String::with_capacity(
+        CONTENT_KEY_TEXT_PREFIX.len() + bytes.len() * HEX_CHARACTERS_PER_BYTE,
+    );
+    encoded.push_str(CONTENT_KEY_TEXT_PREFIX);
+    for byte in bytes {
+        use std::fmt::Write as _;
+        write!(&mut encoded, "{byte:02x}").map_err(|error| io::Error::other(error.to_string()))?;
+    }
+    let modified_ns = after
+        .modified()
+        .ok()
+        .and_then(|modified| modified.duration_since(UNIX_EPOCH).ok())
+        .map(|duration| duration.as_nanos());
+    Ok(ArtifactIdentity {
+        content_key: ContentKey(encoded),
+        size: after.len(),
+        modified_ns,
+        file_id: platform_file_id(&after),
+    })
+}
+
+fn hash_region(
+    digest: &mut Blake2b128,
+    file: &mut std::fs::File,
+    offset: u64,
+    length: usize,
+) -> io::Result<()> {
+    file.seek(SeekFrom::Start(offset))?;
+    let mut bytes = vec![0_u8; length];
+    let read = file.read(&mut bytes)?;
+    digest.update(&offset.to_le_bytes());
+    digest.update(&(read as u64).to_le_bytes());
+    digest.update(bytes.get(..read).unwrap_or_default());
+    Ok(())
 }
 
 #[cfg(unix)]

@@ -11,12 +11,15 @@ use std::{
 use super::{
     operation,
     types::{
-        EncodeOutcome, EncodeRequest, JobReport, JobTerminal, MediaTools, RuntimeStartError,
-        SearchOutcome, SearchRequest, ShutdownError, StartJobError, Telemetry, WaitError,
+        CancelMode, EncodeOutcome, EncodeRequest, JobReport, JobTerminal, MediaTools,
+        RuntimeStartError, SearchOutcome, SearchRequest, ShutdownError, StartJobError, Telemetry,
+        WaitError,
     },
 };
 
 static RUNTIME_ACTIVE: AtomicBool = AtomicBool::new(false);
+const RUNTIME_COMMAND_CAPACITY: usize = 1;
+const RUNTIME_READY_CAPACITY: usize = 0;
 
 #[cfg(feature = "contract-test-fixture")]
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
@@ -29,7 +32,7 @@ pub enum FaultInjection {
 struct RuntimeState {
     accepting: AtomicBool,
     active: AtomicBool,
-    cancellation: Mutex<Option<tokio::sync::watch::Sender<bool>>>,
+    cancellation: Mutex<Option<CancellationHandle>>,
 }
 
 impl RuntimeState {
@@ -55,7 +58,7 @@ impl RuntimeState {
             Err(poisoned) => poisoned.into_inner().clone(),
         };
         if let Some(cancellation) = cancellation {
-            let _result = cancellation.send(true);
+            cancellation.cancel(CancelMode::Force);
         }
     }
 }
@@ -64,14 +67,14 @@ enum RuntimeCommand {
     Search {
         tools: MediaTools,
         request: SearchRequest,
-        cancellation: tokio::sync::watch::Receiver<bool>,
+        cancellation: tokio::sync::watch::Receiver<Option<CancelMode>>,
         telemetry: Arc<Mutex<Option<Telemetry>>>,
         result: mpsc::Sender<JobReport<SearchOutcome>>,
     },
     Encode {
         tools: MediaTools,
         request: EncodeRequest,
-        cancellation: tokio::sync::watch::Receiver<bool>,
+        cancellation: tokio::sync::watch::Receiver<Option<CancelMode>>,
         telemetry: Arc<Mutex<Option<Telemetry>>>,
         result: mpsc::Sender<JobReport<EncodeOutcome>>,
         #[cfg(feature = "contract-test-fixture")]
@@ -90,8 +93,8 @@ pub struct AbAv1Runtime {
 impl AbAv1Runtime {
     pub fn start() -> Result<Self, RuntimeStartError> {
         let permit = RuntimePermit::acquire()?;
-        let (sender, receiver) = mpsc::sync_channel(1);
-        let (ready_tx, ready_rx) = mpsc::sync_channel(0);
+        let (sender, receiver) = mpsc::sync_channel(RUNTIME_COMMAND_CAPACITY);
+        let (ready_tx, ready_rx) = mpsc::sync_channel(RUNTIME_READY_CAPACITY);
         let state = Arc::new(RuntimeState::new());
         let worker_state = Arc::clone(&state);
         let worker = thread::Builder::new()
@@ -191,7 +194,7 @@ impl AbAv1Runtime {
             .map_err(|_| StartJobError::Busy)
     }
 
-    fn install_cancellation(&self, cancellation: &tokio::sync::watch::Sender<bool>) {
+    fn install_cancellation(&self, cancellation: &CancellationHandle) {
         match self.state.cancellation.lock() {
             Ok(mut slot) => *slot = Some(cancellation.clone()),
             Err(poisoned) => *poisoned.into_inner() = Some(cancellation.clone()),
@@ -249,7 +252,7 @@ impl Drop for AbAv1Runtime {
 }
 
 pub struct JobHandle<T> {
-    cancellation: tokio::sync::watch::Sender<bool>,
+    cancellation: CancellationHandle,
     result: Receiver<JobReport<T>>,
     telemetry: Arc<Mutex<Option<Telemetry>>>,
     cancel_on_drop: bool,
@@ -258,19 +261,19 @@ pub struct JobHandle<T> {
 
 type JobChannels<T> = (
     JobHandle<T>,
-    tokio::sync::watch::Receiver<bool>,
+    tokio::sync::watch::Receiver<Option<CancelMode>>,
     Arc<Mutex<Option<Telemetry>>>,
     mpsc::Sender<JobReport<T>>,
 );
 
 impl<T> JobHandle<T> {
     fn channels() -> JobChannels<T> {
-        let (cancel_tx, cancel_rx) = tokio::sync::watch::channel(false);
+        let (cancel_tx, cancel_rx) = tokio::sync::watch::channel(None);
         let (result_tx, result_rx) = mpsc::channel();
         let telemetry = Arc::new(Mutex::new(None));
         (
             Self {
-                cancellation: cancel_tx,
+                cancellation: CancellationHandle { sender: cancel_tx },
                 result: result_rx,
                 telemetry: Arc::clone(&telemetry),
                 cancel_on_drop: true,
@@ -290,8 +293,12 @@ impl<T> JobHandle<T> {
         }
     }
 
-    pub fn cancel(&self) {
-        let _result = self.cancellation.send(true);
+    pub fn cancellation_handle(&self) -> CancellationHandle {
+        self.cancellation.clone()
+    }
+
+    pub fn cancel(&self, mode: CancelMode) {
+        self.cancellation.cancel(mode);
     }
 
     pub fn wait(mut self) -> Result<JobReport<T>, WaitError> {
@@ -302,13 +309,37 @@ impl<T> JobHandle<T> {
         self.cancel_on_drop = false;
         Ok(report)
     }
+
+    pub fn try_report(&mut self) -> Result<Option<JobReport<T>>, WaitError> {
+        match self.result.try_recv() {
+            Ok(report) => {
+                self.cancel_on_drop = false;
+                Ok(Some(report))
+            }
+            Err(mpsc::TryRecvError::Empty) => Ok(None),
+            Err(mpsc::TryRecvError::Disconnected) => Err(WaitError(
+                "ab-av1 runtime dropped the result channel".to_owned(),
+            )),
+        }
+    }
 }
 
 impl<T> Drop for JobHandle<T> {
     fn drop(&mut self) {
         if self.cancel_on_drop {
-            let _result = self.cancellation.send(true);
+            self.cancellation.cancel(CancelMode::Force);
         }
+    }
+}
+
+#[derive(Clone)]
+pub struct CancellationHandle {
+    sender: tokio::sync::watch::Sender<Option<CancelMode>>,
+}
+
+impl CancellationHandle {
+    pub fn cancel(&self, mode: CancelMode) {
+        let _result = self.sender.send(Some(mode));
     }
 }
 

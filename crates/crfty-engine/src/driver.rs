@@ -15,6 +15,7 @@ use crfty_core::{
 use crate::journal::{DurabilityToken, JournalError, JournalWriter};
 
 const DRIVER_CHANNEL_CAPACITY: usize = 64;
+const COMMAND_REPLY_CHANNEL_CAPACITY: usize = 0;
 const DRIVER_TICK: Duration = Duration::from_millis(20);
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -68,7 +69,7 @@ pub struct CommandSender {
 
 impl CommandSender {
     pub fn submit(&self, command: Command) -> Result<Reply, SubmitError> {
-        let (reply_tx, reply_rx) = mpsc::sync_channel(0);
+        let (reply_tx, reply_rx) = mpsc::sync_channel(COMMAND_REPLY_CHANNEL_CAPACITY);
         self.sender
             .send(Envelope {
                 command,
@@ -94,12 +95,26 @@ impl CommandSender {
 
 pub struct DriverHandle {
     pub commands: CommandSender,
-    pub events: mpsc::Receiver<DriverEvent>,
+    events: Option<mpsc::Receiver<DriverEvent>>,
     worker: Option<thread::JoinHandle<()>>,
 }
 
 impl DriverHandle {
     pub fn start(journal_path: impl AsRef<Path>) -> Result<Self, DriverStartError> {
+        Self::start_inner(journal_path, None)
+    }
+
+    pub(crate) fn start_with_effects(
+        journal_path: impl AsRef<Path>,
+        effects: mpsc::Sender<Effect>,
+    ) -> Result<Self, DriverStartError> {
+        Self::start_inner(journal_path, Some(effects))
+    }
+
+    fn start_inner(
+        journal_path: impl AsRef<Path>,
+        effect_sink: Option<mpsc::Sender<Effect>>,
+    ) -> Result<Self, DriverStartError> {
         let (writer, replay) = JournalWriter::open(journal_path)
             .map_err(|error| DriverStartError(format!("failed to start driver: {error}")))?;
         let degraded = replay.corruption.as_ref().map(|corruption| {
@@ -126,6 +141,7 @@ impl DriverHandle {
                     command_rx,
                     event_tx,
                     driver_telemetry,
+                    effect_sink,
                 );
             })
             .map_err(|error| DriverStartError(format!("failed to spawn driver: {error}")))?;
@@ -134,9 +150,17 @@ impl DriverHandle {
                 sender: command_tx,
                 telemetry,
             },
-            events: event_rx,
+            events: Some(event_rx),
             worker: Some(worker),
         })
+    }
+
+    pub fn events(&self) -> Option<&mpsc::Receiver<DriverEvent>> {
+        self.events.as_ref()
+    }
+
+    pub(crate) fn take_events(&mut self) -> Option<mpsc::Receiver<DriverEvent>> {
+        self.events.take()
     }
 
     pub fn shutdown(mut self) -> Result<(), DriverStartError> {
@@ -174,6 +198,7 @@ fn run_driver(
     receiver: mpsc::Receiver<Envelope>,
     events: mpsc::Sender<DriverEvent>,
     telemetry: Arc<Mutex<BTreeMap<RunId, Telemetry>>>,
+    effect_sink: Option<mpsc::Sender<Effect>>,
 ) {
     let _result = events.send(DriverEvent::Snapshot(state.durable.clone()));
     if let Some(reason) = &degraded {
@@ -193,8 +218,14 @@ fn run_driver(
         emit_latest_telemetry(&state, &events, &telemetry);
         let mut batch = vec![first];
         batch.extend(receiver.try_iter());
-        let should_stop =
-            process_batch(&mut state, &mut writer, degraded.as_deref(), batch, &events);
+        let should_stop = process_batch(
+            &mut state,
+            &mut writer,
+            degraded.as_deref(),
+            batch,
+            &events,
+            effect_sink.as_ref(),
+        );
         if should_stop {
             break;
         }
@@ -207,6 +238,7 @@ fn process_batch(
     degraded: Option<&str>,
     batch: Vec<Envelope>,
     events: &mpsc::Sender<DriverEvent>,
+    effect_sink: Option<&mpsc::Sender<Effect>>,
 ) -> bool {
     let mut durable = Vec::new();
     let mut applied_batch = Vec::with_capacity(batch.len());
@@ -244,7 +276,7 @@ fn process_batch(
             }
         }
     };
-    emit_batch(durability, applied_batch, state, events)
+    emit_batch(durability, applied_batch, state, events, effect_sink)
 }
 
 trait JournalSink {
@@ -262,6 +294,7 @@ fn emit_batch(
     applied_batch: Vec<(mpsc::SyncSender<Reply>, crfty_core::Applied)>,
     state: &AppState,
     events: &mpsc::Sender<DriverEvent>,
+    effect_sink: Option<&mpsc::Sender<Effect>>,
 ) -> bool {
     if let Some(token) = durability {
         emit_durable(token, &applied_batch, events);
@@ -277,7 +310,14 @@ fn emit_batch(
     let effects = reconcile_effects(effects, state);
     let should_stop = effects.contains(&Effect::StopDriver);
     for effect in effects {
-        let _result = events.send(DriverEvent::Effect(effect));
+        match effect_sink {
+            Some(sink) => {
+                let _result = sink.send(effect);
+            }
+            None => {
+                let _result = events.send(DriverEvent::Effect(effect));
+            }
+        }
     }
     should_stop
 }
@@ -362,7 +402,9 @@ fn run_is_active(state: &AppState, run_id: RunId) -> bool {
 mod tests {
     use std::{io, path::PathBuf, sync::mpsc};
 
-    use crfty_core::{Command, Effect, QueueCommand, QueueItemId, Reply, SessionState};
+    use crfty_core::{
+        Command, Effect, Operation, OutputTarget, QueueCommand, QueueItemId, Reply, SessionState,
+    };
 
     use super::{
         AppState, DriverEvent, Envelope, JournalError, JournalSink, process_batch,
@@ -388,6 +430,8 @@ mod tests {
             command: Command::Queue(QueueCommand::Add {
                 item_id: QueueItemId(1),
                 input: PathBuf::from("video.mkv"),
+                operation: Operation::Convert,
+                output_target: OutputTarget::Replace,
             }),
             reply: reply_tx,
         };
@@ -399,6 +443,7 @@ mod tests {
             None,
             vec![envelope],
             &event_tx,
+            None,
         );
         assert!(stopped);
         assert!(matches!(

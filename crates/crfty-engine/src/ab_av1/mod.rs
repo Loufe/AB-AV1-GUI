@@ -6,9 +6,9 @@ mod types;
 
 #[cfg(feature = "contract-test-fixture")]
 pub use runtime::FaultInjection;
-pub use runtime::{AbAv1Runtime, JobHandle};
+pub use runtime::{AbAv1Runtime, CancellationHandle, JobHandle};
 pub use types::{
-    EncodeOutcome, EncodeRequest, EncodeTelemetry, JobFailure, JobReport, JobTerminal, MediaTools,
-    RuntimeStartError, SearchOutcome, SearchRequest, SearchTelemetry, SearchWork, ShutdownError,
-    StartJobError, StreamSizes, Telemetry, WaitError,
+    CancelMode, EncodeOutcome, EncodeRequest, EncodeTelemetry, JobFailure, JobFailureKind,
+    JobReport, JobTerminal, MediaTools, RuntimeStartError, SearchOutcome, SearchRequest,
+    SearchTelemetry, SearchWork, ShutdownError, StartJobError, StreamSizes, Telemetry, WaitError,
 };

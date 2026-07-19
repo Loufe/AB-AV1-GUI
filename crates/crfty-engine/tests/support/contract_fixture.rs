@@ -12,10 +12,23 @@ use std::{
     time::Duration,
 };
 
+use crfty_core::{
+    AnalysisProfile, Command as CoreCommand, DEFAULT_VMAF_TARGET, ExecutionSettings,
+    MIN_VMAF_FALLBACK_TARGET, Operation, OutputTarget, QueueCommand, QueueItemId, SessionCommand,
+    VMAF_FALLBACK_STEP,
+};
+
+const CONTRACT_PRESET: u8 = 12;
+const CONTRACT_MAX_ENCODED_PERCENT_BASIS_POINTS: u32 = 50_000;
+const CONTRACT_SAMPLE_COUNT: u64 = 1;
+const CONTRACT_SAMPLE_DURATION_MS: u64 = 1_000;
+const CONTRACT_EXPECTED_FINISHED_ITEMS: u8 = 2;
+const CONTRACT_EVENT_TIMEOUT: Duration = Duration::from_secs(10);
 use crfty_engine::ab_av1::{
     AbAv1Runtime, EncodeOutcome, EncodeRequest, FaultInjection, JobHandle, JobTerminal, MediaTools,
     SearchRequest, StartJobError,
 };
+use crfty_engine::coordinator::{EngineConfig, EngineRuntime};
 
 fn main() {
     if let Err(error) = dispatch() {
@@ -50,6 +63,7 @@ fn dispatch() -> Result<(), Box<dyn Error>> {
     let _executable = arguments.next();
     match arguments.next().as_deref() {
         Some(argument) if argument == "run" => run_contract(arguments),
+        Some(argument) if argument == "coordinate" => run_coordinator_contract(arguments),
         _ => Err("expected: crfty-contract-fixture run INPUT OUTPUT-DIR FFMPEG FFPROBE".into()),
     }
 }
@@ -58,6 +72,7 @@ fn fake_ffprobe() -> Result<(), Box<dyn Error>> {
     const PROBE: &str = r#"{
         "streams": [{
             "index": 0,
+            "codec_name": "av1",
             "codec_type": "video",
             "codec_tag_string": "[0][0][0][0]",
             "codec_tag": "0x0000",
@@ -97,6 +112,104 @@ fn fake_ffprobe() -> Result<(), Box<dyn Error>> {
     stdout.write_all(PROBE.as_bytes())?;
     stdout.write_all(b"\n")?;
     Ok(())
+}
+
+fn run_coordinator_contract(
+    mut arguments: impl Iterator<Item = OsString>,
+) -> Result<(), Box<dyn Error>> {
+    let input = arguments
+        .next()
+        .map(PathBuf::from)
+        .ok_or("input path is missing")?;
+    let output_dir = arguments
+        .next()
+        .map(PathBuf::from)
+        .ok_or("output directory is missing")?;
+    let tools = MediaTools {
+        ffmpeg: arguments
+            .next()
+            .map(PathBuf::from)
+            .ok_or("ffmpeg path is missing")?,
+        ffprobe: arguments
+            .next()
+            .map(PathBuf::from)
+            .ok_or("ffprobe path is missing")?,
+    };
+    let engine = EngineRuntime::start(EngineConfig {
+        journal_path: output_dir.join("coordinator.jsonl"),
+        media_tools: tools,
+        execution: ExecutionSettings {
+            requested_target: DEFAULT_VMAF_TARGET,
+            fallback_floor: MIN_VMAF_FALLBACK_TARGET,
+            fallback_step: VMAF_FALLBACK_STEP,
+            overwrite_existing: false,
+            profile: AnalysisProfile {
+                preset: CONTRACT_PRESET,
+                max_encoded_percent_basis_points: CONTRACT_MAX_ENCODED_PERCENT_BASIS_POINTS,
+                samples: Some(CONTRACT_SAMPLE_COUNT),
+                sample_duration_ms: CONTRACT_SAMPLE_DURATION_MS,
+                thorough: false,
+                hardware_decode: false,
+                ab_av1_revision: "contract".to_owned(),
+                ffmpeg_revision: "contract".to_owned(),
+                encoder_revision: "contract".to_owned(),
+            },
+        },
+    })?;
+    let _snapshot = engine.events.recv()?;
+    accepted_reply(
+        engine
+            .commands
+            .submit(CoreCommand::Queue(QueueCommand::Add {
+                item_id: QueueItemId(1),
+                input: input.clone(),
+                operation: Operation::Analyze,
+                output_target: OutputTarget::Replace,
+            }))?,
+    )?;
+    accepted_reply(
+        engine
+            .commands
+            .submit(CoreCommand::Queue(QueueCommand::Add {
+                item_id: QueueItemId(2),
+                input: input.clone(),
+                operation: Operation::Convert,
+                output_target: OutputTarget::Suffix {
+                    suffix: "_coordinated".to_owned(),
+                },
+            }))?,
+    )?;
+    accepted_reply(
+        engine
+            .commands
+            .submit(CoreCommand::Session(SessionCommand::Start))?,
+    )?;
+
+    let mut finished = 0_u8;
+    while finished < CONTRACT_EXPECTED_FINISHED_ITEMS {
+        if matches!(
+            engine.events.recv_timeout(CONTRACT_EVENT_TIMEOUT)?,
+            crfty_engine::driver::DriverEvent::Durable(
+                crfty_core::DurableDelta::ItemFinished { .. }
+            )
+        ) {
+            finished = finished.saturating_add(1);
+        }
+    }
+    let expected = input.with_file_name("input_coordinated.mkv");
+    if !expected.exists() {
+        return Err(format!("coordinator did not promote {}", expected.display()).into());
+    }
+    engine.shutdown()?;
+    Ok(())
+}
+
+fn accepted_reply(reply: crfty_core::Reply) -> Result<(), Box<dyn Error>> {
+    if reply == crfty_core::Reply::Accepted {
+        Ok(())
+    } else {
+        Err(format!("command was rejected: {reply:?}").into())
+    }
 }
 
 fn fake_ffmpeg() -> Result<(), Box<dyn Error>> {
@@ -202,7 +315,7 @@ fn cancel_search_and_reuse(
     fs::copy(input, &cancel_input)?;
     let job = runtime.start_search(tools.clone(), search_request(&cancel_input))?;
     thread::sleep(Duration::from_millis(150));
-    job.cancel();
+    job.cancel(crfty_engine::ab_av1::CancelMode::Force);
     let report = job.wait()?;
     if report.terminal != JobTerminal::Cancelled {
         return Err(format!(
@@ -271,7 +384,7 @@ fn cancel_descendant_and_reuse(
     ) {
         return Err("runtime accepted a concurrent job".into());
     }
-    job.cancel();
+    job.cancel(crfty_engine::ab_av1::CancelMode::Force);
     let report = job.wait()?;
     if report.terminal != JobTerminal::Cancelled {
         return Err(format!("cancel returned the wrong terminal: {:?}", report.terminal).into());

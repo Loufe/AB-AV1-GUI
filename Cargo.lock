@@ -320,6 +320,8 @@ version = "3.0.0-alpha.0"
 dependencies = [
  "ab-av1",
  "crfty-core",
+ "serde",
+ "serde_json",
  "tokio",
  "tokio-stream",
 ]

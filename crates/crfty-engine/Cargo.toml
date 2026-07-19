@@ -17,6 +17,8 @@ required-features = ["contract-test-fixture"]
 [dependencies]
 ab-av1 = { version = "=0.11.4", git = "https://github.com/Loufe/ab-av1.git", rev = "8bde51723f6f95945792f58a94c08f59171047d7", default-features = false, features = ["library"] }
 crfty-core = { path = "../crfty-core", version = "=3.0.0-alpha.0" }
+serde = { version = "=1.0.229", features = ["derive"] }
+serde_json = "=1.0.150"
 tokio = { version = "=1.49.0", features = ["rt", "sync"] }
 tokio-stream = "=0.1.18"
 

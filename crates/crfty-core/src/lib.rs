@@ -9,11 +9,17 @@
 //! This crate cannot depend on processes, filesystems, clocks, async runtimes,
 //! or user-interface frameworks.
 
+mod constants;
+mod job;
 mod journal;
 mod output;
 mod reducer;
 mod state;
 
+pub use job::{
+    AnalysisAttempt, AnalysisProfile, AnalysisResult, ClaimedJob, Crf, ExecutionSettings, JobPhase,
+    JobSpec, Operation, OutputTarget, SearchMeasurement, ToolRevisions, VmafScore, VmafTarget,
+};
 pub use journal::{
     JOURNAL_SCHEMA_VERSION, JournalCorruption, JournalEnvelope, JournalReplay, encode_record,
     replay,
@@ -34,3 +40,8 @@ pub use state::{
 
 #[cfg(test)]
 mod tests;
+pub use constants::{
+    CRF_FIXED_SCALE, DEFAULT_ENCODING_PRESET, DEFAULT_MAX_ENCODED_PERCENT_BASIS_POINTS,
+    DEFAULT_SAMPLE_DURATION_MS, DEFAULT_VMAF_TARGET, MAX_VMAF_SCORE, MIN_VMAF_FALLBACK_TARGET,
+    PERCENT_BASIS_POINTS_SCALE, VMAF_FALLBACK_STEP, VMAF_SCORE_FIXED_SCALE,
+};

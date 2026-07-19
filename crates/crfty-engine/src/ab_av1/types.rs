@@ -83,17 +83,38 @@ pub struct EncodeOutcome {
     pub stream_sizes: StreamSizes,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq)]
+pub enum JobFailureKind {
+    NoGoodCrf { last: SearchOutcome },
+    Other,
+}
+
+#[derive(Debug, Clone, PartialEq)]
 pub struct JobFailure {
+    pub kind: JobFailureKind,
     pub message: String,
 }
 
 impl JobFailure {
     pub(crate) fn new(message: impl Into<String>) -> Self {
         Self {
+            kind: JobFailureKind::Other,
             message: message.into(),
         }
     }
+
+    pub(crate) fn no_good_crf(last: SearchOutcome) -> Self {
+        Self {
+            kind: JobFailureKind::NoGoodCrf { last },
+            message: "failed to find a suitable CRF".to_owned(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CancelMode {
+    Graceful,
+    Force,
 }
 
 #[derive(Debug, Clone, PartialEq)]
