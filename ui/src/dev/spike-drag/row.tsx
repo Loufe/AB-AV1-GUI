@@ -16,6 +16,8 @@ interface SpikeRowViewProps {
   isOverlay?: boolean;
   handleRef?: React.Ref<HTMLButtonElement>;
   handleProps?: React.ComponentPropsWithoutRef<"button">;
+  /** Extra root-element props (e.g. hello-pangea's draggableProps). */
+  rootProps?: React.HTMLAttributes<HTMLDivElement>;
   /** Drop indicator (absolutely positioned) and similar adornments. */
   children?: React.ReactNode;
 }
@@ -32,12 +34,14 @@ export function SpikeRowView({
   isOverlay,
   handleRef,
   handleProps,
+  rootProps,
   children,
 }: SpikeRowViewProps) {
   const Icon = row.kind === "folder" ? Folder : FileVideo;
   return (
     <div
       ref={ref}
+      {...rootProps}
       style={style}
       className={cn(
         "relative flex h-8 items-center gap-1.5 border-b border-border/40 bg-background px-2 text-sm",
