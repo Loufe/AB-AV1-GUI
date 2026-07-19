@@ -31,6 +31,14 @@
   --destructive-foreground: oklch(0.99 0 0);
   --success: oklch(0.55 0.14 150);
   --warning: oklch(0.6 0.13 98);
+
+  /* Chart series palette (#36 D7): chart-1 is the identity orange; the rest
+   * are hue-spaced for adjacent-series contrast at matched lightness. */
+  --chart-1: oklch(0.62 0.16 55);
+  --chart-2: oklch(0.55 0.11 210);
+  --chart-3: oklch(0.55 0.13 150);
+  --chart-4: oklch(0.55 0.12 300);
+  --chart-5: oklch(0.62 0.13 98);
 }
 
 /* Dark surfaces step up ~4% luminance per elevation level, separated by
@@ -53,6 +61,12 @@
   --destructive-foreground: oklch(0.16 0 0);
   --success: oklch(0.68 0.13 150);
   --warning: oklch(0.8 0.14 100);
+
+  --chart-1: oklch(0.72 0.15 60);
+  --chart-2: oklch(0.7 0.1 210);
+  --chart-3: oklch(0.7 0.12 150);
+  --chart-4: oklch(0.7 0.11 300);
+  --chart-5: oklch(0.8 0.13 100);
 }
 
 @theme inline {
@@ -73,6 +87,11 @@
   --color-destructive-foreground: var(--destructive-foreground);
   --color-success: var(--success);
   --color-warning: var(--warning);
+  --color-chart-1: var(--chart-1);
+  --color-chart-2: var(--chart-2);
+  --color-chart-3: var(--chart-3);
+  --color-chart-4: var(--chart-4);
+  --color-chart-5: var(--chart-5);
 
   /* shadcn component vocabulary, resolved against the elevation tier —
    * the tier stays the single source of truth (#36 D2). */

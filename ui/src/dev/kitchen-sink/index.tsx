@@ -1,6 +1,7 @@
 import { D11Section } from "./d11-section";
 import { DensitySection } from "./density-section";
 import { PrimitivesSection } from "./primitives-section";
+import { StatsSection } from "./stats-section";
 import { TokensSection } from "./tokens-section";
 
 /**
@@ -16,6 +17,7 @@ export default function KitchenSink() {
       <PrimitivesSection />
       <D11Section />
       <DensitySection />
+      <StatsSection />
     </div>
   );
 }
