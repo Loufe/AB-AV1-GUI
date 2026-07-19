@@ -12,8 +12,8 @@
     "test": "vitest run",
     "typecheck": "tsc -b",
     "preview": "vite preview",
-    "tauri:dev": "tauri dev --config ../crates/crfty-shell/tauri.conf.json",
-    "tauri:build": "tauri build --config ../crates/crfty-shell/tauri.conf.json"
+    "tauri:dev": "cd .. && tauri dev --config crates/crfty-shell/tauri.conf.json",
+    "tauri:build": "cd .. && tauri build --config crates/crfty-shell/tauri.conf.json"
   },
   "dependencies": {
     "@base-ui/react": "^1.6.0",

@@ -18,7 +18,9 @@ pnpm build         # tsc -b && vite build
 dev server; Linux needs the Tauri webkit2gtk prerequisites installed (see
 `.github/workflows/rust.yml` for the package list). Without ffmpeg/ffprobe on
 PATH (or `CRFTY_FFMPEG`/`CRFTY_FFPROBE` set) the app opens degraded: the
-stream reports why and commands fail with `engine_unavailable`.
+stream reports why and commands fail with `engine_unavailable`. Under WSLg
+the webview crashes on the GPU path — launch with
+`WEBKIT_DISABLE_DMABUF_RENDERER=1 LIBGL_ALWAYS_SOFTWARE=1 pnpm tauri:dev`.
 
 ## Layout
 
