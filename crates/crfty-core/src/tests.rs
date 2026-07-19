@@ -930,3 +930,21 @@ fn apply_and_journal(
     }
     applied
 }
+
+#[test]
+fn file_record_round_trips_through_json() {
+    let mut record = FileRecord::new(VideoMeta {
+        codec: VideoCodec::H264,
+        container: MediaContainer::Matroska,
+        width: 1_280,
+        height: 720,
+        rotation_degrees: 0,
+        duration_ms: 60_000,
+    });
+    record.record_analysis(analysis());
+    // serde_json rejects non-string map keys, so the profile-keyed index must
+    // serialize as an entry list; this fails if that representation regresses.
+    let encoded = serde_json::to_string(&record).expect("serialize file record");
+    let decoded: FileRecord = serde_json::from_str(&encoded).expect("deserialize file record");
+    assert_eq!(decoded, record);
+}
