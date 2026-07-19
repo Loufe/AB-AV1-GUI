@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { generateRows, moveByStep, moveRow, type SpikeRow } from "./data";
+import { generateRows, moveRow, type SpikeRow } from "./data";
 
 function ids(rows: SpikeRow[]): string[] {
   return rows.map((r) => r.id);
@@ -59,30 +59,5 @@ describe("moveRow: folders", () => {
 
   it("rejects dropping a folder into itself", () => {
     expect(moveRow(SMALL, "A", "a2", "top")).toBeNull();
-  });
-});
-
-describe("moveByStep", () => {
-  it("steps a file down within its folder", () => {
-    const next = moveByStep(SMALL, "a1", 1);
-    expect(next && ids(next)).toEqual(["A", "a2", "a1", "B", "b1"]);
-  });
-
-  it("steps a file down into the next folder", () => {
-    const next = moveByStep(SMALL, "a2", 1);
-    expect(next && ids(next)).toEqual(["A", "a1", "B", "a2", "b1"]);
-    expect(next?.find((r) => r.id === "a2")?.parentId).toBe("B");
-  });
-
-  it("steps a folder block up over the previous folder", () => {
-    const next = moveByStep(SMALL, "B", -1);
-    expect(next && ids(next)).toEqual(["B", "b1", "A", "a1", "a2"]);
-  });
-
-  it("returns null at the boundaries", () => {
-    expect(moveByStep(SMALL, "a1", -1)).toBeNull(); // above first folder
-    expect(moveByStep(SMALL, "b1", 1)).toBeNull(); // last row
-    expect(moveByStep(SMALL, "A", -1)).toBeNull(); // first folder up
-    expect(moveByStep(SMALL, "B", 1)).toBeNull(); // last folder down
   });
 });

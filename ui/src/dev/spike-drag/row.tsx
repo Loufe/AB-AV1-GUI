@@ -10,22 +10,15 @@ interface SpikeRowViewProps {
   row: SpikeRow;
   ref?: React.Ref<HTMLDivElement>;
   style?: React.CSSProperties;
-  /** Source row still in the list while its copy rides the overlay/preview. */
+  /** Source row still in the list while its copy rides the overlay. */
   isDragSource?: boolean;
-  /** Rendered inside a drag overlay / custom native preview. */
+  /** Rendered inside the drag overlay. */
   isOverlay?: boolean;
   handleRef?: React.Ref<HTMLButtonElement>;
-  handleProps?: React.ComponentPropsWithoutRef<"button">;
-  /** Extra root-element props (e.g. hello-pangea's draggableProps). */
-  rootProps?: React.HTMLAttributes<HTMLDivElement>;
-  /** Drop indicator (absolutely positioned) and similar adornments. */
+  /** Trailing adornments (e.g. the overlay's file-count chip). */
   children?: React.ReactNode;
 }
 
-/**
- * Presentation shared by both drag candidates so the comparison only
- * exercises the drag layer, never the row rendering.
- */
 export function SpikeRowView({
   row,
   ref,
@@ -33,15 +26,12 @@ export function SpikeRowView({
   isDragSource,
   isOverlay,
   handleRef,
-  handleProps,
-  rootProps,
   children,
 }: SpikeRowViewProps) {
   const Icon = row.kind === "folder" ? Folder : FileVideo;
   return (
     <div
       ref={ref}
-      {...rootProps}
       style={style}
       className={cn(
         "relative flex h-8 items-center gap-1.5 border-b border-border/40 bg-background px-2 text-sm",
@@ -55,7 +45,6 @@ export function SpikeRowView({
         type="button"
         aria-label={`Reorder ${row.label}`}
         className="cursor-grab rounded p-0.5 text-muted-foreground hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none"
-        {...handleProps}
       >
         <GripVertical className="size-3.5" aria-hidden="true" />
       </button>

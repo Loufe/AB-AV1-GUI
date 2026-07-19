@@ -107,31 +107,3 @@ export function moveRow(
   const insertAt = edge === "top" ? containerIndex : containerEnd;
   return [...without.slice(0, insertAt), ...block, ...without.slice(insertAt)];
 }
-
-/**
- * One-step keyboard move (the pointer-free path): files step over the
- * adjacent row, folders step over the adjacent folder block. Returns null
- * when already at the boundary or the step is invalid.
- */
-export function moveByStep(rows: SpikeRow[], id: string, dir: -1 | 1): SpikeRow[] | null {
-  const index = indexOfId(rows, id);
-  if (index < 0) return null;
-  const row = rows[index];
-
-  if (row.kind === "file") {
-    const target = rows[index + dir];
-    if (!target) return null;
-    return moveRow(rows, id, target.id, dir === -1 ? "top" : "bottom");
-  }
-
-  if (dir === -1) {
-    for (let i = index - 1; i >= 0; i--) {
-      if (rows[i].kind === "folder") return moveRow(rows, id, rows[i].id, "top");
-    }
-    return null;
-  }
-  for (let i = blockEnd(rows, index); i < rows.length; i++) {
-    if (rows[i].kind === "folder") return moveRow(rows, id, rows[i].id, "bottom");
-  }
-  return null;
-}
