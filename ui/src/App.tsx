@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { lazy, Suspense, useEffect, useState } from "react";
 import { Toaster } from "sonner";
 
 import { ErrorBoundary } from "@/components/error-boundary";
@@ -13,6 +13,12 @@ import { getTheme, setTheme, watchSystemTheme, type Theme } from "@/lib/theme";
 
 const THEME_ORDER: Theme[] = ["system", "light", "dark"];
 
+// Dev-only workshop (#36 D10): the DEV gate is statically replaced in
+// release builds, so the dynamic import and its chunk are eliminated.
+const KitchenSink = import.meta.env.DEV ? lazy(() => import("./dev/kitchen-sink")) : null;
+
+type AppView = ViewId | "kitchen-sink";
+
 const VIEW_COMPONENTS: Record<ViewId, { label: string; Component: () => React.ReactNode }> = {
   queue: { label: "Queue view", Component: QueueView },
   analysis: { label: "Analysis view", Component: AnalysisView },
@@ -22,7 +28,7 @@ const VIEW_COMPONENTS: Record<ViewId, { label: string; Component: () => React.Re
 };
 
 export default function App() {
-  const [activeView, setActiveView] = useState<ViewId>("queue");
+  const [activeView, setActiveView] = useState<AppView>("queue");
   const [theme, setThemeState] = useState<Theme>(getTheme);
 
   useEffect(() => watchSystemTheme(), []);
@@ -33,8 +39,6 @@ export default function App() {
     setThemeState(next);
   };
 
-  const { label, Component } = VIEW_COMPONENTS[activeView];
-
   return (
     <div className="flex h-full">
       <Sidebar
@@ -42,11 +46,26 @@ export default function App() {
         onSelectView={setActiveView}
         theme={theme}
         onCycleTheme={cycleTheme}
+        showKitchenSink={KitchenSink !== null}
       />
       <main className="flex-1 overflow-y-auto">
-        <ErrorBoundary key={activeView} label={label}>
-          <Component />
-        </ErrorBoundary>
+        {activeView === "kitchen-sink" && KitchenSink !== null ? (
+          <ErrorBoundary key="kitchen-sink" label="kitchen sink">
+            <Suspense fallback={null}>
+              <KitchenSink />
+            </Suspense>
+          </ErrorBoundary>
+        ) : (
+          activeView !== "kitchen-sink" &&
+          (() => {
+            const { label, Component } = VIEW_COMPONENTS[activeView];
+            return (
+              <ErrorBoundary key={activeView} label={label}>
+                <Component />
+              </ErrorBoundary>
+            );
+          })()
+        )}
       </main>
       <Toaster position="bottom-right" theme={theme} />
     </div>
