@@ -6,7 +6,8 @@ ground-up Rust rewrite of the Python application retained on `main`.
 ## Stack
 
 - Rust stable, Edition 2024
-- Tauri with a React/TypeScript frontend when the shell phase begins
+- Tauri shell; frontend lives in `ui/` (Vite + React + TypeScript + Tailwind v4,
+  pnpm-managed — see `ui/README.md`; design record is issue #36)
 - External FFmpeg/ffprobe processes
 - A pinned, narrowly patched ab-av1 library dependency in the engine adapter
 
@@ -17,6 +18,9 @@ ground-up Rust rewrite of the Python application retained on `main`.
 - `crfty-engine` owns processes and filesystem I/O but must not depend on Tauri.
 - The future Tauri shell is a thin command and event bridge with no domain logic.
 - Mutable application state has one owner: the synchronous driver/reducer.
+- The frontend never hand-authors IPC or domain types — all cross-boundary types
+  come generated from Rust (issue #33). Until bindings exist, views ship static
+  empty states and design work lives in the dev-gated kitchen sink.
 
 ## Commands
 
@@ -27,6 +31,9 @@ cargo test --workspace --all-features --locked
 cargo deny check
 cargo vet
 ```
+
+Frontend (run from `ui/`): `pnpm lint && pnpm format:check && pnpm typecheck &&
+pnpm test && pnpm build` — every commit green, mirrored by `.github/workflows/ui.yml`.
 
 ## Strict rules
 
