@@ -9,7 +9,17 @@ use crate::{
 macro_rules! numeric_id {
     ($name:ident) => {
         #[derive(
-            Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize,
+            Debug,
+            Clone,
+            Copy,
+            PartialEq,
+            Eq,
+            PartialOrd,
+            Ord,
+            Hash,
+            Serialize,
+            Deserialize,
+            specta::Type,
         )]
         pub struct $name(pub u64);
     };
@@ -20,7 +30,7 @@ numeric_id!(ClaimId);
 numeric_id!(RunId);
 numeric_id!(JournalSequence);
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, specta::Type)]
 pub struct QueueItem {
     pub id: QueueItemId,
     pub input: PathBuf,
@@ -29,7 +39,7 @@ pub struct QueueItem {
     pub state: QueueItemState,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, specta::Type)]
 pub enum QueueItemState {
     Queued,
     Claimed { claim_id: ClaimId, run_id: RunId },
@@ -37,7 +47,7 @@ pub enum QueueItemState {
     Finished(ItemOutcome),
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, specta::Type)]
 pub enum ItemOutcome {
     Analyzed,
     Converted,
@@ -47,14 +57,14 @@ pub enum ItemOutcome {
     Failed { message: String },
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, specta::Type)]
 pub struct ConversionRun {
     pub spec: JobSpec,
     pub analysis: Option<AnalysisResult>,
     pub outcome: Option<ItemOutcome>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, specta::Type)]
 pub enum DurableDelta {
     QueueAdded {
         item: QueueItem,
@@ -87,7 +97,7 @@ pub enum DurableDelta {
     Output(OutputDelta),
 }
 
-#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, specta::Type)]
 pub struct DurableState {
     pub queue: Vec<QueueItem>,
     pub outputs: BTreeMap<RunId, crate::OutputTransaction>,
@@ -101,7 +111,7 @@ pub struct AppState {
     pub telemetry: BTreeMap<RunId, Telemetry>,
 }
 
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, specta::Type)]
 pub enum SessionState {
     #[default]
     Idle,
@@ -110,7 +120,7 @@ pub enum SessionState {
     ForceStopping,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, specta::Type)]
 pub struct Telemetry {
     pub run_id: RunId,
     pub sequence: u64,
@@ -118,7 +128,7 @@ pub struct Telemetry {
     pub progress: JobProgress,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, specta::Type)]
 pub enum JobProgress {
     Phase,
     SearchBasisPoints(u32),

@@ -8,13 +8,13 @@ use crate::{
     MIN_VMAF_FALLBACK_TARGET, QueueItemId, RunId, VMAF_FALLBACK_STEP, VMAF_SCORE_FIXED_SCALE,
 };
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, specta::Type)]
 pub enum Operation {
     Analyze,
     Convert,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, specta::Type)]
 pub enum OutputTarget {
     Replace,
     Suffix {
@@ -26,16 +26,18 @@ pub enum OutputTarget {
     },
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize, specta::Type,
+)]
 pub struct VmafTarget(pub u8);
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, specta::Type)]
 pub struct VmafScore(pub u16);
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, specta::Type)]
 pub struct Crf(pub u32);
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, specta::Type)]
 pub struct AnalysisProfile {
     pub preset: u8,
     pub max_encoded_percent_basis_points: u32,
@@ -92,7 +94,7 @@ impl AnalysisProfile {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, specta::Type)]
 pub struct ExecutionSettings {
     pub requested_target: VmafTarget,
     pub fallback_floor: VmafTarget,
@@ -129,7 +131,7 @@ impl ExecutionSettings {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, specta::Type)]
 pub struct SearchMeasurement {
     pub crf: Crf,
     pub score: VmafScore,
@@ -148,13 +150,13 @@ impl SearchMeasurement {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, specta::Type)]
 pub struct AnalysisAttempt {
     pub target: VmafTarget,
     pub last_measurement: Option<SearchMeasurement>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, specta::Type)]
 pub struct AnalysisResult {
     pub requested_target: VmafTarget,
     pub successful_target: VmafTarget,
@@ -190,7 +192,7 @@ impl AnalysisResult {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, specta::Type)]
 pub struct JobSpec {
     pub item_id: QueueItemId,
     pub claim_id: ClaimId,
@@ -201,12 +203,12 @@ pub struct JobSpec {
     pub execution: ExecutionSettings,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, specta::Type)]
 pub struct ClaimedJob {
     pub spec: JobSpec,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, specta::Type)]
 pub enum JobPhase {
     Preparing,
     Analyzing,
