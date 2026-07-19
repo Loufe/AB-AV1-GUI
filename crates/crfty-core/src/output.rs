@@ -8,17 +8,29 @@ use crate::RunId;
 pub struct ContentKey(pub String);
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct ArtifactIdentity {
-    pub content_key: ContentKey,
+pub enum FileSystemId {
+    Unix { device: u64, inode: u64 },
+    WindowsLowResolution { volume_serial: u32, file_index: u64 },
+    WindowsHighResolution { volume_serial: u64, file_id: u128 },
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct DestructiveIdentity {
+    pub file_id: FileSystemId,
     pub size: u64,
     pub modified_ns: Option<u128>,
-    pub file_id: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ArtifactIdentity {
+    pub content_key: ContentKey,
+    pub destructive: DestructiveIdentity,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub enum ArtifactObservation {
+pub enum DestructiveObservation {
     Absent,
-    Present(ArtifactIdentity),
+    Present(DestructiveIdentity),
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -31,11 +43,11 @@ pub enum Replacement {
 pub struct OutputTransaction {
     pub run_id: RunId,
     pub input: PathBuf,
-    pub input_identity: ArtifactIdentity,
+    pub input_identity: DestructiveIdentity,
     pub staging: PathBuf,
-    pub initial_staging_identity: ArtifactIdentity,
+    pub initial_staging_identity: DestructiveIdentity,
     pub final_path: PathBuf,
-    pub final_preimage: Option<ArtifactIdentity>,
+    pub final_preimage: Option<DestructiveIdentity>,
     pub replacement: Replacement,
     pub state: OutputState,
 }
@@ -43,13 +55,25 @@ pub struct OutputTransaction {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum OutputState {
     Started,
-    Ready { staging_identity: ArtifactIdentity },
-    Committed { final_identity: ArtifactIdentity },
-    RetireIntent { final_identity: ArtifactIdentity },
-    Retired { final_identity: ArtifactIdentity },
-    AbandonIntent { staging_identity: ArtifactIdentity },
+    Ready {
+        staging_identity: ArtifactIdentity,
+    },
+    Committed {
+        final_identity: ArtifactIdentity,
+    },
+    RetireIntent {
+        final_identity: ArtifactIdentity,
+    },
+    Retired {
+        final_identity: ArtifactIdentity,
+    },
+    AbandonIntent {
+        staging_identity: DestructiveIdentity,
+    },
     Abandoned,
-    Conflict { reason: String },
+    Conflict {
+        reason: String,
+    },
 }
 
 impl OutputTransaction {
@@ -86,7 +110,7 @@ pub enum OutputDelta {
     },
     AbandonStagingIntent {
         run_id: RunId,
-        staging_identity: ArtifactIdentity,
+        staging_identity: DestructiveIdentity,
     },
     Abandoned {
         run_id: RunId,
@@ -186,9 +210,11 @@ fn update_state(
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct FileSystemFacts {
-    pub staging: ArtifactObservation,
-    pub final_path: ArtifactObservation,
-    pub original: ArtifactObservation,
+    pub staging: DestructiveObservation,
+    pub final_path: DestructiveObservation,
+    pub original: DestructiveObservation,
+    pub staging_artifact: Option<ArtifactIdentity>,
+    pub final_artifact: Option<ArtifactIdentity>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -202,18 +228,19 @@ pub enum OutputRecoveryAction {
     Append(OutputDelta),
     DeleteStaging {
         path: PathBuf,
-        expected: ArtifactIdentity,
+        expected: DestructiveIdentity,
     },
     Promote {
         staging: PathBuf,
         final_path: PathBuf,
-        expected_staging: ArtifactIdentity,
-        expected_final: Option<ArtifactIdentity>,
+        expected_staging: DestructiveIdentity,
+        expected_content: ContentKey,
+        expected_final: Option<DestructiveIdentity>,
     },
     DeleteOriginal {
         path: PathBuf,
-        expected_original: ArtifactIdentity,
-        expected_final: ArtifactIdentity,
+        expected_original: DestructiveIdentity,
+        expected_final: DestructiveIdentity,
     },
     Conflict(RecoveryConflict),
 }
@@ -245,20 +272,20 @@ pub fn recover_output(
 
 fn recover_abandon_intent(
     transaction: &OutputTransaction,
-    staging_identity: &ArtifactIdentity,
+    staging_identity: &DestructiveIdentity,
     facts: &FileSystemFacts,
 ) -> OutputRecoveryAction {
     match &facts.staging {
-        ArtifactObservation::Absent => OutputRecoveryAction::Append(OutputDelta::Abandoned {
+        DestructiveObservation::Absent => OutputRecoveryAction::Append(OutputDelta::Abandoned {
             run_id: transaction.run_id,
         }),
-        ArtifactObservation::Present(actual) if actual == staging_identity => {
+        DestructiveObservation::Present(actual) if actual == staging_identity => {
             OutputRecoveryAction::DeleteStaging {
                 path: transaction.staging.clone(),
                 expected: staging_identity.clone(),
             }
         }
-        ArtifactObservation::Present(_) => conflict("staging changed after abandonment intent"),
+        DestructiveObservation::Present(_) => conflict("staging changed after abandonment intent"),
     }
 }
 
@@ -267,18 +294,18 @@ fn recover_started(
     facts: &FileSystemFacts,
 ) -> OutputRecoveryAction {
     match &facts.staging {
-        ArtifactObservation::Absent => OutputRecoveryAction::Append(OutputDelta::Abandoned {
+        DestructiveObservation::Absent => OutputRecoveryAction::Append(OutputDelta::Abandoned {
             run_id: transaction.run_id,
         }),
-        ArtifactObservation::Present(identity)
-            if identity == &transaction.initial_staging_identity =>
+        DestructiveObservation::Present(identity)
+            if identity.file_id == transaction.initial_staging_identity.file_id =>
         {
-            OutputRecoveryAction::DeleteStaging {
-                path: transaction.staging.clone(),
-                expected: identity.clone(),
-            }
+            OutputRecoveryAction::Append(OutputDelta::AbandonStagingIntent {
+                run_id: transaction.run_id,
+                staging_identity: identity.clone(),
+            })
         }
-        ArtifactObservation::Present(_) => conflict("uncommitted staging identity changed"),
+        DestructiveObservation::Present(_) => conflict("uncommitted staging identity changed"),
     }
 }
 
@@ -287,23 +314,29 @@ fn recover_ready(
     staging_identity: &ArtifactIdentity,
     facts: &FileSystemFacts,
 ) -> OutputRecoveryAction {
-    match (&facts.staging, &facts.final_path) {
-        (ArtifactObservation::Absent, ArtifactObservation::Present(final_identity))
-            if final_identity.content_key == staging_identity.content_key =>
+    match (&facts.staging, &facts.final_path, &facts.final_artifact) {
+        (
+            DestructiveObservation::Absent,
+            DestructiveObservation::Present(final_destructive),
+            Some(final_identity),
+        ) if final_identity.content_key == staging_identity.content_key
+            && &final_identity.destructive == final_destructive =>
         {
             OutputRecoveryAction::Append(OutputDelta::OutputCommitted {
                 run_id: transaction.run_id,
                 final_identity: final_identity.clone(),
             })
         }
-        (ArtifactObservation::Present(staging), final_observation)
-            if staging == staging_identity
+        (DestructiveObservation::Present(staging), final_observation, _)
+            if staging == &staging_identity.destructive
+                && facts.staging_artifact.as_ref() == Some(staging_identity)
                 && observation_matches_preimage(final_observation, &transaction.final_preimage) =>
         {
             OutputRecoveryAction::Promote {
                 staging: transaction.staging.clone(),
                 final_path: transaction.final_path.clone(),
-                expected_staging: staging_identity.clone(),
+                expected_staging: staging_identity.destructive.clone(),
+                expected_content: staging_identity.content_key.clone(),
                 expected_final: transaction.final_preimage.clone(),
             }
         }
@@ -316,7 +349,9 @@ fn recover_committed(
     final_identity: &ArtifactIdentity,
     facts: &FileSystemFacts,
 ) -> OutputRecoveryAction {
-    if facts.final_path != ArtifactObservation::Present(final_identity.clone()) {
+    if facts.final_path != DestructiveObservation::Present(final_identity.destructive.clone())
+        || facts.final_artifact.as_ref() != Some(final_identity)
+    {
         return conflict("committed output identity changed");
     }
     match transaction.replacement {
@@ -334,31 +369,35 @@ fn recover_retire_intent(
     final_identity: &ArtifactIdentity,
     facts: &FileSystemFacts,
 ) -> OutputRecoveryAction {
-    if facts.final_path != ArtifactObservation::Present(final_identity.clone()) {
+    if facts.final_path != DestructiveObservation::Present(final_identity.destructive.clone())
+        || facts.final_artifact.as_ref() != Some(final_identity)
+    {
         return conflict("output changed before original retirement");
     }
     match &facts.original {
-        ArtifactObservation::Absent => OutputRecoveryAction::Append(OutputDelta::OriginalRetired {
-            run_id: transaction.run_id,
-        }),
-        ArtifactObservation::Present(original) if original == &transaction.input_identity => {
+        DestructiveObservation::Absent => {
+            OutputRecoveryAction::Append(OutputDelta::OriginalRetired {
+                run_id: transaction.run_id,
+            })
+        }
+        DestructiveObservation::Present(original) if original == &transaction.input_identity => {
             OutputRecoveryAction::DeleteOriginal {
                 path: transaction.input.clone(),
                 expected_original: original.clone(),
-                expected_final: final_identity.clone(),
+                expected_final: final_identity.destructive.clone(),
             }
         }
-        ArtifactObservation::Present(_) => conflict("original changed before retirement"),
+        DestructiveObservation::Present(_) => conflict("original changed before retirement"),
     }
 }
 
 fn observation_matches_preimage(
-    observation: &ArtifactObservation,
-    preimage: &Option<ArtifactIdentity>,
+    observation: &DestructiveObservation,
+    preimage: &Option<DestructiveIdentity>,
 ) -> bool {
     match (observation, preimage) {
-        (ArtifactObservation::Absent, None) => true,
-        (ArtifactObservation::Present(actual), Some(expected)) => actual == expected,
+        (DestructiveObservation::Absent, None) => true,
+        (DestructiveObservation::Present(actual), Some(expected)) => actual == expected,
         _ => false,
     }
 }

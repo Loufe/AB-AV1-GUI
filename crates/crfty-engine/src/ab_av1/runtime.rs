@@ -120,6 +120,7 @@ impl AbAv1Runtime {
         tools: MediaTools,
         request: SearchRequest,
     ) -> Result<JobHandle<SearchOutcome>, StartJobError> {
+        validate_search_request(&request)?;
         self.validate_and_acquire(&tools)?;
         let (handle, cancellation, telemetry, result) = JobHandle::channels();
         self.install_cancellation(&handle.cancellation);
@@ -162,6 +163,7 @@ impl AbAv1Runtime {
         request: EncodeRequest,
         #[cfg(feature = "contract-test-fixture")] fault: FaultInjection,
     ) -> Result<JobHandle<EncodeOutcome>, StartJobError> {
+        validate_encode_request(&request)?;
         self.validate_and_acquire(&tools)?;
         let (handle, cancellation, telemetry, result) = JobHandle::channels();
         self.install_cancellation(&handle.cancellation);
@@ -341,6 +343,12 @@ impl CancellationHandle {
     pub fn cancel(&self, mode: CancelMode) {
         let _result = self.sender.send(Some(mode));
     }
+
+    #[cfg(test)]
+    pub(crate) fn fixture() -> (Self, tokio::sync::watch::Receiver<Option<CancelMode>>) {
+        let (sender, receiver) = tokio::sync::watch::channel(None);
+        (Self { sender }, receiver)
+    }
 }
 
 fn runtime_thread(
@@ -454,4 +462,69 @@ fn validate_tool(name: &'static str, path: &std::path::Path) -> Result<(), Start
     }
 }
 
+fn validate_search_request(request: &SearchRequest) -> Result<(), StartJobError> {
+    if !request.target_vmaf.is_finite()
+        || !(0.0..=f32::from(crfty_core::MAX_VMAF_SCORE)).contains(&request.target_vmaf)
+    {
+        return Err(StartJobError::InvalidRequest {
+            reason: "target VMAF must be finite and in 0..=100".to_owned(),
+        });
+    }
+    if !request.max_encoded_percent.is_finite() || request.max_encoded_percent <= 0.0 {
+        return Err(StartJobError::InvalidRequest {
+            reason: "maximum encoded percent must be positive and finite".to_owned(),
+        });
+    }
+    if request.preset > crfty_core::MAX_ENCODING_PRESET
+        || request.samples == Some(0)
+        || request.sample_duration.is_zero()
+    {
+        return Err(StartJobError::InvalidRequest {
+            reason: "preset and sample settings are outside the supported range".to_owned(),
+        });
+    }
+    Ok(())
+}
+
+fn validate_encode_request(request: &EncodeRequest) -> Result<(), StartJobError> {
+    if !request.crf.is_finite()
+        || request.crf < 0.0
+        || request.preset > crfty_core::MAX_ENCODING_PRESET
+    {
+        return Err(StartJobError::InvalidRequest {
+            reason: "CRF must be non-negative and finite and preset must be supported".to_owned(),
+        });
+    }
+    Ok(())
+}
+
 use std::future::Future;
+
+#[cfg(test)]
+mod tests {
+    use std::{path::PathBuf, time::Duration};
+
+    use super::{validate_encode_request, validate_search_request};
+    use crate::ab_av1::{EncodeRequest, SearchRequest};
+
+    #[test]
+    fn rejects_non_finite_adapter_requests() {
+        let search = SearchRequest {
+            input: PathBuf::from("input.mkv"),
+            target_vmaf: f32::NAN,
+            max_encoded_percent: 80.0,
+            preset: 6,
+            samples: None,
+            sample_duration: Duration::from_secs(20),
+            thorough: false,
+        };
+        assert!(validate_search_request(&search).is_err());
+        let encode = EncodeRequest {
+            input: PathBuf::from("input.mkv"),
+            output: PathBuf::from("output.mkv"),
+            crf: f32::INFINITY,
+            preset: 6,
+        };
+        assert!(validate_encode_request(&encode).is_err());
+    }
+}

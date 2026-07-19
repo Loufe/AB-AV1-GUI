@@ -94,44 +94,33 @@ impl JournalWriter {
         &mut self,
         deltas: &[DurableDelta],
     ) -> Result<(Vec<JournalEnvelope>, DurabilityToken), JournalError> {
-        let mut envelopes = Vec::with_capacity(deltas.len());
-        for delta in deltas {
-            let envelope = JournalEnvelope {
-                schema_version: JOURNAL_SCHEMA_VERSION,
-                sequence: self.next_sequence,
-                delta: delta.clone(),
-            };
-            let encoded = encode_record(&envelope).map_err(|error| {
-                JournalError::new(
-                    "failed to encode journal record",
-                    io::Error::new(io::ErrorKind::InvalidData, error),
-                )
-            })?;
-            let written = self
-                .file
-                .write(&encoded)
-                .map_err(|error| JournalError::new("failed to append journal record", error))?;
-            if written != encoded.len() {
-                return Err(JournalError::new(
-                    "failed to append complete journal record",
-                    io::Error::new(
-                        io::ErrorKind::WriteZero,
-                        format!("wrote {written} of {} bytes", encoded.len()),
-                    ),
-                ));
-            }
-            self.next_sequence =
-                JournalSequence(self.next_sequence.0.checked_add(1).ok_or_else(|| {
-                    JournalError::new(
-                        "journal sequence overflow",
-                        io::Error::new(io::ErrorKind::InvalidData, "sequence overflow"),
-                    )
-                })?);
-            envelopes.push(envelope);
+        if deltas.is_empty() {
+            return Ok((Vec::new(), DurabilityToken::new()));
         }
+        let envelope = JournalEnvelope {
+            schema_version: JOURNAL_SCHEMA_VERSION,
+            sequence: self.next_sequence,
+            deltas: deltas.to_vec(),
+        };
+        let encoded = encode_record(&envelope).map_err(|error| {
+            JournalError::new(
+                "failed to encode journal batch",
+                io::Error::new(io::ErrorKind::InvalidData, error),
+            )
+        })?;
+        self.file
+            .write_all(&encoded)
+            .map_err(|error| JournalError::new("failed to append journal batch", error))?;
         self.file
             .sync_all()
             .map_err(|error| JournalError::new("failed to synchronize journal", error))?;
-        Ok((envelopes, DurabilityToken::new()))
+        self.next_sequence =
+            JournalSequence(self.next_sequence.0.checked_add(1).ok_or_else(|| {
+                JournalError::new(
+                    "journal sequence overflow",
+                    io::Error::new(io::ErrorKind::InvalidData, "sequence overflow"),
+                )
+            })?);
+        Ok((vec![envelope], DurabilityToken::new()))
     }
 }

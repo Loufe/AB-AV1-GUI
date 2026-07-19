@@ -11,3 +11,5 @@ pub const CRF_FIXED_SCALE: u32 = 1_000;
 pub const VMAF_SCORE_FIXED_SCALE: u16 = 100;
 pub const MAX_VMAF_SCORE: u16 = 100;
 pub const PERCENT_BASIS_POINTS_SCALE: u32 = 100;
+pub const MAX_PERCENT_BASIS_POINTS: u32 = 10_000;
+pub const MAX_ENCODING_PRESET: u8 = 13;

@@ -11,8 +11,8 @@ use std::{
 };
 
 use crfty_core::{
-    AnalysisProfile, Command as CoreCommand, DurableDelta, ExecutionSettings, Operation,
-    OutputTarget, QueueCommand, QueueItemId, SessionCommand, VmafTarget,
+    AnalysisProfile, DurableDelta, ExecutionSettings, Operation, OutputTarget, QueueCommand,
+    QueueItemId, SessionCommand, VmafTarget,
 };
 
 const REAL_CONTRACT_TARGET: VmafTarget = VmafTarget(80);
@@ -139,7 +139,6 @@ fn real_coordinator_analyzes_encodes_verifies_and_promotes() {
                 samples: Some(REAL_CONTRACT_SAMPLE_COUNT),
                 sample_duration_ms: REAL_CONTRACT_SAMPLE_DURATION_MS,
                 thorough: false,
-                hardware_decode: false,
                 ab_av1_revision: "real-contract".to_owned(),
                 ffmpeg_revision: "real-contract".to_owned(),
                 encoder_revision: "real-contract".to_owned(),
@@ -150,18 +149,18 @@ fn real_coordinator_analyzes_encodes_verifies_and_promotes() {
     let _snapshot = engine.events.recv().expect("startup snapshot");
     engine
         .commands
-        .submit(CoreCommand::Queue(QueueCommand::Add {
+        .submit_queue(QueueCommand::Add {
             item_id: QueueItemId(1),
             input: input.clone(),
             operation: Operation::Convert,
             output_target: OutputTarget::Suffix {
                 suffix: "_av1".to_owned(),
             },
-        }))
+        })
         .expect("queue command");
     engine
         .commands
-        .submit(CoreCommand::Session(SessionCommand::Start))
+        .submit_session(SessionCommand::Start)
         .expect("start command");
     loop {
         if matches!(

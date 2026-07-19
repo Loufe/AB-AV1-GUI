@@ -7,23 +7,27 @@ use std::{
     process::Command,
 };
 
+use blake2::{
+    Blake2bVar,
+    digest::{Update, VariableOutput},
+};
 use std::time::UNIX_EPOCH;
 
 #[cfg(unix)]
 use std::fs::File;
 
 use crfty_core::{
-    ArtifactIdentity, ArtifactObservation, FileSystemFacts, OutputDelta, OutputRecoveryAction,
-    OutputState, OutputTransaction, Replacement, RunId, recover_output,
+    ArtifactIdentity, DestructiveIdentity, DestructiveObservation, FileSystemFacts, FileSystemId,
+    OutputDelta, OutputRecoveryAction, OutputState, OutputTransaction, Replacement, RunId,
+    recover_output,
 };
 
 use crfty_core::ContentKey;
 use serde::Deserialize;
 
-use crate::blake2b::Blake2b128;
-
-const CONTENT_KEY_SCHEMA: &[u8] = b"ck1\0";
+const CONTENT_KEY_SCHEMA: &[u8] = b"ck1";
 const CONTENT_KEY_TEXT_PREFIX: &str = "ck1:";
+const CONTENT_KEY_DIGEST_BYTES: usize = 16;
 const HEX_CHARACTERS_PER_BYTE: usize = 2;
 const SAMPLE_ALIGNMENT_BYTES: u64 = 4 * 1024;
 const WHOLE_FILE_LIMIT: u64 = 4 * 1024 * 1024;
@@ -35,7 +39,9 @@ const SAMPLE_QUARTERS: u64 = 4;
 const MILLISECONDS_PER_SECOND: f64 = 1_000.0;
 
 pub trait ArtifactInspector {
-    fn inspect(&self, path: &Path) -> io::Result<ArtifactIdentity>;
+    fn inspect_file(&self, path: &Path) -> io::Result<DestructiveIdentity>;
+
+    fn inspect_media(&self, path: &Path) -> io::Result<ArtifactIdentity>;
 
     fn verify_output(&self, path: &Path) -> io::Result<ArtifactIdentity>;
 }
@@ -95,19 +101,21 @@ impl<I: ArtifactInspector> OutputManager<I> {
         final_path: &Path,
         replacement: Replacement,
     ) -> Result<OutputTransaction, OutputError> {
-        if replacement == Replacement::RetireOriginal && input == final_path {
+        let input_identity = self
+            .inspector
+            .inspect_file(input)
+            .map_err(|error| OutputError::new("failed to inspect input", error))?;
+        let final_preimage = observe_file(&self.inspector, final_path)
+            .map_err(|error| OutputError::new("failed to inspect output destination", error))?
+            .into_identity();
+        if replacement == Replacement::RetireOriginal
+            && final_preimage.as_ref() == Some(&input_identity)
+        {
             return Err(OutputError::new(
-                "same-path replacement cannot retire the original separately",
+                "same-file replacement cannot retire the original separately",
                 io::Error::new(io::ErrorKind::InvalidInput, "invalid replacement mode"),
             ));
         }
-        let input_identity = self
-            .inspector
-            .inspect(input)
-            .map_err(|error| OutputError::new("failed to inspect input", error))?;
-        let final_preimage = observe(&self.inspector, final_path)
-            .map_err(|error| OutputError::new("failed to inspect output destination", error))?
-            .into_identity();
         let staging = staging_path(final_path, run_id)?;
         let staging_file = OpenOptions::new()
             .write(true)
@@ -122,7 +130,7 @@ impl<I: ArtifactInspector> OutputManager<I> {
         drop(staging_file);
         let initial_staging_identity = self
             .inspector
-            .inspect(&staging)
+            .inspect_file(&staging)
             .map_err(|error| OutputError::new("failed to inspect new staging file", error))?;
         Ok(OutputTransaction {
             run_id,
@@ -193,7 +201,7 @@ impl<I: ArtifactInspector> OutputManager<I> {
         }
         let staging_identity = self
             .inspector
-            .inspect(&transaction.staging)
+            .inspect_file(&transaction.staging)
             .map_err(|error| OutputError::new("failed to inspect abandoned staging", error))?;
         Ok(OutputDelta::AbandonStagingIntent {
             run_id: transaction.run_id,
@@ -202,12 +210,36 @@ impl<I: ArtifactInspector> OutputManager<I> {
     }
 
     pub fn facts(&self, transaction: &OutputTransaction) -> Result<FileSystemFacts, OutputError> {
+        let staging = observe_file(&self.inspector, &transaction.staging)
+            .map_err(|error| OutputError::new("failed to inspect staging path", error))?;
+        let final_path = observe_file(&self.inspector, &transaction.final_path)
+            .map_err(|error| OutputError::new("failed to inspect final path", error))?;
+        let needs_staging_artifact = matches!(transaction.state, OutputState::Ready { .. });
+        let needs_final_artifact = matches!(
+            transaction.state,
+            OutputState::Ready { .. }
+                | OutputState::Committed { .. }
+                | OutputState::RetireIntent { .. }
+                | OutputState::Retired { .. }
+        );
         Ok(FileSystemFacts {
-            staging: observe(&self.inspector, &transaction.staging)
-                .map_err(|error| OutputError::new("failed to inspect staging path", error))?,
-            final_path: observe(&self.inspector, &transaction.final_path)
-                .map_err(|error| OutputError::new("failed to inspect final path", error))?,
-            original: observe(&self.inspector, &transaction.input)
+            staging_artifact: inspect_present_media(
+                &self.inspector,
+                &transaction.staging,
+                &staging,
+                needs_staging_artifact,
+            )
+            .map_err(|error| OutputError::new("failed to verify staging artifact", error))?,
+            final_artifact: inspect_present_media(
+                &self.inspector,
+                &transaction.final_path,
+                &final_path,
+                needs_final_artifact,
+            )
+            .map_err(|error| OutputError::new("failed to verify final artifact", error))?,
+            staging,
+            final_path,
+            original: observe_file(&self.inspector, &transaction.input)
                 .map_err(|error| OutputError::new("failed to inspect original path", error))?,
         })
     }
@@ -247,6 +279,7 @@ impl<I: ArtifactInspector> OutputManager<I> {
                 staging,
                 final_path,
                 expected_staging,
+                expected_content,
                 expected_final,
             } => {
                 require_identity(
@@ -268,8 +301,8 @@ impl<I: ArtifactInspector> OutputManager<I> {
                     self.inspector.verify_output(&final_path).map_err(|error| {
                         OutputError::new("promoted output verification failed", error)
                     })?;
-                if final_identity.content_key != expected_staging.content_key
-                    || final_identity.size != expected_staging.size
+                if final_identity.content_key != expected_content
+                    || final_identity.destructive.size != expected_staging.size
                 {
                     return Err(OutputError::new(
                         "promoted output identity differs from staging",
@@ -310,11 +343,11 @@ impl<I: ArtifactInspector> OutputManager<I> {
 }
 
 trait ObservationExt {
-    fn into_identity(self) -> Option<ArtifactIdentity>;
+    fn into_identity(self) -> Option<DestructiveIdentity>;
 }
 
-impl ObservationExt for ArtifactObservation {
-    fn into_identity(self) -> Option<ArtifactIdentity> {
+impl ObservationExt for DestructiveObservation {
+    fn into_identity(self) -> Option<DestructiveIdentity> {
         match self {
             Self::Absent => None,
             Self::Present(identity) => Some(identity),
@@ -322,18 +355,34 @@ impl ObservationExt for ArtifactObservation {
     }
 }
 
-fn observe<I: ArtifactInspector>(inspector: &I, path: &Path) -> io::Result<ArtifactObservation> {
-    match inspector.inspect(path) {
-        Ok(identity) => Ok(ArtifactObservation::Present(identity)),
-        Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(ArtifactObservation::Absent),
+fn observe_file<I: ArtifactInspector>(
+    inspector: &I,
+    path: &Path,
+) -> io::Result<DestructiveObservation> {
+    match inspector.inspect_file(path) {
+        Ok(identity) => Ok(DestructiveObservation::Present(identity)),
+        Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(DestructiveObservation::Absent),
         Err(error) => Err(error),
+    }
+}
+
+fn inspect_present_media<I: ArtifactInspector>(
+    inspector: &I,
+    path: &Path,
+    observation: &DestructiveObservation,
+    required: bool,
+) -> io::Result<Option<ArtifactIdentity>> {
+    if required && matches!(observation, DestructiveObservation::Present(_)) {
+        inspector.inspect_media(path).map(Some)
+    } else {
+        Ok(None)
     }
 }
 
 fn require_identity<I: ArtifactInspector>(
     inspector: &I,
     path: &Path,
-    expected: &ArtifactIdentity,
+    expected: &DestructiveIdentity,
     message: &'static str,
 ) -> Result<(), OutputError> {
     require_observation(inspector, path, Some(expected), message)
@@ -342,14 +391,14 @@ fn require_identity<I: ArtifactInspector>(
 fn require_observation<I: ArtifactInspector>(
     inspector: &I,
     path: &Path,
-    expected: Option<&ArtifactIdentity>,
+    expected: Option<&DestructiveIdentity>,
     message: &'static str,
 ) -> Result<(), OutputError> {
-    let actual = observe(inspector, path)
+    let actual = observe_file(inspector, path)
         .map_err(|error| OutputError::new("failed to revalidate filesystem path", error))?;
     let matches = match (actual, expected) {
-        (ArtifactObservation::Absent, None) => true,
-        (ArtifactObservation::Present(actual), Some(expected)) => &actual == expected,
+        (DestructiveObservation::Absent, None) => true,
+        (DestructiveObservation::Present(actual), Some(expected)) => &actual == expected,
         _ => false,
     };
     if matches {
@@ -396,13 +445,17 @@ fn sync_parent(_path: &Path) -> Result<(), OutputError> {
 pub struct FixtureByteInspector;
 
 impl ArtifactInspector for FixtureByteInspector {
-    fn inspect(&self, path: &Path) -> io::Result<ArtifactIdentity> {
-        byte_identity(path)
+    fn inspect_file(&self, path: &Path) -> io::Result<DestructiveIdentity> {
+        destructive_identity(path)
+    }
+
+    fn inspect_media(&self, path: &Path) -> io::Result<ArtifactIdentity> {
+        byte_artifact_identity(path)
     }
 
     fn verify_output(&self, path: &Path) -> io::Result<ArtifactIdentity> {
-        let identity = byte_identity(path)?;
-        if identity.size == 0 {
+        let identity = byte_artifact_identity(path)?;
+        if identity.destructive.size == 0 {
             return Err(io::Error::new(
                 io::ErrorKind::InvalidData,
                 "output is empty",
@@ -412,24 +465,16 @@ impl ArtifactInspector for FixtureByteInspector {
     }
 }
 
-fn byte_identity(path: &Path) -> io::Result<ArtifactIdentity> {
+fn byte_artifact_identity(path: &Path) -> io::Result<ArtifactIdentity> {
     let bytes = std::fs::read(path)?;
-    let metadata = std::fs::metadata(path)?;
     let mut hash = 0xcbf2_9ce4_8422_2325_u64;
     for byte in &bytes {
         hash ^= u64::from(*byte);
         hash = hash.wrapping_mul(0x0000_0100_0000_01b3);
     }
-    let modified_ns = metadata
-        .modified()
-        .ok()
-        .and_then(|modified| modified.duration_since(UNIX_EPOCH).ok())
-        .map(|duration| duration.as_nanos());
     Ok(ArtifactIdentity {
         content_key: ContentKey(format!("fnv1a64:{hash:016x}")),
-        size: metadata.len(),
-        modified_ns,
-        file_id: platform_file_id(&metadata),
+        destructive: destructive_identity(path)?,
     })
 }
 
@@ -490,13 +535,12 @@ impl MediaArtifactInspector {
 }
 
 impl ArtifactInspector for MediaArtifactInspector {
-    fn inspect(&self, path: &Path) -> io::Result<ArtifactIdentity> {
-        let metadata = std::fs::metadata(path)?;
-        let header = if metadata.len() == 0 {
-            MediaHeader::default()
-        } else {
-            self.probe(path)?
-        };
+    fn inspect_file(&self, path: &Path) -> io::Result<DestructiveIdentity> {
+        destructive_identity(path)
+    }
+
+    fn inspect_media(&self, path: &Path) -> io::Result<ArtifactIdentity> {
+        let header = self.probe(path)?;
         sampled_identity(path, &header)
     }
 
@@ -551,15 +595,17 @@ struct ProbeFormat {
 
 fn sampled_identity(path: &Path, header: &MediaHeader) -> io::Result<ArtifactIdentity> {
     let before = std::fs::metadata(path)?;
+    let before_identity = identity_from_metadata(path, &before)?;
     let mut file = std::fs::File::open(path)?;
-    let mut digest = Blake2b128::new();
+    let mut digest = Blake2bVar::new(CONTENT_KEY_DIGEST_BYTES)
+        .map_err(|error| io::Error::new(io::ErrorKind::InvalidInput, error.to_string()))?;
     digest.update(CONTENT_KEY_SCHEMA);
     digest.update(&before.len().to_le_bytes());
     digest.update(&header.duration_ms.to_le_bytes());
-    digest.update(&header.width.to_le_bytes());
-    digest.update(&header.height.to_le_bytes());
     digest.update(&(header.codec.len() as u64).to_le_bytes());
     digest.update(header.codec.as_bytes());
+    digest.update(&header.width.to_le_bytes());
+    digest.update(&header.height.to_le_bytes());
 
     if before.len() <= WHOLE_FILE_LIMIT {
         let mut bytes = Vec::new();
@@ -580,13 +626,17 @@ fn sampled_identity(path: &Path, header: &MediaHeader) -> io::Result<ArtifactIde
         )?;
     }
     let after = std::fs::metadata(path)?;
-    if before.len() != after.len() || before.modified().ok() != after.modified().ok() {
+    let after_identity = identity_from_metadata(path, &after)?;
+    if before_identity != after_identity {
         return Err(io::Error::new(
             io::ErrorKind::Interrupted,
             "artifact changed while its identity was computed",
         ));
     }
-    let bytes = digest.finalize();
+    let mut bytes = [0_u8; CONTENT_KEY_DIGEST_BYTES];
+    digest
+        .finalize_variable(&mut bytes)
+        .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error.to_string()))?;
     let mut encoded = String::with_capacity(
         CONTENT_KEY_TEXT_PREFIX.len() + bytes.len() * HEX_CHARACTERS_PER_BYTE,
     );
@@ -595,41 +645,127 @@ fn sampled_identity(path: &Path, header: &MediaHeader) -> io::Result<ArtifactIde
         use std::fmt::Write as _;
         write!(&mut encoded, "{byte:02x}").map_err(|error| io::Error::other(error.to_string()))?;
     }
-    let modified_ns = after
-        .modified()
-        .ok()
-        .and_then(|modified| modified.duration_since(UNIX_EPOCH).ok())
-        .map(|duration| duration.as_nanos());
     Ok(ArtifactIdentity {
         content_key: ContentKey(encoded),
-        size: after.len(),
-        modified_ns,
-        file_id: platform_file_id(&after),
+        destructive: after_identity,
     })
 }
 
 fn hash_region(
-    digest: &mut Blake2b128,
+    digest: &mut Blake2bVar,
     file: &mut std::fs::File,
     offset: u64,
     length: usize,
 ) -> io::Result<()> {
     file.seek(SeekFrom::Start(offset))?;
     let mut bytes = vec![0_u8; length];
-    let read = file.read(&mut bytes)?;
-    digest.update(&offset.to_le_bytes());
-    digest.update(&(read as u64).to_le_bytes());
-    digest.update(bytes.get(..read).unwrap_or_default());
+    file.read_exact(&mut bytes)?;
+    digest.update(&bytes);
     Ok(())
 }
 
-#[cfg(unix)]
-fn platform_file_id(metadata: &std::fs::Metadata) -> Option<String> {
-    use std::os::unix::fs::MetadataExt;
-    Some(format!("{}:{}", metadata.dev(), metadata.ino()))
+fn destructive_identity(path: &Path) -> io::Result<DestructiveIdentity> {
+    let metadata = std::fs::metadata(path)?;
+    identity_from_metadata(path, &metadata)
 }
 
-#[cfg(not(unix))]
-fn platform_file_id(_metadata: &std::fs::Metadata) -> Option<String> {
-    None
+fn identity_from_metadata(
+    path: &Path,
+    metadata: &std::fs::Metadata,
+) -> io::Result<DestructiveIdentity> {
+    let file_id = match file_id::get_file_id(path)? {
+        file_id::FileId::Inode {
+            device_id,
+            inode_number,
+        } => FileSystemId::Unix {
+            device: device_id,
+            inode: inode_number,
+        },
+        file_id::FileId::LowRes {
+            volume_serial_number,
+            file_index,
+        } => FileSystemId::WindowsLowResolution {
+            volume_serial: volume_serial_number,
+            file_index,
+        },
+        file_id::FileId::HighRes {
+            volume_serial_number,
+            file_id,
+        } => FileSystemId::WindowsHighResolution {
+            volume_serial: volume_serial_number,
+            file_id,
+        },
+    };
+    let modified_ns = metadata
+        .modified()
+        .ok()
+        .and_then(|modified| modified.duration_since(UNIX_EPOCH).ok())
+        .map(|duration| duration.as_nanos());
+    Ok(DestructiveIdentity {
+        file_id,
+        size: metadata.len(),
+        modified_ns,
+    })
+}
+
+#[cfg(test)]
+mod tests {
+    use std::{
+        fs,
+        sync::atomic::{AtomicU64, Ordering},
+    };
+
+    use super::{MediaHeader, sampled_identity};
+
+    static TEST_SEQUENCE: AtomicU64 = AtomicU64::new(0);
+
+    #[test]
+    fn ck1_matches_independent_golden_fixtures() {
+        let directory = test_directory("ck1-golden");
+        let small = directory.join("small.bin");
+        fs::write(&small, b"test").expect("small fixture");
+        let small_identity = sampled_identity(
+            &small,
+            &MediaHeader {
+                codec: "av1".to_owned(),
+                width: 16,
+                height: 9,
+                duration_ms: 1_000,
+            },
+        )
+        .expect("small content key");
+        assert_eq!(
+            small_identity.content_key.0,
+            "ck1:23ba2a7ea690c5618f0d5e2ef5413c3e"
+        );
+
+        let large = directory.join("large.bin");
+        let bytes: Vec<_> = (0..(4 * 1024 * 1024 + 12_345))
+            .map(|index| u8::try_from(index % 251).expect("bounded byte"))
+            .collect();
+        fs::write(&large, bytes).expect("large fixture");
+        let large_identity = sampled_identity(
+            &large,
+            &MediaHeader {
+                codec: "h264".to_owned(),
+                width: 1_920,
+                height: 1_080,
+                duration_ms: 98_765,
+            },
+        )
+        .expect("large content key");
+        assert_eq!(
+            large_identity.content_key.0,
+            "ck1:58736d4906c208fb16d7e4e3febba397"
+        );
+        fs::remove_dir_all(directory).expect("remove fixture directory");
+    }
+
+    fn test_directory(label: &str) -> std::path::PathBuf {
+        let sequence = TEST_SEQUENCE.fetch_add(1, Ordering::Relaxed);
+        let path =
+            std::env::temp_dir().join(format!("crfty-{label}-{}-{sequence}", std::process::id()));
+        fs::create_dir(&path).expect("fixture directory");
+        path
+    }
 }

@@ -1,5 +1,6 @@
 use std::path::PathBuf;
 
+use crate::state::ConversionRun;
 use crate::{
     AnalysisResult, AppState, ClaimId, ClaimedJob, DurableDelta, ExecutionSettings, ItemOutcome,
     JobSpec, Operation, OutputDelta, OutputTarget, QueueItem, QueueItemId, QueueItemState, RunId,
@@ -64,6 +65,9 @@ pub enum WorkerCommand {
         outcome: ItemOutcome,
         final_telemetry: Option<Telemetry>,
     },
+    Crashed {
+        message: String,
+    },
     Finished,
 }
 
@@ -76,6 +80,8 @@ pub enum SystemCommand {
 pub enum EphemeralDelta {
     SessionChanged(SessionState),
     Telemetry(Telemetry),
+    TelemetryCleared { run_id: RunId },
+    WorkerCrashed { message: String },
     CommandRejected { reason: String },
 }
 
@@ -91,6 +97,7 @@ pub enum Reply {
     Accepted,
     Claimed(Option<Box<ClaimedJob>>),
     Rejected { reason: String },
+    DurabilityUnknown { reason: String },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -144,7 +151,10 @@ pub fn apply(state: &mut AppState, command: Command) -> Applied {
             EphemeralDelta::Telemetry(telemetry) => {
                 state.telemetry.insert(telemetry.run_id, telemetry.clone());
             }
-            EphemeralDelta::CommandRejected { .. } => {}
+            EphemeralDelta::TelemetryCleared { run_id } => {
+                state.telemetry.remove(run_id);
+            }
+            EphemeralDelta::WorkerCrashed { .. } | EphemeralDelta::CommandRejected { .. } => {}
         }
     }
     applied
@@ -224,9 +234,12 @@ fn apply_session(state: &AppState, command: SessionCommand) -> Applied {
         SessionCommand::Start => Applied::rejected("session is already active"),
         SessionCommand::StopAfterCurrent if state.session == SessionState::Running => {
             let mut applied = Applied::accepted();
-            applied.ephemeral.push(EphemeralDelta::SessionChanged(
-                SessionState::StopAfterCurrent,
-            ));
+            let next = if active_run(state).is_some() {
+                SessionState::StopAfterCurrent
+            } else {
+                SessionState::Idle
+            };
+            applied.ephemeral.push(EphemeralDelta::SessionChanged(next));
             applied
         }
         SessionCommand::StopAfterCurrent => Applied::rejected("session is not running"),
@@ -237,11 +250,15 @@ fn apply_session(state: &AppState, command: SessionCommand) -> Applied {
             ) =>
         {
             let mut applied = Applied::accepted();
-            applied
-                .ephemeral
-                .push(EphemeralDelta::SessionChanged(SessionState::ForceStopping));
             if let Some(run_id) = active_run(state) {
+                applied
+                    .ephemeral
+                    .push(EphemeralDelta::SessionChanged(SessionState::ForceStopping));
                 applied.effects.push(Effect::KillActiveRun { run_id });
+            } else {
+                applied
+                    .ephemeral
+                    .push(EphemeralDelta::SessionChanged(SessionState::Idle));
             }
             applied
         }
@@ -256,6 +273,9 @@ fn apply_worker(state: &AppState, command: WorkerCommand) -> Applied {
             run_id,
             execution,
         } => {
+            if let Err(reason) = execution.validate() {
+                return Applied::rejected(reason);
+            }
             if state.session != SessionState::Running {
                 return Applied::rejected("session is not accepting another claim");
             }
@@ -280,7 +300,6 @@ fn apply_worker(state: &AppState, command: WorkerCommand) -> Applied {
                 operation: item.operation,
                 output_target: item.output_target.clone(),
                 execution,
-                selected_analysis: None,
             };
             let mut applied = Applied::accepted();
             applied.durable.push(DurableDelta::ItemClaimed {
@@ -330,11 +349,9 @@ fn apply_worker(state: &AppState, command: WorkerCommand) -> Applied {
                 };
                 return;
             }
-            if result.profile != run.spec.execution.profile
-                || result.requested_target != run.spec.execution.requested_target
-            {
+            if let Err(reason) = result.validate_for(&run.spec.execution) {
                 applied.reply = Reply::Rejected {
-                    reason: "analysis does not match the claimed job".to_owned(),
+                    reason: reason.to_owned(),
                 };
                 return;
             }
@@ -363,22 +380,26 @@ fn apply_worker(state: &AppState, command: WorkerCommand) -> Applied {
                 });
                 return;
             }
-            let analysis_present = state
-                .durable
-                .conversion_runs
-                .get(&run_id)
-                .is_some_and(|run| run.analysis.is_some());
-            if matches!(outcome, ItemOutcome::Analyzed | ItemOutcome::Converted)
-                && !analysis_present
+            let Some(run) = state.durable.conversion_runs.get(&run_id) else {
+                applied.reply = Reply::Rejected {
+                    reason: "conversion run does not exist".to_owned(),
+                };
+                return;
+            };
+            if let Err(reason) =
+                validate_terminal(run, state.durable.outputs.get(&run_id), &outcome)
             {
                 applied.reply = Reply::Rejected {
-                    reason: "successful outcome requires durable analysis".to_owned(),
+                    reason: reason.to_owned(),
                 };
                 return;
             }
             if let Some(telemetry) = final_telemetry {
                 applied.ephemeral.push(EphemeralDelta::Telemetry(telemetry));
             }
+            applied
+                .ephemeral
+                .push(EphemeralDelta::TelemetryCleared { run_id });
             applied.durable.push(DurableDelta::ItemFinished {
                 item_id,
                 claim_id,
@@ -391,7 +412,7 @@ fn apply_worker(state: &AppState, command: WorkerCommand) -> Applied {
                 return Applied::rejected("worker cannot finish while an item is active");
             }
             if state.session == SessionState::Idle {
-                return Applied::rejected("session is not active");
+                return Applied::accepted();
             }
             let mut applied = Applied::accepted();
             applied
@@ -399,7 +420,72 @@ fn apply_worker(state: &AppState, command: WorkerCommand) -> Applied {
                 .push(EphemeralDelta::SessionChanged(SessionState::Idle));
             applied
         }
+        WorkerCommand::Crashed { message } => {
+            let mut applied = Applied::accepted();
+            applied
+                .ephemeral
+                .push(EphemeralDelta::WorkerCrashed { message });
+            applied.effects.push(Effect::StopDriver);
+            applied
+        }
     }
+}
+
+pub(crate) fn validate_terminal(
+    run: &ConversionRun,
+    output: Option<&crate::OutputTransaction>,
+    outcome: &ItemOutcome,
+) -> Result<(), &'static str> {
+    match outcome {
+        ItemOutcome::Analyzed => {
+            if run.spec.operation != Operation::Analyze
+                || run.analysis.is_none()
+                || output.is_some()
+            {
+                return Err("analyzed outcome is incompatible with the run state");
+            }
+        }
+        ItemOutcome::Converted => {
+            if run.spec.operation != Operation::Convert || run.analysis.is_none() {
+                return Err("converted outcome requires a converted run with durable analysis");
+            }
+            let Some(transaction) = output else {
+                return Err("converted outcome requires an output transaction");
+            };
+            let successful = matches!(
+                (&transaction.replacement, &transaction.state),
+                (
+                    crate::Replacement::KeepOriginal,
+                    crate::OutputState::Committed { .. }
+                ) | (
+                    crate::Replacement::RetireOriginal,
+                    crate::OutputState::Retired { .. }
+                )
+            );
+            if !successful {
+                return Err("converted outcome requires a successfully settled output");
+            }
+        }
+        ItemOutcome::NotWorthwhile { attempts } => {
+            if run.analysis.is_some() || output.is_some() {
+                return Err("not-worthwhile outcome cannot retain analysis or output state");
+            }
+            if attempts.is_empty()
+                || attempts.iter().any(|attempt| {
+                    attempt.target > run.spec.execution.requested_target
+                        || attempt.target < run.spec.execution.fallback_floor
+                        || attempt
+                            .last_measurement
+                            .as_ref()
+                            .is_some_and(|measurement| measurement.validate().is_err())
+                })
+            {
+                return Err("not-worthwhile attempts are inconsistent with the claimed job");
+            }
+        }
+        ItemOutcome::Stopped | ItemOutcome::Skipped { .. } | ItemOutcome::Failed { .. } => {}
+    }
+    Ok(())
 }
 
 fn transition_active(
@@ -460,7 +546,10 @@ fn output_run_id(delta: &OutputDelta) -> RunId {
     }
 }
 
-fn validate_output_delta(state: &AppState, delta: &OutputDelta) -> Result<(), &'static str> {
+pub(crate) fn validate_output_delta(
+    state: &AppState,
+    delta: &OutputDelta,
+) -> Result<(), &'static str> {
     let run_id = output_run_id(delta);
     let current = state.durable.outputs.get(&run_id);
     match (current, delta) {
@@ -488,14 +577,20 @@ fn validate_output_delta(state: &AppState, delta: &OutputDelta) -> Result<(), &'
             OutputDelta::OutputReady {
                 staging_identity, ..
             },
-        ) if transaction.state == crate::OutputState::Started && staging_identity.size > 0 => {
+        ) if transaction.state == crate::OutputState::Started
+            && staging_identity.destructive.size > 0
+            && staging_identity.destructive.file_id
+                == transaction.initial_staging_identity.file_id =>
+        {
             Ok(())
         }
         (Some(transaction), OutputDelta::OutputCommitted { final_identity, .. }) => {
             match &transaction.state {
                 crate::OutputState::Ready { staging_identity }
                     if final_identity.content_key == staging_identity.content_key
-                        && final_identity.size == staging_identity.size =>
+                        && final_identity.destructive.size == staging_identity.destructive.size
+                        && final_identity.destructive.file_id
+                            == staging_identity.destructive.file_id =>
                 {
                     Ok(())
                 }
@@ -523,7 +618,10 @@ fn validate_output_delta(state: &AppState, delta: &OutputDelta) -> Result<(), &'
             },
         ) if transaction.state == crate::OutputState::Started => Ok(()),
         (Some(transaction), OutputDelta::Abandoned { .. })
-            if matches!(transaction.state, crate::OutputState::AbandonIntent { .. }) =>
+            if matches!(
+                transaction.state,
+                crate::OutputState::Started | crate::OutputState::AbandonIntent { .. }
+            ) =>
         {
             Ok(())
         }

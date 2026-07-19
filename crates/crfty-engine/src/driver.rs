@@ -308,11 +308,17 @@ fn emit_batch(
         let _result = reply.send(applied.reply);
     }
     let effects = reconcile_effects(effects, state);
-    let should_stop = effects.contains(&Effect::StopDriver);
+    let mut should_stop = effects.contains(&Effect::StopDriver);
     for effect in effects {
         match effect_sink {
             Some(sink) => {
-                let _result = sink.send(effect);
+                if sink.send(effect).is_err() {
+                    should_stop = true;
+                    let _result = events.send(DriverEvent::Fatal {
+                        message: "job supervisor effect channel disconnected".to_owned(),
+                    });
+                    break;
+                }
             }
             None => {
                 let _result = events.send(DriverEvent::Effect(effect));
@@ -361,7 +367,7 @@ fn fail_batch(
 ) {
     let message = format!("durable driver failure: {error}");
     for (reply, _applied) in applied_batch {
-        let _result = reply.send(Reply::Rejected {
+        let _result = reply.send(Reply::DurabilityUnknown {
             reason: message.clone(),
         });
     }
@@ -448,7 +454,7 @@ mod tests {
         assert!(stopped);
         assert!(matches!(
             reply_rx.recv().expect("failure reply"),
-            Reply::Rejected { .. }
+            Reply::DurabilityUnknown { .. }
         ));
         assert!(matches!(
             event_rx.recv().expect("fatal event"),
