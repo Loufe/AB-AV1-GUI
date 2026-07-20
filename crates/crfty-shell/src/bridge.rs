@@ -6,16 +6,19 @@
 //! order the frontend observes is exactly the fold order (ADR-006). The engine
 //! channel keeps draining when no webview is subscribed.
 
-use std::sync::{
-    Arc, Mutex, MutexGuard,
-    atomic::{AtomicU64, Ordering},
-    mpsc,
+use std::{
+    collections::BTreeMap,
+    sync::{
+        Arc, Mutex, MutexGuard,
+        atomic::{AtomicU64, Ordering},
+        mpsc,
+    },
 };
 
 use crfty_core::{
     AnalysisProfile, AppSnapshot, ConfigDelta, DurableDelta, DurableState, EphemeralDelta,
-    ExecutionSettings, QueueCommand, QueueItemId, Reply, SessionCommand, SessionState, Settings,
-    SettingsCommand, ToolAvailability, ToolRevisions, fold, fold_config,
+    ExecutionSettings, QueueCommand, QueueItemId, Reply, RunId, SessionCommand, SessionState,
+    Settings, SettingsCommand, Telemetry, ToolAvailability, ToolRevisions, fold, fold_config,
 };
 use crfty_engine::{
     coordinator::{EngineConfig, EngineRuntime, UserCommandSender},
@@ -76,6 +79,10 @@ struct StreamState {
     model: AppSnapshot,
     session: SessionState,
     tools: ToolAvailability,
+    /// Latest telemetry per active run, mirroring `AppState::telemetry` in
+    /// the reducer so a reconnecting webview sees live progress immediately
+    /// instead of waiting for the next update.
+    telemetry: BTreeMap<RunId, Telemetry>,
     health: Health,
     subscriber: Option<Channel<ShellEvent>>,
     seq: u32,
@@ -87,6 +94,7 @@ impl StreamState {
             model: AppSnapshot::default(),
             session: SessionState::Idle,
             tools: ToolAvailability::default(),
+            telemetry: BTreeMap::new(),
             health,
             subscriber: None,
             seq: 0,
@@ -194,6 +202,10 @@ impl Bridge {
         stream.emit(StreamPayload::Ephemeral(EphemeralDelta::ToolsChanged(
             tools,
         )));
+        let telemetry: Vec<Telemetry> = stream.telemetry.values().cloned().collect();
+        for value in telemetry {
+            stream.emit(StreamPayload::Ephemeral(EphemeralDelta::Telemetry(value)));
+        }
         match stream.health.clone() {
             Health::Ok => {}
             Health::Degraded { reason } => stream.emit(StreamPayload::Degraded { reason }),
@@ -239,46 +251,59 @@ fn forward(
 ) {
     while let Ok(event) = events.recv() {
         let mut state = lock_stream(stream);
-        match event {
-            DriverEvent::Snapshot(model) => {
-                seed_item_ids(next_item_id, &model.durable);
-                state.model = model.clone();
-                state.emit(StreamPayload::Snapshot(model));
+        absorb(&mut state, event, next_item_id);
+    }
+}
+
+/// Folds one driver event into the read model and emits its wire payload.
+/// Separated from the forwarder loop so tests can drive it directly (with no
+/// subscriber installed, `emit` is a no-op).
+fn absorb(state: &mut StreamState, event: DriverEvent, next_item_id: &AtomicU64) {
+    match event {
+        DriverEvent::Snapshot(model) => {
+            seed_item_ids(next_item_id, &model.durable);
+            state.model = model.clone();
+            state.emit(StreamPayload::Snapshot(model));
+        }
+        DriverEvent::Durable(delta) => {
+            fold(&mut state.model.durable, &delta);
+            if let DurableDelta::QueueAdded { item } = &delta {
+                next_item_id.fetch_max(item.id.0.saturating_add(1), Ordering::Relaxed);
             }
-            DriverEvent::Durable(delta) => {
-                fold(&mut state.model.durable, &delta);
-                if let DurableDelta::QueueAdded { item } = &delta {
-                    next_item_id.fetch_max(item.id.0.saturating_add(1), Ordering::Relaxed);
+            state.emit(StreamPayload::Durable(delta));
+        }
+        DriverEvent::Config(delta) => {
+            fold_config(&mut state.model.settings, &delta);
+            state.emit(StreamPayload::Config(delta));
+        }
+        DriverEvent::Ephemeral(delta) => {
+            match &delta {
+                EphemeralDelta::SessionChanged(session) => state.session = session.clone(),
+                EphemeralDelta::ToolsChanged(tools) => state.tools = tools.clone(),
+                EphemeralDelta::Telemetry(telemetry) => {
+                    state.telemetry.insert(telemetry.run_id, telemetry.clone());
                 }
-                state.emit(StreamPayload::Durable(delta));
-            }
-            DriverEvent::Config(delta) => {
-                fold_config(&mut state.model.settings, &delta);
-                state.emit(StreamPayload::Config(delta));
-            }
-            DriverEvent::Ephemeral(delta) => {
-                match &delta {
-                    EphemeralDelta::SessionChanged(session) => state.session = session.clone(),
-                    EphemeralDelta::ToolsChanged(tools) => state.tools = tools.clone(),
-                    _ => {}
+                EphemeralDelta::TelemetryCleared { run_id } => {
+                    state.telemetry.remove(run_id);
                 }
-                state.emit(StreamPayload::Ephemeral(delta));
+                EphemeralDelta::WorkerCrashed { .. } | EphemeralDelta::CommandRejected { .. } => {}
             }
-            // Effects are instructions to the engine's own supervisor and
-            // never cross the IPC boundary (ADR-006).
-            DriverEvent::Effect(_) => {}
-            DriverEvent::Degraded { reason } => {
-                state.health = Health::Degraded {
-                    reason: reason.clone(),
-                };
-                state.emit(StreamPayload::Degraded { reason });
-            }
-            DriverEvent::Fatal { message } => {
-                state.health = Health::Fatal {
-                    message: message.clone(),
-                };
-                state.emit(StreamPayload::EngineFatal { message });
-            }
+            state.emit(StreamPayload::Ephemeral(delta));
+        }
+        // Effects are instructions to the engine's own supervisor and
+        // never cross the IPC boundary (ADR-006).
+        DriverEvent::Effect(_) => {}
+        DriverEvent::Degraded { reason } => {
+            state.health = Health::Degraded {
+                reason: reason.clone(),
+            };
+            state.emit(StreamPayload::Degraded { reason });
+        }
+        DriverEvent::Fatal { message } => {
+            state.health = Health::Fatal {
+                message: message.clone(),
+            };
+            state.emit(StreamPayload::EngineFatal { message });
         }
     }
 }
@@ -307,5 +332,83 @@ fn map_reply(reply: Result<Reply, crfty_engine::driver::SubmitError>) -> Result<
             "driver returned a worker reply to a user command",
         )),
         Err(error) => Err(CommandError::engine_unavailable(error.to_string())),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use crfty_core::{JobPhase, JobProgress};
+
+    use super::*;
+
+    fn telemetry(run: u64, sequence: u64, position_ms: u64) -> Telemetry {
+        Telemetry {
+            run_id: RunId(run),
+            sequence,
+            phase: JobPhase::Encoding,
+            progress: JobProgress::OutputPositionMs(position_ms),
+        }
+    }
+
+    fn ephemeral(delta: EphemeralDelta) -> DriverEvent {
+        DriverEvent::Ephemeral(delta)
+    }
+
+    #[test]
+    fn absorb_retains_the_latest_telemetry_per_run_until_cleared() {
+        let ids = AtomicU64::new(1);
+        let mut state = StreamState::new(Health::Ok);
+        absorb(
+            &mut state,
+            ephemeral(EphemeralDelta::Telemetry(telemetry(1, 1, 10))),
+            &ids,
+        );
+        absorb(
+            &mut state,
+            ephemeral(EphemeralDelta::Telemetry(telemetry(1, 2, 20))),
+            &ids,
+        );
+        absorb(
+            &mut state,
+            ephemeral(EphemeralDelta::Telemetry(telemetry(2, 1, 5))),
+            &ids,
+        );
+        assert_eq!(state.telemetry.len(), 2);
+        assert_eq!(state.telemetry.get(&RunId(1)), Some(&telemetry(1, 2, 20)));
+        assert_eq!(state.telemetry.get(&RunId(2)), Some(&telemetry(2, 1, 5)));
+
+        absorb(
+            &mut state,
+            ephemeral(EphemeralDelta::TelemetryCleared { run_id: RunId(1) }),
+            &ids,
+        );
+        assert_eq!(state.telemetry.get(&RunId(1)), None);
+        assert_eq!(state.telemetry.get(&RunId(2)), Some(&telemetry(2, 1, 5)));
+    }
+
+    #[test]
+    fn absorb_tracks_session_and_tools_without_touching_telemetry() {
+        let ids = AtomicU64::new(1);
+        let mut state = StreamState::new(Health::Ok);
+        absorb(
+            &mut state,
+            ephemeral(EphemeralDelta::SessionChanged(SessionState::Running)),
+            &ids,
+        );
+        absorb(
+            &mut state,
+            ephemeral(EphemeralDelta::ToolsChanged(ToolAvailability::Available)),
+            &ids,
+        );
+        absorb(
+            &mut state,
+            ephemeral(EphemeralDelta::WorkerCrashed {
+                message: "fixture".to_owned(),
+            }),
+            &ids,
+        );
+        assert_eq!(state.session, SessionState::Running);
+        assert_eq!(state.tools, ToolAvailability::Available);
+        assert!(state.telemetry.is_empty());
     }
 }
