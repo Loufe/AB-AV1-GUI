@@ -204,7 +204,12 @@ impl EngineRuntime {
         let discovered = driver
             .commands
             .submit(Command::System(SystemCommand::ToolsDiscovered {
-                availability: config.media_tools.availability(),
+                availability: config.media_tools.availability(crfty_core::ToolRevisions {
+                    ab_av1: config.execution.profile.ab_av1_revision.clone(),
+                    ffmpeg: config.execution.profile.ffmpeg_revision.clone(),
+                    encoder: config.execution.profile.encoder_revision.clone(),
+                }),
+                update_available: false,
             }))
             .map_err(|error| {
                 EngineStartError(format!("failed to report tool availability: {error}"))
@@ -667,6 +672,9 @@ fn supervise(
                 }
             }
             Effect::KillActiveRun { run_id } => cancellation.force(Some(run_id)),
+            // The vendor worker arrives with the install pipeline; until the
+            // shell exposes vendor commands the reducer cannot emit these.
+            Effect::VendorInstall | Effect::VendorCheck => {}
             Effect::WriteSettings { .. } => {
                 report_worker_crash(
                     &commands,

@@ -15,7 +15,7 @@ use std::sync::{
 use crfty_core::{
     AnalysisProfile, AppSnapshot, ConfigDelta, DurableDelta, DurableState, EphemeralDelta,
     ExecutionSettings, QueueCommand, QueueItemId, Reply, SessionCommand, SessionState, Settings,
-    SettingsCommand, ToolAvailability, ToolRevisions, fold, fold_config,
+    SettingsCommand, ToolRevisions, ToolsState, fold, fold_config,
 };
 use crfty_engine::{
     coordinator::{EngineConfig, EngineRuntime, UserCommandSender},
@@ -75,7 +75,7 @@ enum Health {
 struct StreamState {
     model: AppSnapshot,
     session: SessionState,
-    tools: ToolAvailability,
+    tools: ToolsState,
     health: Health,
     subscriber: Option<Channel<ShellEvent>>,
     seq: u32,
@@ -86,7 +86,7 @@ impl StreamState {
         Self {
             model: AppSnapshot::default(),
             session: SessionState::Idle,
-            tools: ToolAvailability::default(),
+            tools: ToolsState::default(),
             health,
             subscriber: None,
             seq: 0,

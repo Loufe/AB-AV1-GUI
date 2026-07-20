@@ -267,7 +267,7 @@ export type DurationMs = number;
 
 export type EphemeralDelta = ({ SessionChanged: SessionState }) & { CommandRejected?: never; Telemetry?: never; TelemetryCleared?: never; ToolsChanged?: never; WorkerCrashed?: never } | ({ Telemetry: Telemetry }) & { CommandRejected?: never; SessionChanged?: never; TelemetryCleared?: never; ToolsChanged?: never; WorkerCrashed?: never } | ({ TelemetryCleared: {
 	run_id: RunId,
-} }) & { CommandRejected?: never; SessionChanged?: never; Telemetry?: never; ToolsChanged?: never; WorkerCrashed?: never } | ({ ToolsChanged: ToolAvailability }) & { CommandRejected?: never; SessionChanged?: never; Telemetry?: never; TelemetryCleared?: never; WorkerCrashed?: never } | ({ WorkerCrashed: {
+} }) & { CommandRejected?: never; SessionChanged?: never; Telemetry?: never; ToolsChanged?: never; WorkerCrashed?: never } | ({ ToolsChanged: ToolsState }) & { CommandRejected?: never; SessionChanged?: never; Telemetry?: never; TelemetryCleared?: never; WorkerCrashed?: never } | ({ WorkerCrashed: {
 	message: string,
 } }) & { CommandRejected?: never; SessionChanged?: never; Telemetry?: never; TelemetryCleared?: never; ToolsChanged?: never } | ({ CommandRejected: {
 	reason: string,
@@ -671,16 +671,54 @@ export type Telemetry = {
  *  filesystem fact reported to the reducer, never journaled. Fail-closed by
  *  default so media work stays gated until discovery actually reports.
  */
-export type ToolAvailability = "Available" | { Missing: {
+export type ToolAvailability = ({ Available: {
+	source: ToolSource,
+	revisions: ToolRevisions,
+} }) & { Missing?: never } | ({ Missing: {
 	missing: MediaTool[],
 	detail: string,
-} };
+} }) & { Available?: never };
+
+export type ToolRevisions = {
+	ab_av1: string,
+	ffmpeg: string,
+	encoder: string,
+};
+
+/**
+ *  Which discovery tier produced the active media tools. Precedence is
+ *  explicit environment paths, then the managed vendor install, then PATH.
+ */
+export type ToolSource = "Explicit" | "System" | "Managed";
+
+/**
+ *  The full ephemeral tool picture: what is usable, what the vendor pipeline
+ *  is doing, and whether the compiled-in manifest is newer than the managed
+ *  install. Never journaled; replayed after each snapshot on subscribe.
+ */
+export type ToolsState = {
+	availability: ToolAvailability,
+	activity: VendorActivity,
+	update_available: boolean,
+};
 
 /**
  *  A wall-clock instant in milliseconds since the Unix epoch. Stamped by the
  *  engine (core has no clock) and delivered inside command payloads.
  */
 export type UnixMillis = number;
+
+/**
+ *  What the vendor subsystem is doing right now. `Downloading` progress is
+ *  throttled by the engine (core has no clock); a terminal `Failed` stands
+ *  until the next vendor command replaces it.
+ */
+export type VendorActivity = "Idle" | "Checking" | ({ Downloading: {
+	received: number,
+	total: number | null,
+} }) & { Failed?: never } | "Installing" | ({ Failed: {
+	detail: string,
+} }) & { Downloading?: never };
 
 /**
  *  The record's standing judgment about this content: what the latest

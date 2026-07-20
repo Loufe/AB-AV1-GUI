@@ -19,7 +19,7 @@ use crfty_core::{
     EphemeralDelta, ExecutionSettings, ItemOutcome, MediaTool, Operation, OutputDelta,
     OutputTarget, QueueCommand, QueueItemId, QueueItemState, Replacement, Reply, RunId,
     SearchMeasurement, SessionCommand, Settings, SettingsCommand, ToolAvailability, ToolRevisions,
-    UnixMillis, VmafScore, WorkerCommand, apply,
+    ToolSource, ToolsState, UnixMillis, VmafScore, WorkerCommand, apply,
 };
 use crfty_engine::{
     ab_av1::MediaTools,
@@ -50,6 +50,17 @@ fn missing_tools() -> ToolDiscovery {
     ToolDiscovery::Missing {
         missing: vec![MediaTool::Ffmpeg, MediaTool::Ffprobe],
         detail: "fixture: no tools installed".to_owned(),
+    }
+}
+
+fn fixture_available() -> ToolAvailability {
+    ToolAvailability::Available {
+        source: ToolSource::System,
+        revisions: ToolRevisions {
+            ab_av1: "fixture".to_owned(),
+            ffmpeg: "fixture".to_owned(),
+            encoder: "fixture".to_owned(),
+        },
     }
 }
 
@@ -140,9 +151,9 @@ fn startup_without_tools_replays_and_serves_non_media_commands() {
     assert_eq!(snapshot.durable.queue[0].id, QueueItemId(1));
     assert_eq!(snapshot.settings, settings);
     let availability = engine.events.recv().expect("availability event");
-    let DriverEvent::Ephemeral(EphemeralDelta::ToolsChanged(ToolAvailability::Missing {
-        missing,
-        detail,
+    let DriverEvent::Ephemeral(EphemeralDelta::ToolsChanged(ToolsState {
+        availability: ToolAvailability::Missing { missing, detail },
+        ..
     })) = availability
     else {
         panic!("expected missing-tools availability after the snapshot: {availability:?}");
@@ -232,7 +243,8 @@ fn startup_recovery_without_ffprobe_defers_output_settlement() {
             output_target: OutputTarget::Replace,
         }),
         Command::System(crfty_core::SystemCommand::ToolsDiscovered {
-            availability: ToolAvailability::Available,
+            availability: fixture_available(),
+            update_available: false,
         }),
         Command::Session(SessionCommand::Start),
         Command::Worker(WorkerCommand::ReserveNext {
@@ -313,10 +325,13 @@ fn startup_recovery_without_ffprobe_defers_output_settlement() {
     let executable = std::env::current_exe().expect("test executable");
     let recovered = EngineRuntime::start(engine_config(
         &directory,
-        ToolDiscovery::Available(MediaTools {
-            ffmpeg: executable.clone(),
-            ffprobe: executable,
-        }),
+        ToolDiscovery::Available {
+            source: ToolSource::System,
+            tools: MediaTools {
+                ffmpeg: executable.clone(),
+                ffprobe: executable,
+            },
+        },
     ))
     .expect("recovery with tools");
     let DriverEvent::Snapshot(snapshot) = recovered.events.recv().expect("recovered snapshot")

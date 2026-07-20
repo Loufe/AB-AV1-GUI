@@ -8,7 +8,7 @@ use crate::{
     DecodeMode, DecodePreference, DurableDelta, ExecutionSettings, ItemOutcome, JobAction, JobSpec,
     MediaObservation, Operation, OutputDelta, OutputTarget, PhaseSpan, QueueItem, QueueItemId,
     QueueItemState, ReservedJob, RunId, SessionState, Settings, Telemetry, ToolAvailability,
-    UnixMillis, fold, fold_config, select_job_action,
+    ToolsState, UnixMillis, VendorActivity, fold, fold_config, select_job_action,
 };
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -17,6 +17,7 @@ pub enum Command {
     Session(SessionCommand),
     Settings(SettingsCommand),
     Worker(WorkerCommand),
+    Vendor(VendorCommand),
     System(SystemCommand),
 }
 
@@ -48,6 +49,16 @@ pub enum SessionCommand {
     Start,
     StopAfterCurrent,
     ForceStop,
+}
+
+/// User-initiated vendor operations. `Install` downloads and atomically
+/// activates the manifest-pinned FFmpeg build; `Check` re-runs discovery and
+/// the local update comparison. Both are serialized through
+/// [`VendorActivity`]: at most one vendor worker exists at a time.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum VendorCommand {
+    Install,
+    Check,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -100,7 +111,18 @@ pub enum WorkerCommand {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum SystemCommand {
     Shutdown,
-    ToolsDiscovered { availability: ToolAvailability },
+    /// Discovery facts from the engine: what is usable and whether the
+    /// compiled-in manifest is newer than the managed install. Never touches
+    /// the vendor activity — progress travels via `VendorProgress`.
+    ToolsDiscovered {
+        availability: ToolAvailability,
+        update_available: bool,
+    },
+    /// Vendor worker progress. The engine throttles emission; core has no
+    /// clock and applies whatever it is told.
+    VendorProgress {
+        activity: VendorActivity,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, specta::Type)]
@@ -108,7 +130,7 @@ pub enum EphemeralDelta {
     SessionChanged(SessionState),
     Telemetry(Telemetry),
     TelemetryCleared { run_id: RunId },
-    ToolsChanged(ToolAvailability),
+    ToolsChanged(ToolsState),
     WorkerCrashed { message: String },
     CommandRejected { reason: String },
 }
@@ -118,6 +140,8 @@ pub enum Effect {
     StartWorker,
     KillActiveRun { run_id: RunId },
     WriteSettings { settings: Settings },
+    VendorInstall,
+    VendorCheck,
     StopDriver,
 }
 
@@ -170,20 +194,30 @@ pub fn apply(state: &mut AppState, command: Command) -> Applied {
         Command::Session(command) => apply_session(state, command),
         Command::Settings(command) => apply_settings(state, command),
         Command::Worker(command) => apply_worker(state, command),
+        Command::Vendor(command) => apply_vendor(state, command),
         Command::System(SystemCommand::Shutdown) => {
             let mut applied = Applied::accepted();
             applied.effects.push(Effect::StopDriver);
             applied
         }
-        Command::System(SystemCommand::ToolsDiscovered { availability }) => {
-            let mut applied = Applied::accepted();
-            if state.tools != availability {
-                applied
-                    .ephemeral
-                    .push(EphemeralDelta::ToolsChanged(availability));
-            }
-            applied
-        }
+        Command::System(SystemCommand::ToolsDiscovered {
+            availability,
+            update_available,
+        }) => tools_transition(
+            state,
+            ToolsState {
+                availability,
+                activity: state.tools.activity.clone(),
+                update_available,
+            },
+        ),
+        Command::System(SystemCommand::VendorProgress { activity }) => tools_transition(
+            state,
+            ToolsState {
+                activity,
+                ..state.tools.clone()
+            },
+        ),
     };
     for delta in &applied.durable {
         fold(&mut state.durable, delta);
@@ -200,7 +234,7 @@ pub fn apply(state: &mut AppState, command: Command) -> Applied {
             EphemeralDelta::TelemetryCleared { run_id } => {
                 state.telemetry.remove(run_id);
             }
-            EphemeralDelta::ToolsChanged(availability) => state.tools = availability.clone(),
+            EphemeralDelta::ToolsChanged(tools) => state.tools = tools.clone(),
             EphemeralDelta::WorkerCrashed { .. } | EphemeralDelta::CommandRejected { .. } => {}
         }
     }
@@ -305,11 +339,84 @@ fn apply_queue(state: &AppState, command: QueueCommand) -> Applied {
     }
 }
 
+fn tools_transition(state: &AppState, next: ToolsState) -> Applied {
+    let mut applied = Applied::accepted();
+    if state.tools != next {
+        applied.ephemeral.push(EphemeralDelta::ToolsChanged(next));
+    }
+    applied
+}
+
+/// Whether a vendor worker is (or is about to be) running. `Failed` and
+/// `Idle` are the only restable states.
+fn vendor_worker_active(activity: &VendorActivity) -> bool {
+    matches!(
+        activity,
+        VendorActivity::Checking | VendorActivity::Downloading { .. } | VendorActivity::Installing
+    )
+}
+
+/// Whether the installed tool binaries may currently be swapped out from
+/// under a starting session.
+fn vendor_swapping_tools(activity: &VendorActivity) -> bool {
+    matches!(
+        activity,
+        VendorActivity::Downloading { .. } | VendorActivity::Installing
+    )
+}
+
+fn apply_vendor(state: &AppState, command: VendorCommand) -> Applied {
+    if vendor_worker_active(&state.tools.activity) {
+        return Applied::rejected("a vendor operation is already in progress");
+    }
+    match command {
+        VendorCommand::Install => {
+            // Idle-only swap: an install replaces the binaries a session
+            // worker would execute, so it is refused whenever a session or
+            // claimed item exists — including crash-recovered actives.
+            if state.session != SessionState::Idle {
+                return Applied::rejected("vendor install requires an idle session");
+            }
+            if active_run(state).is_some() {
+                return Applied::rejected(
+                    "vendor install cannot start while a queue item is active",
+                );
+            }
+            let mut applied = tools_transition(
+                state,
+                ToolsState {
+                    activity: VendorActivity::Downloading {
+                        received: 0,
+                        total: None,
+                    },
+                    ..state.tools.clone()
+                },
+            );
+            applied.effects.push(Effect::VendorInstall);
+            applied
+        }
+        VendorCommand::Check => {
+            let mut applied = tools_transition(
+                state,
+                ToolsState {
+                    activity: VendorActivity::Checking,
+                    ..state.tools.clone()
+                },
+            );
+            applied.effects.push(Effect::VendorCheck);
+            applied
+        }
+    }
+}
+
 fn apply_session(state: &AppState, command: SessionCommand) -> Applied {
     match command {
         SessionCommand::Start if state.session == SessionState::Idle => {
-            if let ToolAvailability::Missing { detail, .. } = &state.tools {
+            if let ToolAvailability::Missing { detail, .. } = &state.tools.availability {
                 return Applied::rejected(format!("media tools are unavailable: {detail}"));
+            }
+            if vendor_swapping_tools(&state.tools.activity) {
+                return Applied::rejected("a vendor install is in progress");
             }
             let mut applied = Applied::accepted();
             applied

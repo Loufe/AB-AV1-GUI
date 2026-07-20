@@ -99,7 +99,7 @@ pub struct AnalysisProfile {
     pub encoder_revision: String,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, specta::Type)]
 pub struct ToolRevisions {
     pub ab_av1: String,
     pub ffmpeg: String,
