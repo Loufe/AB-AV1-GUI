@@ -1,8 +1,8 @@
 use serde::{Deserialize, Serialize};
 
 use crate::{
-    AppState, DurableDelta, DurableState, JournalSequence, QueueItemState, fold,
-    reducer::{validate_output_delta, validate_terminal},
+    DurableDelta, DurableState, JournalSequence, QueueItemState, fold,
+    output::validate_output_delta, reducer::validate_terminal,
 };
 
 pub const JOURNAL_SCHEMA_VERSION: u32 = 11;
@@ -314,11 +314,7 @@ fn validate_replayed_delta(state: &DurableState, delta: &DurableDelta) -> Result
             validate_terminal(run, state.outputs.get(run_id), outcome)?;
         }
         DurableDelta::Output(output) => {
-            let app = AppState {
-                durable: state.clone(),
-                ..AppState::default()
-            };
-            validate_output_delta(&app, output)?;
+            validate_output_delta(state, output)?;
         }
     }
     Ok(())

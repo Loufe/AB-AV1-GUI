@@ -517,11 +517,12 @@ fn apply_worker(state: &AppState, command: WorkerCommand) -> Applied {
             });
         }),
         WorkerCommand::Output(output_delta) => {
-            let run_id = output_run_id(&output_delta);
+            let run_id = output_delta.run_id();
             if active_run(state) != Some(run_id) {
                 return Applied::rejected("output event does not belong to the active run");
             }
-            if let Err(reason) = validate_output_delta(state, &output_delta) {
+            if let Err(reason) = crate::output::validate_output_delta(&state.durable, &output_delta)
+            {
                 return Applied::rejected(reason);
             }
             let mut applied = Applied::accepted();
@@ -772,123 +773,4 @@ fn active_run(state: &AppState) -> Option<RunId> {
             QueueItemState::Reserved { run_id, .. } => Some(run_id),
             QueueItemState::Queued | QueueItemState::Finished(_) => None,
         })
-}
-
-fn output_run_id(delta: &OutputDelta) -> RunId {
-    match delta {
-        OutputDelta::OutputStarted { transaction } => transaction.run_id,
-        OutputDelta::StagingCreated { run_id, .. }
-        | OutputDelta::OutputReady { run_id, .. }
-        | OutputDelta::OutputCommitted { run_id, .. }
-        | OutputDelta::RetireOriginalIntent { run_id }
-        | OutputDelta::OriginalRetired { run_id }
-        | OutputDelta::AbandonStagingIntent { run_id, .. }
-        | OutputDelta::Abandoned { run_id }
-        | OutputDelta::Conflict { run_id, .. } => *run_id,
-    }
-}
-
-pub(crate) fn validate_output_delta(
-    state: &AppState,
-    delta: &OutputDelta,
-) -> Result<(), &'static str> {
-    let run_id = output_run_id(delta);
-    let current = state.durable.outputs.get(&run_id);
-    match (current, delta) {
-        (None, OutputDelta::OutputStarted { transaction })
-            if transaction.state == crate::OutputState::Started
-                && state
-                    .durable
-                    .conversion_runs
-                    .get(&run_id)
-                    .is_some_and(|run| match run.spec.action {
-                        JobAction::Encode { .. } => run.analysis.is_some(),
-                        JobAction::Remux => run.analysis.is_none(),
-                        JobAction::Analyze { .. } | JobAction::Skip { .. } => false,
-                    }) =>
-        {
-            Ok(())
-        }
-        (None, OutputDelta::OutputStarted { .. }) => {
-            Err("new output transaction must begin in started state")
-        }
-        (None, _) => Err("output transaction has not started"),
-        (Some(_), OutputDelta::OutputStarted { .. }) => {
-            Err("output transaction has already started")
-        }
-        // A repeated `StagingCreated` (from `StagingCreated` state) is the
-        // encode retry's restage: the failed attempt's adapter cleanup
-        // deleted the staging file, so the pin moves to the recreated one.
-        // Any settled state refuses it — retry-after-abandonment is
-        // unrepresentable.
-        (Some(transaction), OutputDelta::StagingCreated { .. })
-            if matches!(
-                transaction.state,
-                crate::OutputState::Started | crate::OutputState::StagingCreated { .. }
-            ) =>
-        {
-            Ok(())
-        }
-        (
-            Some(transaction),
-            OutputDelta::OutputReady {
-                staging_identity, ..
-            },
-        ) if matches!(
-            &transaction.state,
-            crate::OutputState::StagingCreated { initial }
-                if staging_identity.destructive.size > 0
-                    && staging_identity.destructive.file_id == initial.file_id
-        ) =>
-        {
-            Ok(())
-        }
-        (Some(transaction), OutputDelta::OutputCommitted { final_identity, .. }) => {
-            match &transaction.state {
-                crate::OutputState::Ready { staging_identity }
-                    if final_identity.content_key == staging_identity.content_key
-                        && final_identity.destructive.size == staging_identity.destructive.size
-                        && final_identity.destructive.file_id
-                            == staging_identity.destructive.file_id =>
-                {
-                    Ok(())
-                }
-                crate::OutputState::Ready { .. } => {
-                    Err("committed output does not match the ready staging artifact")
-                }
-                _ => Err("output is not ready for commit"),
-            }
-        }
-        (Some(transaction), OutputDelta::RetireOriginalIntent { .. })
-            if transaction.replacement == crate::Replacement::RetireOriginal
-                && matches!(transaction.state, crate::OutputState::Committed { .. }) =>
-        {
-            Ok(())
-        }
-        (Some(transaction), OutputDelta::OriginalRetired { .. })
-            if matches!(transaction.state, crate::OutputState::RetireIntent { .. }) =>
-        {
-            Ok(())
-        }
-        (Some(transaction), OutputDelta::AbandonStagingIntent { .. })
-            if matches!(
-                transaction.state,
-                crate::OutputState::Started | crate::OutputState::StagingCreated { .. }
-            ) =>
-        {
-            Ok(())
-        }
-        (Some(transaction), OutputDelta::Abandoned { .. })
-            if matches!(
-                transaction.state,
-                crate::OutputState::Started
-                    | crate::OutputState::StagingCreated { .. }
-                    | crate::OutputState::AbandonIntent { .. }
-            ) =>
-        {
-            Ok(())
-        }
-        (Some(transaction), OutputDelta::Conflict { .. }) if !transaction.is_settled() => Ok(()),
-        (Some(_), _) => Err("output event is invalid for the current ledger state"),
-    }
 }

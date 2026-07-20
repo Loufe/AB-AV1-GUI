@@ -2,7 +2,7 @@ use std::{collections::BTreeMap, path::PathBuf};
 
 use serde::{Deserialize, Serialize};
 
-use crate::{FileTimeNs, RunId};
+use crate::{DurableState, FileTimeNs, JobAction, RunId};
 
 #[derive(
     Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize, specta::Type,
@@ -178,6 +178,20 @@ pub enum OutputDelta {
 }
 
 impl OutputDelta {
+    pub(crate) fn run_id(&self) -> RunId {
+        match self {
+            Self::OutputStarted { transaction } => transaction.run_id,
+            Self::StagingCreated { run_id, .. }
+            | Self::OutputReady { run_id, .. }
+            | Self::OutputCommitted { run_id, .. }
+            | Self::RetireOriginalIntent { run_id }
+            | Self::OriginalRetired { run_id }
+            | Self::AbandonStagingIntent { run_id, .. }
+            | Self::Abandoned { run_id }
+            | Self::Conflict { run_id, .. } => *run_id,
+        }
+    }
+
     pub(crate) fn fold_into(&self, outputs: &mut BTreeMap<RunId, OutputTransaction>) {
         match self {
             Self::OutputStarted { transaction } => {
@@ -273,6 +287,109 @@ fn update_state(
 ) {
     if let Some(transaction) = outputs.get_mut(&run_id) {
         transaction.state = state;
+    }
+}
+
+pub(crate) fn validate_output_delta(
+    state: &DurableState,
+    delta: &OutputDelta,
+) -> Result<(), &'static str> {
+    let run_id = delta.run_id();
+    let current = state.outputs.get(&run_id);
+    match (current, delta) {
+        (None, OutputDelta::OutputStarted { transaction })
+            if transaction.state == OutputState::Started
+                && state.conversion_runs.get(&run_id).is_some_and(|run| {
+                    match run.spec.action {
+                        JobAction::Encode { .. } => run.analysis.is_some(),
+                        JobAction::Remux => run.analysis.is_none(),
+                        JobAction::Analyze { .. } | JobAction::Skip { .. } => false,
+                    }
+                }) =>
+        {
+            Ok(())
+        }
+        (None, OutputDelta::OutputStarted { .. }) => {
+            Err("new output transaction must begin in started state")
+        }
+        (None, _) => Err("output transaction has not started"),
+        (Some(_), OutputDelta::OutputStarted { .. }) => {
+            Err("output transaction has already started")
+        }
+        // A repeated `StagingCreated` (from `StagingCreated` state) is the
+        // encode retry's restage: the failed attempt's adapter cleanup
+        // deleted the staging file, so the pin moves to the recreated one.
+        // Any settled state refuses it — retry-after-abandonment is
+        // unrepresentable.
+        (Some(transaction), OutputDelta::StagingCreated { .. })
+            if matches!(
+                transaction.state,
+                OutputState::Started | OutputState::StagingCreated { .. }
+            ) =>
+        {
+            Ok(())
+        }
+        (
+            Some(transaction),
+            OutputDelta::OutputReady {
+                staging_identity, ..
+            },
+        ) if matches!(
+            &transaction.state,
+            OutputState::StagingCreated { initial }
+                if staging_identity.destructive.size > 0
+                    && staging_identity.destructive.file_id == initial.file_id
+        ) =>
+        {
+            Ok(())
+        }
+        (Some(transaction), OutputDelta::OutputCommitted { final_identity, .. }) => {
+            match &transaction.state {
+                OutputState::Ready { staging_identity }
+                    if final_identity.content_key == staging_identity.content_key
+                        && final_identity.destructive.size == staging_identity.destructive.size
+                        && final_identity.destructive.file_id
+                            == staging_identity.destructive.file_id =>
+                {
+                    Ok(())
+                }
+                OutputState::Ready { .. } => {
+                    Err("committed output does not match the ready staging artifact")
+                }
+                _ => Err("output is not ready for commit"),
+            }
+        }
+        (Some(transaction), OutputDelta::RetireOriginalIntent { .. })
+            if transaction.replacement == Replacement::RetireOriginal
+                && matches!(transaction.state, OutputState::Committed { .. }) =>
+        {
+            Ok(())
+        }
+        (Some(transaction), OutputDelta::OriginalRetired { .. })
+            if matches!(transaction.state, OutputState::RetireIntent { .. }) =>
+        {
+            Ok(())
+        }
+        (Some(transaction), OutputDelta::AbandonStagingIntent { .. })
+            if matches!(
+                transaction.state,
+                OutputState::Started | OutputState::StagingCreated { .. }
+            ) =>
+        {
+            Ok(())
+        }
+        (Some(transaction), OutputDelta::Abandoned { .. })
+            if matches!(
+                transaction.state,
+                OutputState::Started
+                    | OutputState::StagingCreated { .. }
+                    | OutputState::AbandonIntent { .. }
+            ) =>
+        {
+            Ok(())
+        }
+        (Some(transaction), OutputDelta::Conflict { .. }) if !transaction.is_settled() => Ok(()),
+        (Some(_), _) => Err("output event is invalid for the current ledger state"),
     }
 }
 
