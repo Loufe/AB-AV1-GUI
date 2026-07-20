@@ -2419,6 +2419,466 @@ fn verdict_freshness_is_a_stamp_match_against_the_settled_output() {
     assert!(crate::verdict_applies(&not_worthwhile, None, None));
 }
 
+/// A durable state with one observed path/record, optionally carrying a
+/// standing verdict. Returns the bound path hash and the binding's stamp
+/// (the "file is unchanged" probe).
+fn enqueue_fixture(verdict: Option<crate::Verdict>) -> (crate::DurableState, PathHash, FileStamp) {
+    let observation = media_observation("enqueue-content");
+    let path_hash = observation.path_hash.clone();
+    let stamp = observation.binding.stamp.clone();
+    let content_key = observation.binding.content_key.clone();
+    let mut durable = crate::DurableState::default();
+    crate::fold(
+        &mut durable,
+        &DurableDelta::MediaObserved {
+            observation: Box::new(observation),
+        },
+    );
+    if let Some(verdict) = verdict {
+        durable
+            .records
+            .get_mut(&content_key)
+            .expect("observed record")
+            .verdict = Some(verdict);
+    }
+    (durable, path_hash, stamp)
+}
+
+fn converted_verdict(source_run: RunId) -> crate::Verdict {
+    crate::Verdict {
+        kind: crate::VerdictKind::Converted {
+            output_content_key: ContentKey("ck-out".to_owned()),
+        },
+        source_run,
+        decided_at: UnixMillis(5_000),
+    }
+}
+
+fn not_worthwhile_verdict(source_run: RunId) -> crate::Verdict {
+    let execution = execution();
+    crate::Verdict {
+        kind: crate::VerdictKind::NotWorthwhile {
+            requested: execution.requested_target,
+            floor: execution.fallback_floor,
+        },
+        source_run,
+        decided_at: UnixMillis(5_000),
+    }
+}
+
+#[test]
+fn enqueue_disposition_is_verdict_aware_and_stamp_gated() {
+    // Unknown path: nothing cached, nothing to skip on.
+    assert_eq!(
+        crate::evaluate_enqueue(
+            &crate::DurableState::default(),
+            &PathHash("path-unknown".to_owned()),
+            None,
+            Operation::Convert,
+            AnalysisIntent::ReuseIfFresh,
+        ),
+        None
+    );
+
+    let (durable, path_hash, stamp) = enqueue_fixture(Some(not_worthwhile_verdict(RunId(9))));
+    let cases: [(
+        Option<&FileStamp>,
+        Operation,
+        AnalysisIntent,
+        Option<SkipReason>,
+    ); 4] = [
+        (
+            Some(&stamp),
+            Operation::Convert,
+            AnalysisIntent::ReuseIfFresh,
+            Some(SkipReason::NotWorthwhile {
+                source_run: RunId(9),
+            }),
+        ),
+        // Analyze adds are never verdict-filtered.
+        (
+            Some(&stamp),
+            Operation::Analyze,
+            AnalysisIntent::ReuseIfFresh,
+            None,
+        ),
+        // Refresh is the explicit escape hatch.
+        (
+            Some(&stamp),
+            Operation::Convert,
+            AnalysisIntent::Refresh,
+            None,
+        ),
+        // A missing stamp cannot establish the binding still describes the
+        // file, so no verdict-based skip fires.
+        (None, Operation::Convert, AnalysisIntent::ReuseIfFresh, None),
+    ];
+    for (stamp, operation, intent, expected) in cases {
+        assert_eq!(
+            crate::evaluate_enqueue(&durable, &path_hash, stamp, operation, intent),
+            expected,
+            "operation {operation:?} intent {intent:?}"
+        );
+    }
+
+    // A changed file at the known path (stale stamp) is re-queueable.
+    let changed = FileStamp {
+        size: stamp.size + 1,
+        modified_ns: stamp.modified_ns,
+    };
+    assert_eq!(
+        crate::evaluate_enqueue(
+            &durable,
+            &path_hash,
+            Some(&changed),
+            Operation::Convert,
+            AnalysisIntent::ReuseIfFresh,
+        ),
+        None
+    );
+
+    // Fresh binding + Converted verdict: the content itself was already
+    // processed, so re-converting is duplicate work.
+    let (durable, path_hash, stamp) = enqueue_fixture(Some(converted_verdict(RunId(9))));
+    assert_eq!(
+        crate::evaluate_enqueue(
+            &durable,
+            &path_hash,
+            Some(&stamp),
+            Operation::Convert,
+            AnalysisIntent::ReuseIfFresh,
+        ),
+        Some(SkipReason::ProbableDuplicate {
+            source_run: RunId(9),
+        })
+    );
+}
+
+#[test]
+fn enqueue_recognizes_the_replace_mode_output_without_a_fresh_binding() {
+    // Replace-mode aftermath: the binding still names the ORIGINAL content
+    // (stamp 10_000), but the file now at the path is the settled output of
+    // run 9 (size 42). Recognition rides on the output identity alone.
+    let (mut durable, path_hash, _stamp) = enqueue_fixture(Some(converted_verdict(RunId(9))));
+    durable.outputs.insert(
+        RunId(9),
+        transaction(
+            OutputState::Retired {
+                final_identity: identity("out", 42),
+            },
+            Replacement::RetireOriginal,
+        ),
+    );
+    let output_stamp = FileStamp {
+        size: 42,
+        modified_ns: destructive("out", 42).modified_ns,
+    };
+    assert_eq!(
+        crate::evaluate_enqueue(
+            &durable,
+            &path_hash,
+            Some(&output_stamp),
+            Operation::Convert,
+            AnalysisIntent::ReuseIfFresh,
+        ),
+        Some(SkipReason::AlreadyConverted {
+            source_run: RunId(9),
+        })
+    );
+    // Refresh bypasses even output recognition.
+    assert_eq!(
+        crate::evaluate_enqueue(
+            &durable,
+            &path_hash,
+            Some(&output_stamp),
+            Operation::Convert,
+            AnalysisIntent::Refresh,
+        ),
+        None
+    );
+    // A file that matches neither the output nor the original binding is new
+    // content at a known path: accept.
+    let unrelated = FileStamp {
+        size: 43,
+        modified_ns: None,
+    };
+    assert_eq!(
+        crate::evaluate_enqueue(
+            &durable,
+            &path_hash,
+            Some(&unrelated),
+            Operation::Convert,
+            AnalysisIntent::ReuseIfFresh,
+        ),
+        None
+    );
+    // An unsettled or pruned transaction has no artifact to answer for.
+    durable.outputs.insert(
+        RunId(9),
+        transaction(
+            OutputState::Ready {
+                staging_identity: identity("out", 42),
+            },
+            Replacement::RetireOriginal,
+        ),
+    );
+    assert_eq!(
+        crate::evaluate_enqueue(
+            &durable,
+            &path_hash,
+            Some(&output_stamp),
+            Operation::Convert,
+            AnalysisIntent::ReuseIfFresh,
+        ),
+        None
+    );
+}
+
+#[test]
+fn enqueue_filters_ineligible_cached_metadata_only_when_fresh() {
+    let (mut durable, path_hash, stamp) = enqueue_fixture(None);
+    {
+        let record = durable
+            .records
+            .get_mut(&ContentKey("enqueue-content".to_owned()))
+            .expect("observed record");
+        record.metadata.codec = VideoCodec::Av1;
+        record.metadata.container = MediaContainer::Matroska;
+    }
+    assert_eq!(
+        crate::evaluate_enqueue(
+            &durable,
+            &path_hash,
+            Some(&stamp),
+            Operation::Convert,
+            AnalysisIntent::ReuseIfFresh,
+        ),
+        Some(SkipReason::AlreadyAv1Matroska)
+    );
+    // Media-fact skips ignore intent: refreshing cannot make a file eligible.
+    assert_eq!(
+        crate::evaluate_enqueue(
+            &durable,
+            &path_hash,
+            Some(&stamp),
+            Operation::Convert,
+            AnalysisIntent::Refresh,
+        ),
+        Some(SkipReason::AlreadyAv1Matroska)
+    );
+    // Stale stamp: the cached metadata no longer answers for the file.
+    let changed = FileStamp {
+        size: stamp.size + 1,
+        modified_ns: stamp.modified_ns,
+    };
+    assert_eq!(
+        crate::evaluate_enqueue(
+            &durable,
+            &path_hash,
+            Some(&changed),
+            Operation::Convert,
+            AnalysisIntent::ReuseIfFresh,
+        ),
+        None
+    );
+    // Av1 outside Matroska is remux-eligible work, not a skip.
+    {
+        let record = durable
+            .records
+            .get_mut(&ContentKey("enqueue-content".to_owned()))
+            .expect("observed record");
+        record.metadata.container = MediaContainer::Other("mp4".to_owned());
+    }
+    assert_eq!(
+        crate::evaluate_enqueue(
+            &durable,
+            &path_hash,
+            Some(&stamp),
+            Operation::Convert,
+            AnalysisIntent::ReuseIfFresh,
+        ),
+        None
+    );
+}
+
+#[test]
+fn claim_short_circuits_content_with_a_decisive_verdict() {
+    let metadata = media_observation("claim-content").metadata;
+    let mut record = FileRecord::new(metadata.clone());
+    record.verdict = Some(converted_verdict(RunId(4)));
+
+    assert_eq!(
+        select_job_action(
+            Some(&metadata),
+            Some(&record),
+            Operation::Convert,
+            AnalysisIntent::ReuseIfFresh,
+            &execution(),
+        ),
+        JobAction::Skip {
+            reason: SkipReason::ProbableDuplicate {
+                source_run: RunId(4),
+            },
+        }
+    );
+    // Refresh and Analyze both proceed past the verdict.
+    assert_eq!(
+        select_job_action(
+            Some(&metadata),
+            Some(&record),
+            Operation::Convert,
+            AnalysisIntent::Refresh,
+            &execution(),
+        ),
+        JobAction::Encode {
+            selected_analysis: None,
+        }
+    );
+    assert_eq!(
+        select_job_action(
+            Some(&metadata),
+            Some(&record),
+            Operation::Analyze,
+            AnalysisIntent::ReuseIfFresh,
+            &execution(),
+        ),
+        JobAction::Analyze {
+            selected_analysis: None,
+        }
+    );
+    // A media-fact skip outranks the verdict.
+    let mut small = metadata.clone();
+    small.width = 640;
+    small.height = 480;
+    assert_eq!(
+        select_job_action(
+            Some(&small),
+            Some(&record),
+            Operation::Convert,
+            AnalysisIntent::ReuseIfFresh,
+            &execution(),
+        ),
+        JobAction::Skip {
+            reason: SkipReason::LowResolution {
+                pixels: 640 * 480,
+                minimum: crate::MIN_VIDEO_PIXELS,
+            },
+        }
+    );
+    // The verdict outranks the remux branch: re-remuxing already-processed
+    // content is still duplicate work.
+    let mut av1_mp4 = metadata.clone();
+    av1_mp4.codec = VideoCodec::Av1;
+    av1_mp4.container = MediaContainer::Other("mp4".to_owned());
+    assert_eq!(
+        select_job_action(
+            Some(&av1_mp4),
+            Some(&record),
+            Operation::Convert,
+            AnalysisIntent::ReuseIfFresh,
+            &execution(),
+        ),
+        JobAction::Skip {
+            reason: SkipReason::ProbableDuplicate {
+                source_run: RunId(4),
+            },
+        }
+    );
+    record.verdict = None;
+    assert_eq!(
+        select_job_action(
+            Some(&av1_mp4),
+            Some(&record),
+            Operation::Convert,
+            AnalysisIntent::ReuseIfFresh,
+            &execution(),
+        ),
+        JobAction::Remux
+    );
+}
+
+#[test]
+fn claim_not_worthwhile_skip_respects_the_fallback_floor() {
+    let metadata = media_observation("claim-floor").metadata;
+    let mut record = FileRecord::new(metadata.clone());
+    record.verdict = Some(not_worthwhile_verdict(RunId(4)));
+    let execution = execution();
+    assert_eq!(
+        select_job_action(
+            Some(&metadata),
+            Some(&record),
+            Operation::Convert,
+            AnalysisIntent::ReuseIfFresh,
+            &execution,
+        ),
+        JobAction::Skip {
+            reason: SkipReason::NotWorthwhile {
+                source_run: RunId(4),
+            },
+        }
+    );
+    // A ladder reaching below the decided floor is untried ground.
+    let mut deeper = execution.clone();
+    deeper.fallback_floor = VmafTarget(execution.fallback_floor.0 - 1);
+    assert_eq!(
+        select_job_action(
+            Some(&metadata),
+            Some(&record),
+            Operation::Convert,
+            AnalysisIntent::ReuseIfFresh,
+            &deeper,
+        ),
+        JobAction::Encode {
+            selected_analysis: None,
+        }
+    );
+}
+
+#[test]
+fn enqueue_time_skip_reasons_are_never_terminal_outcomes() {
+    let spec = crate::JobSpec {
+        item_id: QueueItemId(1),
+        claim_id: ClaimId(2),
+        run_id: RunId(3),
+        input: PathBuf::from("video.mkv"),
+        content_key: None,
+        operation: Operation::Convert,
+        intent: AnalysisIntent::ReuseIfFresh,
+        output_target: OutputTarget::Replace,
+        execution: execution(),
+        action: JobAction::Encode {
+            selected_analysis: None,
+        },
+    };
+    let run = crate::ConversionRun {
+        spec,
+        analysis: None,
+        output_content_key: None,
+        outcome: None,
+        started_at: None,
+        finished_at: None,
+        phase_spans: Vec::new(),
+    };
+    for reason in [
+        SkipReason::AlreadyQueued,
+        SkipReason::AlreadyConverted {
+            source_run: RunId(9),
+        },
+    ] {
+        assert!(
+            validate_terminal(
+                &run,
+                None,
+                &ItemOutcome::Skipped {
+                    reason: reason.clone()
+                }
+            )
+            .is_err(),
+            "{reason:?} must be rejected as a terminal outcome"
+        );
+    }
+}
+
 #[test]
 fn refresh_intent_forces_a_new_search_over_a_qualifying_cached_analysis() {
     let mut record = FileRecord::new(media_observation("refresh-content").metadata);

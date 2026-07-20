@@ -796,7 +796,10 @@ pub(crate) fn validate_terminal(
             }
         }
         ItemOutcome::Skipped { reason } => match reason {
-            crate::SkipReason::LowResolution { .. } | crate::SkipReason::AlreadyAv1Matroska => {
+            crate::SkipReason::LowResolution { .. }
+            | crate::SkipReason::AlreadyAv1Matroska
+            | crate::SkipReason::NotWorthwhile { .. }
+            | crate::SkipReason::ProbableDuplicate { .. } => {
                 if !matches!(&run.spec.action, JobAction::Skip { reason: expected } if expected == reason)
                     || run.analysis.is_some()
                     || output.is_some()
@@ -808,6 +811,9 @@ pub(crate) fn validate_terminal(
                 if !run.spec.action.produces_output() || output.is_some() {
                     return Err("output-exists skip is incompatible with the run state");
                 }
+            }
+            crate::SkipReason::AlreadyConverted { .. } | crate::SkipReason::AlreadyQueued => {
+                return Err("enqueue-time skip reasons are never terminal outcomes");
             }
         },
         ItemOutcome::Failed(facts) => {

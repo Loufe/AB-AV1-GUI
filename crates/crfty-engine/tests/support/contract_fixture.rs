@@ -32,6 +32,14 @@ use crfty_engine::ab_av1::{
 use crfty_engine::coordinator::{EngineConfig, EngineRuntime, ToolsConfig};
 use crfty_engine::vendor::discovery::{CurrentTools, DiscoveredTools, MediaTools};
 
+/// Distinct bytes for a distinct piece of media. The fake tools key their
+/// behavior off filenames, but content identity hashes real bytes: a
+/// byte-identical copy shares its record, and verdict-aware claim policy
+/// skips already-decided content as a duplicate.
+fn write_distinct_media(path: &Path, seed: u8) -> io::Result<()> {
+    fs::write(path, vec![seed; 8192])
+}
+
 fn fixed_tools(tools: MediaTools) -> ToolsConfig {
     ToolsConfig::Fixed(DiscoveredTools::Available(CurrentTools {
         media: tools,
@@ -211,7 +219,7 @@ fn run_coordinator_contract(
         output_target: OutputTarget::Replace,
     })?)?;
     let incompatible_input = output_dir.join("incompatible-av1.mp4");
-    fs::copy(&input, &incompatible_input)?;
+    write_distinct_media(&incompatible_input, 2)?;
     accepted_reply(engine.commands.submit_queue(QueueCommand::Add {
         item_id: QueueItemId(4),
         input: incompatible_input,
@@ -231,7 +239,7 @@ fn run_coordinator_contract(
         },
     })?)?;
     let remux_input = output_dir.join("already-av1.mp4");
-    fs::copy(&input, &remux_input)?;
+    write_distinct_media(&remux_input, 3)?;
     accepted_reply(engine.commands.submit_queue(QueueCommand::Add {
         item_id: QueueItemId(3),
         input: remux_input.clone(),
@@ -326,11 +334,13 @@ fn run_coordinator_contract(
         return Err(format!("coordinator did not promote {}", expected.display()).into());
     }
     wait_for_idle(&engine)?;
+    // Re-converting content that already carries a Converted verdict needs
+    // the Refresh escape hatch — ReuseIfFresh would skip it as a duplicate.
     accepted_reply(engine.commands.submit_queue(QueueCommand::Add {
         item_id: QueueItemId(5),
         input: input.clone(),
         operation: Operation::Convert,
-        intent: AnalysisIntent::ReuseIfFresh,
+        intent: AnalysisIntent::Refresh,
         output_target: OutputTarget::Suffix {
             suffix: "_cancelled".to_owned(),
         },
@@ -408,8 +418,10 @@ fn run_ladder_contract(
         },
     })?;
     let _snapshot = engine.events.recv()?;
+    // Distinct content: item 1's conversion writes a Converted verdict for
+    // its content, which must not shadow items 2 and 3.
     let search_input = output_dir.join("search-ladder.mkv");
-    fs::copy(&input, &search_input)?;
+    write_distinct_media(&search_input, 2)?;
     let encode_input = output_dir.join("encode-ladder.mkv");
     fs::copy(&input, &encode_input)?;
     // 1: the hardware search fails; the ladder records a software analysis

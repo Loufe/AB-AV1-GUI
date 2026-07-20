@@ -51,8 +51,9 @@ pub use output::{
     OutputTransaction, RecoveryConflict, Replacement, recover_output,
 };
 pub use policy::{
-    Eligibility, MIN_VIDEO_PIXELS, SkipReason, evaluate_eligibility, permitted_profiles,
-    select_analysis, select_job_action, verdict_applies,
+    Eligibility, MIN_VIDEO_PIXELS, SkipReason, evaluate_eligibility, evaluate_enqueue,
+    permitted_profiles, select_analysis, select_job_action, settled_output_identity, stamp_matches,
+    verdict_applies,
 };
 pub use reducer::{
     Applied, Command, Effect, EphemeralDelta, QueueCommand, Reply, SessionCommand, SettingsCommand,

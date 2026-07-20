@@ -671,10 +671,38 @@ export type ShellEvent_Serialize = {
 	payload: StreamPayload_Serialize,
 };
 
-export type SkipReason = { LowResolution: {
+export type SkipReason = ({ LowResolution: {
 	pixels: number,
 	minimum: number,
-} } | "AlreadyAv1Matroska" | "OutputExists";
+} }) & { AlreadyConverted?: never; NotWorthwhile?: never; ProbableDuplicate?: never } | "AlreadyAv1Matroska" | "OutputExists" | 
+/**
+ *  Enqueue-time only: the file at the candidate path is recognized by
+ *  stamp as the settled output of `source_run` (replace-mode output at
+ *  the input path).
+ */
+({ AlreadyConverted: {
+	source_run: RunId,
+} }) & { LowResolution?: never; NotWorthwhile?: never; ProbableDuplicate?: never } | 
+/**
+ *  The content's standing verdict says a search already bottomed out at
+ *  (or below) the floor this request would try.
+ */
+({ NotWorthwhile: {
+	source_run: RunId,
+} }) & { AlreadyConverted?: never; LowResolution?: never; ProbableDuplicate?: never } | 
+/**
+ *  Claim-time: the observed content carries a Converted/Remuxed verdict —
+ *  this file is bytewise identical to content that was already processed,
+ *  wherever it now lives.
+ */
+({ ProbableDuplicate: {
+	source_run: RunId,
+} }) & { AlreadyConverted?: never; LowResolution?: never; NotWorthwhile?: never } | 
+/**
+ *  Add-summary only: the path is already queued and not finished. Never a
+ *  terminal outcome.
+ */
+"AlreadyQueued";
 
 /**  Core-owned mirror of the adapter's per-stream output byte accounting. */
 export type StreamByteSizes = {
