@@ -51,16 +51,16 @@ pub use policy::{
 };
 pub use reducer::{
     Applied, Command, Effect, EphemeralDelta, QueueCommand, Reply, SessionCommand, SettingsCommand,
-    SystemCommand, WorkerCommand, apply,
+    SystemCommand, WorkerCommand, apply, settled_outcome,
 };
 pub use settings::{
     DEFAULT_OUTPUT_SUFFIX, DefaultOutputMode, OutputSettings, PrivacySettings, Settings,
     VideoExtension,
 };
 pub use state::{
-    AppSnapshot, AppState, ClaimId, ConfigDelta, DurableDelta, DurableState, ItemOutcome,
-    JobProgress, JournalSequence, MediaTool, QueueItem, QueueItemId, QueueItemState, RunId,
-    SessionState, Telemetry, ToolAvailability, fold, fold_config,
+    AppSnapshot, AppState, ClaimId, ConfigDelta, ConversionRun, DurableDelta, DurableState,
+    ItemOutcome, JobProgress, JournalSequence, MediaTool, QueueItem, QueueItemId, QueueItemState,
+    RunId, SessionState, Telemetry, ToolAvailability, fold, fold_config,
 };
 
 #[cfg(test)]
