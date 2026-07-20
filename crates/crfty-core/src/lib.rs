@@ -16,6 +16,7 @@ mod journal;
 mod media;
 mod output;
 mod policy;
+mod projection;
 mod reducer;
 mod settings;
 mod state;
@@ -53,6 +54,11 @@ pub use output::{
 pub use policy::{
     Eligibility, MIN_VIDEO_PIXELS, SkipReason, evaluate_eligibility, permitted_profiles,
     select_analysis, select_job_action, verdict_applies,
+};
+pub use projection::{
+    CodecCount, CumulativeSavingsPoint, HistoryRow, HistoryStatus, RunTotals, StatFact,
+    StatFactKind, StatisticsPayload, ValueSpread, collect_stat_facts, history_rows,
+    local_epoch_day, statistics,
 };
 pub use reducer::{
     Applied, Command, Effect, EphemeralDelta, QueueCommand, Reply, SessionCommand, SettingsCommand,
