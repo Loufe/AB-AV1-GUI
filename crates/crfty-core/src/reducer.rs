@@ -1,5 +1,7 @@
 use std::path::PathBuf;
 
+use serde::Serialize;
+
 use crate::state::ConversionRun;
 use crate::{
     AnalysisResult, AppState, ClaimId, ClaimedJob, ConfigDelta, DecodeMode, DecodePreference,
@@ -94,7 +96,7 @@ pub enum SystemCommand {
     Shutdown,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, specta::Type)]
 pub enum EphemeralDelta {
     SessionChanged(SessionState),
     Telemetry(Telemetry),

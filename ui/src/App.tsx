@@ -7,8 +7,11 @@ import type { DevViewId, ViewId } from "@/components/layout/views";
 import { AnalysisView } from "@/features/analysis";
 import { HistoryView } from "@/features/history";
 import { QueueView } from "@/features/queue";
-import { SettingsView } from "@/features/settings";
+import { SettingsProvider, SettingsView } from "@/features/settings";
 import { StatisticsView } from "@/features/statistics";
+import { fetchAppVersion, isTauri, subscribeStream } from "@/lib/ipc";
+import type { Settings } from "@/lib/bindings";
+import { foldSettings } from "@/lib/settings-stream";
 import { getTheme, setTheme, watchSystemTheme, type Theme } from "@/lib/theme";
 
 const THEME_ORDER: Theme[] = ["system", "light", "dark"];
@@ -48,8 +51,29 @@ function isDevView(view: AppView): view is DevViewId {
 export default function App() {
   const [activeView, setActiveView] = useState<AppView>("queue");
   const [theme, setThemeState] = useState<Theme>(getTheme);
+  const [appVersion, setAppVersion] = useState<string | null>(null);
+  const [settings, setSettings] = useState<Settings | null>(null);
 
   useEffect(() => watchSystemTheme(), []);
+
+  // IPC smoke wiring: under Tauri, open the event stream and show the shell
+  // version. The fold reducer that consumes these events is the next
+  // workstream; until then deltas land in the console.
+  useEffect(() => {
+    if (!isTauri()) {
+      return;
+    }
+    subscribeStream((event) => {
+      setSettings((current) => foldSettings(current, event.payload));
+    }).catch((error: unknown) => {
+      console.error("failed to subscribe to the shell event stream", error);
+    });
+    fetchAppVersion()
+      .then(setAppVersion)
+      .catch((error: unknown) => {
+        console.error("failed to fetch the shell version", error);
+      });
+  }, []);
 
   const cycleTheme = () => {
     const next = THEME_ORDER[(THEME_ORDER.indexOf(theme) + 1) % THEME_ORDER.length];
@@ -58,37 +82,40 @@ export default function App() {
   };
 
   return (
-    <div className="flex h-full">
-      <Sidebar
-        activeView={activeView}
-        onSelectView={setActiveView}
-        theme={theme}
-        onCycleTheme={cycleTheme}
-        showDevViews={DEV_COMPONENTS !== null}
-      />
-      <main className="flex-1 overflow-y-auto">
-        {isDevView(activeView)
-          ? DEV_COMPONENTS !== null &&
-            (() => {
-              const { label, Component } = DEV_COMPONENTS[activeView];
-              return (
-                <ErrorBoundary key={activeView} label={label}>
-                  <Suspense fallback={null}>
+    <SettingsProvider settings={settings}>
+      <div className="flex h-full">
+        <Sidebar
+          activeView={activeView}
+          onSelectView={setActiveView}
+          theme={theme}
+          onCycleTheme={cycleTheme}
+          showDevViews={DEV_COMPONENTS !== null}
+          appVersion={appVersion}
+        />
+        <main className="flex-1 overflow-y-auto">
+          {isDevView(activeView)
+            ? DEV_COMPONENTS !== null &&
+              (() => {
+                const { label, Component } = DEV_COMPONENTS[activeView];
+                return (
+                  <ErrorBoundary key={activeView} label={label}>
+                    <Suspense fallback={null}>
+                      <Component />
+                    </Suspense>
+                  </ErrorBoundary>
+                );
+              })()
+            : (() => {
+                const { label, Component } = VIEW_COMPONENTS[activeView];
+                return (
+                  <ErrorBoundary key={activeView} label={label}>
                     <Component />
-                  </Suspense>
-                </ErrorBoundary>
-              );
-            })()
-          : (() => {
-              const { label, Component } = VIEW_COMPONENTS[activeView];
-              return (
-                <ErrorBoundary key={activeView} label={label}>
-                  <Component />
-                </ErrorBoundary>
-              );
-            })()}
-      </main>
-      <Toaster position="bottom-right" theme={theme} />
-    </div>
+                  </ErrorBoundary>
+                );
+              })()}
+        </main>
+        <Toaster position="bottom-right" theme={theme} />
+      </div>
+    </SettingsProvider>
   );
 }

@@ -4,7 +4,9 @@ use serde::{Deserialize, Serialize};
 
 pub const DEFAULT_OUTPUT_SUFFIX: &str = "_av1";
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize, specta::Type,
+)]
 #[serde(rename_all = "snake_case")]
 pub enum VideoExtension {
     Mp4,
@@ -13,7 +15,7 @@ pub enum VideoExtension {
     Wmv,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, specta::Type)]
 #[serde(rename_all = "snake_case")]
 pub enum DefaultOutputMode {
     Replace,
@@ -21,7 +23,7 @@ pub enum DefaultOutputMode {
     SeparateFolder,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, specta::Type)]
 #[serde(deny_unknown_fields)]
 pub struct OutputSettings {
     pub default_mode: DefaultOutputMode,
@@ -41,14 +43,14 @@ impl Default for OutputSettings {
     }
 }
 
-#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, specta::Type)]
 #[serde(deny_unknown_fields)]
 pub struct PrivacySettings {
     pub anonymize_logs: bool,
     pub anonymize_history: bool,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, specta::Type)]
 #[serde(deny_unknown_fields)]
 pub struct Settings {
     pub last_input_folder: Option<PathBuf>,

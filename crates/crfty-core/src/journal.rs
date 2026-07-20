@@ -7,7 +7,7 @@ use crate::{
 
 pub const JOURNAL_SCHEMA_VERSION: u32 = 5;
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, specta::Type)]
 pub struct JournalEnvelope {
     pub schema_version: u32,
     pub sequence: JournalSequence,

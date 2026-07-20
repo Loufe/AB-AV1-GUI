@@ -1,0 +1,28 @@
+[package]
+name = "crfty-shell"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+publish.workspace = true
+
+[lib]
+name = "crfty_shell"
+crate-type = ["lib"]
+
+[build-dependencies]
+tauri-build = { version = "=2.6.3", features = [] }
+
+[dependencies]
+crfty-core = { path = "../crfty-core", version = "=3.0.0-alpha.0" }
+crfty-engine = { path = "../crfty-engine", version = "=3.0.0-alpha.0" }
+serde = { version = "=1.0.229", features = ["derive"] }
+specta = { version = "=2.0.0-rc.25", features = ["derive"] }
+tauri = { version = "=2.11.5", features = ["specta"] }
+tauri-specta = { version = "=2.0.0-rc.25", features = ["derive", "typescript"] }
+
+[dev-dependencies]
+specta-typescript = "=0.0.12"
+
+[lints]
+workspace = true

@@ -15,6 +15,9 @@ Thumbs.db
 *.tmp
 *.bak
 
-# Frontend artifacts (future Tauri shell)
+# Frontend artifacts
 /ui/node_modules/
 /ui/dist/
+
+# Tauri generated capability schemas
+/crates/crfty-shell/gen/

@@ -7,9 +7,14 @@ use crate::{
 
 pub const MIN_VIDEO_PIXELS: u64 = 921_600;
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, specta::Type)]
 pub enum SkipReason {
-    LowResolution { pixels: u64, minimum: u64 },
+    LowResolution {
+        #[specta(type = crate::JsNumber)]
+        pixels: u64,
+        #[specta(type = crate::JsNumber)]
+        minimum: u64,
+    },
     AlreadyAv1Matroska,
     OutputExists,
 }
