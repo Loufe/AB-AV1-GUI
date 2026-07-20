@@ -84,3 +84,18 @@ jobs:
           CRFTY_FFMPEG: ${{ github.workspace }}/.ci/ffmpeg/bin/ffmpeg.exe
           CRFTY_FFPROBE: ${{ github.workspace }}/.ci/ffmpeg/bin/ffprobe.exe
         run: cargo test -p crfty-engine --all-features --locked --test ab_av1_real_media -- --ignored --nocapture
+      # The vendor-native contract copies these binaries into a managed-install
+      # layout under a spaces + Unicode directory and runs discovery + a full
+      # convert from there; the env vars only locate the source binaries.
+      - name: Run vendor-native contract on Linux
+        if: runner.os == 'Linux'
+        env:
+          CRFTY_FFMPEG: ${{ github.workspace }}/.ci/ffmpeg/bin/ffmpeg
+          CRFTY_FFPROBE: ${{ github.workspace }}/.ci/ffmpeg/bin/ffprobe
+        run: cargo test -p crfty-engine --all-features --locked --test vendor_native -- --ignored --nocapture
+      - name: Run vendor-native contract on Windows
+        if: runner.os == 'Windows'
+        env:
+          CRFTY_FFMPEG: ${{ github.workspace }}/.ci/ffmpeg/bin/ffmpeg.exe
+          CRFTY_FFPROBE: ${{ github.workspace }}/.ci/ffmpeg/bin/ffprobe.exe
+        run: cargo test -p crfty-engine --all-features --locked --test vendor_native -- --ignored --nocapture
