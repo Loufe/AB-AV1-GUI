@@ -1,9 +1,10 @@
 use std::{
+    ffi::OsString,
     fmt,
     fs::{File, OpenOptions},
     io::{self, Read, Seek, SeekFrom, Write},
     path::{Path, PathBuf},
-    time::Duration,
+    time::{Duration, SystemTime, UNIX_EPOCH},
 };
 
 use crfty_core::{
@@ -228,6 +229,62 @@ impl JournalWriter {
         self.bytes_len = u64::try_from(encoded.len()).unwrap_or(u64::MAX);
         Ok(())
     }
+
+    /// Recover from acknowledged corruption: archive the corrupt journal to a
+    /// `<name>.corrupt-<timestamp>` sibling, then compact the valid-prefix
+    /// state into a fresh generation. Returns the archive path.
+    ///
+    /// The archive is a copy, never a rename. If the compaction that follows
+    /// fails, the corrupt original must still be at the journal path —
+    /// `compact`'s failure path reopens that path with create semantics, so a
+    /// rename would have it materialize an *empty* journal, which is data
+    /// loss. Copy-then-replace is also crash-safe: a crash after the copy
+    /// leaves the corrupt journal in place, the next start degrades again,
+    /// and the acknowledgement is simply retried.
+    pub fn recover_corrupt(
+        &mut self,
+        state: &DurableState,
+        app_version: &str,
+        recovered_at: UnixMillis,
+    ) -> Result<PathBuf, JournalError> {
+        let archive = corrupt_archive_path(&self.path)?;
+        let mut source = File::open(&self.path)
+            .map_err(|error| JournalError::new("failed to open journal for archival", error))?;
+        let mut destination = File::create(&archive)
+            .map_err(|error| JournalError::new("failed to create corruption archive", error))?;
+        io::copy(&mut source, &mut destination)
+            .map_err(|error| JournalError::new("failed to copy corruption archive", error))?;
+        destination.sync_all().map_err(|error| {
+            JournalError::new("failed to synchronize corruption archive", error)
+        })?;
+        sync_parent(&self.path)
+            .map_err(|error| JournalError::new("failed to synchronize journal directory", error))?;
+        self.compact(state, app_version, recovered_at)?;
+        Ok(archive)
+    }
+}
+
+/// Mirror of the config store's `.invalid-<nanos>` quarantine naming: the
+/// archive sits beside the journal, unmistakably stamped, never overwritten.
+fn corrupt_archive_path(path: &Path) -> Result<PathBuf, JournalError> {
+    let file_name = path.file_name().ok_or_else(|| {
+        JournalError::new(
+            "journal path has no file name",
+            io::Error::new(io::ErrorKind::InvalidInput, "missing file name"),
+        )
+    })?;
+    let timestamp = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map_err(|error| {
+            JournalError::new(
+                "system clock is before the Unix epoch",
+                io::Error::other(error),
+            )
+        })?
+        .as_nanos();
+    let mut archive_name = OsString::from(file_name);
+    archive_name.push(format!(".corrupt-{timestamp}"));
+    Ok(path.with_file_name(archive_name))
 }
 
 fn open_append(path: &Path) -> io::Result<File> {

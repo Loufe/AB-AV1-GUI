@@ -6,6 +6,7 @@ import { useStore } from "zustand";
 import { createStore } from "zustand/vanilla";
 
 import type {
+  CorruptionReport,
   DurableState_Deserialize,
   SessionState,
   Settings,
@@ -15,7 +16,13 @@ import { emptyDurableState } from "@/lib/store/fold";
 
 /** Standing engine health from the stream; cleared by each snapshot. */
 export interface Health {
-  degraded: string | null;
+  /**
+   * Journal corruption report while mutation is rejected; its signature is
+   * what an acknowledgement must echo back. Null when healthy or recovered.
+   */
+  degraded: CorruptionReport | null;
+  /** Engine never started; no commands can run. */
+  unavailable: string | null;
   fatal: string | null;
   /** Lock path held by the running instance when this one is a duplicate. */
   secondInstance: string | null;
@@ -40,7 +47,7 @@ export function initialAppState(): AppStoreState {
     durable: emptyDurableState(),
     settings: null,
     session: "Idle",
-    health: { degraded: null, fatal: null, secondInstance: null },
+    health: { degraded: null, unavailable: null, fatal: null, secondInstance: null },
     tools: null,
   };
 }

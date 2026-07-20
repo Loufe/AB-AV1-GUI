@@ -1,3 +1,4 @@
+use blake2::{Blake2b512, Digest};
 use serde::{Deserialize, Serialize};
 
 use crate::{
@@ -107,10 +108,47 @@ struct JournalSnapshotRef<'a> {
     state: &'a DurableState,
 }
 
+/// Identity of a journal's unreadable suffix: everything past the last
+/// replayable record. An acknowledgement quotes this signature back, so
+/// recovery only ever discards the exact bytes the operator was shown — a
+/// journal that changed since the report was produced yields a different
+/// signature and the acknowledgement is rejected.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, specta::Type)]
+pub struct CorruptionSignature {
+    /// Byte length of the unreadable suffix.
+    #[specta(type = crate::JsNumber)]
+    pub tail_len: u64,
+    /// Hex BLAKE2b-512 digest of the unreadable suffix bytes.
+    pub digest: String,
+}
+
+/// Digest the unreadable suffix of a journal. The tail is a byte range, not a
+/// record list — corruption means the records could not be parsed, so bytes
+/// are the only stable identity the suffix has.
+#[must_use]
+pub fn corruption_signature(tail: &[u8]) -> CorruptionSignature {
+    let digest = Blake2b512::digest(tail);
+    CorruptionSignature {
+        tail_len: u64::try_from(tail.len()).unwrap_or(u64::MAX),
+        digest: digest.iter().map(|byte| format!("{byte:02x}")).collect(),
+    }
+}
+
+/// The degraded surface shown to the operator: why replay stopped, and the
+/// identity of the unreadable bytes an acknowledgement would discard.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, specta::Type)]
+pub struct CorruptionReport {
+    pub reason: String,
+    pub signature: CorruptionSignature,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct JournalCorruption {
     pub offset: usize,
     pub reason: String,
+    /// Signature of `bytes[offset..]` — the whole unreadable suffix,
+    /// including any torn tail behind the corrupt record.
+    pub signature: CorruptionSignature,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -164,7 +202,7 @@ pub fn replay(bytes: &[u8]) -> JournalReplay {
     let mut state = DurableState::default();
     let mut expected = 0_u64;
     let mut offset = 0_usize;
-    let mut corruption = None;
+    let mut corruption: Option<String> = None;
     let mut ignored_torn_tail = false;
 
     for segment in bytes.split_inclusive(|byte| *byte == b'\n') {
@@ -175,36 +213,27 @@ pub fn replay(bytes: &[u8]) -> JournalReplay {
         }
         let line = segment.strip_suffix(b"\n").unwrap_or(segment);
         if line.is_empty() {
-            corruption = Some(JournalCorruption {
-                offset,
-                reason: "empty journal record".to_owned(),
-            });
+            corruption = Some("empty journal record".to_owned());
             break;
         }
         match serde_json::from_slice::<JournalLineVersion>(line) {
             Ok(probe) if probe.schema_version != JOURNAL_SCHEMA_VERSION => {
-                corruption = Some(JournalCorruption {
-                    offset,
-                    reason: format!("unsupported journal schema {}", probe.schema_version),
-                });
+                corruption = Some(format!(
+                    "unsupported journal schema {}",
+                    probe.schema_version
+                ));
                 break;
             }
             Ok(_current) => {}
             Err(error) => {
-                corruption = Some(JournalCorruption {
-                    offset,
-                    reason: format!("invalid journal record: {error}"),
-                });
+                corruption = Some(format!("invalid journal record: {error}"));
                 break;
             }
         }
         let parsed = match serde_json::from_slice::<JournalLine>(line) {
             Ok(parsed) => parsed,
             Err(error) => {
-                corruption = Some(JournalCorruption {
-                    offset,
-                    reason: format!("invalid journal record: {error}"),
-                });
+                corruption = Some(format!("invalid journal record: {error}"));
                 break;
             }
         };
@@ -214,10 +243,7 @@ pub fn replay(bytes: &[u8]) -> JournalReplay {
                 // compacted journal; one appearing later means the file was
                 // spliced or overwritten mid-stream.
                 if offset != 0 {
-                    corruption = Some(JournalCorruption {
-                        offset,
-                        reason: "snapshot record after journal head".to_owned(),
-                    });
+                    corruption = Some("snapshot record after journal head".to_owned());
                     break;
                 }
                 state = snapshot.state;
@@ -225,29 +251,20 @@ pub fn replay(bytes: &[u8]) -> JournalReplay {
             }
             JournalRecord::Deltas(envelope) => {
                 if envelope.sequence != JournalSequence(expected) {
-                    corruption = Some(JournalCorruption {
-                        offset,
-                        reason: format!(
-                            "expected journal sequence {expected}, found {}",
-                            envelope.sequence.0
-                        ),
-                    });
+                    corruption = Some(format!(
+                        "expected journal sequence {expected}, found {}",
+                        envelope.sequence.0
+                    ));
                     break;
                 }
                 if envelope.deltas.is_empty() {
-                    corruption = Some(JournalCorruption {
-                        offset,
-                        reason: "empty journal batch".to_owned(),
-                    });
+                    corruption = Some("empty journal batch".to_owned());
                     break;
                 }
                 let mut candidate = state.clone();
                 for delta in &envelope.deltas {
                     if let Err(reason) = validate_replayed_delta(&candidate, delta) {
-                        corruption = Some(JournalCorruption {
-                            offset,
-                            reason: format!("invalid durable transition: {reason}"),
-                        });
+                        corruption = Some(format!("invalid durable transition: {reason}"));
                         break;
                     }
                     fold(&mut candidate, delta);
@@ -259,10 +276,7 @@ pub fn replay(bytes: &[u8]) -> JournalReplay {
                 expected = match expected.checked_add(1) {
                     Some(next) => next,
                     None => {
-                        corruption = Some(JournalCorruption {
-                            offset,
-                            reason: "journal sequence overflow".to_owned(),
-                        });
+                        corruption = Some("journal sequence overflow".to_owned());
                         break;
                     }
                 };
@@ -270,6 +284,16 @@ pub fn replay(bytes: &[u8]) -> JournalReplay {
         }
         offset += segment.len();
     }
+
+    // The signature covers the whole unreadable suffix in one digest: the
+    // records inside it are by definition unparseable, so the byte range is
+    // the only identity it has. A torn tail alone is not corruption and gets
+    // no signature — it is auto-truncated on reopen.
+    let corruption = corruption.map(|reason| JournalCorruption {
+        offset,
+        reason,
+        signature: corruption_signature(bytes.get(offset..).unwrap_or_default()),
+    });
 
     JournalReplay {
         state,

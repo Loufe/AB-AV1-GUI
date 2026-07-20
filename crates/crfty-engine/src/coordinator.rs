@@ -12,13 +12,13 @@ use std::{
 
 use crfty_core::{
     AnalysisAttempt, AnalysisResult, AppSnapshot, CRF_FIXED_SCALE, ClaimId, ClaimedJob, Command,
-    CompletionEvidence, ConflictKind, Crf, DecodeMode, DurableDelta, DurableState, DurationMs,
-    Effect, ExecutionSettings, FailureFacts, FailureKind, ItemOutcome, JobAction, JobPhase,
-    JobProgress, MAX_PERCENT_BASIS_POINTS, MAX_VMAF_SCORE, OutputDelta, OutputState, OutputTarget,
-    OutputTransaction, PERCENT_BASIS_POINTS_SCALE, PhaseSpan, QueueCommand, QueueItemState,
-    Replacement, Reply, RunId, SearchMeasurement, SessionCommand, SettingsCommand, SkipReason,
-    StreamByteSizes, SystemCommand, Telemetry, UnixMillis, VMAF_SCORE_FIXED_SCALE, VmafScore,
-    VmafTarget, WorkerCommand, fold,
+    CompletionEvidence, ConflictKind, CorruptionSignature, Crf, DecodeMode, DurableDelta,
+    DurableState, DurationMs, Effect, ExecutionSettings, FailureFacts, FailureKind, ItemOutcome,
+    JobAction, JobPhase, JobProgress, MAX_PERCENT_BASIS_POINTS, MAX_VMAF_SCORE, OutputDelta,
+    OutputState, OutputTarget, OutputTransaction, PERCENT_BASIS_POINTS_SCALE, PhaseSpan,
+    QueueCommand, QueueItemState, Replacement, Reply, RunId, SearchMeasurement, SessionCommand,
+    SettingsCommand, SkipReason, StreamByteSizes, SystemCommand, Telemetry, UnixMillis,
+    VMAF_SCORE_FIXED_SCALE, VmafScore, VmafTarget, WorkerCommand, fold,
 };
 
 const FIRST_RUNTIME_ID: u64 = 1;
@@ -347,6 +347,19 @@ impl UserCommandSender {
         command: SettingsCommand,
     ) -> Result<Reply, crate::driver::SubmitError> {
         self.inner.submit(Command::Settings(command))
+    }
+
+    /// Operator consent to discard the corrupt journal tail identified by
+    /// `signature`. The only `System` command a user surface may submit; the
+    /// driver intercepts it, so it never reaches the reducer.
+    pub fn acknowledge_corruption(
+        &self,
+        signature: CorruptionSignature,
+    ) -> Result<Reply, crate::driver::SubmitError> {
+        self.inner
+            .submit(Command::System(SystemCommand::AcknowledgeCorruption {
+                signature,
+            }))
     }
 }
 

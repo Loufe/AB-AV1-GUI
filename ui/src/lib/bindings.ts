@@ -13,6 +13,12 @@ export const commands = {
 	stopAfterCurrent: () => typedError<null, CommandError>(__TAURI_INVOKE("stop_after_current")),
 	forceStop: () => typedError<null, CommandError>(__TAURI_INVOKE("force_stop")),
 	setSettings: (settings: Settings) => typedError<null, CommandError>(__TAURI_INVOKE("set_settings", { settings })),
+	/**
+	 *  Consent to discard a corrupt journal tail. The signature must echo the
+	 *  one delivered on the `Degraded` payload — the driver rejects anything
+	 *  else, so a stale acknowledgement can never discard fresher bytes.
+	 */
+	acknowledgeCorruption: (signature: CorruptionSignature) => typedError<null, CommandError>(__TAURI_INVOKE("acknowledge_corruption", { signature })),
 };
 
 /* Types */
@@ -156,6 +162,29 @@ export type ConversionRun = {
 	started_at: UnixMillis | null,
 	finished_at: UnixMillis | null,
 	phase_spans: PhaseSpan[],
+};
+
+/**
+ *  The degraded surface shown to the operator: why replay stopped, and the
+ *  identity of the unreadable bytes an acknowledgement would discard.
+ */
+export type CorruptionReport = {
+	reason: string,
+	signature: CorruptionSignature,
+};
+
+/**
+ *  Identity of a journal's unreadable suffix: everything past the last
+ *  replayable record. An acknowledgement quotes this signature back, so
+ *  recovery only ever discards the exact bytes the operator was shown — a
+ *  journal that changed since the report was produced yields a different
+ *  signature and the acknowledgement is rejected.
+ */
+export type CorruptionSignature = {
+	/**  Byte length of the unreadable suffix. */
+	tail_len: number,
+	/**  Hex BLAKE2b-512 digest of the unreadable suffix bytes. */
+	digest: string,
 };
 
 export type Crf = number;
@@ -655,31 +684,63 @@ export type StreamByteSizes = {
 
 export type StreamPayload = StreamPayload_Serialize | StreamPayload_Deserialize;
 
-export type StreamPayload_Deserialize = ({ Snapshot: AppSnapshot_Deserialize }) & { Config?: never; Degraded?: never; Durable?: never; EngineFatal?: never; Ephemeral?: never; SecondInstance?: never } | ({ Durable: DurableDelta_Deserialize }) & { Config?: never; Degraded?: never; EngineFatal?: never; Ephemeral?: never; SecondInstance?: never; Snapshot?: never } | ({ Config: ConfigDelta }) & { Degraded?: never; Durable?: never; EngineFatal?: never; Ephemeral?: never; SecondInstance?: never; Snapshot?: never } | ({ Ephemeral: EphemeralDelta }) & { Config?: never; Degraded?: never; Durable?: never; EngineFatal?: never; SecondInstance?: never; Snapshot?: never } | ({ Degraded: {
+export type StreamPayload_Deserialize = ({ Snapshot: AppSnapshot_Deserialize }) & { Config?: never; Degraded?: never; Durable?: never; EngineFatal?: never; EngineUnavailable?: never; Ephemeral?: never; SecondInstance?: never } | ({ Durable: DurableDelta_Deserialize }) & { Config?: never; Degraded?: never; EngineFatal?: never; EngineUnavailable?: never; Ephemeral?: never; SecondInstance?: never; Snapshot?: never } | ({ Config: ConfigDelta }) & { Degraded?: never; Durable?: never; EngineFatal?: never; EngineUnavailable?: never; Ephemeral?: never; SecondInstance?: never; Snapshot?: never } | ({ Ephemeral: EphemeralDelta }) & { Config?: never; Degraded?: never; Durable?: never; EngineFatal?: never; EngineUnavailable?: never; SecondInstance?: never; Snapshot?: never } | 
+/**
+ *  The journal failed replay validation. Reads keep working over the
+ *  valid prefix; mutation is rejected until the operator acknowledges
+ *  discarding the unreadable tail identified by the report's signature.
+ */
+({ Degraded: CorruptionReport }) & { Config?: never; Durable?: never; EngineFatal?: never; EngineUnavailable?: never; Ephemeral?: never; SecondInstance?: never; Snapshot?: never } | 
+/**
+ *  An acknowledged corruption was archived and compacted away; the
+ *  journal is a fresh healthy generation and mutation is accepted again.
+ */
+"Recovered" | 
+/**
+ *  The engine never started (no data directory, engine start failure);
+ *  there is nothing to acknowledge and no commands can run.
+ */
+({ EngineUnavailable: {
 	reason: string,
-} }) & { Config?: never; Durable?: never; EngineFatal?: never; Ephemeral?: never; SecondInstance?: never; Snapshot?: never } | ({ EngineFatal: {
+} }) & { Config?: never; Degraded?: never; Durable?: never; EngineFatal?: never; Ephemeral?: never; SecondInstance?: never; Snapshot?: never } | ({ EngineFatal: {
 	message: string,
-} }) & { Config?: never; Degraded?: never; Durable?: never; Ephemeral?: never; SecondInstance?: never; Snapshot?: never } | 
+} }) & { Config?: never; Degraded?: never; Durable?: never; EngineUnavailable?: never; Ephemeral?: never; SecondInstance?: never; Snapshot?: never } | 
 /**
  *  Another process holds the engine's data-directory lock: this is a
  *  second instance and the engine refused to start (ADR-008).
  */
 ({ SecondInstance: {
 	lock_path: string,
-} }) & { Config?: never; Degraded?: never; Durable?: never; EngineFatal?: never; Ephemeral?: never; Snapshot?: never };
+} }) & { Config?: never; Degraded?: never; Durable?: never; EngineFatal?: never; EngineUnavailable?: never; Ephemeral?: never; Snapshot?: never };
 
-export type StreamPayload_Serialize = ({ Snapshot: AppSnapshot_Serialize }) & { Config?: never; Degraded?: never; Durable?: never; EngineFatal?: never; Ephemeral?: never; SecondInstance?: never } | ({ Durable: DurableDelta_Serialize }) & { Config?: never; Degraded?: never; EngineFatal?: never; Ephemeral?: never; SecondInstance?: never; Snapshot?: never } | ({ Config: ConfigDelta }) & { Degraded?: never; Durable?: never; EngineFatal?: never; Ephemeral?: never; SecondInstance?: never; Snapshot?: never } | ({ Ephemeral: EphemeralDelta }) & { Config?: never; Degraded?: never; Durable?: never; EngineFatal?: never; SecondInstance?: never; Snapshot?: never } | ({ Degraded: {
+export type StreamPayload_Serialize = ({ Snapshot: AppSnapshot_Serialize }) & { Config?: never; Degraded?: never; Durable?: never; EngineFatal?: never; EngineUnavailable?: never; Ephemeral?: never; SecondInstance?: never } | ({ Durable: DurableDelta_Serialize }) & { Config?: never; Degraded?: never; EngineFatal?: never; EngineUnavailable?: never; Ephemeral?: never; SecondInstance?: never; Snapshot?: never } | ({ Config: ConfigDelta }) & { Degraded?: never; Durable?: never; EngineFatal?: never; EngineUnavailable?: never; Ephemeral?: never; SecondInstance?: never; Snapshot?: never } | ({ Ephemeral: EphemeralDelta }) & { Config?: never; Degraded?: never; Durable?: never; EngineFatal?: never; EngineUnavailable?: never; SecondInstance?: never; Snapshot?: never } | 
+/**
+ *  The journal failed replay validation. Reads keep working over the
+ *  valid prefix; mutation is rejected until the operator acknowledges
+ *  discarding the unreadable tail identified by the report's signature.
+ */
+({ Degraded: CorruptionReport }) & { Config?: never; Durable?: never; EngineFatal?: never; EngineUnavailable?: never; Ephemeral?: never; SecondInstance?: never; Snapshot?: never } | 
+/**
+ *  An acknowledged corruption was archived and compacted away; the
+ *  journal is a fresh healthy generation and mutation is accepted again.
+ */
+"Recovered" | 
+/**
+ *  The engine never started (no data directory, engine start failure);
+ *  there is nothing to acknowledge and no commands can run.
+ */
+({ EngineUnavailable: {
 	reason: string,
-} }) & { Config?: never; Durable?: never; EngineFatal?: never; Ephemeral?: never; SecondInstance?: never; Snapshot?: never } | ({ EngineFatal: {
+} }) & { Config?: never; Degraded?: never; Durable?: never; EngineFatal?: never; Ephemeral?: never; SecondInstance?: never; Snapshot?: never } | ({ EngineFatal: {
 	message: string,
-} }) & { Config?: never; Degraded?: never; Durable?: never; Ephemeral?: never; SecondInstance?: never; Snapshot?: never } | 
+} }) & { Config?: never; Degraded?: never; Durable?: never; EngineUnavailable?: never; Ephemeral?: never; SecondInstance?: never; Snapshot?: never } | 
 /**
  *  Another process holds the engine's data-directory lock: this is a
  *  second instance and the engine refused to start (ADR-008).
  */
 ({ SecondInstance: {
 	lock_path: string,
-} }) & { Config?: never; Degraded?: never; Durable?: never; EngineFatal?: never; Ephemeral?: never; Snapshot?: never };
+} }) & { Config?: never; Degraded?: never; Durable?: never; EngineFatal?: never; EngineUnavailable?: never; Ephemeral?: never; Snapshot?: never };
 
 export type Telemetry = {
 	run_id: RunId,

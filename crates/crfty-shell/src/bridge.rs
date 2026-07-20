@@ -16,9 +16,10 @@ use std::{
 };
 
 use crfty_core::{
-    AnalysisProfile, AppSnapshot, ConfigDelta, DurableDelta, DurableState, EphemeralDelta,
-    ExecutionSettings, QueueCommand, QueueItemId, Reply, RunId, SessionCommand, SessionState,
-    Settings, SettingsCommand, Telemetry, ToolAvailability, ToolRevisions, fold, fold_config,
+    AnalysisProfile, AppSnapshot, ConfigDelta, CorruptionReport, CorruptionSignature, DurableDelta,
+    DurableState, EphemeralDelta, ExecutionSettings, QueueCommand, QueueItemId, Reply, RunId,
+    SessionCommand, SessionState, Settings, SettingsCommand, Telemetry, ToolAvailability,
+    ToolRevisions, fold, fold_config,
 };
 use crfty_engine::{
     coordinator::{EngineConfig, EngineRuntime, UserCommandSender},
@@ -45,7 +46,16 @@ pub enum StreamPayload {
     Durable(DurableDelta),
     Config(ConfigDelta),
     Ephemeral(EphemeralDelta),
-    Degraded {
+    /// The journal failed replay validation. Reads keep working over the
+    /// valid prefix; mutation is rejected until the operator acknowledges
+    /// discarding the unreadable tail identified by the report's signature.
+    Degraded(CorruptionReport),
+    /// An acknowledged corruption was archived and compacted away; the
+    /// journal is a fresh healthy generation and mutation is accepted again.
+    Recovered,
+    /// The engine never started (no data directory, engine start failure);
+    /// there is nothing to acknowledge and no commands can run.
+    EngineUnavailable {
         reason: String,
     },
     EngineFatal {
@@ -80,9 +90,21 @@ impl CommandError {
 #[derive(Debug, Clone)]
 enum Health {
     Ok,
-    Degraded { reason: String },
-    Fatal { message: String },
-    SecondInstance { lock_path: String },
+    /// The engine never started; no command channel exists.
+    Unavailable {
+        reason: String,
+    },
+    /// The engine is running over a corrupt journal; recovery is one
+    /// matching acknowledgement away.
+    Degraded {
+        report: CorruptionReport,
+    },
+    Fatal {
+        message: String,
+    },
+    SecondInstance {
+        lock_path: String,
+    },
 }
 
 struct StreamState {
@@ -146,8 +168,8 @@ impl Bridge {
                     Health::SecondInstance { lock_path } => {
                         eprintln!("another instance holds the data lock at {lock_path}");
                     }
-                    Health::Degraded { reason } => eprintln!("engine unavailable: {reason}"),
-                    Health::Ok | Health::Fatal { .. } => {}
+                    Health::Unavailable { reason } => eprintln!("engine unavailable: {reason}"),
+                    Health::Ok | Health::Degraded { .. } | Health::Fatal { .. } => {}
                 }
                 Self {
                     stream: Arc::new(Mutex::new(StreamState::new(health))),
@@ -160,13 +182,13 @@ impl Bridge {
     }
 
     fn try_start(app: &tauri::AppHandle) -> Result<Self, Health> {
-        let degraded = |reason: String| Health::Degraded { reason };
+        let unavailable = |reason: String| Health::Unavailable { reason };
         let data_dir = app
             .path()
             .app_data_dir()
-            .map_err(|error| degraded(format!("no application data directory: {error}")))?;
+            .map_err(|error| unavailable(format!("no application data directory: {error}")))?;
         std::fs::create_dir_all(&data_dir).map_err(|error| {
-            degraded(format!(
+            unavailable(format!(
                 "failed to create application data directory: {error}"
             ))
         })?;
@@ -191,7 +213,7 @@ impl Bridge {
                     lock_path: lock_path.display().to_string(),
                 }
             }
-            other => Health::Degraded {
+            other => Health::Unavailable {
                 reason: other.to_string(),
             },
         })?;
@@ -203,7 +225,7 @@ impl Bridge {
         std::thread::Builder::new()
             .name("crfty-shell-forwarder".to_owned())
             .spawn(move || forward(events, &forwarder_stream, &forwarder_ids))
-            .map_err(|error| degraded(format!("failed to start stream forwarder: {error}")))?;
+            .map_err(|error| unavailable(format!("failed to start stream forwarder: {error}")))?;
         Ok(Self {
             stream,
             commands: Some(runtime.commands.clone()),
@@ -237,7 +259,10 @@ impl Bridge {
         }
         match stream.health.clone() {
             Health::Ok => {}
-            Health::Degraded { reason } => stream.emit(StreamPayload::Degraded { reason }),
+            Health::Unavailable { reason } => {
+                stream.emit(StreamPayload::EngineUnavailable { reason });
+            }
+            Health::Degraded { report } => stream.emit(StreamPayload::Degraded(report)),
             Health::Fatal { message } => stream.emit(StreamPayload::EngineFatal { message }),
             Health::SecondInstance { lock_path } => {
                 stream.emit(StreamPayload::SecondInstance { lock_path });
@@ -264,11 +289,25 @@ impl Bridge {
         map_reply(commands.submit_settings(SettingsCommand::Set { settings }))
     }
 
+    /// Passes through while degraded by design: acknowledgement is the one
+    /// mutation a corrupt journal accepts, and the driver verifies the
+    /// signature itself.
+    pub fn acknowledge_corruption(
+        &self,
+        signature: CorruptionSignature,
+    ) -> Result<(), CommandError> {
+        let commands = self.commands()?;
+        map_reply(commands.acknowledge_corruption(signature))
+    }
+
     fn commands(&self) -> Result<&UserCommandSender, CommandError> {
         self.commands.as_ref().ok_or_else(|| {
             let stream = lock_stream(&self.stream);
             match &stream.health {
-                Health::Degraded { reason } => CommandError::engine_unavailable(reason.clone()),
+                Health::Unavailable { reason } => CommandError::engine_unavailable(reason.clone()),
+                Health::Degraded { report } => {
+                    CommandError::engine_unavailable(report.reason.clone())
+                }
                 Health::Fatal { message } => CommandError::engine_unavailable(message.clone()),
                 Health::SecondInstance { lock_path } => CommandError::new(
                     "second_instance",
@@ -329,11 +368,17 @@ fn absorb(state: &mut StreamState, event: DriverEvent, next_item_id: &AtomicU64)
         // Effects are instructions to the engine's own supervisor and
         // never cross the IPC boundary (ADR-006).
         DriverEvent::Effect(_) => {}
-        DriverEvent::Degraded { reason } => {
+        DriverEvent::Degraded(report) => {
             state.health = Health::Degraded {
-                reason: reason.clone(),
+                report: report.clone(),
             };
-            state.emit(StreamPayload::Degraded { reason });
+            state.emit(StreamPayload::Degraded(report));
+        }
+        // The stored health must clear too, or a webview subscribing after
+        // the recovery would replay a degraded banner over a healthy journal.
+        DriverEvent::Recovered => {
+            state.health = Health::Ok;
+            state.emit(StreamPayload::Recovered);
         }
         DriverEvent::Fatal { message } => {
             state.health = Health::Fatal {
