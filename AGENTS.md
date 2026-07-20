@@ -76,6 +76,20 @@ update all call sites in the same change, and leave no shims, aliases, fallback
 imports, migrations, or obsolete artifacts. The one-time Python history adoption
 is an explicit product requirement, not general compatibility policy.
 
+## Worktrees
+
+The main checkout stays on `main` — never edit files in it. It is used only for
+read-only inspection, merges, and worktree management.
+
+- Before any file modification, enter a git worktree on a `feature/*`, `fix/*`,
+  or `refactor/*` branch. Canonical location: `.worktrees/<name>` at the repo
+  root (`git worktree add .worktrees/<name> -b <type>/<name>`).
+- Claude Code creates worktrees there automatically via the `WorktreeCreate`
+  hook in `.claude/settings.json`; other agents follow this convention manually.
+- Subagents that write files must use worktree isolation.
+- After merging, remove the worktree (`git worktree remove .worktrees/<name>`)
+  and delete the branch. Don't leave finished worktrees behind.
+
 ## Architecture decisions
 
 ADRs use MADR and live in `docs/adr/`. Accepted ADRs are immutable; supersede them

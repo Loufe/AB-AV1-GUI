@@ -21,3 +21,7 @@ Thumbs.db
 
 # Tauri generated capability schemas
 /crates/crfty-shell/gen/
+
+# AI agent worktrees and local state
+/.worktrees/
+/.claude/plans/
