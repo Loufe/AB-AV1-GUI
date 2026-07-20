@@ -418,6 +418,38 @@ export type FileTimeNs = string;
 
 export type HardwareDecoder = "H264Cuvid" | "H264Qsv" | "HevcCuvid" | "HevcQsv" | "Vp9Cuvid" | "Vp9Qsv" | "Av1Cuvid" | "Av1Qsv";
 
+/**
+ *  One History row per content with something to report. Facts only — units,
+ *  prefixes, and labels are presentation. Width and height are post-rotation.
+ *  Bitrate is derived in views from size and duration, matching the
+ *  [`crate::VideoMeta`] contract.
+ */
+export type HistoryRow = {
+	content_key: ContentKey,
+	status: HistoryStatus,
+	source_run: RunId | null,
+	happened_at: UnixMillis | null,
+	codec: VideoCodec,
+	container: MediaContainer,
+	width: number,
+	height: number,
+	duration_ms: number,
+	audio: AudioCodec[],
+	input_size_bytes: number,
+	output_size_bytes: number | null,
+	vmaf: VmafScore | null,
+	crf: Crf | null,
+};
+
+/**  The current standing of one content in History terms. */
+export type HistoryStatus = "Converted" | "Remuxed" | ({ NotWorthwhile: {
+	requested: VmafTarget,
+	floor: VmafTarget,
+} }) & { Failed?: never } | "Analyzed" | ({ Failed: {
+	kind: FailureKind,
+	message: string,
+} }) & { NotWorthwhile?: never } | "Stopped";
+
 export type ItemOutcome = "Analyzed" | ({ Converted: CompletionEvidence }) & { Failed?: never; NotWorthwhile?: never; Remuxed?: never; Skipped?: never } | ({ Remuxed: CompletionEvidence }) & { Converted?: never; Failed?: never; NotWorthwhile?: never; Skipped?: never } | ({ NotWorthwhile: {
 	attempts: AnalysisAttempt[],
 } }) & { Converted?: never; Failed?: never; Remuxed?: never; Skipped?: never } | "Stopped" | ({ Skipped: {

@@ -32,6 +32,7 @@ export function applyPayload(payload: StreamPayload_Deserialize): void {
       settings,
       health: { degraded: null, unavailable: null, fatal: null, secondInstance: null },
       tools: null,
+      statistics: null,
     }));
     // Telemetry for pre-snapshot runs never gets a TelemetryCleared on this
     // connection; the snapshot is the fresh baseline.
@@ -67,6 +68,13 @@ export function applyPayload(payload: StreamPayload_Deserialize): void {
     if ("ToolsChanged" in delta && delta.ToolsChanged !== undefined) {
       const tools = delta.ToolsChanged;
       appStore.setState((state) => ({ ...state, tools }));
+      return;
+    }
+    if ("Statistics" in delta && delta.Statistics !== undefined) {
+      // Answer to a request_statistics call; never replayed on subscribe,
+      // so the view re-requests after each snapshot.
+      const statistics = delta.Statistics;
+      appStore.setState((state) => ({ ...state, statistics }));
       return;
     }
     progressStore.setState((state) => ({ telemetry: foldTelemetry(state.telemetry, delta) }));
