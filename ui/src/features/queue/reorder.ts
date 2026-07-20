@@ -25,7 +25,9 @@ export function moveRowBefore(
 /**
  * Translates a drop on `targetId` into Move semantics: dragging downward
  * lands after the target, upward lands before it. Returns the `before` id
- * (null = end of queue), or undefined when the drop is a no-op.
+ * (null = end of queue), or undefined when the drop is a no-op. Rows are
+ * forwarded regardless of state; the engine reducer clamps a drop above the
+ * active or a finished row to the first pending slot.
  */
 export function dropToBeforeId(
   rows: QueueRowData[],

@@ -56,4 +56,11 @@ describe("dropToBeforeId", () => {
     expect(dropToBeforeId(ROWS, 2 as QueueItemId, 2 as QueueItemId)).toBeUndefined();
     expect(dropToBeforeId(ROWS, 99 as QueueItemId, 2 as QueueItemId)).toBeUndefined();
   });
+  it("forwards a drop above a frozen row; the engine clamps it to first pending", () => {
+    const frozen = [row(1), row(2), row(3), row(4)];
+    frozen[0].item.state = { Finished: "Stopped" };
+    frozen[1].item.state = { Claimed: { claim_id: 1, run_id: 1 } };
+    expect(dropToBeforeId(frozen, 4 as QueueItemId, 2 as QueueItemId)).toBe(2);
+    expect(dropToBeforeId(frozen, 4 as QueueItemId, 1 as QueueItemId)).toBe(1);
+  });
 });
