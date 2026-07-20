@@ -8,16 +8,22 @@ cache validation based on file size and modification time.
 
 import contextlib
 import dataclasses
-import datetime
 import json
 import logging
 import os
 import threading
 import time
 
-from src.config import DURATION_TOLERANCE_SEC, HISTORY_FILE, MAX_CRF_VALUE, MAX_VMAF_VALUE, RESOLUTION_TOLERANCE_PERCENT
+from src.config import (
+    DURATION_TOLERANCE_SEC,
+    HISTORY_FILE,
+    HISTORY_SCHEMA_VERSION,
+    MAX_CRF_VALUE,
+    MAX_VMAF_VALUE,
+    RESOLUTION_TOLERANCE_PERCENT,
+)
 from src.logging_setup import get_script_directory
-from src.models import AudioStreamInfo, FileRecord, FileStatus, OperationType, VideoMetadata
+from src.models import AudioStreamInfo, FileRecord, FileStatus, OperationType
 from src.privacy import compute_hash, normalize_path
 
 logger = logging.getLogger(__name__)
@@ -110,57 +116,6 @@ def get_history_path() -> str:
     return os.path.join(get_script_directory(), HISTORY_FILE)
 
 
-def create_alias_record(
-    source: FileRecord,
-    prior_first_seen: str | None,
-    file_path: str,
-    path_hash: str,
-    file_size: int,
-    file_mtime: float,
-    meta: VideoMetadata,
-    anonymize: bool,
-) -> FileRecord:
-    """Build a duplicate-path alias record: the source's decided result, re-keyed to this path.
-
-    Status and Layer-2/3 results are mirrored from ``source`` (so lookup_file(file_path)
-    resolves to the same outcome); identity, cache stamps, and Layer-1 metadata are this
-    path's. ``duplicate_of`` keeps it out of the size index and the statistics accessors.
-
-    Args:
-        source: The decided record for the same physical file (status/results mirror it).
-        prior_first_seen: first_seen of any existing record at this path_hash, else None.
-        file_path: The current (duplicate) path.
-        path_hash: Pre-computed hash of file_path.
-        file_size: Current file size in bytes.
-        file_mtime: Current file modification time.
-        meta: Metadata from this file's ffprobe.
-        anonymize: Whether to store the path or None.
-    """
-    now = datetime.datetime.now().isoformat(sep=" ", timespec="seconds")
-    return dataclasses.replace(
-        source,
-        # Identity + cache validation - this path / this file on disk
-        path_hash=path_hash,
-        original_path=file_path if not anonymize else None,
-        filename_hash=compute_filename_hash(file_path),
-        duplicate_of=source.path_hash,
-        file_size_bytes=file_size,
-        file_mtime=file_mtime,
-        # Layer-1 metadata - this file's fresh ffprobe, source as fallback (refreshes a stale source).
-        duration_sec=meta.duration_sec or source.duration_sec,
-        video_codec=meta.video_codec or source.video_codec,
-        width=meta.width or source.width,
-        height=meta.height or source.height,
-        bitrate_kbps=meta.bitrate_kbps or source.bitrate_kbps,
-        audio_streams=list(meta.audio_streams or source.audio_streams or []),
-        # Estimates are meaningless on a decided record; preserve this path's first_seen.
-        estimated_reduction_percent=None,
-        estimated_from_similar=None,
-        first_seen=prior_first_seen or now,
-        last_updated=now,
-    )
-
-
 class HistoryIndex:
     """Thread-safe in-memory index for conversion history.
 
@@ -250,10 +205,9 @@ class HistoryIndex:
                 self._converted_cache = None
                 self._percentiles_cache = None
 
-            # Maintain size index: re-home this path_hash; _add_to_size_index skips
-            # aliases. Removing the OLD record (by its own size) handles an in-place
-            # SCANNED->alias replacement at the same size, which the old size-change-only check
-            # left as a stale entry.
+            # Maintain size index: re-home this path_hash. Removing the OLD record (by
+            # its own size) handles an in-place replacement at the same size, which a
+            # size-change-only check would leave as a stale entry.
             if old_record is not None:
                 self._remove_from_size_index(old_record)
             self._add_to_size_index(record)
@@ -262,15 +216,8 @@ class HistoryIndex:
             self._dirty = True
 
     def _add_to_size_index(self, record: FileRecord) -> None:
-        """Register a record in the size index for duplicate detection.
-
-        Alias records (duplicate_of set) are deliberately excluded - they mirror another
-        path's file and must never be duplicate-detection candidates (they would corrupt
-        find_by_size and the step-3 uniqueness check). They stay resolvable by exact
-        path_hash via _records. Caller holds self._lock.
-        """
-        if record.duplicate_of is None:
-            self._size_index.setdefault(record.file_size_bytes, set()).add(record.path_hash)
+        """Register a record in the size index for duplicate detection. Caller holds self._lock."""
+        self._size_index.setdefault(record.file_size_bytes, set()).add(record.path_hash)
 
     def _remove_from_size_index(self, record: FileRecord) -> None:
         """Remove a record's path_hash from its size bucket; no-op if absent. Caller holds self._lock.
@@ -293,9 +240,7 @@ class HistoryIndex:
         """
         with self._lock:
             self._ensure_loaded()
-            # Exclude alias records (duplicate_of set) - they mirror another path's status
-            # and must not appear as independent results (e.g. a phantom History-tab row).
-            return [r for r in self._records.values() if r.status == status and r.duplicate_of is None]
+            return [r for r in self._records.values() if r.status == status]
 
     def get_converted_records(self) -> list[FileRecord]:
         """Get all successfully converted records.
@@ -309,11 +254,7 @@ class HistoryIndex:
         with self._lock:
             self._ensure_loaded()
             if self._converted_cache is None:
-                # Exclude alias records (duplicate_of set) so statistics / estimation do not
-                # double-count a single physical conversion reached via multiple paths.
-                self._converted_cache = [
-                    r for r in self._records.values() if r.status == FileStatus.CONVERTED and r.duplicate_of is None
-                ]
+                self._converted_cache = [r for r in self._records.values() if r.status == FileStatus.CONVERTED]
             return self._converted_cache
 
     def get_cached_percentiles(self, operation_type: OperationType | None) -> dict | None:
@@ -395,14 +336,12 @@ class HistoryIndex:
             hashes = self._size_index.get(file_size_bytes, set())
             return [self._records[h] for h in hashes if h in self._records]
 
-    def find_better_duplicate(
-        self, file_path: str, file_size: int, duration_sec: float | None
-    ) -> FileRecord | None:
+    def find_better_duplicate(self, file_path: str, file_size: int, duration_sec: float | None) -> FileRecord | None:
         """Find an equal-or-higher-status record representing the same physical file.
 
-        Only non-alias records are ever considered: aliases (duplicate_of set) are excluded
-        from the size index, so they never enter the candidate pool here. The queried path's
-        own record is also excluded - a file is never its own duplicate.
+        The queried path's own record is excluded - a file is never its own duplicate.
+        Nothing is persisted for the queried path: duplicates resolve at read/decision
+        time (ADR-002), so callers use the returned verdict directly.
 
         Implements duplicate detection using a 3-step metadata cascade:
         1. Size + duration + filename literal (when original_path available)
@@ -438,9 +377,9 @@ class HistoryIndex:
         # Filter by duration (within tolerance)
         if duration_sec is not None:
             candidates = [
-                c for c in candidates
-                if c.duration_sec is not None
-                and abs(c.duration_sec - duration_sec) <= DURATION_TOLERANCE_SEC
+                c
+                for c in candidates
+                if c.duration_sec is not None and abs(c.duration_sec - duration_sec) <= DURATION_TOLERANCE_SEC
             ]
 
         if not candidates:
@@ -451,8 +390,7 @@ class HistoryIndex:
         # rather than per-process set iteration order. last_updated is ISO "YYYY-MM-DD
         # HH:MM:SS" everywhere, so lexicographic == chronological; None sorts last.
         candidates.sort(
-            key=lambda c: (status_priority.get(c.status, 0), c.last_updated or "", c.path_hash),
-            reverse=True,
+            key=lambda c: (status_priority.get(c.status, 0), c.last_updated or "", c.path_hash), reverse=True
         )
 
         # Compute filename info for matching
@@ -495,9 +433,11 @@ class HistoryIndex:
             # Check if this size+duration combo is unique in the entire index
             all_with_size = self.find_by_size(file_size)
             matching_duration = [
-                c for c in all_with_size
+                c
+                for c in all_with_size
                 if c.path_hash != own_hash
-                and duration_sec is not None and c.duration_sec is not None
+                and duration_sec is not None
+                and c.duration_sec is not None
                 and abs(c.duration_sec - duration_sec) <= DURATION_TOLERANCE_SEC
             ]
             if len(matching_duration) == 1:
@@ -591,18 +531,25 @@ class HistoryIndex:
                     return
                 data = json.loads(content)
 
-            self._records = {}
-            for record_dict in data:
-                try:
-                    # Detect old format that needs migration
-                    if "audio_codec" in record_dict and "audio_streams" not in record_dict:
-                        raise RuntimeError(
-                            "History file uses old format (audio_codec field).\n"
-                            "Please run migration before starting the app:\n"
-                            "  python tools/migrate_audio_streams.py\n"
-                            "See docs/PLAN_AUDIO_STREAMS_AND_BITRATE.md for details."
-                        )
+            # Schema v2 (ADR-002): versioned container, no key sniffing.
+            if isinstance(data, list):
+                # A user-facing file-format error, not a programming type error
+                raise RuntimeError(  # noqa: TRY004
+                    "History file uses the legacy unversioned format.\n"
+                    "Please run migration before starting the app:\n"
+                    "  python tools/migrate_history_v2.py"
+                )
+            if not isinstance(data, dict) or data.get("schema_version") != HISTORY_SCHEMA_VERSION:
+                # A user-facing file-format error, not a programming type error
+                raise RuntimeError(
+                    f"History file has unsupported schema_version "
+                    f"{data.get('schema_version') if isinstance(data, dict) else data!r} "
+                    f"(expected {HISTORY_SCHEMA_VERSION}): {history_path}"
+                )
 
+            self._records = {}
+            for record_dict in data["records"]:
+                try:
                     # Convert status string back to enum
                     if "status" in record_dict:
                         record_dict["status"] = FileStatus(record_dict["status"])
@@ -610,9 +557,7 @@ class HistoryIndex:
                     # Convert audio_streams dicts to AudioStreamInfo objects
                     audio_streams_data = record_dict.get("audio_streams")
                     if audio_streams_data:
-                        record_dict["audio_streams"] = [
-                            AudioStreamInfo.from_dict(s) for s in audio_streams_data
-                        ]
+                        record_dict["audio_streams"] = [AudioStreamInfo.from_dict(s) for s in audio_streams_data]
 
                     record = FileRecord(**record_dict)
                     # Validate record fields
@@ -654,7 +599,7 @@ class HistoryIndex:
 
             # Write to temp file
             with open(temp_path, "w", encoding="utf-8") as f:
-                json.dump(records_list, f, indent=2)
+                json.dump({"schema_version": HISTORY_SCHEMA_VERSION, "records": records_list}, f, indent=2)
 
             # Atomic rename
             os.replace(temp_path, history_path)

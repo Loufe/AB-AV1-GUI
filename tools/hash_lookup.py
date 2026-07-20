@@ -20,6 +20,10 @@ import hashlib
 import os
 import sys
 
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
+from src.platform_utils import resolve_mapped_drive_path
+
 
 def compute_file_hash(filename: str, length: int = 12) -> str:
     """Compute the BLAKE2b hash of a filename (matching the anonymizer).
@@ -52,8 +56,8 @@ def compute_folder_hash(folder_path: str, length: int = 12) -> str:
     Returns:
         Truncated hex hash string
     """
-    # Normalize path
-    normalized = os.path.normpath(os.path.abspath(folder_path))
+    # Normalize path (matching privacy.normalize_path, incl. mapped-drive -> UNC)
+    normalized = os.path.normpath(resolve_mapped_drive_path(os.path.abspath(folder_path)))
     if sys.platform == "win32":
         normalized = normalized.lower()
     normalized = normalized.replace("\\", "/")
@@ -76,8 +80,7 @@ def search_files(hash_prefix: str, directory: str, show_folders: bool = False) -
     """
     # Strip 'file_' prefix if present
     search_hash = hash_prefix.lower()
-    if search_hash.startswith("file_"):
-        search_hash = search_hash[5:]
+    search_hash = search_hash.removeprefix("file_")
 
     matches = []
 
@@ -105,8 +108,7 @@ def search_folders(hash_prefix: str, directory: str) -> list[tuple[str, str]]:
     """
     # Strip 'folder_' prefix if present
     search_hash = hash_prefix.lower()
-    if search_hash.startswith("folder_"):
-        search_hash = search_hash[7:]
+    search_hash = search_hash.removeprefix("folder_")
 
     matches = []
 

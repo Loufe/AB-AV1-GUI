@@ -7,6 +7,8 @@ import os
 import re
 import sys
 
+from src.platform_utils import resolve_mapped_drive_path
+
 logger = logging.getLogger(__name__)
 
 
@@ -23,14 +25,17 @@ _path_hash_cache: dict[str, str] = {}
 def normalize_path(path: str) -> str:
     """Normalize a path for consistent hashing across platforms.
 
+    Mapped network drives resolve to their UNC spelling first (ADR-002), so
+    ``B:\\x.mp4`` and ``\\\\server\\share\\x.mp4`` hash to the same key.
+
     Args:
         path: File or directory path to normalize
 
     Returns:
         Normalized path string suitable for hashing
     """
-    # Get absolute path and normalize separators
-    normalized = os.path.normpath(os.path.abspath(path))
+    # Get absolute path, resolve mapped drives to UNC, and normalize separators
+    normalized = os.path.normpath(resolve_mapped_drive_path(os.path.abspath(path)))
     # Lowercase on Windows (case-insensitive filesystem)
     if sys.platform == "win32":
         normalized = normalized.lower()

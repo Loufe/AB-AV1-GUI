@@ -185,7 +185,7 @@ The queue supports two operation types via `OperationType` enum:
 **Worker branching** (`sequential_conversion_worker`):
 - CONVERT: Calls `process_video()` (existing flow)
 - ANALYZE: Calls `wrapper.crf_search()`, updates history with Layer 2 data
-- Both: before processing, a duplicate short-circuit skips files already decided under another path (ADR-001), writing a `duplicate_of` alias — catches duplicates queued without a prior Basic Scan
+- Both: before processing, a duplicate short-circuit skips files already decided under another path (ADR-001), resolved at read time with nothing persisted (ADR-002) — catches duplicates queued without a prior Basic Scan
 
 **Queue tree updates** (`gui/queue_tree.py`): status/value changes, operation changes, adds, removes, and drag reorders update rows in place (folder expand state, selection, and scroll survive). Full rebuild via `refresh_queue_tree()` is reserved for structural bulk ops (startup load, clear queue, clear completed, conflict replace) and restores expand state. See `docs/ARCHITECTURE.md` § Queue Tree Updates.
 

@@ -19,13 +19,7 @@ from src.ab_av1.wrapper import AbAv1Wrapper
 from src.cache_helpers import converted_verdict_applies, is_file_unchanged
 from src.config import DEFAULT_ENCODING_PRESET, DEFAULT_VMAF_TARGET, HISTORY_SAVE_INTERVAL_SEC, MIN_VMAF_FALLBACK_TARGET
 from src.hardware_accel import get_hw_decoder_for_codec, get_video_codec_from_info
-from src.history_index import (
-    HistoryIndex,
-    compute_filename_hash,
-    compute_path_hash,
-    create_alias_record,
-    get_history_index,
-)
+from src.history_index import HistoryIndex, compute_filename_hash, compute_path_hash, get_history_index
 from src.models import (
     DECIDED_STATUSES,
     FileRecord,
@@ -184,25 +178,16 @@ def _find_duplicate_verdict(
     """Return the decided record another path holds for this same physical file, or None.
 
     Files added to the queue without a prior Basic Scan bypass the Analysis-tab duplicate
-    detection (ADR-001), so the worker re-checks here. Covers two routes the queue filter
-    can't see:
-    - an alias already written at this path by a later scan (queue items are only filtered
-      when added, so a subsequent Basic Scan can decide a still-queued file), and
-    - fresh duplicate detection for a file with no (or stale/undecided) own record.
+    detection (ADR-001), so the worker re-checks here with fresh duplicate detection.
+    Nothing is persisted for this path (ADR-002): the verdict is read-time state.
 
-    Canonical decided records for this path are deliberately NOT returned - those are the
+    Decided records for this path itself are deliberately NOT returned - those are the
     existing own-record checks' territory (queue filter, reconciliation, scanner output/codec
     checks, the ANALYZE-branch cache checks).
     """
     cached = index.lookup_file(file_path)
     if cached is not None:
-        if cached.duplicate_of is not None and is_file_unchanged(cached, file_path):
-            return cached  # Valid alias: mirrors a decided verdict from another path
-        if (
-            cached.status == FileStatus.CONVERTED
-            and cached.duplicate_of is None
-            and converted_verdict_applies(cached, file_path)
-        ):
+        if cached.status == FileStatus.CONVERTED and converted_verdict_applies(cached, file_path):
             # Canonical conversion at this path; changed stamps in replace mode are
             # the steady state, never grounds to re-derive it as someone else's
             # duplicate. Genuinely changed content falls through instead: the new
@@ -218,39 +203,6 @@ def _find_duplicate_verdict(
     if duplicate is not None and duplicate.status in DECIDED_STATUSES:
         return duplicate
     return None
-
-
-def _persist_duplicate_alias(
-    index: HistoryIndex, source: FileRecord, file_path: str, video_info: dict | None, anonymize: bool
-) -> None:
-    """Write an alias keying ``source``'s decided verdict to this path.
-
-    Makes future per-path lookups (queue filter, Analysis tab, cached-CRF reuse in
-    process_video) resolve directly. Failure is non-critical: the caller's skip/reuse
-    decision stands either way, detection just runs again next time.
-    """
-    try:
-        path_hash = compute_path_hash(file_path)
-        prior = index.get(path_hash)
-        stat_info = os.stat(file_path)
-        meta = extract_video_metadata(video_info)
-        alias = create_alias_record(
-            source,
-            prior.first_seen if prior else None,
-            file_path,
-            path_hash,
-            stat_info.st_size,
-            stat_info.st_mtime,
-            meta,
-            anonymize,
-        )
-        index.upsert(alias)
-        index.save_if_stale(HISTORY_SAVE_INTERVAL_SEC)
-        logger.debug(
-            "Aliased %s record to queued path %s (duplicate detection)", source.status, anonymize_filename(file_path)
-        )
-    except Exception:
-        logger.exception(f"Failed to persist duplicate alias for {anonymize_filename(file_path)}")
 
 
 def sequential_conversion_worker(
@@ -596,40 +548,32 @@ def sequential_conversion_worker(
                 # --- Duplicate Short-Circuit (ADR-001) ---
                 # A physical file already decided under another path must not be re-processed:
                 # skip on CONVERTED / NOT_WORTHWHILE (and on ANALYZED for ANALYZE operations).
-                # An ANALYZED verdict on a CONVERT operation falls through instead - the alias
-                # written here carries the Layer-2 data, so process_video reuses the cached CRF.
+                # An ANALYZED verdict on a CONVERT operation falls through instead and re-runs
+                # the CRF search; nothing is persisted for this path (ADR-002).
                 index = get_history_index()
                 verdict = _find_duplicate_verdict(index, file_path, original_size, input_duration)
-                if verdict is not None:
-                    if verdict.duplicate_of is None:
-                        _persist_duplicate_alias(
-                            index, verdict, file_path, video_info, anonymize_history_value[0] or False
-                        )
-                    if verdict.status in (FileStatus.CONVERTED, FileStatus.NOT_WORTHWHILE) or (
-                        verdict.status == FileStatus.ANALYZED and queue_item.operation_type == OperationType.ANALYZE
-                    ):
-                        if verdict.status == FileStatus.CONVERTED:
-                            reason, tree_status = "Already converted (duplicate of another path)", "done"
-                        elif verdict.status == FileStatus.NOT_WORTHWHILE:
-                            reason, tree_status = "Not worth converting (duplicate of another path)", "skip"
-                        else:
-                            reason, tree_status = "Already analyzed (duplicate of another path)", "done"
-                        logger.info(f"Skipping {anonymized_name} - {reason}")
-                        file_event_callback(filename, "skipped", reason)
-                        queue_item.processed_files += 1
-                        queue_item.files_skipped += 1
-                        _update_file_status(queue_item, file_index, QueueItemStatus.COMPLETED)
-                        queue_status_callback(
-                            queue_item.id,
-                            QueueItemStatus.CONVERTING,
-                            queue_item.processed_files,
-                            queue_item.total_files,
-                        )
-                        update_ui_safely(
-                            gui.root,
-                            lambda fp=file_path, s=tree_status: gui.update_analysis_tree_for_completed_file(fp, s),
-                        )
-                        continue
+                if verdict is not None and (
+                    verdict.status in (FileStatus.CONVERTED, FileStatus.NOT_WORTHWHILE)
+                    or (verdict.status == FileStatus.ANALYZED and queue_item.operation_type == OperationType.ANALYZE)
+                ):
+                    if verdict.status == FileStatus.CONVERTED:
+                        reason, tree_status = "Already converted (duplicate of another path)", "done"
+                    elif verdict.status == FileStatus.NOT_WORTHWHILE:
+                        reason, tree_status = "Not worth converting (duplicate of another path)", "skip"
+                    else:
+                        reason, tree_status = "Already analyzed (duplicate of another path)", "done"
+                    logger.info(f"Skipping {anonymized_name} - {reason}")
+                    file_event_callback(filename, "skipped", reason)
+                    queue_item.processed_files += 1
+                    queue_item.files_skipped += 1
+                    _update_file_status(queue_item, file_index, QueueItemStatus.COMPLETED)
+                    queue_status_callback(
+                        queue_item.id, QueueItemStatus.CONVERTING, queue_item.processed_files, queue_item.total_files
+                    )
+                    update_ui_safely(
+                        gui.root, lambda fp=file_path, s=tree_status: gui.update_analysis_tree_for_completed_file(fp, s)
+                    )
+                    continue
 
                 current_time = time.time()
                 update_ui_safely(gui.root, lambda t=current_time: setattr(gui.session, "current_file_start_time", t))

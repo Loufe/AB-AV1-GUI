@@ -24,7 +24,7 @@ from statistics import mean
 
 from src.cache_helpers import mtimes_match
 from src.config import DEFAULT_REDUCTION_ESTIMATE_PERCENT
-from src.history_index import HistoryIndex, compute_filename_hash, compute_path_hash, create_alias_record
+from src.history_index import HistoryIndex, compute_filename_hash, compute_path_hash
 from src.models import DECIDED_STATUSES, FileRecord, FileStatus, VideoMetadata
 from src.utils import format_crf, get_video_info
 from src.video_metadata import extract_video_metadata
@@ -262,14 +262,14 @@ def _analyze_file(
         # Re-read under the lock: another writer may have updated this path meanwhile.
         cached = index.get(path_hash)
 
-        # A canonical CONVERTED record survives a size/mtime mismatch only while the file is
+        # A CONVERTED record survives a size/mtime mismatch only while the file is
         # plausibly its own output: in replace mode the file at that path IS the AV1 output,
         # so changed stamps are the expected steady state (also preserved when the probe
         # failed and the codec is unknown). A non-AV1 file cannot be our output - the path
-        # was replaced with new content, so the verdict is stale. Aliases (any status) and
-        # ANALYZED/NOT_WORTHWHILE verdicts likewise described content that no longer exists;
-        # all of these fall through and re-derive from the fresh ffprobe.
-        if cached and cached.status == FileStatus.CONVERTED and cached.duplicate_of is None:
+        # was replaced with new content, so the verdict is stale. ANALYZED/NOT_WORTHWHILE
+        # verdicts likewise described content that no longer exists; those fall through
+        # and re-derive from the fresh ffprobe.
+        if cached and cached.status == FileStatus.CONVERTED:
             if meta.video_codec is None or meta.is_av1:
                 # Update metadata while preserving conversion data
                 record = _update_existing_record_metadata(cached, file_size, file_mtime, meta, anonymize, file_path)
@@ -278,31 +278,17 @@ def _analyze_file(
                 return _record_to_result(file_path, record, index)
             logger.info("Converted file replaced with non-AV1 content, re-deriving record: %s", filename)
 
-        # Duplicate detection: same physical file reached via a different path?
+        # Duplicate detection (ADR-002): does another path hold a decided verdict for the
+        # same physical file? The verdict is used directly and never persisted for this
+        # path - read-time resolution cannot go stale. This path still gets its own
+        # SCANNED record so its probe results are cached; a SCANNED duplicate has nothing
+        # decided to mirror and falls through like a new file.
         duplicate = index.find_better_duplicate(file_path, file_size, meta.duration_sec)
-        if duplicate is not None:
-            if meta.duration_sec is None:
-                # No duration -> find_better_duplicate could only match on filename+size (low
-                # confidence). Show the duplicate's status but don't persist a terminal one.
-                return _record_to_result(file_path, duplicate, index)
-            if duplicate.status in DECIDED_STATUSES:
-                # Source carries a decided result worth mirroring. Persist an alias keyed by THIS
-                # path so lookup_file(this_path) resolves to it and the copy isn't re-encoded.
-                record = create_alias_record(
-                    duplicate,
-                    cached.first_seen if cached else None,
-                    file_path,
-                    path_hash,
-                    file_size,
-                    file_mtime,
-                    meta,
-                    anonymize,
-                )
-                logger.debug("Aliased %s record to new path %s (duplicate detection)", duplicate.status, filename)
-                index.upsert(record)
-                return _record_to_result(file_path, record, index)
-            # Duplicate is only SCANNED - nothing decided to mirror; fall through and create a
-            # fresh SCANNED record for this path below.
+        if duplicate is not None and duplicate.status in DECIDED_STATUSES:
+            record = _create_scanned_record(file_path, path_hash, file_size, file_mtime, video_info, anonymize)
+            index.upsert(record)
+            logger.debug("Resolved %s verdict from another path for %s (duplicate)", duplicate.status, filename)
+            return _record_to_result(file_path, duplicate, index)
 
         # New file or previously SCANNED - create new SCANNED record
         record = _create_scanned_record(file_path, path_hash, file_size, file_mtime, video_info, anonymize)
@@ -502,6 +488,14 @@ def _record_to_result(file_path: str, record: FileRecord, index: HistoryIndex) -
     Returns:
         FileAnalysisResult based on cached data.
     """
+    # Read-time duplicate resolution (ADR-002): an undecided record defers to a decided
+    # verdict for the same physical file under another path. Never persisted, so it can
+    # never go stale - deleting or re-deriving the source takes effect on the next read.
+    if record.status in (FileStatus.SCANNED, FileStatus.ANALYZED):
+        better = index.find_better_duplicate(file_path, record.file_size_bytes, record.duration_sec)
+        if better is not None and better.status in DECIDED_STATUSES:
+            record = better
+
     # Determine status
     if record.status == FileStatus.CONVERTED:
         status = "already_done"
