@@ -53,6 +53,26 @@ export function foldDurable(
     const { item_id, before } = delta.QueueMoved;
     return { ...state, queue: movedQueue(state.queue, item_id, before) };
   }
+  if ("QueueRequeued" in delta && delta.QueueRequeued !== undefined) {
+    const { item_id } = delta.QueueRequeued;
+    const source = state.queue.findIndex((item) => item.id === item_id);
+    if (source === -1) {
+      return state;
+    }
+    const next = [...state.queue];
+    const [item] = next.splice(source, 1);
+    next.push({ ...item, state: "Queued" });
+    return { ...state, queue: next };
+  }
+  if ("QueueEdited" in delta && delta.QueueEdited !== undefined) {
+    const { item_id, operation, intent, output_target, overwrite } = delta.QueueEdited;
+    return {
+      ...state,
+      queue: state.queue.map((item) =>
+        item.id === item_id ? { ...item, operation, intent, output_target, overwrite } : item,
+      ),
+    };
+  }
   if ("ItemReserved" in delta && delta.ItemReserved !== undefined) {
     const { job } = delta.ItemReserved;
     return {

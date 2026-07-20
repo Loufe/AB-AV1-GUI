@@ -1,6 +1,6 @@
 use std::path::PathBuf;
 
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 
 use crate::state::ConversionRun;
 use crate::{
@@ -44,6 +44,37 @@ pub enum QueueCommand {
         item_id: QueueItemId,
         before: Option<QueueItemId>,
     },
+    /// Removes every `Queued` and `Finished` item. Idle-only — while a
+    /// session runs, the queue's pending tail is the worker's feed. An empty
+    /// result is an accepted no-op.
+    Clear,
+    /// Removes `Finished` items except `Failed(_)` — failures stay visible
+    /// until addressed (V2/HandBrake parity). Allowed while running.
+    ClearCompleted,
+    /// Sends a finished item around again: state resets to `Queued` in place
+    /// (no re-add) and the item moves to the end of the queue. Allowed while
+    /// running — it is a pending append, same as an add.
+    Retry {
+        item_id: QueueItemId,
+    },
+    /// Rewrites a pending item's job parameters. Valid only on `Queued`
+    /// items while the session is idle: a running session's rules are frozen
+    /// (#33 §11). Bulk edits are frontend loops over this command.
+    Edit {
+        item_id: QueueItemId,
+        patch: QueueItemEdit,
+    },
+}
+
+/// A partial edit of a queued item; `None` keeps the current value. The
+/// reducer resolves the full tuple before journaling, so the fold and replay
+/// never see patch semantics.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, specta::Type)]
+pub struct QueueItemEdit {
+    pub operation: Option<Operation>,
+    pub intent: Option<AnalysisIntent>,
+    pub output_target: Option<OutputTarget>,
+    pub overwrite: Option<OverwriteDecision>,
 }
 
 /// One add request inside [`QueueCommand::AddMany`]. The enqueue facts
@@ -418,6 +449,82 @@ fn apply_queue(state: &AppState, command: QueueCommand) -> Applied {
             applied.durable.push(DurableDelta::QueueMoved {
                 item_id,
                 before: resolved,
+            });
+            applied
+        }
+        QueueCommand::Clear => {
+            if state.session != SessionState::Idle {
+                return Applied::rejected("queue can only be cleared while idle");
+            }
+            let mut applied = Applied::accepted();
+            for item in &state.durable.queue {
+                if matches!(
+                    item.state,
+                    QueueItemState::Queued | QueueItemState::Finished(_)
+                ) {
+                    applied
+                        .durable
+                        .push(DurableDelta::QueueRemoved { item_id: item.id });
+                }
+            }
+            applied
+        }
+        QueueCommand::ClearCompleted => {
+            let mut applied = Applied::accepted();
+            for item in &state.durable.queue {
+                if matches!(&item.state, QueueItemState::Finished(outcome)
+                    if !matches!(outcome, ItemOutcome::Failed(_)))
+                {
+                    applied
+                        .durable
+                        .push(DurableDelta::QueueRemoved { item_id: item.id });
+                }
+            }
+            applied
+        }
+        QueueCommand::Retry { item_id } => {
+            let Some(item) = find_item(state, item_id) else {
+                return Applied::rejected("queue item does not exist");
+            };
+            if !matches!(item.state, QueueItemState::Finished(_)) {
+                return Applied::rejected("only finished items can be retried");
+            }
+            let mut applied = Applied::accepted();
+            applied
+                .durable
+                .push(DurableDelta::QueueRequeued { item_id });
+            applied
+        }
+        QueueCommand::Edit { item_id, patch } => {
+            if state.session != SessionState::Idle {
+                return Applied::rejected("queue items can only be edited while idle");
+            }
+            let Some(item) = find_item(state, item_id) else {
+                return Applied::rejected("queue item does not exist");
+            };
+            if !matches!(item.state, QueueItemState::Queued) {
+                return Applied::rejected("only queued items can be edited");
+            }
+            let operation = patch.operation.unwrap_or(item.operation);
+            let intent = patch.intent.unwrap_or(item.intent);
+            let output_target = patch
+                .output_target
+                .unwrap_or_else(|| item.output_target.clone());
+            let overwrite = patch.overwrite.unwrap_or(item.overwrite);
+            if operation == item.operation
+                && intent == item.intent
+                && output_target == item.output_target
+                && overwrite == item.overwrite
+            {
+                return Applied::accepted();
+            }
+            let mut applied = Applied::accepted();
+            applied.durable.push(DurableDelta::QueueEdited {
+                item_id,
+                operation,
+                intent,
+                output_target,
+                overwrite,
             });
             applied
         }

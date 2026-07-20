@@ -88,6 +88,24 @@ fn moved(id: u64, before: Option<u64>) -> DurableDelta {
     }
 }
 
+fn requeued(id: u64) -> DurableDelta {
+    DurableDelta::QueueRequeued {
+        item_id: QueueItemId(id),
+    }
+}
+
+fn edited(id: u64) -> DurableDelta {
+    DurableDelta::QueueEdited {
+        item_id: QueueItemId(id),
+        operation: Operation::Analyze,
+        intent: AnalysisIntent::Refresh,
+        output_target: OutputTarget::Suffix {
+            suffix: "_edited".to_owned(),
+        },
+        overwrite: OverwriteDecision::Allow,
+    }
+}
+
 fn reserved(item: u64, claim: u64, run: u64) -> DurableDelta {
     DurableDelta::ItemReserved {
         job: Box::new(ReservedJob {
@@ -364,6 +382,28 @@ fn scenarios() -> Vec<Scenario> {
             vec![added(1), added(2)],
             vec![moved(9, Some(1))],
         ),
+        scenario(
+            // The retried item resets to Queued and moves to the end.
+            "queue_requeued_resets_and_moves_to_end",
+            vec![
+                added(1),
+                added(2),
+                added(3),
+                finished(1, 10, 100, ItemOutcome::Stopped),
+            ],
+            vec![requeued(1)],
+        ),
+        scenario(
+            "queue_requeued_missing_item",
+            vec![added(1)],
+            vec![requeued(9)],
+        ),
+        scenario(
+            "queue_edited_rewrites_the_job_tuple",
+            vec![added(1), added(2)],
+            vec![edited(2)],
+        ),
+        scenario("queue_edited_missing_item", vec![added(1)], vec![edited(9)]),
         scenario(
             "media_observed_new",
             vec![],

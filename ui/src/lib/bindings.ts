@@ -225,63 +225,103 @@ export type DurableDelta = DurableDelta_Serialize | DurableDelta_Deserialize;
 
 export type DurableDelta_Deserialize = ({ QueueAdded: {
 	item: QueueItem,
-} }) & { AnalysisRecorded?: never; ItemFinished?: never; ItemPrepared?: never; ItemReserved?: never; ItemRunning?: never; MediaObserved?: never; Output?: never; QueueMoved?: never; QueueRemoved?: never } | ({ QueueRemoved: {
+} }) & { AnalysisRecorded?: never; ItemFinished?: never; ItemPrepared?: never; ItemReserved?: never; ItemRunning?: never; MediaObserved?: never; Output?: never; QueueEdited?: never; QueueMoved?: never; QueueRemoved?: never; QueueRequeued?: never } | ({ QueueRemoved: {
 	item_id: QueueItemId,
-} }) & { AnalysisRecorded?: never; ItemFinished?: never; ItemPrepared?: never; ItemReserved?: never; ItemRunning?: never; MediaObserved?: never; Output?: never; QueueAdded?: never; QueueMoved?: never } | ({ QueueMoved: {
+} }) & { AnalysisRecorded?: never; ItemFinished?: never; ItemPrepared?: never; ItemReserved?: never; ItemRunning?: never; MediaObserved?: never; Output?: never; QueueAdded?: never; QueueEdited?: never; QueueMoved?: never; QueueRequeued?: never } | ({ QueueMoved: {
 	item_id: QueueItemId,
 	before: QueueItemId | null,
-} }) & { AnalysisRecorded?: never; ItemFinished?: never; ItemPrepared?: never; ItemReserved?: never; ItemRunning?: never; MediaObserved?: never; Output?: never; QueueAdded?: never; QueueRemoved?: never } | ({ ItemReserved: {
+} }) & { AnalysisRecorded?: never; ItemFinished?: never; ItemPrepared?: never; ItemReserved?: never; ItemRunning?: never; MediaObserved?: never; Output?: never; QueueAdded?: never; QueueEdited?: never; QueueRemoved?: never; QueueRequeued?: never } | 
+/**
+ *  A finished item goes around again: state resets to `Queued` and the
+ *  item moves to the end of the queue, preserving the
+ *  finished < active < queued shape invariant. The old run's lineage is
+ *  untouched; fresh claim/run ids arrive at the next reservation.
+ */
+({ QueueRequeued: {
+	item_id: QueueItemId,
+} }) & { AnalysisRecorded?: never; ItemFinished?: never; ItemPrepared?: never; ItemReserved?: never; ItemRunning?: never; MediaObserved?: never; Output?: never; QueueAdded?: never; QueueEdited?: never; QueueMoved?: never; QueueRemoved?: never } | 
+/**
+ *  A pending item's job parameters, resolved to the full tuple so the
+ *  fold stays structural and replay needs no patch semantics.
+ */
+({ QueueEdited: {
+	item_id: QueueItemId,
+	operation: Operation,
+	intent: AnalysisIntent,
+	output_target: OutputTarget,
+	overwrite: OverwriteDecision,
+} }) & { AnalysisRecorded?: never; ItemFinished?: never; ItemPrepared?: never; ItemReserved?: never; ItemRunning?: never; MediaObserved?: never; Output?: never; QueueAdded?: never; QueueMoved?: never; QueueRemoved?: never; QueueRequeued?: never } | ({ ItemReserved: {
 	job: ReservedJob,
-} }) & { AnalysisRecorded?: never; ItemFinished?: never; ItemPrepared?: never; ItemRunning?: never; MediaObserved?: never; Output?: never; QueueAdded?: never; QueueMoved?: never; QueueRemoved?: never } | ({ MediaObserved: {
+} }) & { AnalysisRecorded?: never; ItemFinished?: never; ItemPrepared?: never; ItemRunning?: never; MediaObserved?: never; Output?: never; QueueAdded?: never; QueueEdited?: never; QueueMoved?: never; QueueRemoved?: never; QueueRequeued?: never } | ({ MediaObserved: {
 	observation: MediaObservation,
-} }) & { AnalysisRecorded?: never; ItemFinished?: never; ItemPrepared?: never; ItemReserved?: never; ItemRunning?: never; Output?: never; QueueAdded?: never; QueueMoved?: never; QueueRemoved?: never } | ({ ItemPrepared: {
+} }) & { AnalysisRecorded?: never; ItemFinished?: never; ItemPrepared?: never; ItemReserved?: never; ItemRunning?: never; Output?: never; QueueAdded?: never; QueueEdited?: never; QueueMoved?: never; QueueRemoved?: never; QueueRequeued?: never } | ({ ItemPrepared: {
 	spec: JobSpec,
-} }) & { AnalysisRecorded?: never; ItemFinished?: never; ItemReserved?: never; ItemRunning?: never; MediaObserved?: never; Output?: never; QueueAdded?: never; QueueMoved?: never; QueueRemoved?: never } | ({ ItemRunning: {
+} }) & { AnalysisRecorded?: never; ItemFinished?: never; ItemReserved?: never; ItemRunning?: never; MediaObserved?: never; Output?: never; QueueAdded?: never; QueueEdited?: never; QueueMoved?: never; QueueRemoved?: never; QueueRequeued?: never } | ({ ItemRunning: {
 	item_id: QueueItemId,
 	claim_id: ClaimId,
 	run_id: RunId,
 	at: UnixMillis,
-} }) & { AnalysisRecorded?: never; ItemFinished?: never; ItemPrepared?: never; ItemReserved?: never; MediaObserved?: never; Output?: never; QueueAdded?: never; QueueMoved?: never; QueueRemoved?: never } | ({ AnalysisRecorded: {
+} }) & { AnalysisRecorded?: never; ItemFinished?: never; ItemPrepared?: never; ItemReserved?: never; MediaObserved?: never; Output?: never; QueueAdded?: never; QueueEdited?: never; QueueMoved?: never; QueueRemoved?: never; QueueRequeued?: never } | ({ AnalysisRecorded: {
 	run_id: RunId,
 	result: AnalysisResult,
-} }) & { ItemFinished?: never; ItemPrepared?: never; ItemReserved?: never; ItemRunning?: never; MediaObserved?: never; Output?: never; QueueAdded?: never; QueueMoved?: never; QueueRemoved?: never } | ({ ItemFinished: {
+} }) & { ItemFinished?: never; ItemPrepared?: never; ItemReserved?: never; ItemRunning?: never; MediaObserved?: never; Output?: never; QueueAdded?: never; QueueEdited?: never; QueueMoved?: never; QueueRemoved?: never; QueueRequeued?: never } | ({ ItemFinished: {
 	item_id: QueueItemId,
 	claim_id: ClaimId,
 	run_id: RunId,
 	outcome: ItemOutcome,
 	at: UnixMillis,
 	phase_spans: PhaseSpan[],
-} }) & { AnalysisRecorded?: never; ItemPrepared?: never; ItemReserved?: never; ItemRunning?: never; MediaObserved?: never; Output?: never; QueueAdded?: never; QueueMoved?: never; QueueRemoved?: never } | ({ Output: OutputDelta_Deserialize }) & { AnalysisRecorded?: never; ItemFinished?: never; ItemPrepared?: never; ItemReserved?: never; ItemRunning?: never; MediaObserved?: never; QueueAdded?: never; QueueMoved?: never; QueueRemoved?: never };
+} }) & { AnalysisRecorded?: never; ItemPrepared?: never; ItemReserved?: never; ItemRunning?: never; MediaObserved?: never; Output?: never; QueueAdded?: never; QueueEdited?: never; QueueMoved?: never; QueueRemoved?: never; QueueRequeued?: never } | ({ Output: OutputDelta_Deserialize }) & { AnalysisRecorded?: never; ItemFinished?: never; ItemPrepared?: never; ItemReserved?: never; ItemRunning?: never; MediaObserved?: never; QueueAdded?: never; QueueEdited?: never; QueueMoved?: never; QueueRemoved?: never; QueueRequeued?: never };
 
 export type DurableDelta_Serialize = ({ QueueAdded: {
 	item: QueueItem,
-} }) & { AnalysisRecorded?: never; ItemFinished?: never; ItemPrepared?: never; ItemReserved?: never; ItemRunning?: never; MediaObserved?: never; Output?: never; QueueMoved?: never; QueueRemoved?: never } | ({ QueueRemoved: {
+} }) & { AnalysisRecorded?: never; ItemFinished?: never; ItemPrepared?: never; ItemReserved?: never; ItemRunning?: never; MediaObserved?: never; Output?: never; QueueEdited?: never; QueueMoved?: never; QueueRemoved?: never; QueueRequeued?: never } | ({ QueueRemoved: {
 	item_id: QueueItemId,
-} }) & { AnalysisRecorded?: never; ItemFinished?: never; ItemPrepared?: never; ItemReserved?: never; ItemRunning?: never; MediaObserved?: never; Output?: never; QueueAdded?: never; QueueMoved?: never } | ({ QueueMoved: {
+} }) & { AnalysisRecorded?: never; ItemFinished?: never; ItemPrepared?: never; ItemReserved?: never; ItemRunning?: never; MediaObserved?: never; Output?: never; QueueAdded?: never; QueueEdited?: never; QueueMoved?: never; QueueRequeued?: never } | ({ QueueMoved: {
 	item_id: QueueItemId,
 	before: QueueItemId | null,
-} }) & { AnalysisRecorded?: never; ItemFinished?: never; ItemPrepared?: never; ItemReserved?: never; ItemRunning?: never; MediaObserved?: never; Output?: never; QueueAdded?: never; QueueRemoved?: never } | ({ ItemReserved: {
+} }) & { AnalysisRecorded?: never; ItemFinished?: never; ItemPrepared?: never; ItemReserved?: never; ItemRunning?: never; MediaObserved?: never; Output?: never; QueueAdded?: never; QueueEdited?: never; QueueRemoved?: never; QueueRequeued?: never } | 
+/**
+ *  A finished item goes around again: state resets to `Queued` and the
+ *  item moves to the end of the queue, preserving the
+ *  finished < active < queued shape invariant. The old run's lineage is
+ *  untouched; fresh claim/run ids arrive at the next reservation.
+ */
+({ QueueRequeued: {
+	item_id: QueueItemId,
+} }) & { AnalysisRecorded?: never; ItemFinished?: never; ItemPrepared?: never; ItemReserved?: never; ItemRunning?: never; MediaObserved?: never; Output?: never; QueueAdded?: never; QueueEdited?: never; QueueMoved?: never; QueueRemoved?: never } | 
+/**
+ *  A pending item's job parameters, resolved to the full tuple so the
+ *  fold stays structural and replay needs no patch semantics.
+ */
+({ QueueEdited: {
+	item_id: QueueItemId,
+	operation: Operation,
+	intent: AnalysisIntent,
+	output_target: OutputTarget,
+	overwrite: OverwriteDecision,
+} }) & { AnalysisRecorded?: never; ItemFinished?: never; ItemPrepared?: never; ItemReserved?: never; ItemRunning?: never; MediaObserved?: never; Output?: never; QueueAdded?: never; QueueMoved?: never; QueueRemoved?: never; QueueRequeued?: never } | ({ ItemReserved: {
 	job: ReservedJob,
-} }) & { AnalysisRecorded?: never; ItemFinished?: never; ItemPrepared?: never; ItemRunning?: never; MediaObserved?: never; Output?: never; QueueAdded?: never; QueueMoved?: never; QueueRemoved?: never } | ({ MediaObserved: {
+} }) & { AnalysisRecorded?: never; ItemFinished?: never; ItemPrepared?: never; ItemRunning?: never; MediaObserved?: never; Output?: never; QueueAdded?: never; QueueEdited?: never; QueueMoved?: never; QueueRemoved?: never; QueueRequeued?: never } | ({ MediaObserved: {
 	observation: MediaObservation,
-} }) & { AnalysisRecorded?: never; ItemFinished?: never; ItemPrepared?: never; ItemReserved?: never; ItemRunning?: never; Output?: never; QueueAdded?: never; QueueMoved?: never; QueueRemoved?: never } | ({ ItemPrepared: {
+} }) & { AnalysisRecorded?: never; ItemFinished?: never; ItemPrepared?: never; ItemReserved?: never; ItemRunning?: never; Output?: never; QueueAdded?: never; QueueEdited?: never; QueueMoved?: never; QueueRemoved?: never; QueueRequeued?: never } | ({ ItemPrepared: {
 	spec: JobSpec,
-} }) & { AnalysisRecorded?: never; ItemFinished?: never; ItemReserved?: never; ItemRunning?: never; MediaObserved?: never; Output?: never; QueueAdded?: never; QueueMoved?: never; QueueRemoved?: never } | ({ ItemRunning: {
+} }) & { AnalysisRecorded?: never; ItemFinished?: never; ItemReserved?: never; ItemRunning?: never; MediaObserved?: never; Output?: never; QueueAdded?: never; QueueEdited?: never; QueueMoved?: never; QueueRemoved?: never; QueueRequeued?: never } | ({ ItemRunning: {
 	item_id: QueueItemId,
 	claim_id: ClaimId,
 	run_id: RunId,
 	at: UnixMillis,
-} }) & { AnalysisRecorded?: never; ItemFinished?: never; ItemPrepared?: never; ItemReserved?: never; MediaObserved?: never; Output?: never; QueueAdded?: never; QueueMoved?: never; QueueRemoved?: never } | ({ AnalysisRecorded: {
+} }) & { AnalysisRecorded?: never; ItemFinished?: never; ItemPrepared?: never; ItemReserved?: never; MediaObserved?: never; Output?: never; QueueAdded?: never; QueueEdited?: never; QueueMoved?: never; QueueRemoved?: never; QueueRequeued?: never } | ({ AnalysisRecorded: {
 	run_id: RunId,
 	result: AnalysisResult,
-} }) & { ItemFinished?: never; ItemPrepared?: never; ItemReserved?: never; ItemRunning?: never; MediaObserved?: never; Output?: never; QueueAdded?: never; QueueMoved?: never; QueueRemoved?: never } | ({ ItemFinished: {
+} }) & { ItemFinished?: never; ItemPrepared?: never; ItemReserved?: never; ItemRunning?: never; MediaObserved?: never; Output?: never; QueueAdded?: never; QueueEdited?: never; QueueMoved?: never; QueueRemoved?: never; QueueRequeued?: never } | ({ ItemFinished: {
 	item_id: QueueItemId,
 	claim_id: ClaimId,
 	run_id: RunId,
 	outcome: ItemOutcome,
 	at: UnixMillis,
 	phase_spans: PhaseSpan[],
-} }) & { AnalysisRecorded?: never; ItemPrepared?: never; ItemReserved?: never; ItemRunning?: never; MediaObserved?: never; Output?: never; QueueAdded?: never; QueueMoved?: never; QueueRemoved?: never } | ({ Output: OutputDelta_Serialize }) & { AnalysisRecorded?: never; ItemFinished?: never; ItemPrepared?: never; ItemReserved?: never; ItemRunning?: never; MediaObserved?: never; QueueAdded?: never; QueueMoved?: never; QueueRemoved?: never };
+} }) & { AnalysisRecorded?: never; ItemPrepared?: never; ItemReserved?: never; ItemRunning?: never; MediaObserved?: never; Output?: never; QueueAdded?: never; QueueEdited?: never; QueueMoved?: never; QueueRemoved?: never; QueueRequeued?: never } | ({ Output: OutputDelta_Serialize }) & { AnalysisRecorded?: never; ItemFinished?: never; ItemPrepared?: never; ItemReserved?: never; ItemRunning?: never; MediaObserved?: never; QueueAdded?: never; QueueEdited?: never; QueueMoved?: never; QueueRemoved?: never; QueueRequeued?: never };
 
 export type DurableState = DurableState_Serialize | DurableState_Deserialize;
 

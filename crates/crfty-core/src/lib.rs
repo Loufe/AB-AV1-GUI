@@ -57,8 +57,8 @@ pub use policy::{
     verdict_applies,
 };
 pub use reducer::{
-    Applied, Command, Effect, EphemeralDelta, QueueAddRequest, QueueCommand, Reply, SessionCommand,
-    SettingsCommand, SystemCommand, VendorCommand, WorkerCommand, apply,
+    Applied, Command, Effect, EphemeralDelta, QueueAddRequest, QueueCommand, QueueItemEdit, Reply,
+    SessionCommand, SettingsCommand, SystemCommand, VendorCommand, WorkerCommand, apply,
 };
 pub use settings::{
     DEFAULT_OUTPUT_SUFFIX, DefaultOutputMode, OutputSettings, PrivacySettings, Settings,

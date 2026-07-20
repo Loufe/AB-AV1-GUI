@@ -14,8 +14,8 @@ use crate::{
     JOURNAL_SCHEMA_VERSION, JobAction, JobPhase, JobProgress, JournalEnvelope, JournalSequence,
     MediaContainer, MediaObservation, Operation, OutputDelta, OutputRecoveryAction, OutputState,
     OutputTarget, OutputTransaction, OverwriteDecision, PathBinding, PathHash, PhaseSpan,
-    QueueAddRequest, QueueCommand, QueueItemId, QueueItemState, Replacement, Reply, RunId,
-    SearchMeasurement, SessionCommand, SessionState, Settings, SettingsCommand, SkipReason,
+    QueueAddRequest, QueueCommand, QueueItemEdit, QueueItemId, QueueItemState, Replacement, Reply,
+    RunId, SearchMeasurement, SessionCommand, SessionState, Settings, SettingsCommand, SkipReason,
     StreamByteSizes, SystemCommand, Telemetry, ToolAvailability, ToolRevisions, ToolSource,
     ToolsState, UnixMillis, VendorActivity, VendorCommand, VideoCodec, VideoMeta, VmafScore,
     VmafTarget, WorkerCommand, apply, compaction_due, compaction_quiescent, corruption_signature,
@@ -3035,6 +3035,457 @@ fn prepare_resolves_overwrite_from_the_item_not_the_settings() {
             "{decision:?} under overwrite_existing={settings_overwrite}"
         );
     }
+}
+
+/// A settled queue for the admin-command decision tables: items 1 (Failed)
+/// and 2 (Stopped) are finished, item 3 takes the given state, items 4 and 5
+/// are queued. Item and session states are set directly — the command flows
+/// that produce them are exercised by the lifecycle tests.
+fn admin_fixture(third: QueueItemState, session: SessionState) -> AppState {
+    let mut state = AppState::default();
+    for id in 1..=5 {
+        let added = apply(
+            &mut state,
+            add_command(QueueItemId(id), format!("clip-{id}.mkv")),
+        );
+        assert_eq!(added.reply, Reply::Accepted);
+    }
+    state.durable.queue[0].state = QueueItemState::Finished(ItemOutcome::Failed(
+        FailureFacts::new(FailureKind::Internal, "fixture"),
+    ));
+    state.durable.queue[1].state = QueueItemState::Finished(ItemOutcome::Stopped);
+    state.durable.queue[2].state = third;
+    state.session = session;
+    state
+}
+
+fn claimed_state() -> QueueItemState {
+    QueueItemState::Claimed {
+        claim_id: ClaimId(30),
+        run_id: RunId(31),
+    }
+}
+
+#[test]
+fn clear_is_refused_while_a_session_is_active() {
+    for session in [
+        SessionState::Running,
+        SessionState::StopAfterCurrent,
+        SessionState::ForceStopping,
+    ] {
+        let mut state = admin_fixture(claimed_state(), session.clone());
+        let applied = apply(&mut state, Command::Queue(QueueCommand::Clear));
+        assert!(
+            matches!(applied.reply, Reply::Rejected { .. }),
+            "{session:?}"
+        );
+        assert!(applied.durable.is_empty());
+        assert_eq!(state.durable.queue.len(), 5, "{session:?}");
+    }
+}
+
+#[test]
+fn clear_removes_pending_and_finished_items_but_never_an_active_one() {
+    // A crash-recovered claim can outlive its session; clear leaves it alone.
+    let mut state = admin_fixture(claimed_state(), SessionState::Idle);
+    let applied = apply(&mut state, Command::Queue(QueueCommand::Clear));
+    assert_eq!(applied.reply, Reply::Accepted);
+    assert_eq!(applied.durable.len(), 4);
+    assert_eq!(queue_order(&state), vec![3]);
+    // A settled queue clears to empty, and an empty clear is an accepted no-op.
+    let mut state = admin_fixture(QueueItemState::Queued, SessionState::Idle);
+    let applied = apply(&mut state, Command::Queue(QueueCommand::Clear));
+    assert_eq!(applied.reply, Reply::Accepted);
+    assert_eq!(applied.durable.len(), 5);
+    assert!(state.durable.queue.is_empty());
+    let empty = apply(&mut state, Command::Queue(QueueCommand::Clear));
+    assert_eq!(empty.reply, Reply::Accepted);
+    assert!(empty.durable.is_empty());
+}
+
+#[test]
+fn clear_completed_keeps_failed_items_and_runs_in_any_session_state() {
+    for session in [
+        SessionState::Idle,
+        SessionState::Running,
+        SessionState::StopAfterCurrent,
+        SessionState::ForceStopping,
+    ] {
+        let mut state = admin_fixture(claimed_state(), session.clone());
+        let applied = apply(&mut state, Command::Queue(QueueCommand::ClearCompleted));
+        assert_eq!(applied.reply, Reply::Accepted, "{session:?}");
+        assert_eq!(
+            applied.durable,
+            vec![DurableDelta::QueueRemoved {
+                item_id: QueueItemId(2)
+            }],
+            "{session:?}"
+        );
+        assert_eq!(queue_order(&state), vec![1, 3, 4, 5], "{session:?}");
+    }
+}
+
+#[test]
+fn clear_completed_removes_every_terminal_outcome_except_failed() {
+    let outcomes = [
+        ItemOutcome::Analyzed,
+        ItemOutcome::Converted(CompletionEvidence::RecoveredAtStartup),
+        ItemOutcome::Remuxed(CompletionEvidence::RecoveredAtStartup),
+        ItemOutcome::NotWorthwhile {
+            attempts: Vec::new(),
+        },
+        ItemOutcome::Stopped,
+        ItemOutcome::Skipped {
+            reason: SkipReason::AlreadyAv1Matroska,
+        },
+        ItemOutcome::Failed(FailureFacts::new(FailureKind::Internal, "fixture")),
+    ];
+    let mut state = AppState::default();
+    for (index, outcome) in outcomes.into_iter().enumerate() {
+        let id = u64::try_from(index).expect("small index") + 1;
+        let added = apply(
+            &mut state,
+            add_command(QueueItemId(id), format!("clip-{id}.mkv")),
+        );
+        assert_eq!(added.reply, Reply::Accepted);
+        state.durable.queue[index].state = QueueItemState::Finished(outcome);
+    }
+    let applied = apply(&mut state, Command::Queue(QueueCommand::ClearCompleted));
+    assert_eq!(applied.reply, Reply::Accepted);
+    assert_eq!(applied.durable.len(), 6);
+    assert_eq!(queue_order(&state), vec![7]);
+}
+
+#[test]
+fn retry_requeues_a_finished_item_to_the_end_in_any_session_state() {
+    for session in [
+        SessionState::Idle,
+        SessionState::Running,
+        SessionState::StopAfterCurrent,
+        SessionState::ForceStopping,
+    ] {
+        let mut state = admin_fixture(claimed_state(), session.clone());
+        let applied = apply(
+            &mut state,
+            Command::Queue(QueueCommand::Retry {
+                item_id: QueueItemId(1),
+            }),
+        );
+        assert_eq!(applied.reply, Reply::Accepted, "{session:?}");
+        assert_eq!(
+            applied.durable,
+            vec![DurableDelta::QueueRequeued {
+                item_id: QueueItemId(1)
+            }],
+            "{session:?}"
+        );
+        assert_queue_shape(&state, &[2, 3, 4, 5, 1]);
+        let retried = state.durable.queue.last().expect("requeued item");
+        assert_eq!(retried.state, QueueItemState::Queued, "{session:?}");
+    }
+}
+
+#[test]
+fn retry_is_refused_for_missing_active_or_pending_items() {
+    let active_states = [
+        QueueItemState::Reserved {
+            claim_id: ClaimId(30),
+            run_id: RunId(31),
+        },
+        claimed_state(),
+        QueueItemState::Running {
+            claim_id: ClaimId(30),
+            run_id: RunId(31),
+        },
+    ];
+    for active in active_states {
+        let mut state = admin_fixture(active.clone(), SessionState::Running);
+        // Item 3 is active, item 4 is queued, item 9 does not exist.
+        for target in [QueueItemId(3), QueueItemId(4), QueueItemId(9)] {
+            let applied = apply(
+                &mut state,
+                Command::Queue(QueueCommand::Retry { item_id: target }),
+            );
+            assert!(
+                matches!(applied.reply, Reply::Rejected { .. }),
+                "{active:?} -> {target:?}"
+            );
+            assert!(applied.durable.is_empty());
+        }
+        assert_queue_shape(&state, &[1, 2, 3, 4, 5]);
+    }
+}
+
+#[test]
+fn retry_flows_through_the_next_reservation_and_replays() {
+    let mut state = AppState::default();
+    let mut bytes = Vec::new();
+    let mut sequence = 0;
+    for (id, input) in [(1, "first.mkv"), (2, "second.mkv")] {
+        let added = apply_and_journal(
+            &mut state,
+            &mut bytes,
+            &mut sequence,
+            add_command(QueueItemId(id), input),
+        );
+        assert_eq!(added.reply, Reply::Accepted);
+    }
+    let started = start_session(&mut state);
+    assert_eq!(started.reply, Reply::Accepted);
+    let reserved = apply_and_journal(
+        &mut state,
+        &mut bytes,
+        &mut sequence,
+        Command::Worker(WorkerCommand::ReserveNext {
+            claim_id: ClaimId(20),
+            run_id: RunId(21),
+        }),
+    );
+    assert!(matches!(reserved.reply, Reply::Reserved(Some(_))));
+    let prepared = apply_and_journal(
+        &mut state,
+        &mut bytes,
+        &mut sequence,
+        Command::Worker(WorkerCommand::PrepareReserved {
+            item_id: QueueItemId(1),
+            claim_id: ClaimId(20),
+            run_id: RunId(21),
+            observation: None,
+            execution: execution(),
+        }),
+    );
+    assert!(matches!(prepared.reply, Reply::Claimed(Some(_))));
+    let failed = apply_and_journal(
+        &mut state,
+        &mut bytes,
+        &mut sequence,
+        Command::Worker(WorkerCommand::Terminal {
+            item_id: QueueItemId(1),
+            claim_id: ClaimId(20),
+            run_id: RunId(21),
+            outcome: ItemOutcome::Failed(FailureFacts::new(FailureKind::Internal, "fixture")),
+            at: UnixMillis(1_000),
+            phase_spans: Vec::new(),
+            final_telemetry: None,
+        }),
+    );
+    assert_eq!(failed.reply, Reply::Accepted);
+    // Retry sends the failure behind the remaining pending item.
+    let retried = apply_and_journal(
+        &mut state,
+        &mut bytes,
+        &mut sequence,
+        Command::Queue(QueueCommand::Retry {
+            item_id: QueueItemId(1),
+        }),
+    );
+    assert_eq!(retried.reply, Reply::Accepted);
+    assert_queue_shape(&state, &[2, 1]);
+    // The next reservation claims item 2 — the retried item waits its turn —
+    // and the old run's lineage still records the failure.
+    let next = apply_and_journal(
+        &mut state,
+        &mut bytes,
+        &mut sequence,
+        Command::Worker(WorkerCommand::ReserveNext {
+            claim_id: ClaimId(22),
+            run_id: RunId(23),
+        }),
+    );
+    let Reply::Reserved(Some(job)) = next.reply else {
+        panic!("expected a reservation for item 2");
+    };
+    assert_eq!(job.item_id, QueueItemId(2));
+    assert!(
+        state
+            .durable
+            .conversion_runs
+            .get(&RunId(21))
+            .is_some_and(|run| run.outcome.is_some())
+    );
+    let replayed = replay(&bytes);
+    assert!(replayed.corruption.is_none());
+    assert_eq!(replayed.state, state.durable);
+}
+
+#[test]
+fn edit_resolves_partial_patches_against_the_current_tuple() {
+    let mut state = AppState::default();
+    let mut bytes = Vec::new();
+    let mut sequence = 0;
+    let added = apply_and_journal(
+        &mut state,
+        &mut bytes,
+        &mut sequence,
+        add_command(QueueItemId(1), "video.mkv"),
+    );
+    assert_eq!(added.reply, Reply::Accepted);
+    let applied = apply_and_journal(
+        &mut state,
+        &mut bytes,
+        &mut sequence,
+        Command::Queue(QueueCommand::Edit {
+            item_id: QueueItemId(1),
+            patch: QueueItemEdit {
+                operation: Some(Operation::Analyze),
+                overwrite: Some(OverwriteDecision::Deny),
+                ..QueueItemEdit::default()
+            },
+        }),
+    );
+    assert_eq!(applied.reply, Reply::Accepted);
+    // The journaled delta carries the resolved tuple: patched fields plus the
+    // item's unchanged intent and output target.
+    assert_eq!(
+        applied.durable,
+        vec![DurableDelta::QueueEdited {
+            item_id: QueueItemId(1),
+            operation: Operation::Analyze,
+            intent: AnalysisIntent::ReuseIfFresh,
+            output_target: OutputTarget::Replace,
+            overwrite: OverwriteDecision::Deny,
+        }]
+    );
+    assert_eq!(state.durable.queue[0].operation, Operation::Analyze);
+    assert_eq!(state.durable.queue[0].overwrite, OverwriteDecision::Deny);
+    // Patches that change nothing are accepted no-ops with no durable record.
+    for patch in [
+        QueueItemEdit::default(),
+        QueueItemEdit {
+            operation: Some(Operation::Analyze),
+            ..QueueItemEdit::default()
+        },
+    ] {
+        let noop = apply_and_journal(
+            &mut state,
+            &mut bytes,
+            &mut sequence,
+            Command::Queue(QueueCommand::Edit {
+                item_id: QueueItemId(1),
+                patch,
+            }),
+        );
+        assert_eq!(noop.reply, Reply::Accepted);
+        assert!(noop.durable.is_empty());
+    }
+    let replayed = replay(&bytes);
+    assert!(replayed.corruption.is_none());
+    assert_eq!(replayed.state, state.durable);
+}
+
+#[test]
+fn edit_is_idle_only_and_targets_queued_items() {
+    // Session gate: a non-idle session refuses edits even of queued items —
+    // the running session's rules are frozen.
+    for session in [
+        SessionState::Running,
+        SessionState::StopAfterCurrent,
+        SessionState::ForceStopping,
+    ] {
+        let mut state = admin_fixture(claimed_state(), session.clone());
+        let applied = apply(
+            &mut state,
+            Command::Queue(QueueCommand::Edit {
+                item_id: QueueItemId(4),
+                patch: QueueItemEdit {
+                    operation: Some(Operation::Analyze),
+                    ..QueueItemEdit::default()
+                },
+            }),
+        );
+        assert!(
+            matches!(applied.reply, Reply::Rejected { .. }),
+            "{session:?}"
+        );
+        assert!(applied.durable.is_empty());
+    }
+    // Item gate while idle: finished, crash-recovered active, and missing
+    // items all refuse.
+    let mut state = admin_fixture(claimed_state(), SessionState::Idle);
+    for target in [QueueItemId(1), QueueItemId(3), QueueItemId(9)] {
+        let applied = apply(
+            &mut state,
+            Command::Queue(QueueCommand::Edit {
+                item_id: target,
+                patch: QueueItemEdit {
+                    operation: Some(Operation::Analyze),
+                    ..QueueItemEdit::default()
+                },
+            }),
+        );
+        assert!(
+            matches!(applied.reply, Reply::Rejected { .. }),
+            "{target:?}"
+        );
+        assert!(applied.durable.is_empty());
+    }
+    assert_queue_shape(&state, &[1, 2, 3, 4, 5]);
+}
+
+#[test]
+fn replay_rejects_requeues_of_pending_and_edits_of_finished_items() {
+    // A queued item cannot be requeued.
+    let mut bytes = encode_record(&JournalEnvelope {
+        sequence: JournalSequence(0),
+        deltas: vec![queue_added_delta(1, "one.mkv")],
+    })
+    .expect("head record");
+    bytes.extend(
+        encode_record(&JournalEnvelope {
+            sequence: JournalSequence(1),
+            deltas: vec![DurableDelta::QueueRequeued {
+                item_id: QueueItemId(1),
+            }],
+        })
+        .expect("requeue record"),
+    );
+    let replayed = replay(&bytes);
+    let corruption = replayed.corruption.expect("requeue of a queued item");
+    assert!(corruption.reason.contains("requeued item"));
+
+    // A finished item cannot be edited.
+    let mut bytes = encode_record(&JournalEnvelope {
+        sequence: JournalSequence(0),
+        deltas: vec![
+            queue_added_delta(1, "one.mkv"),
+            DurableDelta::ItemReserved {
+                job: Box::new(crate::ReservedJob {
+                    item_id: QueueItemId(1),
+                    claim_id: ClaimId(2),
+                    run_id: RunId(3),
+                    input: PathBuf::from("one.mkv"),
+                    operation: Operation::Convert,
+                    intent: AnalysisIntent::ReuseIfFresh,
+                    output_target: OutputTarget::Replace,
+                }),
+            },
+            DurableDelta::ItemFinished {
+                item_id: QueueItemId(1),
+                claim_id: ClaimId(2),
+                run_id: RunId(3),
+                outcome: ItemOutcome::Stopped,
+                at: UnixMillis(1_000),
+                phase_spans: Vec::new(),
+            },
+        ],
+    })
+    .expect("head record");
+    bytes.extend(
+        encode_record(&JournalEnvelope {
+            sequence: JournalSequence(1),
+            deltas: vec![DurableDelta::QueueEdited {
+                item_id: QueueItemId(1),
+                operation: Operation::Analyze,
+                intent: AnalysisIntent::ReuseIfFresh,
+                output_target: OutputTarget::Replace,
+                overwrite: OverwriteDecision::FollowSettings,
+            }],
+        })
+        .expect("edit record"),
+    );
+    let replayed = replay(&bytes);
+    let corruption = replayed.corruption.expect("edit of a finished item");
+    assert!(corruption.reason.contains("edited item"));
 }
 
 #[test]

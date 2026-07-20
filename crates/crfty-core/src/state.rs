@@ -140,6 +140,22 @@ pub enum DurableDelta {
         item_id: QueueItemId,
         before: Option<QueueItemId>,
     },
+    /// A finished item goes around again: state resets to `Queued` and the
+    /// item moves to the end of the queue, preserving the
+    /// finished < active < queued shape invariant. The old run's lineage is
+    /// untouched; fresh claim/run ids arrive at the next reservation.
+    QueueRequeued {
+        item_id: QueueItemId,
+    },
+    /// A pending item's job parameters, resolved to the full tuple so the
+    /// fold stays structural and replay needs no patch semantics.
+    QueueEdited {
+        item_id: QueueItemId,
+        operation: Operation,
+        intent: AnalysisIntent,
+        output_target: OutputTarget,
+        overwrite: OverwriteDecision,
+    },
     ItemReserved {
         job: Box<ReservedJob>,
     },
@@ -307,6 +323,27 @@ pub fn fold(state: &mut DurableState, delta: &DurableDelta) {
         }
         DurableDelta::QueueMoved { item_id, before } => {
             move_item(&mut state.queue, *item_id, *before)
+        }
+        DurableDelta::QueueRequeued { item_id } => {
+            if let Some(source) = state.queue.iter().position(|item| item.id == *item_id) {
+                let mut item = state.queue.remove(source);
+                item.state = QueueItemState::Queued;
+                state.queue.push(item);
+            }
+        }
+        DurableDelta::QueueEdited {
+            item_id,
+            operation,
+            intent,
+            output_target,
+            overwrite,
+        } => {
+            if let Some(item) = state.queue.iter_mut().find(|item| item.id == *item_id) {
+                item.operation = *operation;
+                item.intent = *intent;
+                item.output_target = output_target.clone();
+                item.overwrite = *overwrite;
+            }
         }
         DurableDelta::ItemReserved { job } => {
             set_item_state(
