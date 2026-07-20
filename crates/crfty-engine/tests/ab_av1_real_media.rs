@@ -324,10 +324,20 @@ fn real_engine_config(directory: &Path, tools: &MediaTools) -> EngineConfig {
     EngineConfig {
         journal_path: directory.join("state.jsonl"),
         config_path: directory.join("config.json"),
-        media_tools: crfty_engine::tools::ToolDiscovery::Available {
-            source: crfty_core::ToolSource::Explicit,
-            tools: tools.clone(),
-        },
+        vendor_root: directory.join("vendor"),
+        tools: crfty_engine::coordinator::ToolsConfig::Fixed(
+            crfty_engine::vendor::discovery::DiscoveredTools::Available(
+                crfty_engine::vendor::discovery::CurrentTools {
+                    media: tools.clone(),
+                    source: crfty_core::ToolSource::Explicit,
+                    revisions: crfty_core::ToolRevisions {
+                        ab_av1: "real-contract".to_owned(),
+                        ffmpeg: "real-contract".to_owned(),
+                        encoder: "real-contract".to_owned(),
+                    },
+                },
+            ),
+        ),
         execution: ExecutionSettings {
             requested_target: REAL_CONTRACT_TARGET,
             fallback_floor: REAL_CONTRACT_TARGET,

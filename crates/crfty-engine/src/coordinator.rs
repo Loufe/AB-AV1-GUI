@@ -137,15 +137,31 @@ use crate::{
         self, RemuxCancellationHandle, RemuxHandle, RemuxReport, RemuxRequest, RemuxTelemetry,
         RemuxTerminal,
     },
-    tools::ToolDiscovery,
+    vendor::discovery::{self, CurrentTools, DiscoveredTools, DiscoveryReport},
 };
 
 #[derive(Debug, Clone)]
 pub struct EngineConfig {
     pub journal_path: PathBuf,
     pub config_path: PathBuf,
-    pub media_tools: ToolDiscovery,
+    /// Root of the managed vendor tree (`current.json`, `installs/`,
+    /// `staging/`); the shell passes `<app data dir>/vendor`.
+    pub vendor_root: PathBuf,
+    pub tools: ToolsConfig,
+    /// Base execution settings. The profile carries no tool revisions — the
+    /// session worker composes the discovered revisions in before each claim,
+    /// so only [`ExecutionSettings::validate_base`] applies here.
     pub execution: ExecutionSettings,
+}
+
+#[derive(Debug, Clone)]
+pub enum ToolsConfig {
+    /// Run vendor discovery (explicit env paths > managed install > PATH)
+    /// against the vendor root at startup.
+    Discover,
+    /// Injected discovery outcome. Tests and the contract fixture pin tools
+    /// and revisions without touching the process environment.
+    Fixed(DiscoveredTools),
 }
 
 #[derive(Debug)]
@@ -170,7 +186,7 @@ pub struct EngineRuntime {
 
 impl EngineRuntime {
     pub fn start(config: EngineConfig) -> Result<Self, EngineStartError> {
-        config.execution.validate().map_err(|reason| {
+        config.execution.validate_base().map_err(|reason| {
             EngineStartError(format!("invalid engine execution settings: {reason}"))
         })?;
         let runtime = Arc::new(
@@ -197,6 +213,13 @@ impl EngineRuntime {
                 )));
             }
         };
+        let report = match &config.tools {
+            ToolsConfig::Discover => discovery::discover(&config.vendor_root),
+            ToolsConfig::Fixed(tools) => DiscoveryReport {
+                tools: tools.clone(),
+                update_available: false,
+            },
+        };
         // Availability is reported before recovery so the reducer's fail-closed
         // default is replaced by the real discovery result ahead of any
         // recovery events, and the ToolsChanged ephemeral is already queued
@@ -204,12 +227,8 @@ impl EngineRuntime {
         let discovered = driver
             .commands
             .submit(Command::System(SystemCommand::ToolsDiscovered {
-                availability: config.media_tools.availability(crfty_core::ToolRevisions {
-                    ab_av1: config.execution.profile.ab_av1_revision.clone(),
-                    ffmpeg: config.execution.profile.ffmpeg_revision.clone(),
-                    encoder: config.execution.profile.encoder_revision.clone(),
-                }),
-                update_available: false,
+                availability: report.tools.availability(),
+                update_available: report.update_available,
             }))
             .map_err(|error| {
                 EngineStartError(format!("failed to report tool availability: {error}"))
@@ -219,9 +238,13 @@ impl EngineRuntime {
                 "tool availability report was not accepted: {discovered:?}"
             )));
         }
+        let current_tools = match report.tools {
+            DiscoveredTools::Available(current) => Some(current),
+            DiscoveredTools::Missing { .. } => None,
+        };
         let recovered = recover_startup(
             &driver.commands,
-            config.media_tools.tools(),
+            current_tools.as_ref().map(|current| &current.media),
             initial.durable,
         );
         let next_runtime_id = next_runtime_id(&recovered)?;
@@ -251,9 +274,15 @@ impl EngineRuntime {
                 }
             })
             .map_err(|error| EngineStartError(format!("failed to start event bridge: {error}")))?;
+        // Written only by the vendor worker on successful activation, which
+        // the reducer permits only while the engine is fully idle; sessions
+        // snapshot it once at start. That serialization is what makes the
+        // shared slot race-free.
+        let tools_slot = Arc::new(Mutex::new(current_tools));
         let internal_commands = driver.commands.clone();
         let supervisor_commands = internal_commands.clone();
         let supervisor_runtime = Arc::clone(&runtime);
+        let supervisor_tools = Arc::clone(&tools_slot);
         let supervisor = thread::Builder::new()
             .name("crfty-job-supervisor".to_owned())
             .spawn(move || {
@@ -262,6 +291,7 @@ impl EngineRuntime {
                     supervisor_commands,
                     supervisor_runtime,
                     config,
+                    supervisor_tools,
                     next_runtime_id,
                 );
             })
@@ -617,6 +647,7 @@ fn supervise(
     commands: CommandSender,
     runtime: Arc<AbAv1Runtime>,
     config: EngineConfig,
+    tools_slot: Arc<Mutex<Option<CurrentTools>>>,
     next_runtime_id: u64,
 ) {
     let cancellation = ActiveCancellation::new();
@@ -635,6 +666,7 @@ fn supervise(
                 let worker_commands = commands.clone();
                 let worker_runtime = Arc::clone(&runtime);
                 let worker_config = config.clone();
+                let worker_tools = Arc::clone(&tools_slot);
                 let worker_cancellation = cancellation.clone();
                 let worker_ids = Arc::clone(&next_id);
                 let spawned = thread::Builder::new()
@@ -645,6 +677,7 @@ fn supervise(
                                 &worker_commands,
                                 &worker_runtime,
                                 &worker_config,
+                                &worker_tools,
                                 &worker_cancellation,
                                 &worker_ids,
                             )
@@ -709,10 +742,21 @@ fn run_session(
     commands: &CommandSender,
     runtime: &AbAv1Runtime,
     config: &EngineConfig,
+    tools_slot: &Mutex<Option<CurrentTools>>,
     cancellation: &ActiveCancellation,
     ids: &AtomicU64,
 ) -> Result<(), String> {
-    let Some(tools) = config.media_tools.tools() else {
+    // Snapshot the slot once: every claim in this session executes with the
+    // same binaries and revisions, and the reducer refuses vendor installs
+    // while a session runs, so the snapshot cannot go stale mid-session.
+    let current = {
+        let slot = match tools_slot.lock() {
+            Ok(slot) => slot,
+            Err(poisoned) => poisoned.into_inner(),
+        };
+        slot.clone()
+    };
+    let Some(current) = current else {
         // Unreachable past the reducer's session-start gate; finish the
         // session gracefully rather than reporting a worker crash.
         return require_accepted(
@@ -720,8 +764,15 @@ fn run_session(
             commands.submit(Command::Worker(WorkerCommand::Finished)),
         );
     };
+    let tools = &current.media;
     let inspector = MediaInspector::new(tools.ffprobe.clone());
     let mut decoder_resolver = DecodeResolver::new(tools.ffmpeg.clone());
+    // Claim-time revision immutability: the composed revisions freeze into
+    // each JobSpec at PrepareReserved and survive any later tool swap.
+    let mut base_execution = config.execution.clone();
+    base_execution.profile.ab_av1_revision = current.revisions.ab_av1.clone();
+    base_execution.profile.ffmpeg_revision = current.revisions.ffmpeg.clone();
+    base_execution.profile.encoder_revision = current.revisions.encoder.clone();
     loop {
         let claim_id = ClaimId(ids.fetch_add(1, Ordering::Relaxed));
         let run_id = RunId(ids.fetch_add(1, Ordering::Relaxed));
@@ -745,7 +796,7 @@ fn run_session(
                 None
             }
         };
-        let mut execution = config.execution.clone();
+        let mut execution = base_execution.clone();
         execution.profile.decode_mode =
             observation
                 .as_ref()

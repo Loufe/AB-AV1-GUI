@@ -36,7 +36,20 @@ fn available() -> ToolAvailability {
 }
 
 fn execution() -> ExecutionSettings {
-    ExecutionSettings::production(AnalysisProfile::production(revisions()), false)
+    let mut profile = AnalysisProfile::production();
+    let revisions = revisions();
+    profile.ab_av1_revision = revisions.ab_av1;
+    profile.ffmpeg_revision = revisions.ffmpeg;
+    profile.encoder_revision = revisions.encoder;
+    ExecutionSettings::production(profile, false)
+}
+
+#[test]
+fn base_profile_is_valid_only_until_revisions_are_required() {
+    let base = ExecutionSettings::production(AnalysisProfile::production(), false);
+    assert_eq!(base.validate_base(), Ok(()));
+    assert_eq!(base.validate(), Err("tool revisions must not be empty"));
+    assert_eq!(execution().validate(), Ok(()));
 }
 
 fn analysis() -> AnalysisResult {

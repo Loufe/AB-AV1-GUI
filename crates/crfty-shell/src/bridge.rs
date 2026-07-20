@@ -15,10 +15,10 @@ use std::sync::{
 use crfty_core::{
     AnalysisProfile, AppSnapshot, ConfigDelta, DurableDelta, DurableState, EphemeralDelta,
     ExecutionSettings, QueueCommand, QueueItemId, Reply, SessionCommand, SessionState, Settings,
-    SettingsCommand, ToolRevisions, ToolsState, fold, fold_config,
+    SettingsCommand, ToolsState, fold, fold_config,
 };
 use crfty_engine::{
-    coordinator::{EngineConfig, EngineRuntime, UserCommandSender},
+    coordinator::{EngineConfig, EngineRuntime, ToolsConfig, UserCommandSender},
     driver::DriverEvent,
 };
 use serde::Serialize;
@@ -26,9 +26,7 @@ use tauri::{Manager, ipc::Channel};
 
 const JOURNAL_FILE_NAME: &str = "journal.jsonl";
 const CONFIG_FILE_NAME: &str = "config.json";
-/// Real tool revisions arrive with the vendor subsystem; until then analysis
-/// provenance records a placeholder (core only requires non-empty strings).
-const INTERIM_TOOL_REVISION: &str = "unknown";
+const VENDOR_DIR_NAME: &str = "vendor";
 
 #[derive(Debug, Clone, Serialize, specta::Type)]
 pub struct ShellEvent {
@@ -142,20 +140,15 @@ impl Bridge {
             .map_err(|error| format!("no application data directory: {error}"))?;
         std::fs::create_dir_all(&data_dir)
             .map_err(|error| format!("failed to create application data directory: {error}"))?;
-        // Discovery is infallible: missing tools become typed availability
-        // state on the stream, never a startup failure that would hide the
-        // queue, history, or settings.
-        let media_tools = crfty_engine::tools::discover_media_tools();
-        let revisions = ToolRevisions {
-            ab_av1: INTERIM_TOOL_REVISION.to_owned(),
-            ffmpeg: INTERIM_TOOL_REVISION.to_owned(),
-            encoder: INTERIM_TOOL_REVISION.to_owned(),
-        };
+        // Discovery runs inside the engine and is infallible: missing tools
+        // become typed availability state on the stream, never a startup
+        // failure that would hide the queue, history, or settings.
         let config = EngineConfig {
             journal_path: data_dir.join(JOURNAL_FILE_NAME),
             config_path: data_dir.join(CONFIG_FILE_NAME),
-            media_tools,
-            execution: ExecutionSettings::production(AnalysisProfile::production(revisions), false),
+            vendor_root: data_dir.join(VENDOR_DIR_NAME),
+            tools: ToolsConfig::Discover,
+            execution: ExecutionSettings::production(AnalysisProfile::production(), false),
         };
         let mut runtime = EngineRuntime::start(config).map_err(|error| error.to_string())?;
         let events = std::mem::replace(&mut runtime.events, mpsc::channel().1);

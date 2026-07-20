@@ -633,14 +633,13 @@ mod tests {
 
     #[test]
     fn terminal_publishes_ephemerals_before_the_durable_finish() {
-        let execution = ExecutionSettings::production(
-            AnalysisProfile::production(ToolRevisions {
-                ab_av1: "fixture".to_owned(),
-                ffmpeg: "fixture".to_owned(),
-                encoder: "fixture".to_owned(),
-            }),
-            false,
-        );
+        let execution = {
+            let mut profile = AnalysisProfile::production();
+            profile.ab_av1_revision = "fixture".to_owned();
+            profile.ffmpeg_revision = "fixture".to_owned();
+            profile.encoder_revision = "fixture".to_owned();
+            ExecutionSettings::production(profile, false)
+        };
         let mut state = AppState::default();
         for command in [
             Command::Queue(QueueCommand::Add {

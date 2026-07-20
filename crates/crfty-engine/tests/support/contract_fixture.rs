@@ -29,7 +29,20 @@ use crfty_engine::ab_av1::{
     AbAv1Runtime, EncodeOutcome, EncodeRequest, FaultInjection, JobHandle, JobTerminal, MediaTools,
     SearchRequest, StartJobError,
 };
-use crfty_engine::coordinator::{EngineConfig, EngineRuntime};
+use crfty_engine::coordinator::{EngineConfig, EngineRuntime, ToolsConfig};
+use crfty_engine::vendor::discovery::{CurrentTools, DiscoveredTools};
+
+fn fixed_tools(tools: MediaTools) -> ToolsConfig {
+    ToolsConfig::Fixed(DiscoveredTools::Available(CurrentTools {
+        media: tools,
+        source: crfty_core::ToolSource::Explicit,
+        revisions: crfty_core::ToolRevisions {
+            ab_av1: "contract".to_owned(),
+            ffmpeg: "contract".to_owned(),
+            encoder: "contract".to_owned(),
+        },
+    }))
+}
 
 fn main() {
     if let Err(error) = dispatch() {
@@ -71,6 +84,14 @@ fn dispatch() -> Result<(), Box<dyn Error>> {
 }
 
 fn fake_ffprobe() -> Result<(), Box<dyn Error>> {
+    if env::args_os().any(|argument| argument == "-show_program_version") {
+        let mut stdout = io::stdout().lock();
+        stdout.write_all(
+            br#"{"program_version": {"version": "fixture-8.1.2", "copyright": "fixture", "compiler_ident": "fixture", "configuration": ""}}"#,
+        )?;
+        stdout.write_all(b"\n")?;
+        return Ok(());
+    }
     const PROBE: &str = r#"{
         "streams": [{
             "index": 0,
@@ -160,10 +181,8 @@ fn run_coordinator_contract(
     let engine = EngineRuntime::start(EngineConfig {
         journal_path: output_dir.join("coordinator.jsonl"),
         config_path: output_dir.join("config.json"),
-        media_tools: crfty_engine::tools::ToolDiscovery::Available {
-            source: crfty_core::ToolSource::Explicit,
-            tools,
-        },
+        vendor_root: output_dir.join("vendor"),
+        tools: fixed_tools(tools),
         execution: ExecutionSettings {
             requested_target: DEFAULT_VMAF_TARGET,
             fallback_floor: MIN_VMAF_FALLBACK_TARGET,
@@ -367,10 +386,8 @@ fn run_ladder_contract(
     let engine = EngineRuntime::start(EngineConfig {
         journal_path: output_dir.join("ladder.jsonl"),
         config_path: output_dir.join("ladder-config.json"),
-        media_tools: crfty_engine::tools::ToolDiscovery::Available {
-            source: crfty_core::ToolSource::Explicit,
-            tools,
-        },
+        vendor_root: output_dir.join("vendor"),
+        tools: fixed_tools(tools),
         execution: ExecutionSettings {
             requested_target: DEFAULT_VMAF_TARGET,
             fallback_floor: MIN_VMAF_FALLBACK_TARGET,

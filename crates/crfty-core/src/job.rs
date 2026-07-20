@@ -107,8 +107,12 @@ pub struct ToolRevisions {
 }
 
 impl AnalysisProfile {
+    /// Production base profile. Tool revisions start empty: the engine
+    /// composes the discovered revisions in when it prepares a claim, so a
+    /// base profile satisfies [`Self::validate_base`] but not
+    /// [`Self::validate`].
     #[must_use]
-    pub fn production(revisions: ToolRevisions) -> Self {
+    pub fn production() -> Self {
         Self {
             preset: DEFAULT_ENCODING_PRESET,
             max_encoded_percent_basis_points: DEFAULT_MAX_ENCODED_PERCENT_BASIS_POINTS,
@@ -116,13 +120,15 @@ impl AnalysisProfile {
             sample_duration_ms: DEFAULT_SAMPLE_DURATION_MS,
             thorough: false,
             decode_mode: DecodeMode::Software,
-            ab_av1_revision: revisions.ab_av1,
-            ffmpeg_revision: revisions.ffmpeg,
-            encoder_revision: revisions.encoder,
+            ab_av1_revision: String::new(),
+            ffmpeg_revision: String::new(),
+            encoder_revision: String::new(),
         }
     }
 
-    pub fn validate(&self) -> Result<(), &'static str> {
+    /// Structural checks that a base profile must satisfy before tool
+    /// revisions are composed in at claim time.
+    pub fn validate_base(&self) -> Result<(), &'static str> {
         if self.preset > MAX_ENCODING_PRESET {
             return Err("encoding preset is outside the supported range");
         }
@@ -135,6 +141,11 @@ impl AnalysisProfile {
         if self.sample_duration_ms == 0 {
             return Err("sample duration must be positive");
         }
+        Ok(())
+    }
+
+    pub fn validate(&self) -> Result<(), &'static str> {
+        self.validate_base()?;
         if self.ab_av1_revision.is_empty()
             || self.ffmpeg_revision.is_empty()
             || self.encoder_revision.is_empty()
@@ -168,7 +179,9 @@ impl ExecutionSettings {
         }
     }
 
-    pub fn validate(&self) -> Result<(), &'static str> {
+    /// Validates everything except the profile's tool revisions, which the
+    /// engine composes in at claim time.
+    pub fn validate_base(&self) -> Result<(), &'static str> {
         if u16::from(self.requested_target.0) > MAX_VMAF_SCORE
             || u16::from(self.fallback_floor.0) > MAX_VMAF_SCORE
         {
@@ -180,6 +193,11 @@ impl ExecutionSettings {
         if self.fallback_step == 0 {
             return Err("VMAF fallback step must be positive");
         }
+        self.profile.validate_base()
+    }
+
+    pub fn validate(&self) -> Result<(), &'static str> {
+        self.validate_base()?;
         self.profile.validate()
     }
 }

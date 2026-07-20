@@ -21,11 +21,11 @@ use crfty_core::{
 };
 use crfty_engine::{
     ab_av1::MediaTools,
-    coordinator::{EngineConfig, EngineRuntime},
+    coordinator::{EngineConfig, EngineRuntime, ToolsConfig},
     driver::{DriverEvent, DriverHandle},
     journal::JournalWriter,
     output::{ArtifactInspector, FixtureByteInspector, OutputManager},
-    tools::ToolDiscovery,
+    vendor::discovery::{CurrentTools, DiscoveredTools},
 };
 
 static TEMP_SEQUENCE: AtomicU64 = AtomicU64::new(0);
@@ -35,14 +35,23 @@ static TEMP_SEQUENCE: AtomicU64 = AtomicU64::new(0);
 static ENGINE_GUARD: Mutex<()> = Mutex::new(());
 
 fn execution() -> ExecutionSettings {
-    ExecutionSettings::production(
-        AnalysisProfile::production(ToolRevisions {
+    let mut profile = AnalysisProfile::production();
+    profile.ab_av1_revision = "fixture".to_owned();
+    profile.ffmpeg_revision = "fixture".to_owned();
+    profile.encoder_revision = "fixture".to_owned();
+    ExecutionSettings::production(profile, false)
+}
+
+fn fixture_tools(media: MediaTools) -> ToolsConfig {
+    ToolsConfig::Fixed(DiscoveredTools::Available(CurrentTools {
+        media,
+        source: ToolSource::System,
+        revisions: ToolRevisions {
             ab_av1: "fixture".to_owned(),
             ffmpeg: "fixture".to_owned(),
             encoder: "fixture".to_owned(),
-        }),
-        false,
-    )
+        },
+    }))
 }
 
 fn fixture_available() -> ToolAvailability {
@@ -650,13 +659,11 @@ fn engine_startup_recovers_an_active_partial_staging_transaction() {
     let engine = EngineRuntime::start(EngineConfig {
         journal_path,
         config_path: directory.path().join("config.json"),
-        media_tools: ToolDiscovery::Available {
-            source: ToolSource::System,
-            tools: MediaTools {
-                ffmpeg: executable.clone(),
-                ffprobe: executable,
-            },
-        },
+        vendor_root: directory.path().join("vendor"),
+        tools: fixture_tools(MediaTools {
+            ffmpeg: executable.clone(),
+            ffprobe: executable,
+        }),
         execution: settings,
     })
     .expect("engine startup recovery");
@@ -778,13 +785,11 @@ fn engine_startup_abandons_intent_when_staging_was_never_created() {
     let engine = EngineRuntime::start(EngineConfig {
         journal_path,
         config_path: directory.path().join("config.json"),
-        media_tools: ToolDiscovery::Available {
-            source: ToolSource::System,
-            tools: MediaTools {
-                ffmpeg: executable.clone(),
-                ffprobe: executable,
-            },
-        },
+        vendor_root: directory.path().join("vendor"),
+        tools: fixture_tools(MediaTools {
+            ffmpeg: executable.clone(),
+            ffprobe: executable,
+        }),
         execution: settings,
     })
     .expect("engine startup recovery");
@@ -832,13 +837,11 @@ fn engine_startup_removes_staging_left_before_staging_created_was_durable() {
     let engine = EngineRuntime::start(EngineConfig {
         journal_path,
         config_path: directory.path().join("config.json"),
-        media_tools: ToolDiscovery::Available {
-            source: ToolSource::System,
-            tools: MediaTools {
-                ffmpeg: executable.clone(),
-                ffprobe: executable,
-            },
-        },
+        vendor_root: directory.path().join("vendor"),
+        tools: fixture_tools(MediaTools {
+            ffmpeg: executable.clone(),
+            ffprobe: executable,
+        }),
         execution: settings,
     })
     .expect("engine startup recovery");
@@ -1007,13 +1010,11 @@ fn recover_settled_success(directory: &TestDirectory, fixture: &SettledSuccessFi
     let engine = EngineRuntime::start(EngineConfig {
         journal_path: fixture.journal_path.clone(),
         config_path: directory.path().join("config.json"),
-        media_tools: ToolDiscovery::Available {
-            source: ToolSource::System,
-            tools: MediaTools {
-                ffmpeg: executable.clone(),
-                ffprobe: executable,
-            },
-        },
+        vendor_root: directory.path().join("vendor"),
+        tools: fixture_tools(MediaTools {
+            ffmpeg: executable.clone(),
+            ffprobe: executable,
+        }),
         execution: execution(),
     })
     .expect("engine startup recovery");
