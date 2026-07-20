@@ -427,6 +427,10 @@ fn run_ladder_contract(
     let mut prepared_decodes = Vec::new();
     let mut reused_analyses = 0_u8;
     let mut recorded_decodes = Vec::new();
+    // A repeated StagingCreated for the same run is the encode retry's
+    // restage.
+    let mut stagings: std::collections::BTreeMap<crfty_core::RunId, u8> =
+        std::collections::BTreeMap::new();
     let mut restages = 0_u8;
     let mut outcomes = Vec::new();
     while finished < 3 {
@@ -443,8 +447,14 @@ fn run_ladder_contract(
                 crfty_core::DurableDelta::AnalysisRecorded { result, .. },
             ) => recorded_decodes.push(result.profile.decode_mode),
             crfty_engine::driver::DriverEvent::Durable(crfty_core::DurableDelta::Output(
-                crfty_core::OutputDelta::OutputRestaged { .. },
-            )) => restages = restages.saturating_add(1),
+                crfty_core::OutputDelta::StagingCreated { run_id, .. },
+            )) => {
+                let count = stagings.entry(run_id).or_insert(0);
+                *count = count.saturating_add(1);
+                if *count > 1 {
+                    restages = restages.saturating_add(1);
+                }
+            }
             crfty_engine::driver::DriverEvent::Durable(
                 crfty_core::DurableDelta::ItemFinished {
                     item_id, outcome, ..

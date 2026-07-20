@@ -789,8 +789,8 @@ fn active_run(state: &AppState) -> Option<RunId> {
 fn output_run_id(delta: &OutputDelta) -> RunId {
     match delta {
         OutputDelta::OutputStarted { transaction } => transaction.run_id,
-        OutputDelta::OutputReady { run_id, .. }
-        | OutputDelta::OutputRestaged { run_id, .. }
+        OutputDelta::StagingCreated { run_id, .. }
+        | OutputDelta::OutputReady { run_id, .. }
         | OutputDelta::OutputCommitted { run_id, .. }
         | OutputDelta::RetireOriginalIntent { run_id }
         | OutputDelta::OriginalRetired { run_id }
@@ -828,27 +828,31 @@ pub(crate) fn validate_output_delta(
         (Some(_), OutputDelta::OutputStarted { .. }) => {
             Err("output transaction has already started")
         }
+        // A repeated `StagingCreated` (from `StagingCreated` state) is the
+        // encode retry's restage: the failed attempt's adapter cleanup
+        // deleted the staging file, so the pin moves to the recreated one.
+        // Any settled state refuses it — retry-after-abandonment is
+        // unrepresentable.
+        (Some(transaction), OutputDelta::StagingCreated { .. })
+            if matches!(
+                transaction.state,
+                crate::OutputState::Started | crate::OutputState::StagingCreated { .. }
+            ) =>
+        {
+            Ok(())
+        }
         (
             Some(transaction),
             OutputDelta::OutputReady {
                 staging_identity, ..
             },
-        ) if transaction.state == crate::OutputState::Started
-            && staging_identity.destructive.size > 0
-            && staging_identity.destructive.file_id
-                == transaction.initial_staging_identity.file_id =>
+        ) if matches!(
+            &transaction.state,
+            crate::OutputState::StagingCreated { initial }
+                if staging_identity.destructive.size > 0
+                    && staging_identity.destructive.file_id == initial.file_id
+        ) =>
         {
-            Ok(())
-        }
-        // An encode retry recreates the empty staging artifact in place; the
-        // pin moves with it. Only a Started transaction can restage — after
-        // abandonment (or any settlement) a retry is unrepresentable.
-        (
-            Some(transaction),
-            OutputDelta::OutputRestaged {
-                staging_identity, ..
-            },
-        ) if transaction.state == crate::OutputState::Started && staging_identity.size == 0 => {
             Ok(())
         }
         (Some(transaction), OutputDelta::OutputCommitted { final_identity, .. }) => {
@@ -878,16 +882,20 @@ pub(crate) fn validate_output_delta(
         {
             Ok(())
         }
-        (
-            Some(transaction),
-            OutputDelta::AbandonStagingIntent {
-                staging_identity, ..
-            },
-        ) if transaction.state == crate::OutputState::Started => Ok(()),
+        (Some(transaction), OutputDelta::AbandonStagingIntent { .. })
+            if matches!(
+                transaction.state,
+                crate::OutputState::Started | crate::OutputState::StagingCreated { .. }
+            ) =>
+        {
+            Ok(())
+        }
         (Some(transaction), OutputDelta::Abandoned { .. })
             if matches!(
                 transaction.state,
-                crate::OutputState::Started | crate::OutputState::AbandonIntent { .. }
+                crate::OutputState::Started
+                    | crate::OutputState::StagingCreated { .. }
+                    | crate::OutputState::AbandonIntent { .. }
             ) =>
         {
             Ok(())

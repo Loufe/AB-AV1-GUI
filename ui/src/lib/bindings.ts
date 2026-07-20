@@ -400,73 +400,73 @@ export type OutputDelta = OutputDelta_Serialize | OutputDelta_Deserialize;
 
 export type OutputDelta_Deserialize = ({ OutputStarted: {
 	transaction: OutputTransaction_Deserialize,
-} }) & { AbandonStagingIntent?: never; Abandoned?: never; Conflict?: never; OriginalRetired?: never; OutputCommitted?: never; OutputReady?: never; OutputRestaged?: never; RetireOriginalIntent?: never } | ({ OutputReady: {
+} }) & { AbandonStagingIntent?: never; Abandoned?: never; Conflict?: never; OriginalRetired?: never; OutputCommitted?: never; OutputReady?: never; RetireOriginalIntent?: never; StagingCreated?: never } | 
+/**
+ *  Records the created (or, for an in-transaction encode retry,
+ *  recreated) staging artifact. A repeated `StagingCreated` moves the
+ *  journaled pin — which `OutputReady` verifies by file id — to the
+ *  recreated file after the failed attempt's adapter cleanup deleted it.
+ *  A settled transaction refuses this, so retry-after-abandonment stays
+ *  unrepresentable.
+ */
+({ StagingCreated: {
+	run_id: RunId,
+	initial: DestructiveIdentity_Deserialize,
+} }) & { AbandonStagingIntent?: never; Abandoned?: never; Conflict?: never; OriginalRetired?: never; OutputCommitted?: never; OutputReady?: never; OutputStarted?: never; RetireOriginalIntent?: never } | ({ OutputReady: {
 	run_id: RunId,
 	staging_identity: ArtifactIdentity_Deserialize,
-} }) & { AbandonStagingIntent?: never; Abandoned?: never; Conflict?: never; OriginalRetired?: never; OutputCommitted?: never; OutputRestaged?: never; OutputStarted?: never; RetireOriginalIntent?: never } | 
-/**
- *  The staging artifact was recreated for an in-transaction encode retry
- *  (the failed attempt's adapter cleanup deletes staging). Valid only
- *  while the transaction is Started; the journaled staging pin —
- *  `initial_staging_identity`, which `OutputReady` verifies by file id —
- *  moves to the recreated file. After abandonment the ledger refuses
- *  this, so retry-after-abandon stays unrepresentable.
- */
-({ OutputRestaged: {
-	run_id: RunId,
-	staging_identity: DestructiveIdentity_Deserialize,
-} }) & { AbandonStagingIntent?: never; Abandoned?: never; Conflict?: never; OriginalRetired?: never; OutputCommitted?: never; OutputReady?: never; OutputStarted?: never; RetireOriginalIntent?: never } | ({ OutputCommitted: {
+} }) & { AbandonStagingIntent?: never; Abandoned?: never; Conflict?: never; OriginalRetired?: never; OutputCommitted?: never; OutputStarted?: never; RetireOriginalIntent?: never; StagingCreated?: never } | ({ OutputCommitted: {
 	run_id: RunId,
 	final_identity: ArtifactIdentity_Deserialize,
-} }) & { AbandonStagingIntent?: never; Abandoned?: never; Conflict?: never; OriginalRetired?: never; OutputReady?: never; OutputRestaged?: never; OutputStarted?: never; RetireOriginalIntent?: never } | ({ RetireOriginalIntent: {
+} }) & { AbandonStagingIntent?: never; Abandoned?: never; Conflict?: never; OriginalRetired?: never; OutputReady?: never; OutputStarted?: never; RetireOriginalIntent?: never; StagingCreated?: never } | ({ RetireOriginalIntent: {
 	run_id: RunId,
-} }) & { AbandonStagingIntent?: never; Abandoned?: never; Conflict?: never; OriginalRetired?: never; OutputCommitted?: never; OutputReady?: never; OutputRestaged?: never; OutputStarted?: never } | ({ OriginalRetired: {
+} }) & { AbandonStagingIntent?: never; Abandoned?: never; Conflict?: never; OriginalRetired?: never; OutputCommitted?: never; OutputReady?: never; OutputStarted?: never; StagingCreated?: never } | ({ OriginalRetired: {
 	run_id: RunId,
-} }) & { AbandonStagingIntent?: never; Abandoned?: never; Conflict?: never; OutputCommitted?: never; OutputReady?: never; OutputRestaged?: never; OutputStarted?: never; RetireOriginalIntent?: never } | ({ AbandonStagingIntent: {
+} }) & { AbandonStagingIntent?: never; Abandoned?: never; Conflict?: never; OutputCommitted?: never; OutputReady?: never; OutputStarted?: never; RetireOriginalIntent?: never; StagingCreated?: never } | ({ AbandonStagingIntent: {
 	run_id: RunId,
 	staging_identity: DestructiveIdentity_Deserialize,
-} }) & { Abandoned?: never; Conflict?: never; OriginalRetired?: never; OutputCommitted?: never; OutputReady?: never; OutputRestaged?: never; OutputStarted?: never; RetireOriginalIntent?: never } | ({ Abandoned: {
+} }) & { Abandoned?: never; Conflict?: never; OriginalRetired?: never; OutputCommitted?: never; OutputReady?: never; OutputStarted?: never; RetireOriginalIntent?: never; StagingCreated?: never } | ({ Abandoned: {
 	run_id: RunId,
-} }) & { AbandonStagingIntent?: never; Conflict?: never; OriginalRetired?: never; OutputCommitted?: never; OutputReady?: never; OutputRestaged?: never; OutputStarted?: never; RetireOriginalIntent?: never } | ({ Conflict: {
+} }) & { AbandonStagingIntent?: never; Conflict?: never; OriginalRetired?: never; OutputCommitted?: never; OutputReady?: never; OutputStarted?: never; RetireOriginalIntent?: never; StagingCreated?: never } | ({ Conflict: {
 	run_id: RunId,
 	kind: ConflictKind,
 	detail: string,
-} }) & { AbandonStagingIntent?: never; Abandoned?: never; OriginalRetired?: never; OutputCommitted?: never; OutputReady?: never; OutputRestaged?: never; OutputStarted?: never; RetireOriginalIntent?: never };
+} }) & { AbandonStagingIntent?: never; Abandoned?: never; OriginalRetired?: never; OutputCommitted?: never; OutputReady?: never; OutputStarted?: never; RetireOriginalIntent?: never; StagingCreated?: never };
 
 export type OutputDelta_Serialize = ({ OutputStarted: {
 	transaction: OutputTransaction_Serialize,
-} }) & { AbandonStagingIntent?: never; Abandoned?: never; Conflict?: never; OriginalRetired?: never; OutputCommitted?: never; OutputReady?: never; OutputRestaged?: never; RetireOriginalIntent?: never } | ({ OutputReady: {
+} }) & { AbandonStagingIntent?: never; Abandoned?: never; Conflict?: never; OriginalRetired?: never; OutputCommitted?: never; OutputReady?: never; RetireOriginalIntent?: never; StagingCreated?: never } | 
+/**
+ *  Records the created (or, for an in-transaction encode retry,
+ *  recreated) staging artifact. A repeated `StagingCreated` moves the
+ *  journaled pin — which `OutputReady` verifies by file id — to the
+ *  recreated file after the failed attempt's adapter cleanup deleted it.
+ *  A settled transaction refuses this, so retry-after-abandonment stays
+ *  unrepresentable.
+ */
+({ StagingCreated: {
+	run_id: RunId,
+	initial: DestructiveIdentity_Serialize,
+} }) & { AbandonStagingIntent?: never; Abandoned?: never; Conflict?: never; OriginalRetired?: never; OutputCommitted?: never; OutputReady?: never; OutputStarted?: never; RetireOriginalIntent?: never } | ({ OutputReady: {
 	run_id: RunId,
 	staging_identity: ArtifactIdentity_Serialize,
-} }) & { AbandonStagingIntent?: never; Abandoned?: never; Conflict?: never; OriginalRetired?: never; OutputCommitted?: never; OutputRestaged?: never; OutputStarted?: never; RetireOriginalIntent?: never } | 
-/**
- *  The staging artifact was recreated for an in-transaction encode retry
- *  (the failed attempt's adapter cleanup deletes staging). Valid only
- *  while the transaction is Started; the journaled staging pin —
- *  `initial_staging_identity`, which `OutputReady` verifies by file id —
- *  moves to the recreated file. After abandonment the ledger refuses
- *  this, so retry-after-abandon stays unrepresentable.
- */
-({ OutputRestaged: {
-	run_id: RunId,
-	staging_identity: DestructiveIdentity_Serialize,
-} }) & { AbandonStagingIntent?: never; Abandoned?: never; Conflict?: never; OriginalRetired?: never; OutputCommitted?: never; OutputReady?: never; OutputStarted?: never; RetireOriginalIntent?: never } | ({ OutputCommitted: {
+} }) & { AbandonStagingIntent?: never; Abandoned?: never; Conflict?: never; OriginalRetired?: never; OutputCommitted?: never; OutputStarted?: never; RetireOriginalIntent?: never; StagingCreated?: never } | ({ OutputCommitted: {
 	run_id: RunId,
 	final_identity: ArtifactIdentity_Serialize,
-} }) & { AbandonStagingIntent?: never; Abandoned?: never; Conflict?: never; OriginalRetired?: never; OutputReady?: never; OutputRestaged?: never; OutputStarted?: never; RetireOriginalIntent?: never } | ({ RetireOriginalIntent: {
+} }) & { AbandonStagingIntent?: never; Abandoned?: never; Conflict?: never; OriginalRetired?: never; OutputReady?: never; OutputStarted?: never; RetireOriginalIntent?: never; StagingCreated?: never } | ({ RetireOriginalIntent: {
 	run_id: RunId,
-} }) & { AbandonStagingIntent?: never; Abandoned?: never; Conflict?: never; OriginalRetired?: never; OutputCommitted?: never; OutputReady?: never; OutputRestaged?: never; OutputStarted?: never } | ({ OriginalRetired: {
+} }) & { AbandonStagingIntent?: never; Abandoned?: never; Conflict?: never; OriginalRetired?: never; OutputCommitted?: never; OutputReady?: never; OutputStarted?: never; StagingCreated?: never } | ({ OriginalRetired: {
 	run_id: RunId,
-} }) & { AbandonStagingIntent?: never; Abandoned?: never; Conflict?: never; OutputCommitted?: never; OutputReady?: never; OutputRestaged?: never; OutputStarted?: never; RetireOriginalIntent?: never } | ({ AbandonStagingIntent: {
+} }) & { AbandonStagingIntent?: never; Abandoned?: never; Conflict?: never; OutputCommitted?: never; OutputReady?: never; OutputStarted?: never; RetireOriginalIntent?: never; StagingCreated?: never } | ({ AbandonStagingIntent: {
 	run_id: RunId,
 	staging_identity: DestructiveIdentity_Serialize,
-} }) & { Abandoned?: never; Conflict?: never; OriginalRetired?: never; OutputCommitted?: never; OutputReady?: never; OutputRestaged?: never; OutputStarted?: never; RetireOriginalIntent?: never } | ({ Abandoned: {
+} }) & { Abandoned?: never; Conflict?: never; OriginalRetired?: never; OutputCommitted?: never; OutputReady?: never; OutputStarted?: never; RetireOriginalIntent?: never; StagingCreated?: never } | ({ Abandoned: {
 	run_id: RunId,
-} }) & { AbandonStagingIntent?: never; Conflict?: never; OriginalRetired?: never; OutputCommitted?: never; OutputReady?: never; OutputRestaged?: never; OutputStarted?: never; RetireOriginalIntent?: never } | ({ Conflict: {
+} }) & { AbandonStagingIntent?: never; Conflict?: never; OriginalRetired?: never; OutputCommitted?: never; OutputReady?: never; OutputStarted?: never; RetireOriginalIntent?: never; StagingCreated?: never } | ({ Conflict: {
 	run_id: RunId,
 	kind: ConflictKind,
 	detail: string,
-} }) & { AbandonStagingIntent?: never; Abandoned?: never; OriginalRetired?: never; OutputCommitted?: never; OutputReady?: never; OutputRestaged?: never; OutputStarted?: never; RetireOriginalIntent?: never };
+} }) & { AbandonStagingIntent?: never; Abandoned?: never; OriginalRetired?: never; OutputCommitted?: never; OutputReady?: never; OutputStarted?: never; RetireOriginalIntent?: never; StagingCreated?: never };
 
 export type OutputSettings = {
 	default_mode: DefaultOutputMode,
@@ -477,35 +477,39 @@ export type OutputSettings = {
 
 export type OutputState = OutputState_Serialize | OutputState_Deserialize;
 
-export type OutputState_Deserialize = "Started" | ({ Ready: {
+export type OutputState_Deserialize = "Started" | ({ StagingCreated: {
+	initial: DestructiveIdentity_Deserialize,
+} }) & { AbandonIntent?: never; Committed?: never; Conflict?: never; Ready?: never; RetireIntent?: never; Retired?: never } | ({ Ready: {
 	staging_identity: ArtifactIdentity_Deserialize,
-} }) & { AbandonIntent?: never; Committed?: never; Conflict?: never; RetireIntent?: never; Retired?: never } | ({ Committed: {
+} }) & { AbandonIntent?: never; Committed?: never; Conflict?: never; RetireIntent?: never; Retired?: never; StagingCreated?: never } | ({ Committed: {
 	final_identity: ArtifactIdentity_Deserialize,
-} }) & { AbandonIntent?: never; Conflict?: never; Ready?: never; RetireIntent?: never; Retired?: never } | ({ RetireIntent: {
+} }) & { AbandonIntent?: never; Conflict?: never; Ready?: never; RetireIntent?: never; Retired?: never; StagingCreated?: never } | ({ RetireIntent: {
 	final_identity: ArtifactIdentity_Deserialize,
-} }) & { AbandonIntent?: never; Committed?: never; Conflict?: never; Ready?: never; Retired?: never } | ({ Retired: {
+} }) & { AbandonIntent?: never; Committed?: never; Conflict?: never; Ready?: never; Retired?: never; StagingCreated?: never } | ({ Retired: {
 	final_identity: ArtifactIdentity_Deserialize,
-} }) & { AbandonIntent?: never; Committed?: never; Conflict?: never; Ready?: never; RetireIntent?: never } | ({ AbandonIntent: {
+} }) & { AbandonIntent?: never; Committed?: never; Conflict?: never; Ready?: never; RetireIntent?: never; StagingCreated?: never } | ({ AbandonIntent: {
 	staging_identity: DestructiveIdentity_Deserialize,
-} }) & { Committed?: never; Conflict?: never; Ready?: never; RetireIntent?: never; Retired?: never } | "Abandoned" | ({ Conflict: {
+} }) & { Committed?: never; Conflict?: never; Ready?: never; RetireIntent?: never; Retired?: never; StagingCreated?: never } | "Abandoned" | ({ Conflict: {
 	kind: ConflictKind,
 	detail: string,
-} }) & { AbandonIntent?: never; Committed?: never; Ready?: never; RetireIntent?: never; Retired?: never };
+} }) & { AbandonIntent?: never; Committed?: never; Ready?: never; RetireIntent?: never; Retired?: never; StagingCreated?: never };
 
-export type OutputState_Serialize = "Started" | ({ Ready: {
+export type OutputState_Serialize = "Started" | ({ StagingCreated: {
+	initial: DestructiveIdentity_Serialize,
+} }) & { AbandonIntent?: never; Committed?: never; Conflict?: never; Ready?: never; RetireIntent?: never; Retired?: never } | ({ Ready: {
 	staging_identity: ArtifactIdentity_Serialize,
-} }) & { AbandonIntent?: never; Committed?: never; Conflict?: never; RetireIntent?: never; Retired?: never } | ({ Committed: {
+} }) & { AbandonIntent?: never; Committed?: never; Conflict?: never; RetireIntent?: never; Retired?: never; StagingCreated?: never } | ({ Committed: {
 	final_identity: ArtifactIdentity_Serialize,
-} }) & { AbandonIntent?: never; Conflict?: never; Ready?: never; RetireIntent?: never; Retired?: never } | ({ RetireIntent: {
+} }) & { AbandonIntent?: never; Conflict?: never; Ready?: never; RetireIntent?: never; Retired?: never; StagingCreated?: never } | ({ RetireIntent: {
 	final_identity: ArtifactIdentity_Serialize,
-} }) & { AbandonIntent?: never; Committed?: never; Conflict?: never; Ready?: never; Retired?: never } | ({ Retired: {
+} }) & { AbandonIntent?: never; Committed?: never; Conflict?: never; Ready?: never; Retired?: never; StagingCreated?: never } | ({ Retired: {
 	final_identity: ArtifactIdentity_Serialize,
-} }) & { AbandonIntent?: never; Committed?: never; Conflict?: never; Ready?: never; RetireIntent?: never } | ({ AbandonIntent: {
+} }) & { AbandonIntent?: never; Committed?: never; Conflict?: never; Ready?: never; RetireIntent?: never; StagingCreated?: never } | ({ AbandonIntent: {
 	staging_identity: DestructiveIdentity_Serialize,
-} }) & { Committed?: never; Conflict?: never; Ready?: never; RetireIntent?: never; Retired?: never } | "Abandoned" | ({ Conflict: {
+} }) & { Committed?: never; Conflict?: never; Ready?: never; RetireIntent?: never; Retired?: never; StagingCreated?: never } | "Abandoned" | ({ Conflict: {
 	kind: ConflictKind,
 	detail: string,
-} }) & { AbandonIntent?: never; Committed?: never; Ready?: never; RetireIntent?: never; Retired?: never };
+} }) & { AbandonIntent?: never; Committed?: never; Ready?: never; RetireIntent?: never; Retired?: never; StagingCreated?: never };
 
 export type OutputTarget = "Replace" | ({ Suffix: {
 	suffix: string,
@@ -521,7 +525,6 @@ export type OutputTransaction_Deserialize = {
 	input: string,
 	input_identity: DestructiveIdentity_Deserialize,
 	staging: string,
-	initial_staging_identity: DestructiveIdentity_Deserialize,
 	final_path: string,
 	final_preimage: DestructiveIdentity_Deserialize | null,
 	replacement: Replacement,
@@ -533,7 +536,6 @@ export type OutputTransaction_Serialize = {
 	input: string,
 	input_identity: DestructiveIdentity_Serialize,
 	staging: string,
-	initial_staging_identity: DestructiveIdentity_Serialize,
 	final_path: string,
 	final_preimage: DestructiveIdentity_Serialize | null,
 	replacement: Replacement,

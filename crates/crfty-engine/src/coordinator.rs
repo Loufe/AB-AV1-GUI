@@ -973,7 +973,7 @@ fn run_encode(
                 final_telemetry,
             }) => {
                 // Hardware→software retry: hook BEFORE any abandonment so the
-                // still-Started transaction is reused. The failed attempt's
+                // still-unsettled transaction is reused. The failed attempt's
                 // adapter cleanup deleted the staging file, so restaging moves
                 // the journaled pin to a recreated one; once a transaction is
                 // abandoned the ledger refuses to restage, which is what makes
@@ -1052,17 +1052,22 @@ fn run_encode(
 }
 
 /// Moves the journaled staging pin to a freshly recreated empty staging file
-/// so a software-decode retry can reuse the still-Started transaction.
+/// so a software-decode retry can reuse the still-unsettled transaction: the
+/// recreated identity is journaled as a repeated `StagingCreated`.
 fn restage_for_retry(
     manager: &MediaOutputManager,
     commands: &CommandSender,
     transaction: &mut OutputTransaction,
 ) -> Result<(), String> {
-    let delta = manager
+    let initial = manager
         .restage(transaction)
         .map_err(|error| error.to_string())?;
-    submit_output(commands, delta.clone())?;
-    fold_transaction(transaction, delta);
+    let created = OutputDelta::StagingCreated {
+        run_id: transaction.run_id,
+        initial,
+    };
+    submit_output(commands, created.clone())?;
+    fold_transaction(transaction, created);
     Ok(())
 }
 
@@ -1277,7 +1282,7 @@ fn begin_output(
     tracker: &mut PhaseTracker,
 ) -> Result<Option<PreparedOutput>, String> {
     let manager = OutputManager::new(MediaArtifactInspector::new(tools.ffprobe.clone()));
-    let transaction = match manager.prepare(
+    let mut transaction = match manager.plan(
         job.spec.run_id,
         &job.spec.input,
         &destination.final_path,
@@ -1311,17 +1316,51 @@ fn begin_output(
             return Ok(None);
         }
     };
-    let started = OutputDelta::OutputStarted {
-        transaction: Box::new(transaction.clone()),
+    // The intent must be durable before the staging file exists: a crash
+    // after this submit is recovered from the journal (staging absent →
+    // abandoned), whereas a file created before the journal record would
+    // leak with no record to recover it from (#47).
+    submit_output(
+        commands,
+        OutputDelta::OutputStarted {
+            transaction: Box::new(transaction.clone()),
+        },
+    )?;
+    let initial = match manager.create_staging(&transaction) {
+        Ok(initial) => initial,
+        Err(error) => {
+            submit_output(
+                commands,
+                OutputDelta::Abandoned {
+                    run_id: job.spec.run_id,
+                },
+            )?;
+            terminal(
+                commands,
+                job,
+                tracker,
+                ItemOutcome::Failed(FailureFacts::new(
+                    FailureKind::OutputPrepare,
+                    error.to_string(),
+                )),
+                None,
+            )?;
+            return Ok(None);
+        }
     };
-    if let Err(error) = submit_output(commands, started) {
-        return match manager.discard_unjournaled(&transaction) {
+    let created = OutputDelta::StagingCreated {
+        run_id: job.spec.run_id,
+        initial: initial.clone(),
+    };
+    if let Err(error) = submit_output(commands, created.clone()) {
+        return match manager.remove_staging(&transaction.staging, &initial) {
             Ok(()) => Err(error),
             Err(cleanup) => Err(format!(
                 "{error}; unjournaled staging cleanup failed: {cleanup}"
             )),
         };
     }
+    fold_transaction(&mut transaction, created);
     Ok(Some(PreparedOutput {
         manager,
         transaction,

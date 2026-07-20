@@ -81,7 +81,11 @@ impl<I: ArtifactInspector> OutputManager<I> {
         Self { inspector }
     }
 
-    pub fn prepare(
+    /// Plans an output transaction without touching the filesystem beyond
+    /// inspection. The staging file is created separately by `create_staging`
+    /// once the `OutputStarted` intent is durable, so a crash can never leave
+    /// a staging file the journal does not know about.
+    pub fn plan(
         &self,
         run_id: RunId,
         input: &Path,
@@ -111,27 +115,11 @@ impl<I: ArtifactInspector> OutputManager<I> {
             ));
         }
         let staging = staging_path(final_path, run_id)?;
-        let staging_file = OpenOptions::new()
-            .write(true)
-            .create_new(true)
-            .open(&staging)
-            .map_err(|error| {
-                OutputError::new("failed to create staging file exclusively", error)
-            })?;
-        staging_file
-            .sync_all()
-            .map_err(|error| OutputError::new("failed to synchronize new staging file", error))?;
-        drop(staging_file);
-        let initial_staging_identity = self
-            .inspector
-            .inspect_file(&staging)
-            .map_err(|error| OutputError::new("failed to inspect new staging file", error))?;
         Ok(OutputTransaction {
             run_id,
             input: input.to_path_buf(),
             input_identity,
             staging,
-            initial_staging_identity,
             final_path: final_path.to_path_buf(),
             final_preimage,
             replacement,
@@ -139,10 +127,36 @@ impl<I: ArtifactInspector> OutputManager<I> {
         })
     }
 
-    pub fn mark_ready(&self, transaction: &OutputTransaction) -> Result<OutputDelta, OutputError> {
+    pub fn create_staging(
+        &self,
+        transaction: &OutputTransaction,
+    ) -> Result<DestructiveIdentity, OutputError> {
         if transaction.state != OutputState::Started {
             return Err(OutputError::new(
                 "output transaction is not in started state",
+                io::Error::new(io::ErrorKind::InvalidInput, "invalid output state"),
+            ));
+        }
+        let staging_file = OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&transaction.staging)
+            .map_err(|error| {
+                OutputError::new("failed to create staging file exclusively", error)
+            })?;
+        staging_file
+            .sync_all()
+            .map_err(|error| OutputError::new("failed to synchronize new staging file", error))?;
+        drop(staging_file);
+        self.inspector
+            .inspect_file(&transaction.staging)
+            .map_err(|error| OutputError::new("failed to inspect new staging file", error))
+    }
+
+    pub fn mark_ready(&self, transaction: &OutputTransaction) -> Result<OutputDelta, OutputError> {
+        if !matches!(transaction.state, OutputState::StagingCreated { .. }) {
+            return Err(OutputError::new(
+                "output transaction has no recorded staging file",
                 io::Error::new(io::ErrorKind::InvalidInput, "invalid output state"),
             ));
         }
@@ -166,12 +180,15 @@ impl<I: ArtifactInspector> OutputManager<I> {
 
     /// Recreates the staging artifact for an in-transaction encode retry:
     /// the failed attempt's adapter cleanup deletes staging, so the retry
-    /// needs a fresh empty file and a delta that moves the journaled staging
-    /// pin (`initial_staging_identity`) to it. Only a Started transaction can
+    /// needs a fresh empty file and a repeated `StagingCreated` record that
+    /// moves the journaled pin to it. Only a `StagingCreated` transaction can
     /// restage — once abandoned or otherwise settled, a retry is
     /// unrepresentable in the durable model.
-    pub fn restage(&self, transaction: &OutputTransaction) -> Result<OutputDelta, OutputError> {
-        if transaction.state != OutputState::Started {
+    pub fn restage(
+        &self,
+        transaction: &OutputTransaction,
+    ) -> Result<DestructiveIdentity, OutputError> {
+        if !matches!(transaction.state, OutputState::StagingCreated { .. }) {
             return Err(OutputError::new(
                 "output transaction cannot restage from its current state",
                 io::Error::new(io::ErrorKind::InvalidInput, "invalid output state"),
@@ -198,40 +215,36 @@ impl<I: ArtifactInspector> OutputManager<I> {
             OutputError::new("failed to synchronize recreated staging file", error)
         })?;
         drop(staging_file);
-        let staging_identity = self
-            .inspector
+        self.inspector
             .inspect_file(&transaction.staging)
-            .map_err(|error| OutputError::new("failed to inspect recreated staging file", error))?;
-        Ok(OutputDelta::OutputRestaged {
-            run_id: transaction.run_id,
-            staging_identity,
-        })
+            .map_err(|error| OutputError::new("failed to inspect recreated staging file", error))
     }
 
-    pub fn discard_unjournaled(&self, transaction: &OutputTransaction) -> Result<(), OutputError> {
-        if transaction.state != OutputState::Started {
-            return Err(OutputError::new(
-                "unjournaled output is not in started state",
-                io::Error::new(io::ErrorKind::InvalidInput, "invalid output state"),
-            ));
-        }
+    /// Removes a staging file whose `StagingCreated` record could not be
+    /// journaled. Best effort: if this fails, startup recovery abandons the
+    /// file from the durable `OutputStarted` intent instead.
+    pub fn remove_staging(
+        &self,
+        staging: &Path,
+        expected: &DestructiveIdentity,
+    ) -> Result<(), OutputError> {
         require_identity(
             &self.inspector,
-            &transaction.staging,
-            &transaction.initial_staging_identity,
+            staging,
+            expected,
             "new staging file changed before journal acknowledgement",
         )?;
-        std::fs::remove_file(&transaction.staging).map_err(|error| {
+        std::fs::remove_file(staging).map_err(|error| {
             OutputError::new("failed to remove unjournaled staging file", error)
         })?;
-        sync_parent(&transaction.staging)
+        sync_parent(staging)
     }
 
     pub fn abandon_intent(
         &self,
         transaction: &OutputTransaction,
     ) -> Result<OutputDelta, OutputError> {
-        if transaction.state != OutputState::Started {
+        if !matches!(transaction.state, OutputState::StagingCreated { .. }) {
             return Err(OutputError::new(
                 "output transaction cannot be abandoned from its current state",
                 io::Error::new(io::ErrorKind::InvalidInput, "invalid output state"),

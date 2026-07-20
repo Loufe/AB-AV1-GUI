@@ -30,8 +30,8 @@ use crfty_engine::{
 
 static TEMP_SEQUENCE: AtomicU64 = AtomicU64::new(0);
 
-/// `AbAv1Runtime` is a process-wide singleton; engine-starting tests in this
-/// file must not overlap.
+/// The ab-av1 encoder runtime is a process-wide singleton, so tests that
+/// start a full `EngineRuntime` must not overlap.
 static ENGINE_GUARD: Mutex<()> = Mutex::new(());
 
 fn execution() -> ExecutionSettings {
@@ -531,24 +531,17 @@ fn output_recovery_promotes_and_retires_original() {
     let final_path = directory.path().join("input.mkv");
     fs::write(&input, b"original-content").expect("input fixture");
     let manager = OutputManager::new(FixtureByteInspector);
-    let started = manager
-        .prepare(
-            RunId(5),
-            &input,
-            &final_path,
-            Replacement::RetireOriginal,
-            false,
-        )
-        .expect("prepare output");
-    assert!(started.staging.ends_with(".input.crfty-5.part.mkv"));
     let mut state = DurableState::default();
-    fold_output(
+    let transaction = stage_output(
+        &manager,
         &mut state,
-        OutputDelta::OutputStarted {
-            transaction: Box::new(started),
-        },
+        RunId(5),
+        &input,
+        &final_path,
+        Replacement::RetireOriginal,
+        false,
     );
-    let transaction = current(&state, RunId(5));
+    assert!(transaction.staging.ends_with(".input.crfty-5.part.mkv"));
     fs::write(&transaction.staging, b"encoded-content").expect("fake encode");
     let ready = manager.mark_ready(&transaction).expect("ready output");
     fold_output(&mut state, ready);
@@ -590,34 +583,33 @@ fn invalid_partial_staging_is_cleaned_without_media_validation() {
     let final_path = directory.path().join("input.mkv");
     fs::write(&input, b"input bytes").expect("input fixture");
     let manager = OutputManager::new(RejectingMediaInspector);
-    let started = manager
-        .prepare(
-            RunId(77),
-            &input,
-            &final_path,
-            Replacement::RetireOriginal,
-            false,
-        )
-        .expect("prepare output");
-    fs::write(&started.staging, b"not a valid media container").expect("partial staging");
-    let intent = manager
-        .abandon_intent(&started)
-        .expect("identity-only abandonment intent");
     let mut state = DurableState::default();
-    state.outputs.insert(started.run_id, started.clone());
+    let transaction = stage_output(
+        &manager,
+        &mut state,
+        RunId(77),
+        &input,
+        &final_path,
+        Replacement::RetireOriginal,
+        false,
+    );
+    fs::write(&transaction.staging, b"not a valid media container").expect("partial staging");
+    let intent = manager
+        .abandon_intent(&current(&state, RunId(77)))
+        .expect("identity-only abandonment intent");
     fold(&mut state, &DurableDelta::Output(intent));
-    let abandoning = state.outputs.get(&started.run_id).expect("transaction");
+    let abandoning = state.outputs.get(&RunId(77)).expect("transaction");
     let abandoned = manager
         .recover_once(abandoning)
         .expect("identity-only cleanup")
         .expect("abandoned delta");
     assert!(matches!(abandoned, OutputDelta::Abandoned { .. }));
-    assert!(!started.staging.exists());
+    assert!(!transaction.staging.exists());
 }
 
 #[test]
 fn engine_startup_recovers_an_active_partial_staging_transaction() {
-    let _engine_guard = ENGINE_GUARD.lock().expect("engine guard");
+    let _serial = ENGINE_GUARD.lock().expect("engine guard");
     let directory = TestDirectory::new("engine-startup-recovery");
     let journal_path = directory.path().join("state.jsonl");
     let input = directory.path().join("input.mp4");
@@ -625,67 +617,20 @@ fn engine_startup_recovers_an_active_partial_staging_transaction() {
     fs::write(&input, b"input bytes").expect("input fixture");
     let manager = OutputManager::new(FixtureByteInspector);
     let transaction = manager
-        .prepare(
+        .plan(
             RunId(3),
             &input,
             &final_path,
             Replacement::RetireOriginal,
             false,
         )
-        .expect("prepare transaction");
+        .expect("plan transaction");
+    let initial = manager
+        .create_staging(&transaction)
+        .expect("create staging");
     fs::write(&transaction.staging, b"crash-left partial bytes").expect("partial staging");
 
-    let settings = execution();
-    let mut state = AppState::default();
-    let mut durable = Vec::new();
-    for command in [
-        Command::Queue(QueueCommand::Add {
-            item_id: QueueItemId(1),
-            input: input.clone(),
-            operation: Operation::Convert,
-            intent: AnalysisIntent::ReuseIfFresh,
-            output_target: OutputTarget::Replace,
-        }),
-        Command::System(SystemCommand::ToolsDiscovered {
-            availability: ToolAvailability::Available,
-        }),
-        Command::Session(SessionCommand::Start),
-        Command::Worker(WorkerCommand::ReserveNext {
-            claim_id: ClaimId(2),
-            run_id: RunId(3),
-        }),
-        Command::Worker(WorkerCommand::PrepareReserved {
-            item_id: QueueItemId(1),
-            claim_id: ClaimId(2),
-            run_id: RunId(3),
-            observation: None,
-            execution: settings.clone(),
-        }),
-        Command::Worker(WorkerCommand::Started {
-            item_id: QueueItemId(1),
-            claim_id: ClaimId(2),
-            run_id: RunId(3),
-            at: UnixMillis(1_000),
-        }),
-        Command::Worker(WorkerCommand::RecordAnalysis {
-            item_id: QueueItemId(1),
-            claim_id: ClaimId(2),
-            run_id: RunId(3),
-            result: Box::new(fixture_analysis(&settings)),
-        }),
-        Command::Worker(WorkerCommand::Output(OutputDelta::OutputStarted {
-            transaction: Box::new(transaction.clone()),
-        })),
-    ] {
-        let applied = apply(&mut state, command);
-        assert!(!matches!(applied.reply, Reply::Rejected { .. }));
-        durable.extend(applied.durable);
-    }
-    let (mut writer, _replay) = JournalWriter::open(&journal_path).expect("journal writer");
-    writer
-        .append_batch(&durable)
-        .expect("recovery fixture batch");
-    drop(writer);
+    let settings = journal_active_output_run(&journal_path, &input, &transaction, Some(initial));
 
     let executable = std::env::current_exe().expect("test executable");
     let engine = EngineRuntime::start(EngineConfig {
@@ -720,46 +665,236 @@ fn engine_startup_recovers_an_active_partial_staging_transaction() {
     engine.shutdown().expect("engine shutdown");
 }
 
-/// The crash-after-settlement window: the journal holds a fully settled,
-/// promoted output transaction but the process died before the terminal was
-/// recorded. Startup recovery must derive success from the settled ledger —
-/// `Converted(RecoveredAtStartup)` — not record a lying `Stopped`, and no
-/// telemetry may follow the recovered terminal.
+/// Journals the durable trail of an active convert run whose output
+/// transaction reached `OutputStarted`, optionally followed by
+/// `StagingCreated`, mirroring the coordinator's journal order.
+fn journal_active_output_run(
+    journal_path: &Path,
+    input: &Path,
+    transaction: &crfty_core::OutputTransaction,
+    staging_created: Option<DestructiveIdentity>,
+) -> ExecutionSettings {
+    let settings = execution();
+    let run_id = transaction.run_id;
+    let mut commands = vec![
+        Command::Queue(QueueCommand::Add {
+            item_id: QueueItemId(1),
+            input: input.to_path_buf(),
+            operation: Operation::Convert,
+            intent: AnalysisIntent::ReuseIfFresh,
+            output_target: OutputTarget::Replace,
+        }),
+        Command::System(SystemCommand::ToolsDiscovered {
+            availability: ToolAvailability::Available,
+        }),
+        Command::Session(SessionCommand::Start),
+        Command::Worker(WorkerCommand::ReserveNext {
+            claim_id: ClaimId(2),
+            run_id,
+        }),
+        Command::Worker(WorkerCommand::PrepareReserved {
+            item_id: QueueItemId(1),
+            claim_id: ClaimId(2),
+            run_id,
+            observation: None,
+            execution: settings.clone(),
+        }),
+        Command::Worker(WorkerCommand::Started {
+            item_id: QueueItemId(1),
+            claim_id: ClaimId(2),
+            run_id,
+            at: UnixMillis(1_000),
+        }),
+        Command::Worker(WorkerCommand::RecordAnalysis {
+            item_id: QueueItemId(1),
+            claim_id: ClaimId(2),
+            run_id,
+            result: Box::new(fixture_analysis(&settings)),
+        }),
+        Command::Worker(WorkerCommand::Output(OutputDelta::OutputStarted {
+            transaction: Box::new(transaction.clone()),
+        })),
+    ];
+    if let Some(initial) = staging_created {
+        commands.push(Command::Worker(WorkerCommand::Output(
+            OutputDelta::StagingCreated { run_id, initial },
+        )));
+    }
+    let mut state = AppState::default();
+    let mut durable = Vec::new();
+    for command in commands {
+        let applied = apply(&mut state, command);
+        assert!(!matches!(applied.reply, Reply::Rejected { .. }));
+        durable.extend(applied.durable);
+    }
+    let (mut writer, _replay) = JournalWriter::open(journal_path).expect("journal writer");
+    writer
+        .append_batch(&durable)
+        .expect("recovery fixture batch");
+    settings
+}
+
 #[test]
-fn engine_startup_derives_converted_from_a_settled_output_without_terminal() {
-    let _engine_guard = ENGINE_GUARD.lock().expect("engine guard");
-    let directory = TestDirectory::new("engine-startup-settled");
+fn engine_startup_abandons_intent_when_staging_was_never_created() {
+    let _serial = ENGINE_GUARD.lock().expect("engine guard");
+    let directory = TestDirectory::new("engine-startup-no-staging");
     let journal_path = directory.path().join("state.jsonl");
     let input = directory.path().join("input.mp4");
     let final_path = directory.path().join("input.mkv");
     fs::write(&input, b"input bytes").expect("input fixture");
     let manager = OutputManager::new(FixtureByteInspector);
     let transaction = manager
-        .prepare(
+        .plan(
             RunId(3),
             &input,
             &final_path,
-            Replacement::KeepOriginal,
+            Replacement::RetireOriginal,
             false,
         )
-        .expect("prepare transaction");
-    fs::write(&transaction.staging, b"encoded bytes").expect("staging artifact");
+        .expect("plan transaction");
+    // Crash window: `OutputStarted` is durable but the staging file was never
+    // created.
+    let settings = journal_active_output_run(&journal_path, &input, &transaction, None);
+
+    let executable = std::env::current_exe().expect("test executable");
+    let engine = EngineRuntime::start(EngineConfig {
+        journal_path,
+        config_path: directory.path().join("config.json"),
+        media_tools: ToolDiscovery::Available(MediaTools {
+            ffmpeg: executable.clone(),
+            ffprobe: executable,
+        }),
+        execution: settings,
+    })
+    .expect("engine startup recovery");
+    let DriverEvent::Snapshot(snapshot) = engine.events.recv().expect("recovered snapshot") else {
+        panic!("expected recovered snapshot");
+    };
+    assert!(
+        matches!(
+            snapshot.durable.queue.first().expect("queue item").state,
+            crfty_core::QueueItemState::Finished(ItemOutcome::Stopped)
+        ),
+        "unexpected recovered snapshot: {snapshot:?}"
+    );
+    assert_no_staging_leftovers(directory.path());
+    engine.shutdown().expect("engine shutdown");
+}
+
+#[test]
+fn engine_startup_removes_staging_left_before_staging_created_was_durable() {
+    let _serial = ENGINE_GUARD.lock().expect("engine guard");
+    let directory = TestDirectory::new("engine-startup-unjournaled-staging");
+    let journal_path = directory.path().join("state.jsonl");
+    let input = directory.path().join("input.mp4");
+    let final_path = directory.path().join("input.mkv");
+    fs::write(&input, b"input bytes").expect("input fixture");
+    let manager = OutputManager::new(FixtureByteInspector);
+    let transaction = manager
+        .plan(
+            RunId(3),
+            &input,
+            &final_path,
+            Replacement::RetireOriginal,
+            false,
+        )
+        .expect("plan transaction");
+    // Crash window: the staging file exists on disk but `StagingCreated`
+    // never reached the journal, so no identity was recorded for it.
+    let _initial = manager
+        .create_staging(&transaction)
+        .expect("create staging");
+    fs::write(&transaction.staging, b"crash-left partial bytes").expect("partial staging");
+    let settings = journal_active_output_run(&journal_path, &input, &transaction, None);
+
+    let executable = std::env::current_exe().expect("test executable");
+    let engine = EngineRuntime::start(EngineConfig {
+        journal_path,
+        config_path: directory.path().join("config.json"),
+        media_tools: ToolDiscovery::Available(MediaTools {
+            ffmpeg: executable.clone(),
+            ffprobe: executable,
+        }),
+        execution: settings,
+    })
+    .expect("engine startup recovery");
+    let DriverEvent::Snapshot(snapshot) = engine.events.recv().expect("recovered snapshot") else {
+        panic!("expected recovered snapshot");
+    };
+    assert!(
+        matches!(
+            snapshot.durable.queue.first().expect("queue item").state,
+            crfty_core::QueueItemState::Finished(ItemOutcome::Stopped)
+        ),
+        "unexpected recovered snapshot: {snapshot:?}"
+    );
+    assert!(!transaction.staging.exists());
+    assert_no_staging_leftovers(directory.path());
+    engine.shutdown().expect("engine shutdown");
+}
+
+fn assert_no_staging_leftovers(directory: &Path) {
+    let leftovers = fs::read_dir(directory)
+        .expect("read output directory")
+        .filter_map(Result::ok)
+        .map(|entry| entry.file_name())
+        .filter(|name| name.to_string_lossy().contains(".part."))
+        .collect::<Vec<_>>();
+    assert!(leftovers.is_empty(), "leaked staging files: {leftovers:?}");
+}
+
+struct SettledSuccessFixture {
+    journal_path: PathBuf,
+    input: PathBuf,
+    final_path: PathBuf,
+    staging: PathBuf,
+}
+
+/// Journal a run whose output transaction is fully settled — every output
+/// delta durable, files promoted on disk — but whose `Terminal` record was
+/// lost to a crash.
+fn settled_success_journal(
+    directory: &TestDirectory,
+    replacement: Replacement,
+) -> SettledSuccessFixture {
+    let journal_path = directory.path().join("state.jsonl");
+    let input = directory.path().join("input.mp4");
+    fs::write(&input, b"input bytes").expect("input fixture");
+    let (final_path, output_target) = match replacement {
+        Replacement::RetireOriginal => (directory.path().join("input.mkv"), OutputTarget::Replace),
+        Replacement::KeepOriginal => (
+            directory.path().join("input.av1.mkv"),
+            OutputTarget::Suffix {
+                suffix: ".av1".to_owned(),
+            },
+        ),
+    };
+    let manager = OutputManager::new(FixtureByteInspector);
+    let transaction = manager
+        .plan(RunId(3), &input, &final_path, replacement, false)
+        .expect("plan transaction");
+    let initial = manager
+        .create_staging(&transaction)
+        .expect("create staging");
+    fs::write(&transaction.staging, b"encoded output bytes").expect("staging bytes");
+    let staging_identity = FixtureByteInspector
+        .inspect_media(&transaction.staging)
+        .expect("staging identity");
+    fs::rename(&transaction.staging, &final_path).expect("promote staging");
+    if replacement == Replacement::RetireOriginal {
+        fs::remove_file(&input).expect("retire original");
+    }
 
     let settings = execution();
     let mut state = AppState::default();
     let mut durable = Vec::new();
-    let submit = |state: &mut AppState, command| {
-        let applied = apply(state, command);
-        assert!(!matches!(applied.reply, Reply::Rejected { .. }));
-        applied.durable
-    };
-    for command in [
+    let mut commands = vec![
         Command::Queue(QueueCommand::Add {
             item_id: QueueItemId(1),
             input: input.clone(),
             operation: Operation::Convert,
             intent: AnalysisIntent::ReuseIfFresh,
-            output_target: OutputTarget::Replace,
+            output_target,
         }),
         Command::System(SystemCommand::ToolsDiscovered {
             availability: ToolAvailability::Available,
@@ -791,46 +926,69 @@ fn engine_startup_derives_converted_from_a_settled_output_without_terminal() {
         Command::Worker(WorkerCommand::Output(OutputDelta::OutputStarted {
             transaction: Box::new(transaction.clone()),
         })),
-    ] {
-        durable.extend(submit(&mut state, command));
+        Command::Worker(WorkerCommand::Output(OutputDelta::StagingCreated {
+            run_id: RunId(3),
+            initial,
+        })),
+        Command::Worker(WorkerCommand::Output(OutputDelta::OutputReady {
+            run_id: RunId(3),
+            staging_identity: staging_identity.clone(),
+        })),
+        Command::Worker(WorkerCommand::Output(OutputDelta::OutputCommitted {
+            run_id: RunId(3),
+            final_identity: staging_identity,
+        })),
+    ];
+    if replacement == Replacement::RetireOriginal {
+        commands.push(Command::Worker(WorkerCommand::Output(
+            OutputDelta::RetireOriginalIntent { run_id: RunId(3) },
+        )));
+        commands.push(Command::Worker(WorkerCommand::Output(
+            OutputDelta::OriginalRetired { run_id: RunId(3) },
+        )));
     }
-    // Drive the transaction to a settled Committed state the way the live
-    // worker would: mark ready, then promote via one recovery step.
-    let ready = manager.mark_ready(&transaction).expect("ready delta");
-    durable.extend(submit(
-        &mut state,
-        Command::Worker(WorkerCommand::Output(ready)),
-    ));
-    let current = state
-        .durable
-        .outputs
-        .get(&RunId(3))
-        .expect("ready transaction")
-        .clone();
-    let committed = manager
-        .recover_once(&current)
-        .expect("promotion")
-        .expect("committed delta");
-    assert!(matches!(committed, OutputDelta::OutputCommitted { .. }));
-    durable.extend(submit(
-        &mut state,
-        Command::Worker(WorkerCommand::Output(committed)),
-    ));
+    for command in commands {
+        let applied = apply(&mut state, command);
+        assert!(
+            !matches!(applied.reply, Reply::Rejected { .. }),
+            "fixture command rejected: {:?}",
+            applied.reply
+        );
+        durable.extend(applied.durable);
+    }
+    assert!(
+        state
+            .durable
+            .outputs
+            .get(&RunId(3))
+            .expect("settled transaction")
+            .is_settled()
+    );
     let (mut writer, _replay) = JournalWriter::open(&journal_path).expect("journal writer");
-    writer.append_batch(&durable).expect("crash-window batch");
+    writer
+        .append_batch(&durable)
+        .expect("settled fixture batch");
     drop(writer);
+    SettledSuccessFixture {
+        journal_path,
+        input,
+        final_path,
+        staging: transaction.staging,
+    }
+}
 
+fn recover_settled_success(directory: &TestDirectory, fixture: &SettledSuccessFixture) {
     let executable = std::env::current_exe().expect("test executable");
     let engine = EngineRuntime::start(EngineConfig {
-        journal_path,
+        journal_path: fixture.journal_path.clone(),
         config_path: directory.path().join("config.json"),
         media_tools: ToolDiscovery::Available(MediaTools {
             ffmpeg: executable.clone(),
             ffprobe: executable,
         }),
-        execution: settings,
+        execution: execution(),
     })
-    .expect("engine startup");
+    .expect("engine startup recovery");
     let DriverEvent::Snapshot(snapshot) = engine.events.recv().expect("recovered snapshot") else {
         panic!("expected recovered snapshot");
     };
@@ -841,7 +999,7 @@ fn engine_startup_derives_converted_from_a_settled_output_without_terminal() {
                 crfty_core::CompletionEvidence::RecoveredAtStartup
             ))
         ),
-        "unexpected recovered snapshot: {snapshot:?}"
+        "settled success must recover as converted: {snapshot:?}"
     );
     let run = snapshot
         .durable
@@ -856,10 +1014,8 @@ fn engine_startup_derives_converted_from_a_settled_output_without_terminal() {
     ));
     assert_eq!(run.started_at, Some(UnixMillis(1_000)));
     assert!(run.finished_at.is_some());
-    assert_eq!(
-        fs::read(&final_path).expect("promoted output"),
-        b"encoded bytes"
-    );
+    assert!(fixture.final_path.exists());
+    assert!(!fixture.staging.exists());
     while let Ok(event) = engine.events.try_recv() {
         assert!(
             !matches!(event, DriverEvent::Ephemeral(EphemeralDelta::Telemetry(_))),
@@ -867,6 +1023,24 @@ fn engine_startup_derives_converted_from_a_settled_output_without_terminal() {
         );
     }
     engine.shutdown().expect("engine shutdown");
+}
+
+#[test]
+fn startup_recovery_labels_settled_keep_original_success_converted() {
+    let _serial = ENGINE_GUARD.lock().expect("engine guard");
+    let directory = TestDirectory::new("settled-keep-original-recovery");
+    let fixture = settled_success_journal(&directory, Replacement::KeepOriginal);
+    recover_settled_success(&directory, &fixture);
+    assert!(fixture.input.exists());
+}
+
+#[test]
+fn startup_recovery_labels_settled_retired_original_success_converted() {
+    let _serial = ENGINE_GUARD.lock().expect("engine guard");
+    let directory = TestDirectory::new("settled-retired-original-recovery");
+    let fixture = settled_success_journal(&directory, Replacement::RetireOriginal);
+    recover_settled_success(&directory, &fixture);
+    assert!(!fixture.input.exists());
 }
 
 fn fixture_analysis(settings: &ExecutionSettings) -> AnalysisResult {
@@ -915,24 +1089,20 @@ fn abandonment_intent_authorizes_only_the_observed_partial_staging() {
     let final_path = directory.path().join("output.mkv");
     fs::write(&input, b"original").expect("input fixture");
     let manager = OutputManager::new(FixtureByteInspector);
-    let started = manager
-        .prepare(
-            RunId(20),
-            &input,
-            &final_path,
-            Replacement::KeepOriginal,
-            false,
-        )
-        .expect("prepare");
-    fs::write(&started.staging, b"partial-encode").expect("partial staging");
-    let intent = manager.abandon_intent(&started).expect("abandon intent");
     let mut state = DurableState::default();
-    fold_output(
+    let transaction = stage_output(
+        &manager,
         &mut state,
-        OutputDelta::OutputStarted {
-            transaction: Box::new(started),
-        },
+        RunId(20),
+        &input,
+        &final_path,
+        Replacement::KeepOriginal,
+        false,
     );
+    fs::write(&transaction.staging, b"partial-encode").expect("partial staging");
+    let intent = manager
+        .abandon_intent(&current(&state, RunId(20)))
+        .expect("abandon intent");
     fold_output(&mut state, intent);
     let abandoned = manager
         .recover_once(&current(&state, RunId(20)))
@@ -949,23 +1119,17 @@ fn recovery_recognizes_crashes_after_rename_and_delete() {
     let final_path = directory.path().join("input.mkv");
     fs::write(&input, b"original").expect("input fixture");
     let manager = OutputManager::new(FixtureByteInspector);
-    let started = manager
-        .prepare(
-            RunId(8),
-            &input,
-            &final_path,
-            Replacement::RetireOriginal,
-            false,
-        )
-        .expect("prepare");
     let mut state = DurableState::default();
-    fold_output(
+    let staging = stage_output(
+        &manager,
         &mut state,
-        OutputDelta::OutputStarted {
-            transaction: Box::new(started),
-        },
-    );
-    let staging = current(&state, RunId(8)).staging;
+        RunId(8),
+        &input,
+        &final_path,
+        Replacement::RetireOriginal,
+        false,
+    )
+    .staging;
     fs::write(&staging, b"encoded").expect("fake encode");
     let ready = manager
         .mark_ready(&current(&state, RunId(8)))
@@ -1000,17 +1164,17 @@ fn same_path_replacement_preserves_hardlink_sibling() {
     fs::write(&input, b"original").expect("input fixture");
     fs::hard_link(&input, &sibling).expect("hardlink sibling");
     let manager = OutputManager::new(FixtureByteInspector);
-    let started = manager
-        .prepare(RunId(11), &input, &input, Replacement::KeepOriginal, false)
-        .expect("prepare same-path replacement");
     let mut state = DurableState::default();
-    fold_output(
+    let staging = stage_output(
+        &manager,
         &mut state,
-        OutputDelta::OutputStarted {
-            transaction: Box::new(started),
-        },
-    );
-    let staging = current(&state, RunId(11)).staging;
+        RunId(11),
+        &input,
+        &input,
+        Replacement::KeepOriginal,
+        false,
+    )
+    .staging;
     fs::write(&staging, b"encoded").expect("fake encode");
     let ready = manager
         .mark_ready(&current(&state, RunId(11)))
@@ -1032,29 +1196,28 @@ fn restage_recreates_missing_staging_and_the_ready_pin_follows() {
     let final_path = directory.path().join("input.mkv");
     fs::write(&input, b"original").expect("input fixture");
     let manager = OutputManager::new(FixtureByteInspector);
-    let started = manager
-        .prepare(
-            RunId(6),
-            &input,
-            &final_path,
-            Replacement::KeepOriginal,
-            false,
-        )
-        .expect("prepare");
     let mut state = DurableState::default();
-    fold_output(
+    let staged = stage_output(
+        &manager,
         &mut state,
-        OutputDelta::OutputStarted {
-            transaction: Box::new(started.clone()),
-        },
+        RunId(6),
+        &input,
+        &final_path,
+        Replacement::KeepOriginal,
+        false,
     );
     // The failed hardware attempt's adapter cleanup removed staging entirely.
-    fs::remove_file(&started.staging).expect("simulate adapter cleanup");
-    let restaged = manager
+    fs::remove_file(&staged.staging).expect("simulate adapter cleanup");
+    let initial = manager
         .restage(&current(&state, RunId(6)))
-        .expect("restage delta");
-    assert!(matches!(restaged, OutputDelta::OutputRestaged { .. }));
-    fold_output(&mut state, restaged);
+        .expect("restaged identity");
+    fold_output(
+        &mut state,
+        OutputDelta::StagingCreated {
+            run_id: RunId(6),
+            initial,
+        },
+    );
     let transaction = current(&state, RunId(6));
     assert!(transaction.staging.exists());
     fs::write(&transaction.staging, b"encoded-by-retry").expect("retry encode");
@@ -1087,17 +1250,42 @@ fn output_preparation_enforces_overwrite_policy_before_staging() {
     fs::write(&final_path, b"existing").expect("existing output fixture");
     let manager = OutputManager::new(FixtureByteInspector);
     let error = manager
-        .prepare(
+        .plan(
             RunId(30),
             &input,
             &final_path,
             Replacement::KeepOriginal,
             false,
         )
-        .expect_err("overwrite-disabled preparation must fail");
+        .expect_err("overwrite-disabled planning must fail");
     assert!(error.is_destination_exists());
     assert_eq!(fs::read(&final_path).expect("existing output"), b"existing");
     assert!(!directory.path().join(".output.crfty-30.part.mkv").exists());
+}
+
+#[test]
+fn planning_creates_no_filesystem_entries() {
+    let directory = TestDirectory::new("plan-no-writes");
+    let input = directory.path().join("input.mkv");
+    let final_path = directory.path().join("output.mkv");
+    fs::write(&input, b"input").expect("input fixture");
+    let manager = OutputManager::new(FixtureByteInspector);
+    let planned = manager
+        .plan(
+            RunId(31),
+            &input,
+            &final_path,
+            Replacement::KeepOriginal,
+            false,
+        )
+        .expect("plan output");
+    assert!(!planned.staging.exists());
+    let entries = fs::read_dir(directory.path())
+        .expect("read directory")
+        .filter_map(Result::ok)
+        .map(|entry| entry.file_name())
+        .collect::<Vec<_>>();
+    assert_eq!(entries, vec![std::ffi::OsString::from("input.mkv")]);
 }
 
 #[test]
@@ -1108,23 +1296,17 @@ fn changed_destination_becomes_conflict_without_deletion() {
     fs::write(&input, b"original").expect("input fixture");
     fs::write(&final_path, b"preimage").expect("destination fixture");
     let manager = OutputManager::new(FixtureByteInspector);
-    let started = manager
-        .prepare(
-            RunId(12),
-            &input,
-            &final_path,
-            Replacement::KeepOriginal,
-            true,
-        )
-        .expect("prepare");
     let mut state = DurableState::default();
-    fold_output(
+    let staging = stage_output(
+        &manager,
         &mut state,
-        OutputDelta::OutputStarted {
-            transaction: Box::new(started),
-        },
-    );
-    let staging = current(&state, RunId(12)).staging;
+        RunId(12),
+        &input,
+        &final_path,
+        Replacement::KeepOriginal,
+        true,
+    )
+    .staging;
     fs::write(&staging, b"encoded").expect("fake encode");
     let ready = manager
         .mark_ready(&current(&state, RunId(12)))
@@ -1145,6 +1327,33 @@ fn changed_destination_becomes_conflict_without_deletion() {
 
 fn fold_output(state: &mut DurableState, delta: OutputDelta) {
     fold(state, &DurableDelta::Output(delta));
+}
+
+/// Plans a transaction, folds its `OutputStarted` intent, creates the staging
+/// file, and folds `StagingCreated` — the same order the coordinator journals.
+fn stage_output<I: ArtifactInspector>(
+    manager: &OutputManager<I>,
+    state: &mut DurableState,
+    run_id: RunId,
+    input: &Path,
+    final_path: &Path,
+    replacement: Replacement,
+    overwrite_existing: bool,
+) -> crfty_core::OutputTransaction {
+    let planned = manager
+        .plan(run_id, input, final_path, replacement, overwrite_existing)
+        .expect("plan output");
+    fold_output(
+        state,
+        OutputDelta::OutputStarted {
+            transaction: Box::new(planned),
+        },
+    );
+    let initial = manager
+        .create_staging(&current(state, run_id))
+        .expect("create staging");
+    fold_output(state, OutputDelta::StagingCreated { run_id, initial });
+    current(state, run_id)
 }
 
 fn current(state: &DurableState, run_id: RunId) -> crfty_core::OutputTransaction {

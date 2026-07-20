@@ -87,7 +87,6 @@ pub struct OutputTransaction {
     pub input: PathBuf,
     pub input_identity: DestructiveIdentity,
     pub staging: PathBuf,
-    pub initial_staging_identity: DestructiveIdentity,
     pub final_path: PathBuf,
     pub final_preimage: Option<DestructiveIdentity>,
     pub replacement: Replacement,
@@ -97,6 +96,9 @@ pub struct OutputTransaction {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, specta::Type)]
 pub enum OutputState {
     Started,
+    StagingCreated {
+        initial: DestructiveIdentity,
+    },
     Ready {
         staging_identity: ArtifactIdentity,
     },
@@ -137,19 +139,19 @@ pub enum OutputDelta {
     OutputStarted {
         transaction: Box<OutputTransaction>,
     },
+    /// Records the created (or, for an in-transaction encode retry,
+    /// recreated) staging artifact. A repeated `StagingCreated` moves the
+    /// journaled pin — which `OutputReady` verifies by file id — to the
+    /// recreated file after the failed attempt's adapter cleanup deleted it.
+    /// A settled transaction refuses this, so retry-after-abandonment stays
+    /// unrepresentable.
+    StagingCreated {
+        run_id: RunId,
+        initial: DestructiveIdentity,
+    },
     OutputReady {
         run_id: RunId,
         staging_identity: ArtifactIdentity,
-    },
-    /// The staging artifact was recreated for an in-transaction encode retry
-    /// (the failed attempt's adapter cleanup deletes staging). Valid only
-    /// while the transaction is Started; the journaled staging pin —
-    /// `initial_staging_identity`, which `OutputReady` verifies by file id —
-    /// moves to the recreated file. After abandonment the ledger refuses
-    /// this, so retry-after-abandon stays unrepresentable.
-    OutputRestaged {
-        run_id: RunId,
-        staging_identity: DestructiveIdentity,
     },
     OutputCommitted {
         run_id: RunId,
@@ -181,6 +183,13 @@ impl OutputDelta {
             Self::OutputStarted { transaction } => {
                 outputs.insert(transaction.run_id, transaction.as_ref().clone());
             }
+            Self::StagingCreated { run_id, initial } => update_state(
+                outputs,
+                *run_id,
+                OutputState::StagingCreated {
+                    initial: initial.clone(),
+                },
+            ),
             Self::OutputReady {
                 run_id,
                 staging_identity,
@@ -191,14 +200,6 @@ impl OutputDelta {
                     staging_identity: staging_identity.clone(),
                 },
             ),
-            Self::OutputRestaged {
-                run_id,
-                staging_identity,
-            } => {
-                if let Some(transaction) = outputs.get_mut(run_id) {
-                    transaction.initial_staging_identity = staging_identity.clone();
-                }
-            }
             Self::OutputCommitted {
                 run_id,
                 final_identity,
@@ -320,6 +321,9 @@ pub fn recover_output(
 ) -> OutputRecoveryAction {
     match &transaction.state {
         OutputState::Started => recover_started(transaction, facts),
+        OutputState::StagingCreated { initial } => {
+            recover_staging_created(transaction, initial, facts)
+        }
         OutputState::Ready { staging_identity } => {
             recover_ready(transaction, staging_identity, facts)
         }
@@ -365,9 +369,30 @@ fn recover_started(
         DestructiveObservation::Absent => OutputRecoveryAction::Append(OutputDelta::Abandoned {
             run_id: transaction.run_id,
         }),
-        DestructiveObservation::Present(identity)
-            if identity.file_id == transaction.initial_staging_identity.file_id =>
-        {
+        // A present staging file in `Started` means the crash landed between
+        // file creation and the `StagingCreated` journal record, so no identity
+        // was ever recorded. Ownership rests on the staging filename embedding
+        // this run id: run ids are unique within a journal, so the file is ours
+        // to abandon under the identity observed now.
+        DestructiveObservation::Present(identity) => {
+            OutputRecoveryAction::Append(OutputDelta::AbandonStagingIntent {
+                run_id: transaction.run_id,
+                staging_identity: identity.clone(),
+            })
+        }
+    }
+}
+
+fn recover_staging_created(
+    transaction: &OutputTransaction,
+    initial: &DestructiveIdentity,
+    facts: &FileSystemFacts,
+) -> OutputRecoveryAction {
+    match &facts.staging {
+        DestructiveObservation::Absent => OutputRecoveryAction::Append(OutputDelta::Abandoned {
+            run_id: transaction.run_id,
+        }),
+        DestructiveObservation::Present(identity) if identity.file_id == initial.file_id => {
             OutputRecoveryAction::Append(OutputDelta::AbandonStagingIntent {
                 run_id: transaction.run_id,
                 staging_identity: identity.clone(),

@@ -5,7 +5,7 @@ use crate::{
     reducer::{validate_output_delta, validate_terminal},
 };
 
-pub const JOURNAL_SCHEMA_VERSION: u32 = 10;
+pub const JOURNAL_SCHEMA_VERSION: u32 = 11;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, specta::Type)]
 pub struct JournalEnvelope {

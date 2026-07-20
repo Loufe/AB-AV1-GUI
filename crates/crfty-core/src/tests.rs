@@ -229,7 +229,6 @@ fn transaction(state: OutputState, replacement: Replacement) -> OutputTransactio
         input: PathBuf::from("input.mkv"),
         input_identity: destructive("input", 10),
         staging: PathBuf::from(".output.mkv.crfty-9.part"),
-        initial_staging_identity: destructive("empty", 0),
         final_path: PathBuf::from("output.mkv"),
         final_preimage: None,
         replacement,
@@ -1242,14 +1241,59 @@ fn output_ledger_rejects_skipped_and_mismatched_transitions() {
         })),
     );
     assert_eq!(accepted.reply, Reply::Accepted);
+    let ready_without_staging = apply(
+        &mut state,
+        Command::Worker(WorkerCommand::Output(OutputDelta::OutputReady {
+            run_id: RunId(3),
+            staging_identity: identity("staging", 8),
+        })),
+    );
+    assert!(matches!(
+        ready_without_staging.reply,
+        Reply::Rejected { .. }
+    ));
+    let staging_created = apply(
+        &mut state,
+        Command::Worker(WorkerCommand::Output(OutputDelta::StagingCreated {
+            run_id: RunId(3),
+            initial: destructive("staging", 0),
+        })),
+    );
+    assert_eq!(staging_created.reply, Reply::Accepted);
+    // A repeated StagingCreated is legal: it is the encode retry's restage
+    // (the pin moves to the recreated staging artifact).
+    let repeated_staging = apply(
+        &mut state,
+        Command::Worker(WorkerCommand::Output(OutputDelta::StagingCreated {
+            run_id: RunId(3),
+            initial: destructive("staging", 0),
+        })),
+    );
+    assert_eq!(repeated_staging.reply, Reply::Accepted);
     let empty_ready = apply(
         &mut state,
         Command::Worker(WorkerCommand::Output(OutputDelta::OutputReady {
             run_id: RunId(3),
-            staging_identity: identity("empty", 0),
+            staging_identity: identity("staging", 0),
         })),
     );
     assert!(matches!(empty_ready.reply, Reply::Rejected { .. }));
+    let foreign_ready = apply(
+        &mut state,
+        Command::Worker(WorkerCommand::Output(OutputDelta::OutputReady {
+            run_id: RunId(3),
+            staging_identity: identity("other", 8),
+        })),
+    );
+    assert!(matches!(foreign_ready.reply, Reply::Rejected { .. }));
+    let ready = apply(
+        &mut state,
+        Command::Worker(WorkerCommand::Output(OutputDelta::OutputReady {
+            run_id: RunId(3),
+            staging_identity: identity("staging", 8),
+        })),
+    );
+    assert_eq!(ready.reply, Reply::Accepted);
 }
 
 #[test]
@@ -1381,6 +1425,37 @@ fn recovery_covers_every_destructive_boundary() {
     assert!(matches!(
         recover_output(&started, &changed_partial),
         OutputRecoveryAction::Append(OutputDelta::AbandonStagingIntent { .. })
+    ));
+    let absent_staging = FileSystemFacts {
+        staging: DestructiveObservation::Absent,
+        ..started_facts.clone()
+    };
+    assert!(matches!(
+        recover_output(&started, &absent_staging),
+        OutputRecoveryAction::Append(OutputDelta::Abandoned { .. })
+    ));
+
+    let staging_created = transaction(
+        OutputState::StagingCreated {
+            initial: destructive("empty", 0),
+        },
+        Replacement::KeepOriginal,
+    );
+    assert!(matches!(
+        recover_output(&staging_created, &changed_partial),
+        OutputRecoveryAction::Append(OutputDelta::AbandonStagingIntent { .. })
+    ));
+    assert!(matches!(
+        recover_output(&staging_created, &absent_staging),
+        OutputRecoveryAction::Append(OutputDelta::Abandoned { .. })
+    ));
+    let foreign_staging = FileSystemFacts {
+        staging: DestructiveObservation::Present(destructive("foreign", 5)),
+        ..started_facts.clone()
+    };
+    assert!(matches!(
+        recover_output(&staging_created, &foreign_staging),
+        OutputRecoveryAction::Conflict(_)
     ));
 
     let ready_identity = identity("encoded", 7);
@@ -2149,6 +2224,15 @@ fn restage_moves_the_staging_pin_and_is_refused_after_abandonment() {
             transaction: Box::new(started),
         })),
     );
+    let _created = apply_and_journal(
+        &mut state,
+        &mut bytes,
+        &mut sequence,
+        Command::Worker(WorkerCommand::Output(OutputDelta::StagingCreated {
+            run_id: RunId(3),
+            initial: destructive("empty", 0),
+        })),
+    );
     // The ready pin holds: an artifact on a different file id is rejected.
     let stale = apply(
         &mut state,
@@ -2158,22 +2242,15 @@ fn restage_moves_the_staging_pin_and_is_refused_after_abandonment() {
         })),
     );
     assert!(matches!(stale.reply, Reply::Rejected { .. }));
-    // A restage must present a fresh empty artifact.
-    let nonempty = apply(
-        &mut state,
-        Command::Worker(WorkerCommand::Output(OutputDelta::OutputRestaged {
-            run_id: RunId(3),
-            staging_identity: destructive("fresh", 7),
-        })),
-    );
-    assert!(matches!(nonempty.reply, Reply::Rejected { .. }));
+    // The encode retry's restage: a repeated StagingCreated moves the pin to
+    // the recreated staging artifact.
     let restaged = apply_and_journal(
         &mut state,
         &mut bytes,
         &mut sequence,
-        Command::Worker(WorkerCommand::Output(OutputDelta::OutputRestaged {
+        Command::Worker(WorkerCommand::Output(OutputDelta::StagingCreated {
             run_id: RunId(3),
-            staging_identity: destructive("fresh", 0),
+            initial: destructive("fresh", 0),
         })),
     );
     assert_eq!(restaged.reply, Reply::Accepted);
@@ -2183,8 +2260,10 @@ fn restage_moves_the_staging_pin_and_is_refused_after_abandonment() {
             .outputs
             .get(&RunId(3))
             .expect("restaged transaction")
-            .initial_staging_identity,
-        destructive("fresh", 0)
+            .state,
+        OutputState::StagingCreated {
+            initial: destructive("fresh", 0),
+        }
     );
     // The ready pin follows the recreated staging file.
     let ready = apply_and_journal(
@@ -2213,6 +2292,10 @@ fn restage_moves_the_staging_pin_and_is_refused_after_abandonment() {
         OutputDelta::OutputStarted {
             transaction: Box::new(abandoned),
         },
+        OutputDelta::StagingCreated {
+            run_id: RunId(3),
+            initial: destructive("empty", 0),
+        },
         OutputDelta::AbandonStagingIntent {
             run_id: RunId(3),
             staging_identity: destructive("empty", 0),
@@ -2227,9 +2310,9 @@ fn restage_moves_the_staging_pin_and_is_refused_after_abandonment() {
     }
     let refused = apply(
         &mut abandoned_state,
-        Command::Worker(WorkerCommand::Output(OutputDelta::OutputRestaged {
+        Command::Worker(WorkerCommand::Output(OutputDelta::StagingCreated {
             run_id: RunId(3),
-            staging_identity: destructive("fresh", 0),
+            initial: destructive("fresh", 0),
         })),
     );
     assert!(matches!(refused.reply, Reply::Rejected { .. }));
