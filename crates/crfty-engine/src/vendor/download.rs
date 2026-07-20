@@ -1,7 +1,7 @@
 //! Verified vendor downloads. The stream is hashed while it is written and
 //! the SHA-256 must match the compiled-in manifest before the archive is
 //! usable — TLS protects transport, but the pinned digest is the trust
-//! anchor that authenticates content (ADR-008).
+//! anchor that authenticates content (ADR-010).
 
 use std::{
     io::{Read, Write},

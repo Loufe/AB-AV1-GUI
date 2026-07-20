@@ -76,10 +76,11 @@ Mechanics, fixed by this record:
   session is idle with no active run, and rejects `Start` mid-install. A
   claimed job's revisions are frozen into its `JobSpec`; a session snapshots
   the tool set once at start.
-* Concurrent instances: staging is per-process and promotion is atomic, so
-  the worst case for racing installs of the same manifest is a last-writer
-  win over identical content. The real guard is the single-instance data-dir
-  lock deferred to #33; until it lands this posture is accepted.
+* Concurrent instances: the data-directory lock (ADR-008) keeps a second
+  app instance from running installs at all. Against non-cooperating
+  processes, staging is per-process and promotion is atomic, so the worst
+  case for racing installs of the same manifest is a last-writer win over
+  identical content.
 * XZ decoding uses the pure-Rust `lzma-rs`. If it ever fails on a BtbN
   stream, the accepted fallback is the C `liblzma` binding — a dependency
   risk on par with other C-backed crates already in the tree, not a change
@@ -96,13 +97,12 @@ Mechanics, fixed by this record:
   newer builds without one
 * Bad: System/explicit encoder revisions are a proxy, so upgrading system
   FFmpeg re-analyzes even when SVT-AV1 is unchanged
-* Bad: Until #33, two concurrent instances can redundantly re-download the
-  same archive
 
 ## More Information
 
 Related: ADR-003 (pinned ab-av1 adapter; its revision constant is verified
-against `Cargo.lock`), ADR-005 (unsafe policy), ADR-007 (identity honesty).
+against `Cargo.lock`), ADR-005 (unsafe policy), ADR-007 (identity honesty),
+ADR-008 (data-directory lock).
 Implementation: `crates/crfty-engine/src/vendor/`; acceptance tests in
 `crates/crfty-engine/tests/vendor_{download,extract,install,native}.rs` and
 `.github/workflows/media-contract.yml`. Issue #43 is the narrative record.

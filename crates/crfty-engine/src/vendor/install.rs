@@ -2,7 +2,7 @@
 //! `staging/`; the previous install and `current.json` are untouched until
 //! the new install is complete, synced, and renamed into place. Any
 //! interruption at any point leaves only staging debris (cleaned by the next
-//! discovery) and never a half-replaced tool set (ADR-008).
+//! discovery) and never a half-replaced tool set (ADR-010).
 
 use std::{
     io::Write,

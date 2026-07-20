@@ -24,7 +24,7 @@ lzma-rs = "=0.3.0"
 # rustls-no-provider + an explicit ring provider: reqwest 0.13 dropped bundled
 # webpki roots, and the default rustls feature would pull aws-lc-rs (cmake +
 # nasm on Windows). Trust roots come from the OS verifier; the compiled-in
-# SHA-256 manifest is the actual trust anchor for vendor downloads (ADR-008).
+# SHA-256 manifest is the actual trust anchor for vendor downloads (ADR-010).
 reqwest = { version = "=0.13.4", default-features = false, features = ["blocking", "rustls-no-provider"] }
 rustls = { version = "=0.23.42", default-features = false, features = ["ring", "std", "tls12"] }
 serde = { version = "=1.0.229", features = ["derive"] }

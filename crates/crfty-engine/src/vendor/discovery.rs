@@ -10,7 +10,7 @@
 //! written at install time (no process spawn); system and explicit tools are
 //! probed via ffprobe's JSON version document, with the probed FFmpeg version
 //! standing in for the encoder revision — conservatively, any FFmpeg change
-//! invalidates cached analyses (see ADR-008).
+//! invalidates cached analyses (see ADR-010).
 
 use std::{
     ffi::OsStr,
@@ -310,9 +310,10 @@ fn resolve_tool(
         .ok_or_else(|| format!("{binary} was not found via {variable}, a managed install, or PATH"))
 }
 
-/// Removes leftover download staging from crashed runs. Best-effort: another
-/// live process may hold entries open (no single-instance lock yet — #33);
-/// its install then fails typed and restartable rather than corrupting ours.
+/// Removes leftover download staging from crashed runs. Best-effort: the
+/// data-directory lock (ADR-008) keeps a second app instance out, but a
+/// non-cooperating process holding entries open only makes this cleanup —
+/// and any install it would have raced — fail typed and restartable.
 fn clean_stale_staging(vendor_root: &Path) {
     let staging = vendor_root.join(STAGING_DIR_NAME);
     match std::fs::remove_dir_all(&staging) {
