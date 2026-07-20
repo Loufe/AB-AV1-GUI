@@ -11,19 +11,29 @@ in [issue #33](https://github.com/Loufe/AB-AV1-GUI/issues/33).
 
 ## Status
 
-The rewrite has its workspace foundation, pinned ab-av1 integration, and durable
-job coordinator. Queue claims, content-keyed media records, analysis reuse,
-hardware-decode selection, analysis/encode lifecycle, force cancellation, atomic
-journal replay, MKV-only lossless remux for existing AV1, output promotion, and
-crash recovery are implemented and covered by unit and real-process contract
-tests. The remaining product domain and the application shell are still to come.
+The rewrite has its workspace foundation, pinned ab-av1 integration, durable
+job coordinator, Tauri shell, and web UI. Queue claims, content-keyed media
+records, analysis reuse, hardware-decode selection, analysis/encode lifecycle,
+force cancellation, atomic journal replay, MKV-only lossless remux for existing
+AV1, output promotion, and crash recovery are implemented and covered by unit
+and real-process contract tests. The event stream publishes each command's
+ephemeral deltas before its durable deltas, so a finished item's final
+telemetry and telemetry clear always precede its finish event. The engine
+starts without FFmpeg or ffprobe: missing tools surface as typed availability
+on the stream and gate media sessions while the queue, history, and settings
+stay fully usable. The frontend folds that stream into its stores against
+golden fixtures generated from the Rust fold. The remaining product domain —
+including growing the views over the store — is still to come.
 
 ## Workspace
 
 - `crates/crfty-core`: pure domain logic; no processes, filesystem, clock, or UI
 - `crates/crfty-engine`: process and filesystem integration, including the
   isolated ab-av1 adapter; no Tauri dependency
-- Tauri shell and web UI: added only after the engine boundary is proven
+- `crates/crfty-shell`: thin Tauri bridge between the engine's command and
+  event surface and the webview; no domain logic
+- `ui/`: Vite + React + TypeScript + Tailwind frontend, pnpm-managed (see
+  `ui/README.md`)
 
 ## Development
 
