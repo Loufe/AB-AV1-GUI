@@ -14,12 +14,14 @@
 use std::path::PathBuf;
 
 use crfty_core::{
-    AnalysisAttempt, AnalysisProfile, AnalysisResult, ArtifactIdentity, ClaimId, ContentKey, Crf,
-    DecodeMode, DecodePreference, DestructiveIdentity, DurableDelta, DurableState,
-    ExecutionSettings, FileStamp, FileSystemId, ItemOutcome, JobAction, JobSpec, MediaContainer,
-    MediaObservation, Operation, OutputDelta, OutputState, OutputTarget, OutputTransaction,
-    PathBinding, PathHash, QueueItem, QueueItemId, QueueItemState, Replacement, ReservedJob, RunId,
-    SearchMeasurement, SkipReason, VideoCodec, VideoMeta, VmafScore, VmafTarget, fold,
+    AnalysisAttempt, AnalysisIntent, AnalysisProfile, AnalysisResult, ArtifactIdentity, AudioCodec,
+    AudioStreamMeta, ClaimId, CompletionEvidence, ConflictKind, ContentKey, Crf, DecodeMode,
+    DecodePreference, DestructiveIdentity, DiagnosticTail, DurableDelta, DurableState, DurationMs,
+    ExecutionSettings, FailureFacts, FailureKind, FileStamp, FileSystemId, FileTimeNs, ItemOutcome,
+    JobAction, JobPhase, JobSpec, MediaContainer, MediaObservation, Operation, OutputDelta,
+    OutputState, OutputTarget, OutputTransaction, PathBinding, PathHash, PhaseSpan, QueueItem,
+    QueueItemId, QueueItemState, Replacement, ReservedJob, RunId, SearchMeasurement, SkipReason,
+    StreamByteSizes, UnixMillis, VideoCodec, VideoMeta, VmafScore, VmafTarget, fold,
 };
 use serde::Serialize;
 
@@ -60,6 +62,7 @@ fn added(id: u64) -> DurableDelta {
             id: QueueItemId(id),
             input: PathBuf::from(format!("videos/input-{id}.mp4")),
             operation: Operation::Convert,
+            intent: AnalysisIntent::ReuseIfFresh,
             output_target: OutputTarget::Replace,
             state: QueueItemState::Queued,
         },
@@ -87,16 +90,21 @@ fn reserved(item: u64, claim: u64, run: u64) -> DurableDelta {
             run_id: RunId(run),
             input: PathBuf::from(format!("videos/input-{item}.mp4")),
             operation: Operation::Convert,
+            intent: AnalysisIntent::ReuseIfFresh,
             output_target: OutputTarget::Replace,
         }),
     }
 }
+
+const STARTED_AT_MS: u64 = 1_752_000_000_000;
+const FINISHED_AT_MS: u64 = 1_752_000_090_000;
 
 fn running(item: u64, claim: u64, run: u64) -> DurableDelta {
     DurableDelta::ItemRunning {
         item_id: QueueItemId(item),
         claim_id: ClaimId(claim),
         run_id: RunId(run),
+        at: UnixMillis(STARTED_AT_MS),
     }
 }
 
@@ -106,6 +114,31 @@ fn finished(item: u64, claim: u64, run: u64, outcome: ItemOutcome) -> DurableDel
         claim_id: ClaimId(claim),
         run_id: RunId(run),
         outcome,
+        at: UnixMillis(FINISHED_AT_MS),
+        phase_spans: vec![
+            PhaseSpan {
+                phase: JobPhase::Preparing,
+                duration: DurationMs(150),
+            },
+            PhaseSpan {
+                phase: JobPhase::Encoding,
+                duration: DurationMs(88_000),
+            },
+        ],
+    }
+}
+
+fn live_encode_evidence() -> CompletionEvidence {
+    CompletionEvidence::LiveEncode {
+        input_size: 3_000_000,
+        output_size: 1_000_000,
+        stream_sizes: StreamByteSizes {
+            video: 850_000,
+            audio: 120_000,
+            subtitle: 5_000,
+            other: 25_000,
+        },
+        encode_decode: DecodeMode::Software,
     }
 }
 
@@ -117,6 +150,18 @@ fn video_meta(duration_ms: u64) -> VideoMeta {
         height: 1080,
         rotation_degrees: 0,
         duration_ms,
+        size_bytes: 3_000_000,
+        audio: vec![
+            AudioStreamMeta {
+                codec: AudioCodec::Aac,
+                channels: 6,
+            },
+            AudioStreamMeta {
+                codec: AudioCodec::Other("wmav2".to_owned()),
+                channels: 2,
+            },
+        ],
+        subtitle_count: 1,
     }
 }
 
@@ -127,7 +172,7 @@ fn observed(path: &str, key: &str, duration_ms: u64) -> DurableDelta {
             binding: PathBinding {
                 stamp: FileStamp {
                     size: 3_000_000,
-                    modified_ns: Some(1_000_000),
+                    modified_ns: Some(FileTimeNs(1_000_000)),
                 },
                 content_key: ContentKey(key.to_owned()),
             },
@@ -182,6 +227,7 @@ fn prepared(item: u64, claim: u64, run: u64, key: Option<&str>, action: JobActio
             input: PathBuf::from(format!("videos/input-{item}.mp4")),
             content_key: key.map(|key| ContentKey(key.to_owned())),
             operation: Operation::Convert,
+            intent: AnalysisIntent::ReuseIfFresh,
             output_target: OutputTarget::Replace,
             execution: ExecutionSettings {
                 requested_target: VmafTarget(95),
@@ -210,7 +256,7 @@ fn destructive(size: u64) -> DestructiveIdentity {
             inode: 42,
         },
         size,
-        modified_ns: Some(2_000_000),
+        modified_ns: Some(FileTimeNs(2_000_000)),
     }
 }
 
@@ -434,7 +480,12 @@ fn scenarios() -> Vec<Scenario> {
                 ],
             ]
             .concat(),
-            vec![finished(1, 10, 100, ItemOutcome::Converted)],
+            vec![finished(
+                1,
+                10,
+                100,
+                ItemOutcome::Converted(live_encode_evidence()),
+            )],
         ),
         scenario(
             "item_finished_remuxed_retired",
@@ -450,7 +501,15 @@ fn scenarios() -> Vec<Scenario> {
                 ],
             ]
             .concat(),
-            vec![finished(1, 10, 100, ItemOutcome::Remuxed)],
+            vec![finished(
+                1,
+                10,
+                100,
+                ItemOutcome::Remuxed(CompletionEvidence::LiveRemux {
+                    input_size: 3_000_000,
+                    output_size: 1_000_000,
+                }),
+            )],
         ),
         scenario(
             "item_finished_converted_without_commit",
@@ -463,7 +522,32 @@ fn scenarios() -> Vec<Scenario> {
                 ],
             ]
             .concat(),
-            vec![finished(1, 10, 100, ItemOutcome::Converted)],
+            vec![finished(
+                1,
+                10,
+                100,
+                ItemOutcome::Converted(live_encode_evidence()),
+            )],
+        ),
+        scenario(
+            "item_finished_converted_recovered_at_startup",
+            [
+                convert_prelude("ck-1"),
+                vec![
+                    output_started(100),
+                    output_ready(100, "ck-out"),
+                    output_committed(100, "ck-out"),
+                ],
+            ]
+            .concat(),
+            // The crash-window recovery outcome: settlement is durable, the
+            // live adapter facts are not, so evidence carries nothing.
+            vec![finished(
+                1,
+                10,
+                100,
+                ItemOutcome::Converted(CompletionEvidence::RecoveredAtStartup),
+            )],
         ),
         scenario(
             "item_finished_failed",
@@ -472,9 +556,12 @@ fn scenarios() -> Vec<Scenario> {
                 1,
                 10,
                 100,
-                ItemOutcome::Failed {
-                    message: "encoder exited with status 1".to_owned(),
-                },
+                ItemOutcome::Failed(
+                    FailureFacts::new(FailureKind::EncodeRun, "encoder exited with status 1")
+                        .with_diagnostic(DiagnosticTail::truncated(
+                            "Error: <input>: unsupported bit depth",
+                        )),
+                ),
             )],
         ),
         scenario(
@@ -547,6 +634,27 @@ fn scenarios() -> Vec<Scenario> {
             vec![output_staging_created(100)],
         ),
         scenario(
+            "output_restaged",
+            [
+                convert_prelude("ck-1"),
+                vec![output_started(100), output_staging_created(100)],
+            ]
+            .concat(),
+            // An encode retry recreated the staging artifact; the repeated
+            // StagingCreated moves the journaled pin to the new identity.
+            vec![DurableDelta::Output(OutputDelta::StagingCreated {
+                run_id: RunId(100),
+                initial: DestructiveIdentity {
+                    file_id: FileSystemId::Unix {
+                        device: 1,
+                        inode: 77,
+                    },
+                    size: 0,
+                    modified_ns: Some(FileTimeNs(2_500_000)),
+                },
+            })],
+        ),
+        scenario(
             "output_abandoned",
             [convert_prelude("ck-1"), vec![output_started(100)]].concat(),
             vec![
@@ -562,7 +670,8 @@ fn scenarios() -> Vec<Scenario> {
             [convert_prelude("ck-1"), vec![output_started(100)]].concat(),
             vec![DurableDelta::Output(OutputDelta::Conflict {
                 run_id: RunId(100),
-                reason: "final path changed since EncodeStarted".to_owned(),
+                kind: ConflictKind::IdentityMismatch,
+                detail: "final path changed since EncodeStarted".to_owned(),
             })],
         ),
         scenario(

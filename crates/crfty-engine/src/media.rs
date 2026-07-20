@@ -13,9 +13,9 @@ use blake2::{
     digest::{Update, VariableOutput},
 };
 use crfty_core::{
-    ArtifactIdentity, ContentKey, DecodeMode, DecodePreference, DestructiveIdentity, FileStamp,
-    FileSystemId, HardwareDecoder, MediaContainer, MediaObservation, PathBinding, PathHash,
-    VideoCodec, VideoMeta,
+    ArtifactIdentity, AudioCodec, AudioStreamMeta, ContentKey, DecodeMode, DecodePreference,
+    DestructiveIdentity, FileStamp, FileSystemId, FileTimeNs, HardwareDecoder, MediaContainer,
+    MediaObservation, PathBinding, PathHash, VideoCodec, VideoMeta,
 };
 use serde::Deserialize;
 
@@ -119,7 +119,7 @@ impl MediaInspector {
 
     fn inspect(&self, path: &Path) -> io::Result<(VideoMeta, ArtifactIdentity)> {
         let before_probe = destructive_identity(path)?;
-        let metadata = self.probe(path)?;
+        let metadata = self.probe(path, before_probe.size)?;
         let identity = sampled_identity(path, &metadata)?;
         if identity.destructive != before_probe {
             return Err(io::Error::new(
@@ -130,16 +130,14 @@ impl MediaInspector {
         Ok((metadata, identity))
     }
 
-    fn probe(&self, path: &Path) -> io::Result<VideoMeta> {
+    fn probe(&self, path: &Path, size_bytes: u64) -> io::Result<VideoMeta> {
         let mut command = Command::new(&self.ffprobe);
         command
             .args([
                 "-v",
                 "error",
-                "-select_streams",
-                "v:0",
                 "-show_entries",
-                "stream=codec_name,width,height:stream_tags=rotate:stream_side_data=rotation:format=duration,format_name",
+                "stream=codec_type,codec_name,width,height,channels:stream_tags=rotate:stream_side_data=rotation:format=duration,format_name",
                 "-of",
                 "json",
             ])
@@ -153,7 +151,23 @@ impl MediaInspector {
         }
         let probe: ProbeDocument = serde_json::from_slice(&output.stdout)
             .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error))?;
-        let stream = probe.streams.into_iter().next().ok_or_else(|| {
+        // All streams arrive in one probe; classify by codec_type. The first
+        // video stream matches the previous `-select_streams v:0` behavior.
+        let mut video = None;
+        let mut audio = Vec::new();
+        let mut subtitle_count = 0_u32;
+        for stream in probe.streams {
+            match stream.codec_type.as_str() {
+                "video" if video.is_none() => video = Some(stream),
+                "audio" => audio.push(AudioStreamMeta {
+                    codec: audio_codec(&stream.codec_name),
+                    channels: stream.channels,
+                }),
+                "subtitle" => subtitle_count = subtitle_count.saturating_add(1),
+                _ => {}
+            }
+        }
+        let stream = video.ok_or_else(|| {
             io::Error::new(io::ErrorKind::InvalidData, "media has no video stream")
         })?;
         let format = probe
@@ -200,7 +214,24 @@ impl MediaInspector {
             height: stream.height,
             rotation_degrees: rotation,
             duration_ms: (duration * MILLISECONDS_PER_SECOND).round() as u64,
+            size_bytes,
+            audio,
+            subtitle_count,
         })
+    }
+}
+
+fn audio_codec(codec_name: &str) -> AudioCodec {
+    let codec_name = codec_name.to_ascii_lowercase();
+    match codec_name.as_str() {
+        "aac" => AudioCodec::Aac,
+        "ac3" => AudioCodec::Ac3,
+        "eac3" => AudioCodec::Eac3,
+        "dts" => AudioCodec::Dts,
+        "opus" => AudioCodec::Opus,
+        "flac" => AudioCodec::Flac,
+        "mp3" => AudioCodec::Mp3,
+        _ => AudioCodec::Other(codec_name),
     }
 }
 
@@ -362,11 +393,14 @@ fn identity_from_metadata(path: &Path, metadata: &Metadata) -> io::Result<Destru
             file_id,
         },
     };
+    // Epoch-nanoseconds fit u64 until the year 2554; a clock past that (or
+    // before the epoch) degrades to "no modification time" rather than lying.
     let modified_ns = metadata
         .modified()
         .ok()
         .and_then(|modified| modified.duration_since(UNIX_EPOCH).ok())
-        .map(|duration| duration.as_nanos());
+        .and_then(|duration| u64::try_from(duration.as_nanos()).ok())
+        .map(FileTimeNs);
     Ok(DestructiveIdentity {
         file_id,
         size: metadata.len(),
@@ -384,11 +418,15 @@ struct ProbeDocument {
 #[derive(Deserialize)]
 struct ProbeStream {
     #[serde(default)]
+    codec_type: String,
+    #[serde(default)]
     codec_name: String,
     #[serde(default)]
     width: u32,
     #[serde(default)]
     height: u32,
+    #[serde(default)]
+    channels: u16,
     tags: Option<ProbeTags>,
     #[serde(default)]
     side_data_list: Vec<ProbeSideData>,
@@ -448,6 +486,9 @@ mod tests {
                 height: 9,
                 rotation_degrees: 0,
                 duration_ms: 1_000,
+                size_bytes: 4,
+                audio: Vec::new(),
+                subtitle_count: 0,
             },
         )
         .expect("small content key");
@@ -470,6 +511,9 @@ mod tests {
                 height: 1_080,
                 rotation_degrees: 0,
                 duration_ms: 98_765,
+                size_bytes: 4 * 1024 * 1024 + 12_345,
+                audio: Vec::new(),
+                subtitle_count: 0,
             },
         )
         .expect("large content key");

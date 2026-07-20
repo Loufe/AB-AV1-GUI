@@ -5,7 +5,7 @@ use crate::{
     reducer::{validate_output_delta, validate_terminal},
 };
 
-pub const JOURNAL_SCHEMA_VERSION: u32 = 6;
+pub const JOURNAL_SCHEMA_VERSION: u32 = 11;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, specta::Type)]
 pub struct JournalEnvelope {
@@ -171,6 +171,7 @@ fn validate_replayed_delta(state: &DurableState, delta: &DurableDelta) -> Result
                 item.id == job.item_id
                     && item.input == job.input
                     && item.operation == job.operation
+                    && item.intent == job.intent
                     && item.output_target == job.output_target
                     && matches!(item.state, QueueItemState::Queued)
             });
@@ -203,6 +204,7 @@ fn validate_replayed_delta(state: &DurableState, delta: &DurableDelta) -> Result
                 item.id == spec.item_id
                     && item.input == spec.input
                     && item.operation == spec.operation
+                    && item.intent == spec.intent
                     && item.output_target == spec.output_target
                     && matches!(
                         item.state,
@@ -221,6 +223,7 @@ fn validate_replayed_delta(state: &DurableState, delta: &DurableDelta) -> Result
                 record.map(|known| &known.metadata),
                 record,
                 spec.operation,
+                spec.intent,
                 &spec.execution,
             );
             if !matches_item
@@ -235,6 +238,7 @@ fn validate_replayed_delta(state: &DurableState, delta: &DurableDelta) -> Result
             item_id,
             claim_id,
             run_id,
+            ..
         } => {
             let matches_claim = state.queue.iter().any(|item| {
                 item.id == *item_id
@@ -272,6 +276,7 @@ fn validate_replayed_delta(state: &DurableState, delta: &DurableDelta) -> Result
             claim_id,
             run_id,
             outcome,
+            ..
         } => {
             let reserved = state.queue.iter().any(|item| {
                 item.id == *item_id

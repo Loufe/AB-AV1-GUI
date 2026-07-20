@@ -10,6 +10,7 @@
 //! or user-interface frameworks.
 
 mod constants;
+mod failure;
 mod job;
 mod journal;
 mod media;
@@ -18,6 +19,7 @@ mod policy;
 mod reducer;
 mod settings;
 mod state;
+mod time;
 
 /// Export-only override target for `#[specta(type = ...)]` on integers wider
 /// than 32 bits. Tauri's JSON transport delivers every integer as a JavaScript
@@ -27,8 +29,9 @@ mod state;
 /// back. Do not use this alias as a runtime type.
 pub type JsNumber = u32;
 
+pub use failure::{DIAGNOSTIC_TAIL_MAX_BYTES, DiagnosticTail, FailureFacts, FailureKind};
 pub use job::{
-    AnalysisAttempt, AnalysisProfile, AnalysisResult, ClaimedJob, Crf, DecodeMode,
+    AnalysisAttempt, AnalysisIntent, AnalysisProfile, AnalysisResult, ClaimedJob, Crf, DecodeMode,
     DecodePreference, ExecutionSettings, HardwareDecoder, JobAction, JobPhase, JobSpec, Operation,
     OutputTarget, ReservedJob, SearchMeasurement, ToolRevisions, VmafScore, VmafTarget,
 };
@@ -37,31 +40,33 @@ pub use journal::{
     replay,
 };
 pub use media::{
-    FileRecord, FileStamp, MediaContainer, MediaObservation, PathBinding, PathHash, VideoCodec,
-    VideoMeta,
+    AudioCodec, AudioStreamMeta, FileRecord, FileStamp, MediaContainer, MediaObservation,
+    PathBinding, PathHash, Verdict, VerdictKind, VideoCodec, VideoMeta,
 };
 pub use output::{
-    ArtifactIdentity, ContentKey, DestructiveIdentity, DestructiveObservation, FileSystemFacts,
-    FileSystemId, OutputDelta, OutputRecoveryAction, OutputState, OutputTransaction,
-    RecoveryConflict, Replacement, recover_output,
+    ArtifactIdentity, ConflictKind, ContentKey, DestructiveIdentity, DestructiveObservation,
+    FileSystemFacts, FileSystemId, OutputDelta, OutputRecoveryAction, OutputState,
+    OutputTransaction, RecoveryConflict, Replacement, recover_output,
 };
 pub use policy::{
-    Eligibility, MIN_VIDEO_PIXELS, SkipReason, evaluate_eligibility, select_analysis,
-    select_job_action,
+    Eligibility, MIN_VIDEO_PIXELS, SkipReason, evaluate_eligibility, permitted_profiles,
+    select_analysis, select_job_action, verdict_applies,
 };
 pub use reducer::{
     Applied, Command, Effect, EphemeralDelta, QueueCommand, Reply, SessionCommand, SettingsCommand,
-    SystemCommand, WorkerCommand, apply, settled_outcome,
+    SystemCommand, WorkerCommand, apply,
 };
 pub use settings::{
     DEFAULT_OUTPUT_SUFFIX, DefaultOutputMode, OutputSettings, PrivacySettings, Settings,
     VideoExtension,
 };
 pub use state::{
-    AppSnapshot, AppState, ClaimId, ConfigDelta, ConversionRun, DurableDelta, DurableState,
-    ItemOutcome, JobProgress, JournalSequence, MediaTool, QueueItem, QueueItemId, QueueItemState,
-    RunId, SessionState, Telemetry, ToolAvailability, fold, fold_config,
+    AppSnapshot, AppState, ClaimId, CompletionEvidence, ConfigDelta, ConversionRun, DurableDelta,
+    DurableState, ItemOutcome, JobProgress, JournalSequence, MediaTool, PhaseSpan, QueueItem,
+    QueueItemId, QueueItemState, RunId, SessionState, StreamByteSizes, Telemetry, ToolAvailability,
+    fold, fold_config,
 };
+pub use time::{DurationMs, FileTimeNs, UnixMillis};
 
 #[cfg(test)]
 mod tests;

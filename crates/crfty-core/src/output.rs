@@ -2,7 +2,7 @@ use std::{collections::BTreeMap, path::PathBuf};
 
 use serde::{Deserialize, Serialize};
 
-use crate::RunId;
+use crate::{FileTimeNs, RunId};
 
 #[derive(
     Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize, specta::Type,
@@ -25,9 +25,25 @@ pub enum FileSystemId {
     WindowsHighResolution {
         #[specta(type = crate::JsNumber)]
         volume_serial: u64,
-        #[specta(type = crate::JsNumber)]
+        // ReFS 128-bit file ids overflow a JavaScript number, so the wire
+        // representation is a string; the frontend treats it as opaque.
+        #[serde(with = "u128_string")]
+        #[specta(type = String)]
         file_id: u128,
     },
+}
+
+mod u128_string {
+    use serde::{Deserialize, Deserializer, Serializer};
+
+    pub fn serialize<S: Serializer>(value: &u128, serializer: S) -> Result<S::Ok, S::Error> {
+        serializer.collect_str(value)
+    }
+
+    pub fn deserialize<'de, D: Deserializer<'de>>(deserializer: D) -> Result<u128, D::Error> {
+        let text = String::deserialize(deserializer)?;
+        text.parse::<u128>().map_err(serde::de::Error::custom)
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, specta::Type)]
@@ -35,8 +51,7 @@ pub struct DestructiveIdentity {
     pub file_id: FileSystemId,
     #[specta(type = crate::JsNumber)]
     pub size: u64,
-    #[specta(type = Option<crate::JsNumber>)]
-    pub modified_ns: Option<u128>,
+    pub modified_ns: Option<FileTimeNs>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, specta::Type)]
@@ -55,6 +70,15 @@ pub enum DestructiveObservation {
 pub enum Replacement {
     KeepOriginal,
     RetireOriginal,
+}
+
+/// Why an output transaction settled as a conflict. `IdentityMismatch` means
+/// observed files no longer match the ledger; `InspectionFailed` means the
+/// filesystem could not be inspected or acted on to find out.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, specta::Type)]
+pub enum ConflictKind {
+    IdentityMismatch,
+    InspectionFailed,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, specta::Type)]
@@ -92,7 +116,8 @@ pub enum OutputState {
     },
     Abandoned,
     Conflict {
-        reason: String,
+        kind: ConflictKind,
+        detail: String,
     },
 }
 
@@ -114,6 +139,12 @@ pub enum OutputDelta {
     OutputStarted {
         transaction: Box<OutputTransaction>,
     },
+    /// Records the created (or, for an in-transaction encode retry,
+    /// recreated) staging artifact. A repeated `StagingCreated` moves the
+    /// journaled pin — which `OutputReady` verifies by file id — to the
+    /// recreated file after the failed attempt's adapter cleanup deleted it.
+    /// A settled transaction refuses this, so retry-after-abandonment stays
+    /// unrepresentable.
     StagingCreated {
         run_id: RunId,
         initial: DestructiveIdentity,
@@ -141,7 +172,8 @@ pub enum OutputDelta {
     },
     Conflict {
         run_id: RunId,
-        reason: String,
+        kind: ConflictKind,
+        detail: String,
     },
 }
 
@@ -218,11 +250,16 @@ impl OutputDelta {
                 },
             ),
             Self::Abandoned { run_id } => update_state(outputs, *run_id, OutputState::Abandoned),
-            Self::Conflict { run_id, reason } => update_state(
+            Self::Conflict {
+                run_id,
+                kind,
+                detail,
+            } => update_state(
                 outputs,
                 *run_id,
                 OutputState::Conflict {
-                    reason: reason.clone(),
+                    kind: *kind,
+                    detail: detail.clone(),
                 },
             ),
         }
@@ -250,7 +287,8 @@ pub struct FileSystemFacts {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RecoveryConflict {
-    pub reason: String,
+    pub kind: ConflictKind,
+    pub detail: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -457,8 +495,12 @@ fn observation_matches_preimage(
     }
 }
 
-fn conflict(reason: &str) -> OutputRecoveryAction {
+fn conflict(detail: &str) -> OutputRecoveryAction {
+    // Every conflict recover_output itself detects is an identity mismatch:
+    // the observed files no longer match the ledger. Inspection failures are
+    // reported by the engine, which cannot see this far.
     OutputRecoveryAction::Conflict(RecoveryConflict {
-        reason: reason.to_owned(),
+        kind: ConflictKind::IdentityMismatch,
+        detail: detail.to_owned(),
     })
 }

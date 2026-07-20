@@ -12,8 +12,8 @@ use std::{
 };
 
 use crfty_core::{
-    AnalysisProfile, DecodeMode, DecodePreference, DurableDelta, ExecutionSettings, Operation,
-    OutputTarget, QueueCommand, QueueItemId, SessionCommand, VmafTarget,
+    AnalysisIntent, AnalysisProfile, DecodeMode, DecodePreference, DurableDelta, ExecutionSettings,
+    Operation, OutputTarget, QueueCommand, QueueItemId, SessionCommand, VmafTarget,
 };
 
 const REAL_CONTRACT_TARGET: VmafTarget = VmafTarget(80);
@@ -150,6 +150,7 @@ fn real_coordinator_analyzes_encodes_verifies_and_promotes() {
             item_id: QueueItemId(1),
             input: input.clone(),
             operation: Operation::Convert,
+            intent: AnalysisIntent::ReuseIfFresh,
             output_target: OutputTarget::Suffix {
                 suffix: "_av1".to_owned(),
             },
@@ -165,7 +166,15 @@ fn real_coordinator_analyzes_encodes_verifies_and_promotes() {
             ..
         }) = engine.events.recv().expect("coordinator event")
         {
-            assert_eq!(outcome, crfty_core::ItemOutcome::Converted);
+            assert!(
+                matches!(
+                    outcome,
+                    crfty_core::ItemOutcome::Converted(
+                        crfty_core::CompletionEvidence::LiveEncode { .. }
+                    )
+                ),
+                "unexpected outcome: {outcome:?}"
+            );
             break;
         }
     }
@@ -197,6 +206,7 @@ fn real_coordinator_remuxes_av1_mp4_without_reencoding() {
             item_id: QueueItemId(1),
             input: input.clone(),
             operation: Operation::Convert,
+            intent: AnalysisIntent::ReuseIfFresh,
             output_target: OutputTarget::Suffix {
                 suffix: "_remuxed".to_owned(),
             },
@@ -212,7 +222,15 @@ fn real_coordinator_remuxes_av1_mp4_without_reencoding() {
             ..
         }) = engine.events.recv().expect("remux coordinator event")
         {
-            assert_eq!(outcome, crfty_core::ItemOutcome::Remuxed);
+            assert!(
+                matches!(
+                    outcome,
+                    crfty_core::ItemOutcome::Remuxed(
+                        crfty_core::CompletionEvidence::LiveRemux { .. }
+                    )
+                ),
+                "unexpected outcome: {outcome:?}"
+            );
             break;
         }
     }

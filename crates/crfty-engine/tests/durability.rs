@@ -12,12 +12,12 @@ use std::{
 };
 
 use crfty_core::{
-    AnalysisProfile, AnalysisResult, AppState, ArtifactIdentity, ClaimId, Command, Crf,
-    DestructiveIdentity, DurableDelta, DurableState, EphemeralDelta, ExecutionSettings,
-    ItemOutcome, JobPhase, JobProgress, Operation, OutputDelta, OutputTarget, QueueCommand,
-    QueueItemId, Replacement, Reply, RunId, SearchMeasurement, SessionCommand, Settings,
-    SettingsCommand, SystemCommand, Telemetry, ToolAvailability, ToolRevisions, VmafScore,
-    WorkerCommand, apply, fold, replay,
+    AnalysisIntent, AnalysisProfile, AnalysisResult, AppState, ArtifactIdentity, ClaimId, Command,
+    Crf, DestructiveIdentity, DurableDelta, DurableState, EphemeralDelta, ExecutionSettings,
+    FailureFacts, FailureKind, ItemOutcome, JobPhase, JobProgress, Operation, OutputDelta,
+    OutputTarget, QueueCommand, QueueItemId, Replacement, Reply, RunId, SearchMeasurement,
+    SessionCommand, Settings, SettingsCommand, SystemCommand, Telemetry, ToolAvailability,
+    ToolRevisions, UnixMillis, VmafScore, WorkerCommand, apply, fold, replay,
 };
 use crfty_engine::{
     ab_av1::MediaTools,
@@ -50,6 +50,7 @@ fn add(item_id: QueueItemId) -> Command {
         item_id,
         input: PathBuf::from("video.mkv"),
         operation: Operation::Convert,
+        intent: AnalysisIntent::ReuseIfFresh,
         output_target: OutputTarget::Replace,
     })
 }
@@ -94,6 +95,7 @@ fn journal_lock_is_exclusive_and_records_replay() {
             id: QueueItemId(1),
             input: PathBuf::from("video.mkv"),
             operation: Operation::Convert,
+            intent: AnalysisIntent::ReuseIfFresh,
             output_target: OutputTarget::Replace,
             state: crfty_core::QueueItemState::Queued,
         },
@@ -117,6 +119,7 @@ fn journal_group_commit_is_one_atomic_replay_record() {
                 id,
                 input: PathBuf::from(format!("video-{}.mkv", id.0)),
                 operation: Operation::Convert,
+                intent: AnalysisIntent::ReuseIfFresh,
                 output_target: OutputTarget::Replace,
                 state: crfty_core::QueueItemState::Queued,
             },
@@ -328,9 +331,9 @@ fn telemetry_pressure_coalesces_and_terminal_value_wins() {
                 item_id: QueueItemId(1),
                 claim_id: ClaimId(2),
                 run_id: RunId(3),
-                outcome: ItemOutcome::Failed {
-                    message: "fixture".to_owned(),
-                },
+                outcome: ItemOutcome::Failed(FailureFacts::new(FailureKind::Internal, "fixture")),
+                at: UnixMillis(1_000),
+                phase_spans: Vec::new(),
                 final_telemetry: Some(Telemetry {
                     run_id: RunId(3),
                     sequence: terminal_sequence,
@@ -390,9 +393,9 @@ fn terminal_publishes_final_telemetry_and_clear_before_item_finished() {
                 item_id: QueueItemId(1),
                 claim_id: ClaimId(2),
                 run_id: RunId(3),
-                outcome: ItemOutcome::Failed {
-                    message: "fixture".to_owned(),
-                },
+                outcome: ItemOutcome::Failed(FailureFacts::new(FailureKind::Internal, "fixture")),
+                at: UnixMillis(1_000),
+                phase_spans: Vec::new(),
                 final_telemetry: Some(Telemetry {
                     run_id: RunId(3),
                     sequence: final_sequence,
@@ -464,14 +467,15 @@ fn restart_after_fsynced_terminal_folds_to_finished_snapshot() {
             item_id: QueueItemId(1),
             claim_id: ClaimId(2),
             run_id: RunId(3),
+            at: UnixMillis(1_000),
         }),
         Command::Worker(WorkerCommand::Terminal {
             item_id: QueueItemId(1),
             claim_id: ClaimId(2),
             run_id: RunId(3),
-            outcome: ItemOutcome::Failed {
-                message: "fixture".to_owned(),
-            },
+            outcome: ItemOutcome::Failed(FailureFacts::new(FailureKind::Internal, "fixture")),
+            at: UnixMillis(1_000),
+            phase_spans: Vec::new(),
             final_telemetry: Some(Telemetry {
                 run_id: RunId(3),
                 sequence: 9,
@@ -677,6 +681,7 @@ fn journal_active_output_run(
             item_id: QueueItemId(1),
             input: input.to_path_buf(),
             operation: Operation::Convert,
+            intent: AnalysisIntent::ReuseIfFresh,
             output_target: OutputTarget::Replace,
         }),
         Command::System(SystemCommand::ToolsDiscovered {
@@ -698,6 +703,7 @@ fn journal_active_output_run(
             item_id: QueueItemId(1),
             claim_id: ClaimId(2),
             run_id,
+            at: UnixMillis(1_000),
         }),
         Command::Worker(WorkerCommand::RecordAnalysis {
             item_id: QueueItemId(1),
@@ -887,6 +893,7 @@ fn settled_success_journal(
             item_id: QueueItemId(1),
             input: input.clone(),
             operation: Operation::Convert,
+            intent: AnalysisIntent::ReuseIfFresh,
             output_target,
         }),
         Command::System(SystemCommand::ToolsDiscovered {
@@ -908,6 +915,7 @@ fn settled_success_journal(
             item_id: QueueItemId(1),
             claim_id: ClaimId(2),
             run_id: RunId(3),
+            at: UnixMillis(1_000),
         }),
         Command::Worker(WorkerCommand::RecordAnalysis {
             item_id: QueueItemId(1),
@@ -987,12 +995,33 @@ fn recover_settled_success(directory: &TestDirectory, fixture: &SettledSuccessFi
     assert!(
         matches!(
             snapshot.durable.queue.first().expect("queue item").state,
-            crfty_core::QueueItemState::Finished(ItemOutcome::Converted)
+            crfty_core::QueueItemState::Finished(ItemOutcome::Converted(
+                crfty_core::CompletionEvidence::RecoveredAtStartup
+            ))
         ),
         "settled success must recover as converted: {snapshot:?}"
     );
+    let run = snapshot
+        .durable
+        .conversion_runs
+        .get(&RunId(3))
+        .expect("conversion run");
+    assert!(matches!(
+        run.outcome,
+        Some(ItemOutcome::Converted(
+            crfty_core::CompletionEvidence::RecoveredAtStartup
+        ))
+    ));
+    assert_eq!(run.started_at, Some(UnixMillis(1_000)));
+    assert!(run.finished_at.is_some());
     assert!(fixture.final_path.exists());
     assert!(!fixture.staging.exists());
+    while let Ok(event) = engine.events.try_recv() {
+        assert!(
+            !matches!(event, DriverEvent::Ephemeral(EphemeralDelta::Telemetry(_))),
+            "telemetry after recovered terminal: {event:?}"
+        );
+    }
     engine.shutdown().expect("engine shutdown");
 }
 
@@ -1158,6 +1187,58 @@ fn same_path_replacement_preserves_hardlink_sibling() {
     fold_output(&mut state, committed);
     assert_eq!(fs::read(&input).expect("new input bytes"), b"encoded");
     assert_eq!(fs::read(&sibling).expect("sibling bytes"), b"original");
+}
+
+#[test]
+fn restage_recreates_missing_staging_and_the_ready_pin_follows() {
+    let directory = TestDirectory::new("restage");
+    let input = directory.path().join("input.mp4");
+    let final_path = directory.path().join("input.mkv");
+    fs::write(&input, b"original").expect("input fixture");
+    let manager = OutputManager::new(FixtureByteInspector);
+    let mut state = DurableState::default();
+    let staged = stage_output(
+        &manager,
+        &mut state,
+        RunId(6),
+        &input,
+        &final_path,
+        Replacement::KeepOriginal,
+        false,
+    );
+    // The failed hardware attempt's adapter cleanup removed staging entirely.
+    fs::remove_file(&staged.staging).expect("simulate adapter cleanup");
+    let initial = manager
+        .restage(&current(&state, RunId(6)))
+        .expect("restaged identity");
+    fold_output(
+        &mut state,
+        OutputDelta::StagingCreated {
+            run_id: RunId(6),
+            initial,
+        },
+    );
+    let transaction = current(&state, RunId(6));
+    assert!(transaction.staging.exists());
+    fs::write(&transaction.staging, b"encoded-by-retry").expect("retry encode");
+    let ready = manager
+        .mark_ready(&transaction)
+        .expect("ready after restage");
+    fold_output(&mut state, ready);
+    let committed = manager
+        .recover_once(&current(&state, RunId(6)))
+        .expect("promotion")
+        .expect("commit delta");
+    assert!(matches!(committed, OutputDelta::OutputCommitted { .. }));
+    fold_output(&mut state, committed);
+    assert_eq!(
+        fs::read(&final_path).expect("promoted retry output"),
+        b"encoded-by-retry"
+    );
+
+    // A settled transaction refuses to restage — retry-after-abandonment is
+    // unrepresentable, and this manager-side guard mirrors the ledger's.
+    assert!(manager.restage(&current(&state, RunId(6))).is_err());
 }
 
 #[test]

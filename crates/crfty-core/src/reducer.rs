@@ -4,10 +4,11 @@ use serde::Serialize;
 
 use crate::state::ConversionRun;
 use crate::{
-    AnalysisResult, AppState, ClaimId, ClaimedJob, ConfigDelta, DecodeMode, DecodePreference,
-    DurableDelta, ExecutionSettings, ItemOutcome, JobAction, JobSpec, MediaObservation, Operation,
-    OutputDelta, OutputTarget, QueueItem, QueueItemId, QueueItemState, ReservedJob, RunId,
-    SessionState, Settings, Telemetry, ToolAvailability, fold, fold_config, select_job_action,
+    AnalysisIntent, AnalysisResult, AppState, ClaimId, ClaimedJob, CompletionEvidence, ConfigDelta,
+    DecodeMode, DecodePreference, DurableDelta, ExecutionSettings, ItemOutcome, JobAction, JobSpec,
+    MediaObservation, Operation, OutputDelta, OutputTarget, PhaseSpan, QueueItem, QueueItemId,
+    QueueItemState, ReservedJob, RunId, SessionState, Settings, Telemetry, ToolAvailability,
+    UnixMillis, fold, fold_config, select_job_action,
 };
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -30,6 +31,7 @@ pub enum QueueCommand {
         item_id: QueueItemId,
         input: PathBuf,
         operation: Operation,
+        intent: AnalysisIntent,
         output_target: OutputTarget,
     },
     Remove {
@@ -65,11 +67,13 @@ pub enum WorkerCommand {
         item_id: QueueItemId,
         claim_id: ClaimId,
         run_id: RunId,
+        at: UnixMillis,
     },
     Started {
         item_id: QueueItemId,
         claim_id: ClaimId,
         run_id: RunId,
+        at: UnixMillis,
     },
     Output(OutputDelta),
     RecordAnalysis {
@@ -83,6 +87,8 @@ pub enum WorkerCommand {
         claim_id: ClaimId,
         run_id: RunId,
         outcome: ItemOutcome,
+        at: UnixMillis,
+        phase_spans: Vec<PhaseSpan>,
         final_telemetry: Option<Telemetry>,
     },
     Crashed {
@@ -225,6 +231,7 @@ fn apply_queue(state: &AppState, command: QueueCommand) -> Applied {
             item_id,
             input,
             operation,
+            intent,
             output_target,
         } => {
             if state.durable.queue.iter().any(|item| item.id == item_id) {
@@ -236,6 +243,7 @@ fn apply_queue(state: &AppState, command: QueueCommand) -> Applied {
                     id: item_id,
                     input,
                     operation,
+                    intent,
                     output_target,
                     state: QueueItemState::Queued,
                 },
@@ -370,6 +378,7 @@ fn apply_worker(state: &AppState, command: WorkerCommand) -> Applied {
                 run_id,
                 input: item.input.clone(),
                 operation: item.operation,
+                intent: item.intent,
                 output_target: item.output_target.clone(),
             };
             let mut applied = Applied::accepted();
@@ -418,7 +427,8 @@ fn apply_worker(state: &AppState, command: WorkerCommand) -> Applied {
                 .as_ref()
                 .map(|observed| &observed.metadata)
                 .or_else(|| record.map(|known| &known.metadata));
-            let action = select_job_action(metadata, record, item.operation, &execution);
+            let action =
+                select_job_action(metadata, record, item.operation, item.intent, &execution);
             if let Some(selected) = action.selected_analysis()
                 && let Err(reason) = selected.validate_reusable_for(&execution)
             {
@@ -431,6 +441,7 @@ fn apply_worker(state: &AppState, command: WorkerCommand) -> Applied {
                 input: item.input.clone(),
                 content_key,
                 operation: item.operation,
+                intent: item.intent,
                 output_target: item.output_target.clone(),
                 execution,
                 action,
@@ -463,6 +474,7 @@ fn apply_worker(state: &AppState, command: WorkerCommand) -> Applied {
             item_id,
             claim_id,
             run_id,
+            at,
         } => {
             let Some(item) = find_item(state, item_id) else {
                 return Applied::rejected("queue item does not exist");
@@ -483,6 +495,8 @@ fn apply_worker(state: &AppState, command: WorkerCommand) -> Applied {
                 claim_id,
                 run_id,
                 outcome: ItemOutcome::Stopped,
+                at,
+                phase_spans: Vec::new(),
             });
             applied
         }
@@ -490,11 +504,13 @@ fn apply_worker(state: &AppState, command: WorkerCommand) -> Applied {
             item_id,
             claim_id,
             run_id,
+            at,
         } => transition_active(state, item_id, claim_id, run_id, |applied| {
             applied.durable.push(DurableDelta::ItemRunning {
                 item_id,
                 claim_id,
                 run_id,
+                at,
             });
         }),
         WorkerCommand::Output(output_delta) => {
@@ -542,6 +558,8 @@ fn apply_worker(state: &AppState, command: WorkerCommand) -> Applied {
             claim_id,
             run_id,
             outcome,
+            at,
+            phase_spans,
             final_telemetry,
         } => transition_active(state, item_id, claim_id, run_id, |applied| {
             let unsettled = state
@@ -583,6 +601,8 @@ fn apply_worker(state: &AppState, command: WorkerCommand) -> Applied {
                 claim_id,
                 run_id,
                 outcome,
+                at,
+                phase_spans,
             });
         }),
         WorkerCommand::Finished => {
@@ -623,20 +643,32 @@ pub(crate) fn validate_terminal(
                 return Err("analyzed outcome is incompatible with the run state");
             }
         }
-        ItemOutcome::Converted => {
+        ItemOutcome::Converted(evidence) => {
             if !matches!(run.spec.action, JobAction::Encode { .. }) || run.analysis.is_none() {
                 return Err("converted outcome requires a converted run with durable analysis");
             }
             if !has_successful_output(output) {
                 return Err("converted outcome requires a successfully settled output");
             }
+            if run.started_at.is_none() {
+                return Err("successful outcome requires a started run");
+            }
+            if matches!(evidence, CompletionEvidence::LiveRemux { .. }) {
+                return Err("converted outcome cannot carry remux evidence");
+            }
         }
-        ItemOutcome::Remuxed => {
+        ItemOutcome::Remuxed(evidence) => {
             if !matches!(run.spec.action, JobAction::Remux) || run.analysis.is_some() {
                 return Err("remuxed outcome requires a remux run without analysis");
             }
             if !has_successful_output(output) {
                 return Err("remuxed outcome requires a successfully settled output");
+            }
+            if run.started_at.is_none() {
+                return Err("successful outcome requires a started run");
+            }
+            if matches!(evidence, CompletionEvidence::LiveEncode { .. }) {
+                return Err("remuxed outcome cannot carry encode evidence");
             }
         }
         ItemOutcome::NotWorthwhile { attempts } => {
@@ -671,32 +703,23 @@ pub(crate) fn validate_terminal(
                 }
             }
         },
-        ItemOutcome::Stopped | ItemOutcome::Failed { .. } => {}
-    }
-    Ok(())
-}
-
-/// Derive the terminal outcome implied by a settled output transaction whose
-/// `Terminal` record never became durable: a crash between the final output
-/// delta and the terminal must not demote a completed run to `Stopped`.
-/// Mirrors the outcome the worker submits in session for the same ledger
-/// state, so the result always satisfies `validate_terminal`.
-#[must_use]
-pub fn settled_outcome(run: &ConversionRun, transaction: &crate::OutputTransaction) -> ItemOutcome {
-    match (&transaction.replacement, &transaction.state) {
-        (crate::Replacement::KeepOriginal, crate::OutputState::Committed { .. })
-        | (crate::Replacement::RetireOriginal, crate::OutputState::Retired { .. }) => {
-            match &run.spec.action {
-                JobAction::Encode { .. } => ItemOutcome::Converted,
-                JobAction::Remux => ItemOutcome::Remuxed,
-                JobAction::Analyze { .. } | JobAction::Skip { .. } => ItemOutcome::Stopped,
+        ItemOutcome::Failed(facts) => {
+            facts.diagnostic.validate()?;
+            // An output-conflict failure asserts the transaction really did
+            // settle as a conflict. The converse is deliberately NOT an
+            // invariant: a conflicted settlement followed by a Stopped
+            // terminal is legal (cancellation racing a settlement failure).
+            if matches!(facts.kind, crate::FailureKind::OutputConflict)
+                && !output.is_some_and(|transaction| {
+                    matches!(transaction.state, crate::OutputState::Conflict { .. })
+                })
+            {
+                return Err("output-conflict failure requires a conflicted output transaction");
             }
         }
-        (_, crate::OutputState::Conflict { reason }) => ItemOutcome::Failed {
-            message: reason.clone(),
-        },
-        _ => ItemOutcome::Stopped,
+        ItemOutcome::Stopped => {}
     }
+    Ok(())
 }
 
 fn has_successful_output(output: Option<&crate::OutputTransaction>) -> bool {
@@ -805,8 +828,16 @@ pub(crate) fn validate_output_delta(
         (Some(_), OutputDelta::OutputStarted { .. }) => {
             Err("output transaction has already started")
         }
+        // A repeated `StagingCreated` (from `StagingCreated` state) is the
+        // encode retry's restage: the failed attempt's adapter cleanup
+        // deleted the staging file, so the pin moves to the recreated one.
+        // Any settled state refuses it — retry-after-abandonment is
+        // unrepresentable.
         (Some(transaction), OutputDelta::StagingCreated { .. })
-            if transaction.state == crate::OutputState::Started =>
+            if matches!(
+                transaction.state,
+                crate::OutputState::Started | crate::OutputState::StagingCreated { .. }
+            ) =>
         {
             Ok(())
         }

@@ -13,9 +13,9 @@ use std::{
 };
 
 use crfty_core::{
-    AnalysisProfile, DEFAULT_VMAF_TARGET, DecodeMode, DecodePreference, ExecutionSettings,
-    MIN_VMAF_FALLBACK_TARGET, Operation, OutputTarget, QueueCommand, QueueItemId, SessionCommand,
-    VMAF_FALLBACK_STEP,
+    AnalysisIntent, AnalysisProfile, CompletionEvidence, DEFAULT_VMAF_TARGET, DecodeMode,
+    DecodePreference, ExecutionSettings, HardwareDecoder, ItemOutcome, MIN_VMAF_FALLBACK_TARGET,
+    Operation, OutputTarget, QueueCommand, QueueItemId, SessionCommand, VMAF_FALLBACK_STEP,
 };
 
 const CONTRACT_PRESET: u8 = 12;
@@ -65,6 +65,7 @@ fn dispatch() -> Result<(), Box<dyn Error>> {
     match arguments.next().as_deref() {
         Some(argument) if argument == "run" => run_contract(arguments),
         Some(argument) if argument == "coordinate" => run_coordinator_contract(arguments),
+        Some(argument) if argument == "ladder" => run_ladder_contract(arguments),
         _ => Err("expected: crfty-contract-fixture run INPUT OUTPUT-DIR FFMPEG FFPROBE".into()),
     }
 }
@@ -121,6 +122,8 @@ fn fake_ffprobe() -> Result<(), Box<dyn Error>> {
             || argument.contains("incompatible-av1.mp4")
             || argument.contains("input_coordinated.mkv")
             || argument.contains("already-av1_remuxed.mkv")
+            || argument.contains("search-ladder_sw.mkv")
+            || argument.contains("encode-ladder_hw.mkv")
     });
     let probe = if verifies_staging || probes_av1 {
         PROBE.replace("\"codec_name\": \"h264\"", "\"codec_name\": \"av1\"")
@@ -182,6 +185,7 @@ fn run_coordinator_contract(
         item_id: QueueItemId(1),
         input: input.clone(),
         operation: Operation::Analyze,
+        intent: AnalysisIntent::ReuseIfFresh,
         output_target: OutputTarget::Replace,
     })?)?;
     let incompatible_input = output_dir.join("incompatible-av1.mp4");
@@ -190,6 +194,7 @@ fn run_coordinator_contract(
         item_id: QueueItemId(4),
         input: incompatible_input,
         operation: Operation::Convert,
+        intent: AnalysisIntent::ReuseIfFresh,
         output_target: OutputTarget::Suffix {
             suffix: "_must-fail".to_owned(),
         },
@@ -198,6 +203,7 @@ fn run_coordinator_contract(
         item_id: QueueItemId(2),
         input: input.clone(),
         operation: Operation::Convert,
+        intent: AnalysisIntent::ReuseIfFresh,
         output_target: OutputTarget::Suffix {
             suffix: "_coordinated".to_owned(),
         },
@@ -208,6 +214,7 @@ fn run_coordinator_contract(
         item_id: QueueItemId(3),
         input: remux_input.clone(),
         operation: Operation::Convert,
+        intent: AnalysisIntent::ReuseIfFresh,
         output_target: OutputTarget::Suffix {
             suffix: "_remuxed".to_owned(),
         },
@@ -301,6 +308,7 @@ fn run_coordinator_contract(
         item_id: QueueItemId(5),
         input: input.clone(),
         operation: Operation::Convert,
+        intent: AnalysisIntent::ReuseIfFresh,
         output_target: OutputTarget::Suffix {
             suffix: "_cancelled".to_owned(),
         },
@@ -322,6 +330,194 @@ fn run_coordinator_contract(
     });
     if partial_remains {
         return Err("force-stopped coordinator left a staging file".into());
+    }
+    engine.shutdown()?;
+    Ok(())
+}
+
+/// Proves both hardware→software retry ladders end to end against the fake
+/// tools: a search that fails under hardware decode records a
+/// software-profile analysis under the widened gate, and a reused
+/// hardware-profile analysis whose full encode fails under hardware restages
+/// the still-Started transaction and completes with software-decode evidence.
+fn run_ladder_contract(
+    mut arguments: impl Iterator<Item = OsString>,
+) -> Result<(), Box<dyn Error>> {
+    let input = arguments
+        .next()
+        .map(PathBuf::from)
+        .ok_or("input path is missing")?;
+    let output_dir = arguments
+        .next()
+        .map(PathBuf::from)
+        .ok_or("output directory is missing")?;
+    let tools = MediaTools {
+        ffmpeg: arguments
+            .next()
+            .map(PathBuf::from)
+            .ok_or("ffmpeg path is missing")?,
+        ffprobe: arguments
+            .next()
+            .map(PathBuf::from)
+            .ok_or("ffprobe path is missing")?,
+    };
+    let engine = EngineRuntime::start(EngineConfig {
+        journal_path: output_dir.join("ladder.jsonl"),
+        config_path: output_dir.join("ladder-config.json"),
+        media_tools: crfty_engine::tools::ToolDiscovery::Available(tools),
+        execution: ExecutionSettings {
+            requested_target: DEFAULT_VMAF_TARGET,
+            fallback_floor: MIN_VMAF_FALLBACK_TARGET,
+            fallback_step: VMAF_FALLBACK_STEP,
+            overwrite_existing: false,
+            decode_preference: DecodePreference::HardwarePreferred,
+            profile: AnalysisProfile {
+                preset: CONTRACT_PRESET,
+                max_encoded_percent_basis_points: CONTRACT_MAX_ENCODED_PERCENT_BASIS_POINTS,
+                samples: Some(CONTRACT_SAMPLE_COUNT),
+                sample_duration_ms: CONTRACT_SAMPLE_DURATION_MS,
+                thorough: false,
+                decode_mode: DecodeMode::Software,
+                ab_av1_revision: "contract".to_owned(),
+                ffmpeg_revision: "contract".to_owned(),
+                encoder_revision: "contract".to_owned(),
+            },
+        },
+    })?;
+    let _snapshot = engine.events.recv()?;
+    let search_input = output_dir.join("search-ladder.mkv");
+    fs::copy(&input, &search_input)?;
+    let encode_input = output_dir.join("encode-ladder.mkv");
+    fs::copy(&input, &encode_input)?;
+    // 1: the hardware search fails; the ladder records a software analysis
+    //    and the encode runs software from the start.
+    accepted_reply(engine.commands.submit_queue(QueueCommand::Add {
+        item_id: QueueItemId(1),
+        input: search_input.clone(),
+        operation: Operation::Convert,
+        intent: AnalysisIntent::ReuseIfFresh,
+        output_target: OutputTarget::Suffix {
+            suffix: "_sw".to_owned(),
+        },
+    })?)?;
+    // 2: the hardware search succeeds (same content, sample encodes pass) and
+    //    records a hardware-profile analysis.
+    accepted_reply(engine.commands.submit_queue(QueueCommand::Add {
+        item_id: QueueItemId(2),
+        input: encode_input.clone(),
+        operation: Operation::Analyze,
+        intent: AnalysisIntent::ReuseIfFresh,
+        output_target: OutputTarget::Replace,
+    })?)?;
+    // 3: reuses that hardware analysis; the full staging encode fails under
+    //    hardware and retries in place with software.
+    accepted_reply(engine.commands.submit_queue(QueueCommand::Add {
+        item_id: QueueItemId(3),
+        input: encode_input.clone(),
+        operation: Operation::Convert,
+        intent: AnalysisIntent::ReuseIfFresh,
+        output_target: OutputTarget::Suffix {
+            suffix: "_hw".to_owned(),
+        },
+    })?)?;
+    accepted_reply(engine.commands.submit_session(SessionCommand::Start)?)?;
+
+    let hardware = DecodeMode::Hardware(HardwareDecoder::H264Cuvid);
+    let mut finished = 0_u8;
+    let mut prepared_decodes = Vec::new();
+    let mut reused_analyses = 0_u8;
+    let mut recorded_decodes = Vec::new();
+    // A repeated StagingCreated for the same run is the encode retry's
+    // restage.
+    let mut stagings: std::collections::BTreeMap<crfty_core::RunId, u8> =
+        std::collections::BTreeMap::new();
+    let mut restages = 0_u8;
+    let mut outcomes = Vec::new();
+    while finished < 3 {
+        match engine.events.recv_timeout(CONTRACT_EVENT_TIMEOUT)? {
+            crfty_engine::driver::DriverEvent::Durable(
+                crfty_core::DurableDelta::ItemPrepared { spec },
+            ) => {
+                prepared_decodes.push(spec.execution.profile.decode_mode);
+                if spec.action.selected_analysis().is_some() {
+                    reused_analyses = reused_analyses.saturating_add(1);
+                }
+            }
+            crfty_engine::driver::DriverEvent::Durable(
+                crfty_core::DurableDelta::AnalysisRecorded { result, .. },
+            ) => recorded_decodes.push(result.profile.decode_mode),
+            crfty_engine::driver::DriverEvent::Durable(crfty_core::DurableDelta::Output(
+                crfty_core::OutputDelta::StagingCreated { run_id, .. },
+            )) => {
+                let count = stagings.entry(run_id).or_insert(0);
+                *count = count.saturating_add(1);
+                if *count > 1 {
+                    restages = restages.saturating_add(1);
+                }
+            }
+            crfty_engine::driver::DriverEvent::Durable(
+                crfty_core::DurableDelta::ItemFinished {
+                    item_id, outcome, ..
+                },
+            ) => {
+                outcomes.push((item_id, outcome));
+                finished = finished.saturating_add(1);
+            }
+            crfty_engine::driver::DriverEvent::Ephemeral(
+                crfty_core::EphemeralDelta::CommandRejected { reason },
+            ) => return Err(format!("ladder command rejected: {reason}").into()),
+            crfty_engine::driver::DriverEvent::Ephemeral(
+                crfty_core::EphemeralDelta::WorkerCrashed { message },
+            )
+            | crfty_engine::driver::DriverEvent::Fatal { message } => {
+                return Err(format!("ladder worker failed: {message}").into());
+            }
+            _ => {}
+        }
+    }
+    if prepared_decodes != vec![hardware, hardware, hardware] {
+        return Err(
+            format!("ladder specs were not hardware-prepared: {prepared_decodes:?}").into(),
+        );
+    }
+    if reused_analyses != 1 {
+        return Err(format!(
+            "the hardware analysis was not reused exactly once: {reused_analyses}"
+        )
+        .into());
+    }
+    if recorded_decodes != vec![DecodeMode::Software, hardware] {
+        return Err(format!(
+            "recorded analyses have the wrong decode provenance: {recorded_decodes:?}"
+        )
+        .into());
+    }
+    if restages != 1 {
+        return Err(format!("expected exactly one staging restage, observed {restages}").into());
+    }
+    let software_encodes = outcomes
+        .iter()
+        .filter(|(item_id, outcome)| {
+            (*item_id == QueueItemId(1) || *item_id == QueueItemId(3))
+                && matches!(
+                    outcome,
+                    ItemOutcome::Converted(CompletionEvidence::LiveEncode {
+                        encode_decode: DecodeMode::Software,
+                        ..
+                    })
+                )
+        })
+        .count();
+    let analyzed = outcomes
+        .iter()
+        .any(|(item_id, outcome)| *item_id == QueueItemId(2) && *outcome == ItemOutcome::Analyzed);
+    if software_encodes != 2 || !analyzed {
+        return Err(format!("ladder outcomes are wrong: {outcomes:?}").into());
+    }
+    if !output_dir.join("search-ladder_sw.mkv").exists()
+        || !output_dir.join("encode-ladder_hw.mkv").exists()
+    {
+        return Err("ladder encodes did not promote their outputs".into());
     }
     engine.shutdown()?;
     Ok(())
@@ -379,6 +575,18 @@ fn accepted_reply(reply: crfty_core::Reply) -> Result<(), Box<dyn Error>> {
 
 fn fake_ffmpeg() -> Result<(), Box<dyn Error>> {
     let arguments: Vec<OsString> = env::args_os().skip(1).collect();
+    // Hardware decoder availability probe (`-h decoder=NAME`): only
+    // h264_cuvid is "installed" on this fixture machine.
+    if let Some(decoder) = arguments
+        .iter()
+        .find_map(|argument| argument.to_str()?.strip_prefix("decoder="))
+    {
+        return if decoder == "h264_cuvid" {
+            Ok(())
+        } else {
+            Err("fixture decoder is not available".into())
+        };
+    }
     let structured_remux = arguments.windows(2).any(|pair| {
         pair.first().is_some_and(|argument| argument == "-progress")
             && pair.get(1).is_some_and(|argument| argument == "pipe:1")
@@ -396,6 +604,24 @@ fn fake_ffmpeg() -> Result<(), Box<dyn Error>> {
         emit_progress()?;
         eprintln!("[Parsed_libvmaf_0] VMAF score: 95.000000");
         return Ok(());
+    }
+    // Ladder fixtures: hardware decode fails for every encode touching the
+    // search-ladder input, and for full (staging `.part.`) encodes of any
+    // input — sample encodes elsewhere succeed so a hardware analysis can be
+    // recorded and its reuse can then fail at the full encode.
+    if arguments
+        .iter()
+        .any(|argument| argument.to_string_lossy().contains("h264_cuvid"))
+    {
+        let mentions = |needle: &str| {
+            arguments
+                .iter()
+                .any(|argument| argument.to_string_lossy().contains(needle))
+        };
+        if mentions("search-ladder") || mentions(".part.") {
+            eprintln!("fixture: h264_cuvid failed to decode this stream");
+            return Err("fixture hardware decode failure".into());
+        }
     }
 
     let output = arguments

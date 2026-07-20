@@ -548,11 +548,11 @@ mod tests {
     use std::{io, path::PathBuf, sync::mpsc};
 
     use crfty_core::{
-        AnalysisProfile, ClaimId, Command, ConfigDelta, DurableDelta, Effect, EphemeralDelta,
-        ExecutionSettings, ItemOutcome, JobPhase, JobProgress, Operation, OutputTarget,
-        QueueCommand, QueueItemId, Reply, RunId, SessionCommand, SessionState, Settings,
-        SettingsCommand, SystemCommand, Telemetry, ToolAvailability, ToolRevisions, WorkerCommand,
-        apply,
+        AnalysisIntent, AnalysisProfile, ClaimId, Command, ConfigDelta, DurableDelta, Effect,
+        EphemeralDelta, ExecutionSettings, ItemOutcome, JobPhase, JobProgress, Operation,
+        OutputTarget, QueueCommand, QueueItemId, Reply, RunId, SessionCommand, SessionState,
+        Settings, SettingsCommand, SystemCommand, Telemetry, ToolAvailability, ToolRevisions,
+        UnixMillis, WorkerCommand, apply,
     };
 
     use super::{
@@ -587,6 +587,7 @@ mod tests {
                 item_id: QueueItemId(1),
                 input: PathBuf::from("video.mkv"),
                 operation: Operation::Convert,
+                intent: AnalysisIntent::ReuseIfFresh,
                 output_target: OutputTarget::Replace,
             }),
             reply: reply_tx,
@@ -641,6 +642,7 @@ mod tests {
                 item_id: QueueItemId(1),
                 input: PathBuf::from("video.mkv"),
                 operation: Operation::Convert,
+                intent: AnalysisIntent::ReuseIfFresh,
                 output_target: OutputTarget::Replace,
             }),
             Command::System(SystemCommand::ToolsDiscovered {
@@ -669,9 +671,12 @@ mod tests {
                 item_id: QueueItemId(1),
                 claim_id: ClaimId(2),
                 run_id: RunId(3),
-                outcome: ItemOutcome::Failed {
-                    message: "fixture".to_owned(),
-                },
+                outcome: ItemOutcome::Failed(crfty_core::FailureFacts::new(
+                    crfty_core::FailureKind::Internal,
+                    "fixture",
+                )),
+                at: UnixMillis(1_000),
+                phase_spans: Vec::new(),
                 final_telemetry: Some(Telemetry {
                     run_id: RunId(3),
                     sequence: 7,
@@ -826,6 +831,7 @@ mod tests {
                 item_id: QueueItemId(1),
                 input: PathBuf::from("one.mkv"),
                 operation: Operation::Convert,
+                intent: AnalysisIntent::ReuseIfFresh,
                 output_target: OutputTarget::Replace,
             })),
             envelope(Command::Settings(SettingsCommand::Set {

@@ -80,10 +80,13 @@ function clampPercent(value: number): number {
 
 function outcomeStatus(outcome: ItemOutcome, savedBytes: number | null): RowStatus {
   if (outcome === "Analyzed") return { kind: "done", outcome, savedBytes: null };
-  if (outcome === "Converted" || outcome === "Remuxed") {
-    return { kind: "done", outcome, savedBytes };
-  }
   if (outcome === "Stopped") return { kind: "stopped" };
+  if ("Converted" in outcome && outcome.Converted !== undefined) {
+    return { kind: "done", outcome: "Converted", savedBytes };
+  }
+  if ("Remuxed" in outcome && outcome.Remuxed !== undefined) {
+    return { kind: "done", outcome: "Remuxed", savedBytes };
+  }
   if (outcome.Failed !== undefined) return { kind: "failed", message: outcome.Failed.message };
   if (outcome.Skipped !== undefined) {
     return { kind: "skipped", ...skipReasonText(outcome.Skipped.reason) };

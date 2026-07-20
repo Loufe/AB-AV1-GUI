@@ -33,6 +33,7 @@ function queueItem(id: number): QueueItem {
     id,
     input: `videos/input-${id}.mp4`,
     operation: "Convert",
+    intent: "ReuseIfFresh",
     output_target: "Replace",
     state: "Queued",
   };
@@ -112,6 +113,21 @@ describe("applyPayload", () => {
     expect(warn).toHaveBeenCalledWith("command rejected by the engine", "queue is running");
     expect(appStore.getState()).toBe(before);
     warn.mockRestore();
+  });
+
+  it("records tool availability until the next snapshot resets it", () => {
+    const missing = { Missing: { missing: ["Ffmpeg" as const], detail: "ffmpeg not found" } };
+    applyPayload({ Ephemeral: { ToolsChanged: missing } });
+    expect(appStore.getState().tools).toEqual(missing);
+    expect(progressStore.getState().telemetry).toEqual({});
+
+    applyPayload({ Ephemeral: { ToolsChanged: "Available" } });
+    expect(appStore.getState().tools).toBe("Available");
+
+    // The shell replays ToolsChanged right after each snapshot, so the
+    // snapshot itself resets to the unknown state rather than guessing.
+    applyPayload(snapshot(queueItem(1)));
+    expect(appStore.getState().tools).toBeNull();
   });
 
   it("records standing health until the next snapshot", () => {

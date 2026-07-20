@@ -178,6 +178,48 @@ impl<I: ArtifactInspector> OutputManager<I> {
         })
     }
 
+    /// Recreates the staging artifact for an in-transaction encode retry:
+    /// the failed attempt's adapter cleanup deletes staging, so the retry
+    /// needs a fresh empty file and a repeated `StagingCreated` record that
+    /// moves the journaled pin to it. Only a `StagingCreated` transaction can
+    /// restage — once abandoned or otherwise settled, a retry is
+    /// unrepresentable in the durable model.
+    pub fn restage(
+        &self,
+        transaction: &OutputTransaction,
+    ) -> Result<DestructiveIdentity, OutputError> {
+        if !matches!(transaction.state, OutputState::StagingCreated { .. }) {
+            return Err(OutputError::new(
+                "output transaction cannot restage from its current state",
+                io::Error::new(io::ErrorKind::InvalidInput, "invalid output state"),
+            ));
+        }
+        match std::fs::remove_file(&transaction.staging) {
+            Ok(()) => {}
+            Err(error) if error.kind() == io::ErrorKind::NotFound => {}
+            Err(error) => {
+                return Err(OutputError::new(
+                    "failed to remove stale staging before restage",
+                    error,
+                ));
+            }
+        }
+        let staging_file = OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&transaction.staging)
+            .map_err(|error| {
+                OutputError::new("failed to recreate staging file exclusively", error)
+            })?;
+        staging_file.sync_all().map_err(|error| {
+            OutputError::new("failed to synchronize recreated staging file", error)
+        })?;
+        drop(staging_file);
+        self.inspector
+            .inspect_file(&transaction.staging)
+            .map_err(|error| OutputError::new("failed to inspect recreated staging file", error))
+    }
+
     /// Removes a staging file whose `StagingCreated` record could not be
     /// journaled. Best effort: if this fails, startup recovery abandons the
     /// file from the durable `OutputStarted` intent instead.
@@ -272,7 +314,8 @@ impl<I: ArtifactInspector> OutputManager<I> {
             OutputRecoveryAction::Append(delta) => Ok(Some(delta)),
             OutputRecoveryAction::Conflict(conflict) => Ok(Some(OutputDelta::Conflict {
                 run_id: transaction.run_id,
-                reason: conflict.reason,
+                kind: conflict.kind,
+                detail: conflict.detail,
             })),
             OutputRecoveryAction::DeleteStaging { path, expected } => {
                 require_identity(&self.inspector, &path, &expected, "staging file changed")?;

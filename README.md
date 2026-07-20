@@ -22,8 +22,14 @@ telemetry and telemetry clear always precede its finish event. The engine
 starts without FFmpeg or ffprobe: missing tools surface as typed availability
 on the stream and gate media sessions while the queue, history, and settings
 stay fully usable. The frontend folds that stream into its stores against
-golden fixtures generated from the Rust fold. The remaining product domain —
-including growing the views over the store — is still to come.
+golden fixtures generated from the Rust fold. The durable domain model is
+complete (issue #38): structured failure facts, wall-clock run instants with
+monotonic phase spans, evidence-carrying success outcomes derived from the
+settled output ledger (including crash recovery), expanded probe metadata,
+content verdicts with derived lineage and a frozen reuse policy, per-item
+analysis intent, and the hardware→software retry ladders for search and
+encode. What remains is growing the views over the store — History,
+Statistics, Analysis, and the final Queue integration.
 
 ## Workspace
 
