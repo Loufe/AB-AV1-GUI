@@ -655,17 +655,31 @@ export type StreamByteSizes = {
 
 export type StreamPayload = StreamPayload_Serialize | StreamPayload_Deserialize;
 
-export type StreamPayload_Deserialize = ({ Snapshot: AppSnapshot_Deserialize }) & { Config?: never; Degraded?: never; Durable?: never; EngineFatal?: never; Ephemeral?: never } | ({ Durable: DurableDelta_Deserialize }) & { Config?: never; Degraded?: never; EngineFatal?: never; Ephemeral?: never; Snapshot?: never } | ({ Config: ConfigDelta }) & { Degraded?: never; Durable?: never; EngineFatal?: never; Ephemeral?: never; Snapshot?: never } | ({ Ephemeral: EphemeralDelta }) & { Config?: never; Degraded?: never; Durable?: never; EngineFatal?: never; Snapshot?: never } | ({ Degraded: {
+export type StreamPayload_Deserialize = ({ Snapshot: AppSnapshot_Deserialize }) & { Config?: never; Degraded?: never; Durable?: never; EngineFatal?: never; Ephemeral?: never; SecondInstance?: never } | ({ Durable: DurableDelta_Deserialize }) & { Config?: never; Degraded?: never; EngineFatal?: never; Ephemeral?: never; SecondInstance?: never; Snapshot?: never } | ({ Config: ConfigDelta }) & { Degraded?: never; Durable?: never; EngineFatal?: never; Ephemeral?: never; SecondInstance?: never; Snapshot?: never } | ({ Ephemeral: EphemeralDelta }) & { Config?: never; Degraded?: never; Durable?: never; EngineFatal?: never; SecondInstance?: never; Snapshot?: never } | ({ Degraded: {
 	reason: string,
-} }) & { Config?: never; Durable?: never; EngineFatal?: never; Ephemeral?: never; Snapshot?: never } | ({ EngineFatal: {
+} }) & { Config?: never; Durable?: never; EngineFatal?: never; Ephemeral?: never; SecondInstance?: never; Snapshot?: never } | ({ EngineFatal: {
 	message: string,
-} }) & { Config?: never; Degraded?: never; Durable?: never; Ephemeral?: never; Snapshot?: never };
+} }) & { Config?: never; Degraded?: never; Durable?: never; Ephemeral?: never; SecondInstance?: never; Snapshot?: never } | 
+/**
+ *  Another process holds the engine's data-directory lock: this is a
+ *  second instance and the engine refused to start (ADR-008).
+ */
+({ SecondInstance: {
+	lock_path: string,
+} }) & { Config?: never; Degraded?: never; Durable?: never; EngineFatal?: never; Ephemeral?: never; Snapshot?: never };
 
-export type StreamPayload_Serialize = ({ Snapshot: AppSnapshot_Serialize }) & { Config?: never; Degraded?: never; Durable?: never; EngineFatal?: never; Ephemeral?: never } | ({ Durable: DurableDelta_Serialize }) & { Config?: never; Degraded?: never; EngineFatal?: never; Ephemeral?: never; Snapshot?: never } | ({ Config: ConfigDelta }) & { Degraded?: never; Durable?: never; EngineFatal?: never; Ephemeral?: never; Snapshot?: never } | ({ Ephemeral: EphemeralDelta }) & { Config?: never; Degraded?: never; Durable?: never; EngineFatal?: never; Snapshot?: never } | ({ Degraded: {
+export type StreamPayload_Serialize = ({ Snapshot: AppSnapshot_Serialize }) & { Config?: never; Degraded?: never; Durable?: never; EngineFatal?: never; Ephemeral?: never; SecondInstance?: never } | ({ Durable: DurableDelta_Serialize }) & { Config?: never; Degraded?: never; EngineFatal?: never; Ephemeral?: never; SecondInstance?: never; Snapshot?: never } | ({ Config: ConfigDelta }) & { Degraded?: never; Durable?: never; EngineFatal?: never; Ephemeral?: never; SecondInstance?: never; Snapshot?: never } | ({ Ephemeral: EphemeralDelta }) & { Config?: never; Degraded?: never; Durable?: never; EngineFatal?: never; SecondInstance?: never; Snapshot?: never } | ({ Degraded: {
 	reason: string,
-} }) & { Config?: never; Durable?: never; EngineFatal?: never; Ephemeral?: never; Snapshot?: never } | ({ EngineFatal: {
+} }) & { Config?: never; Durable?: never; EngineFatal?: never; Ephemeral?: never; SecondInstance?: never; Snapshot?: never } | ({ EngineFatal: {
 	message: string,
-} }) & { Config?: never; Degraded?: never; Durable?: never; Ephemeral?: never; Snapshot?: never };
+} }) & { Config?: never; Degraded?: never; Durable?: never; Ephemeral?: never; SecondInstance?: never; Snapshot?: never } | 
+/**
+ *  Another process holds the engine's data-directory lock: this is a
+ *  second instance and the engine refused to start (ADR-008).
+ */
+({ SecondInstance: {
+	lock_path: string,
+} }) & { Config?: never; Degraded?: never; Durable?: never; EngineFatal?: never; Ephemeral?: never; Snapshot?: never };
 
 export type Telemetry = {
 	run_id: RunId,

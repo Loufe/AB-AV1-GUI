@@ -60,7 +60,10 @@ beforeEach(() => {
 
 describe("applyPayload", () => {
   it("replaces durable state and settings from a snapshot and clears health and telemetry", () => {
-    appStore.setState((state) => ({ ...state, health: { degraded: "stale", fatal: "stale" } }));
+    appStore.setState((state) => ({
+      ...state,
+      health: { degraded: "stale", fatal: "stale", secondInstance: "stale" },
+    }));
     progressStore.setState({ telemetry: { 9: telemetry(9) } });
 
     applyPayload(snapshot(queueItem(1)));
@@ -68,7 +71,7 @@ describe("applyPayload", () => {
     const state = appStore.getState();
     expect(state.durable.queue).toEqual([queueItem(1)]);
     expect(state.settings).toEqual(settings());
-    expect(state.health).toEqual({ degraded: null, fatal: null });
+    expect(state.health).toEqual({ degraded: null, fatal: null, secondInstance: null });
     expect(progressStore.getState().telemetry).toEqual({});
   });
 
@@ -133,13 +136,19 @@ describe("applyPayload", () => {
   it("records standing health until the next snapshot", () => {
     applyPayload({ Degraded: { reason: "journal corruption" } });
     applyPayload({ EngineFatal: { message: "driver exited" } });
+    applyPayload({ SecondInstance: { lock_path: "/data/crfty.lock" } });
     expect(appStore.getState().health).toEqual({
       degraded: "journal corruption",
       fatal: "driver exited",
+      secondInstance: "/data/crfty.lock",
     });
 
     applyPayload(snapshot(queueItem(1)));
-    expect(appStore.getState().health).toEqual({ degraded: null, fatal: null });
+    expect(appStore.getState().health).toEqual({
+      degraded: null,
+      fatal: null,
+      secondInstance: null,
+    });
   });
 });
 

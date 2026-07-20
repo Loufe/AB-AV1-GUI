@@ -21,7 +21,7 @@ use crfty_core::{
 };
 use crfty_engine::{
     coordinator::{EngineConfig, EngineRuntime},
-    driver::{DriverEvent, DriverHandle},
+    driver::{DriverEvent, DriverHandle, DriverStartError},
     journal::JournalWriter,
     output::{ArtifactInspector, FixtureByteInspector, OutputManager},
     tools::{MediaTools, ToolDiscovery},
@@ -83,12 +83,28 @@ impl Drop for TestDirectory {
 }
 
 #[test]
-fn journal_lock_is_exclusive_and_records_replay() {
-    let directory = TestDirectory::new("journal-lock");
+fn data_lock_makes_a_second_driver_start_fail_as_already_running() {
+    let directory = TestDirectory::new("data-lock");
+    let path = directory.path().join("state.jsonl");
+    let config_path = directory.path().join("config.json");
+    let driver = DriverHandle::start(&path, &config_path).expect("first driver");
+    let second = DriverHandle::start(&path, &config_path);
+    assert!(matches!(
+        second,
+        Err(DriverStartError::AlreadyRunning { .. })
+    ));
+    driver.shutdown().expect("driver shutdown");
+    // Releasing the lock is what admits the next instance.
+    let restarted = DriverHandle::start(&path, &config_path).expect("restart after shutdown");
+    restarted.shutdown().expect("restart shutdown");
+}
+
+#[test]
+fn journal_records_replay() {
+    let directory = TestDirectory::new("journal-replay");
     let path = directory.path().join("state.jsonl");
     let (mut writer, initial) = JournalWriter::open(&path).expect("first journal writer");
     assert_eq!(initial.next_sequence.0, 0);
-    assert!(JournalWriter::open(&path).is_err());
     let delta = DurableDelta::QueueAdded {
         item: crfty_core::QueueItem {
             id: QueueItemId(1),
@@ -104,6 +120,87 @@ fn journal_lock_is_exclusive_and_records_replay() {
     let replayed = replay(&fs::read(path).expect("journal bytes"));
     assert!(replayed.corruption.is_none());
     assert_eq!(replayed.state.queue.len(), 1);
+}
+
+fn queue_added(id: QueueItemId) -> DurableDelta {
+    DurableDelta::QueueAdded {
+        item: crfty_core::QueueItem {
+            id,
+            input: PathBuf::from(format!("video-{}.mkv", id.0)),
+            operation: Operation::Convert,
+            intent: AnalysisIntent::ReuseIfFresh,
+            output_target: OutputTarget::Replace,
+            state: crfty_core::QueueItemState::Queued,
+        },
+    }
+}
+
+/// A crash mid-append leaves a partial final record. The writer must truncate
+/// it on reopen: appending after the torn bytes would merge the partial record
+/// and the fresh one into a single unparseable line, and the journal would
+/// load as corrupt on the following start.
+#[test]
+fn torn_tail_is_truncated_on_reopen_so_later_appends_stay_replayable() {
+    let directory = TestDirectory::new("torn-tail");
+    let path = directory.path().join("state.jsonl");
+    {
+        let (mut writer, _initial) = JournalWriter::open(&path).expect("journal writer");
+        let (_records, _token) = writer
+            .append_batch(&[queue_added(QueueItemId(1))])
+            .expect("journal append");
+    }
+    {
+        use std::io::Write;
+        let mut file = fs::OpenOptions::new()
+            .append(true)
+            .open(&path)
+            .expect("crash-simulation handle");
+        file.write_all(b"{\"schema_version\":11,\"sequence\":1,\"del")
+            .expect("partial record");
+    }
+    let (mut writer, reopened) = JournalWriter::open(&path).expect("reopen after torn tail");
+    assert!(reopened.ignored_torn_tail);
+    assert!(reopened.corruption.is_none());
+    assert_eq!(reopened.state.queue.len(), 1);
+    assert_eq!(reopened.next_sequence.0, 1);
+    let (_records, _token) = writer
+        .append_batch(&[queue_added(QueueItemId(2))])
+        .expect("append after truncation");
+    drop(writer);
+    let replayed = replay(&fs::read(&path).expect("journal bytes"));
+    assert!(replayed.corruption.is_none());
+    assert!(!replayed.ignored_torn_tail);
+    assert_eq!(replayed.state.queue.len(), 2);
+}
+
+/// Semantic corruption must leave the journal byte-identical: the file is the
+/// evidence that gets archived as `.corrupt-<timestamp>` before any discard,
+/// so reopening never rewrites it (#33 §10).
+#[test]
+fn corrupt_journal_is_preserved_byte_identical_on_reopen() {
+    let directory = TestDirectory::new("corrupt-preserve");
+    let path = directory.path().join("state.jsonl");
+    {
+        let (mut writer, _initial) = JournalWriter::open(&path).expect("journal writer");
+        let (_records, _token) = writer
+            .append_batch(&[queue_added(QueueItemId(1))])
+            .expect("journal append");
+    }
+    {
+        use std::io::Write;
+        let mut file = fs::OpenOptions::new()
+            .append(true)
+            .open(&path)
+            .expect("corruption handle");
+        file.write_all(b"not-json\n").expect("corrupt record");
+    }
+    let before = fs::read(&path).expect("corrupt journal bytes");
+    let (writer, reopened) = JournalWriter::open(&path).expect("reopen over corruption");
+    assert!(reopened.corruption.is_some());
+    assert!(!reopened.ignored_torn_tail);
+    assert_eq!(reopened.state.queue.len(), 1);
+    drop(writer);
+    assert_eq!(fs::read(&path).expect("journal bytes"), before);
 }
 
 #[test]

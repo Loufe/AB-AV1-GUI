@@ -149,11 +149,25 @@ pub struct EngineConfig {
 }
 
 #[derive(Debug)]
-pub struct EngineStartError(String);
+pub enum EngineStartError {
+    /// Another process holds the data-directory lock: a second instance. The
+    /// shell surfaces this distinctly instead of a generic degraded state.
+    AlreadyRunning {
+        lock_path: PathBuf,
+    },
+    Failed(String),
+}
 
 impl fmt::Display for EngineStartError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        formatter.write_str(&self.0)
+        match self {
+            Self::AlreadyRunning { lock_path } => write!(
+                formatter,
+                "another instance holds the data lock at {}",
+                lock_path.display()
+            ),
+            Self::Failed(message) => formatter.write_str(message),
+        }
     }
 }
 
@@ -171,12 +185,11 @@ pub struct EngineRuntime {
 impl EngineRuntime {
     pub fn start(config: EngineConfig) -> Result<Self, EngineStartError> {
         config.execution.validate().map_err(|reason| {
-            EngineStartError(format!("invalid engine execution settings: {reason}"))
+            EngineStartError::Failed(format!("invalid engine execution settings: {reason}"))
         })?;
-        let runtime = Arc::new(
-            AbAv1Runtime::start()
-                .map_err(|error| EngineStartError(format!("failed to start encoder: {error}")))?,
-        );
+        let runtime = Arc::new(AbAv1Runtime::start().map_err(|error| {
+            EngineStartError::Failed(format!("failed to start encoder: {error}"))
+        })?);
         // Unbounded by design for now: the supervisor loop feeds effects back
         // into itself, so a bound risks deadlock. Capping belongs to the
         // backpressure semantics owned by #41.
@@ -184,18 +197,18 @@ impl EngineRuntime {
         let mut driver =
             DriverHandle::start_with_effects(&config.journal_path, &config.config_path, effect_tx)
                 .map_err(map_driver_start)?;
-        let driver_events = driver
-            .take_events()
-            .ok_or_else(|| EngineStartError("driver event receiver is missing".to_owned()))?;
+        let driver_events = driver.take_events().ok_or_else(|| {
+            EngineStartError::Failed("driver event receiver is missing".to_owned())
+        })?;
         let initial = match driver_events.recv() {
             Ok(DriverEvent::Snapshot(snapshot)) => snapshot,
             Ok(_) => {
-                return Err(EngineStartError(
+                return Err(EngineStartError::Failed(
                     "driver did not emit its snapshot first".to_owned(),
                 ));
             }
             Err(error) => {
-                return Err(EngineStartError(format!(
+                return Err(EngineStartError::Failed(format!(
                     "driver disconnected before startup recovery: {error}"
                 )));
             }
@@ -210,10 +223,10 @@ impl EngineRuntime {
                 availability: config.media_tools.availability(),
             }))
             .map_err(|error| {
-                EngineStartError(format!("failed to report tool availability: {error}"))
+                EngineStartError::Failed(format!("failed to report tool availability: {error}"))
             })?;
         if !matches!(discovered, Reply::Accepted) {
-            return Err(EngineStartError(format!(
+            return Err(EngineStartError::Failed(format!(
                 "tool availability report was not accepted: {discovered:?}"
             )));
         }
@@ -232,12 +245,12 @@ impl EngineRuntime {
                 settings: initial.settings,
             }))
             .map_err(|error| {
-                EngineStartError(format!("failed to emit startup snapshot: {error}"))
+                EngineStartError::Failed(format!("failed to emit startup snapshot: {error}"))
             })?;
         for pending in driver_events.try_iter() {
             if !matches!(pending, DriverEvent::Durable(_)) {
                 public_event_tx.send(pending).map_err(|error| {
-                    EngineStartError(format!("failed to emit startup event: {error}"))
+                    EngineStartError::Failed(format!("failed to emit startup event: {error}"))
                 })?;
             }
         }
@@ -250,7 +263,9 @@ impl EngineRuntime {
                     }
                 }
             })
-            .map_err(|error| EngineStartError(format!("failed to start event bridge: {error}")))?;
+            .map_err(|error| {
+                EngineStartError::Failed(format!("failed to start event bridge: {error}"))
+            })?;
         let internal_commands = driver.commands.clone();
         let supervisor_commands = internal_commands.clone();
         let supervisor_runtime = Arc::clone(&runtime);
@@ -265,7 +280,9 @@ impl EngineRuntime {
                     next_runtime_id,
                 );
             })
-            .map_err(|error| EngineStartError(format!("failed to start coordinator: {error}")))?;
+            .map_err(|error| {
+                EngineStartError::Failed(format!("failed to start coordinator: {error}"))
+            })?;
         Ok(Self {
             commands: UserCommandSender {
                 inner: internal_commands,
@@ -289,20 +306,20 @@ impl EngineRuntime {
         if let Some(supervisor) = self.supervisor.take() {
             supervisor
                 .join()
-                .map_err(|_| EngineStartError("job supervisor panicked".to_owned()))?;
+                .map_err(|_| EngineStartError::Failed("job supervisor panicked".to_owned()))?;
         }
         if let Some(forwarder) = self.event_forwarder.take() {
             forwarder
                 .join()
-                .map_err(|_| EngineStartError("event forwarder panicked".to_owned()))?;
+                .map_err(|_| EngineStartError::Failed("event forwarder panicked".to_owned()))?;
         }
         if let Some(runtime) = self.runtime.take() {
             let runtime = Arc::try_unwrap(runtime).map_err(|_| {
-                EngineStartError("encoder runtime still has active owners".to_owned())
+                EngineStartError::Failed("encoder runtime still has active owners".to_owned())
             })?;
-            runtime
-                .shutdown()
-                .map_err(|error| EngineStartError(format!("encoder shutdown failed: {error}")))?;
+            runtime.shutdown().map_err(|error| {
+                EngineStartError::Failed(format!("encoder shutdown failed: {error}"))
+            })?;
         }
         Ok(())
     }
@@ -340,7 +357,14 @@ impl Drop for EngineRuntime {
 }
 
 fn map_driver_start(error: DriverStartError) -> EngineStartError {
-    EngineStartError(format!("driver error: {error}"))
+    match error {
+        DriverStartError::AlreadyRunning { lock_path } => {
+            EngineStartError::AlreadyRunning { lock_path }
+        }
+        DriverStartError::Failed(message) => {
+            EngineStartError::Failed(format!("driver error: {message}"))
+        }
+    }
 }
 
 fn next_runtime_id(state: &DurableState) -> Result<u64, EngineStartError> {
@@ -359,7 +383,7 @@ fn next_runtime_id(state: &DurableState) -> Result<u64, EngineStartError> {
         .unwrap_or(FIRST_RUNTIME_ID.saturating_sub(1));
     maximum
         .checked_add(1)
-        .ok_or_else(|| EngineStartError("runtime id space is exhausted".to_owned()))
+        .ok_or_else(|| EngineStartError::Failed("runtime id space is exhausted".to_owned()))
 }
 
 fn recover_startup(

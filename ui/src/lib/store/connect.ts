@@ -25,7 +25,7 @@ export function applyPayload(payload: StreamPayload_Deserialize): void {
       ...state,
       durable,
       settings,
-      health: { degraded: null, fatal: null },
+      health: { degraded: null, fatal: null, secondInstance: null },
       tools: null,
     }));
     // Telemetry for pre-snapshot runs never gets a TelemetryCleared on this
@@ -75,6 +75,14 @@ export function applyPayload(payload: StreamPayload_Deserialize): void {
   if ("EngineFatal" in payload && payload.EngineFatal !== undefined) {
     const { message } = payload.EngineFatal;
     appStore.setState((state) => ({ ...state, health: { ...state.health, fatal: message } }));
+    return;
+  }
+  if ("SecondInstance" in payload && payload.SecondInstance !== undefined) {
+    const { lock_path } = payload.SecondInstance;
+    appStore.setState((state) => ({
+      ...state,
+      health: { ...state.health, secondInstance: lock_path },
+    }));
   }
 }
 
