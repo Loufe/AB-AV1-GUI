@@ -87,8 +87,9 @@ read-only inspection, merges, and worktree management.
 - Claude Code creates worktrees there automatically via the `WorktreeCreate`
   hook in `.claude/settings.json`; other agents follow this convention manually.
 - Subagents that write files must use worktree isolation.
-- After merging, remove the worktree (`git worktree remove .worktrees/<name>`)
-  and delete the branch. Don't leave finished worktrees behind.
+- After merging: push the target branch to origin, remove the worktree
+  (`git worktree remove .worktrees/<name>`), and delete the branch. Don't leave
+  finished worktrees, dead branches, or unpushed merges behind.
 
 ## Architecture decisions
 
