@@ -31,11 +31,12 @@ const FFPROBE_VARIABLE: &str = "CRFTY_FFPROBE";
 /// stale debris from a crashed process whenever discovery runs.
 pub(crate) const CURRENT_FILE_NAME: &str = "current.json";
 pub(crate) const STAGING_DIR_NAME: &str = "staging";
+pub(crate) const INSTALLS_DIR_NAME: &str = "installs";
 
 /// The managed install record stored in `current.json`. Paths are relative
 /// to the vendor root and must stay inside it.
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub(crate) struct InstalledMetadata {
+pub struct InstalledMetadata {
     pub version: String,
     pub ffmpeg: PathBuf,
     pub ffprobe: PathBuf,
