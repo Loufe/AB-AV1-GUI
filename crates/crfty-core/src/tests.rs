@@ -15,7 +15,7 @@ use crate::{
     SearchMeasurement, SessionCommand, SessionState, Settings, SettingsCommand, SkipReason,
     SystemCommand, Telemetry, ToolAvailability, ToolRevisions, VideoCodec, VideoMeta, VmafScore,
     VmafTarget, WorkerCommand, apply, encode_record, evaluate_eligibility, recover_output, replay,
-    select_analysis, select_job_action,
+    select_analysis, select_job_action, settled_outcome,
 };
 
 fn execution() -> ExecutionSettings {
@@ -897,6 +897,131 @@ fn remuxed_requires_a_remux_action_and_committed_output() {
     output.run_id = RunId(3);
     assert!(validate_terminal(run, Some(&output), &ItemOutcome::Remuxed).is_ok());
     assert!(validate_terminal(run, Some(&output), &ItemOutcome::Converted).is_err());
+}
+
+#[test]
+fn settled_outcome_derives_encode_success_conflict_and_stopped_terminals() {
+    let mut state = AppState::default();
+    let _added = apply(&mut state, add_command(QueueItemId(1), "video.mp4"));
+    let _started = start_session(&mut state);
+    let _reserved = apply(
+        &mut state,
+        Command::Worker(WorkerCommand::ReserveNext {
+            claim_id: ClaimId(2),
+            run_id: RunId(3),
+        }),
+    );
+    let prepared = apply(
+        &mut state,
+        Command::Worker(WorkerCommand::PrepareReserved {
+            item_id: QueueItemId(1),
+            claim_id: ClaimId(2),
+            run_id: RunId(3),
+            observation: None,
+            execution: execution(),
+        }),
+    );
+    assert!(matches!(prepared.reply, Reply::Claimed(Some(_))));
+    let recorded = apply(
+        &mut state,
+        Command::Worker(WorkerCommand::RecordAnalysis {
+            item_id: QueueItemId(1),
+            claim_id: ClaimId(2),
+            run_id: RunId(3),
+            result: Box::new(analysis()),
+        }),
+    );
+    assert_eq!(recorded.reply, Reply::Accepted);
+    let run = state
+        .durable
+        .conversion_runs
+        .get(&RunId(3))
+        .expect("prepared encode run");
+
+    let committed = transaction(
+        OutputState::Committed {
+            final_identity: identity("output", 20),
+        },
+        Replacement::KeepOriginal,
+    );
+    let retired = transaction(
+        OutputState::Retired {
+            final_identity: identity("output", 20),
+        },
+        Replacement::RetireOriginal,
+    );
+    let conflicted = transaction(
+        OutputState::Conflict {
+            reason: "identity drifted".to_owned(),
+        },
+        Replacement::RetireOriginal,
+    );
+    let abandoned = transaction(OutputState::Abandoned, Replacement::KeepOriginal);
+
+    assert_eq!(settled_outcome(run, &committed), ItemOutcome::Converted);
+    assert_eq!(settled_outcome(run, &retired), ItemOutcome::Converted);
+    assert_eq!(
+        settled_outcome(run, &conflicted),
+        ItemOutcome::Failed {
+            message: "identity drifted".to_owned(),
+        }
+    );
+    assert_eq!(settled_outcome(run, &abandoned), ItemOutcome::Stopped);
+    for settled in [&committed, &retired, &conflicted, &abandoned] {
+        assert!(validate_terminal(run, Some(settled), &settled_outcome(run, settled)).is_ok());
+    }
+}
+
+#[test]
+fn settled_outcome_labels_settled_remux_success_as_remuxed() {
+    let mut state = AppState::default();
+    let _added = apply(&mut state, add_command(QueueItemId(1), "video.mp4"));
+    let _started = start_session(&mut state);
+    let _reserved = apply(
+        &mut state,
+        Command::Worker(WorkerCommand::ReserveNext {
+            claim_id: ClaimId(2),
+            run_id: RunId(3),
+        }),
+    );
+    let mut observation = media_observation("remux-content");
+    observation.metadata.codec = VideoCodec::Av1;
+    observation.metadata.container = MediaContainer::Other("mov,mp4".to_owned());
+    let prepared = apply(
+        &mut state,
+        Command::Worker(WorkerCommand::PrepareReserved {
+            item_id: QueueItemId(1),
+            claim_id: ClaimId(2),
+            run_id: RunId(3),
+            observation: Some(Box::new(observation)),
+            execution: execution(),
+        }),
+    );
+    assert!(matches!(prepared.reply, Reply::Claimed(Some(_))));
+    let run = state
+        .durable
+        .conversion_runs
+        .get(&RunId(3))
+        .expect("prepared remux run");
+    assert_eq!(run.spec.action, JobAction::Remux);
+
+    let committed = transaction(
+        OutputState::Committed {
+            final_identity: identity("remux-output", 20),
+        },
+        Replacement::KeepOriginal,
+    );
+    let retired = transaction(
+        OutputState::Retired {
+            final_identity: identity("remux-output", 20),
+        },
+        Replacement::RetireOriginal,
+    );
+    assert_eq!(settled_outcome(run, &committed), ItemOutcome::Remuxed);
+    assert_eq!(settled_outcome(run, &retired), ItemOutcome::Remuxed);
+    for settled in [&committed, &retired] {
+        assert!(validate_terminal(run, Some(settled), &settled_outcome(run, settled)).is_ok());
+    }
 }
 
 #[test]

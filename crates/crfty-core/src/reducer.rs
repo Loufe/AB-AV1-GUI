@@ -676,6 +676,29 @@ pub(crate) fn validate_terminal(
     Ok(())
 }
 
+/// Derive the terminal outcome implied by a settled output transaction whose
+/// `Terminal` record never became durable: a crash between the final output
+/// delta and the terminal must not demote a completed run to `Stopped`.
+/// Mirrors the outcome the worker submits in session for the same ledger
+/// state, so the result always satisfies `validate_terminal`.
+#[must_use]
+pub fn settled_outcome(run: &ConversionRun, transaction: &crate::OutputTransaction) -> ItemOutcome {
+    match (&transaction.replacement, &transaction.state) {
+        (crate::Replacement::KeepOriginal, crate::OutputState::Committed { .. })
+        | (crate::Replacement::RetireOriginal, crate::OutputState::Retired { .. }) => {
+            match &run.spec.action {
+                JobAction::Encode { .. } => ItemOutcome::Converted,
+                JobAction::Remux => ItemOutcome::Remuxed,
+                JobAction::Analyze { .. } | JobAction::Skip { .. } => ItemOutcome::Stopped,
+            }
+        }
+        (_, crate::OutputState::Conflict { reason }) => ItemOutcome::Failed {
+            message: reason.clone(),
+        },
+        _ => ItemOutcome::Stopped,
+    }
+}
+
 fn has_successful_output(output: Option<&crate::OutputTransaction>) -> bool {
     output.is_some_and(|transaction| {
         matches!(

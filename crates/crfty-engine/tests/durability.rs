@@ -837,6 +837,183 @@ fn assert_no_staging_leftovers(directory: &Path) {
     assert!(leftovers.is_empty(), "leaked staging files: {leftovers:?}");
 }
 
+struct SettledSuccessFixture {
+    journal_path: PathBuf,
+    input: PathBuf,
+    final_path: PathBuf,
+    staging: PathBuf,
+}
+
+/// Journal a run whose output transaction is fully settled — every output
+/// delta durable, files promoted on disk — but whose `Terminal` record was
+/// lost to a crash.
+fn settled_success_journal(
+    directory: &TestDirectory,
+    replacement: Replacement,
+) -> SettledSuccessFixture {
+    let journal_path = directory.path().join("state.jsonl");
+    let input = directory.path().join("input.mp4");
+    fs::write(&input, b"input bytes").expect("input fixture");
+    let (final_path, output_target) = match replacement {
+        Replacement::RetireOriginal => (directory.path().join("input.mkv"), OutputTarget::Replace),
+        Replacement::KeepOriginal => (
+            directory.path().join("input.av1.mkv"),
+            OutputTarget::Suffix {
+                suffix: ".av1".to_owned(),
+            },
+        ),
+    };
+    let manager = OutputManager::new(FixtureByteInspector);
+    let transaction = manager
+        .plan(RunId(3), &input, &final_path, replacement, false)
+        .expect("plan transaction");
+    let initial = manager
+        .create_staging(&transaction)
+        .expect("create staging");
+    fs::write(&transaction.staging, b"encoded output bytes").expect("staging bytes");
+    let staging_identity = FixtureByteInspector
+        .inspect_media(&transaction.staging)
+        .expect("staging identity");
+    fs::rename(&transaction.staging, &final_path).expect("promote staging");
+    if replacement == Replacement::RetireOriginal {
+        fs::remove_file(&input).expect("retire original");
+    }
+
+    let settings = execution();
+    let mut state = AppState::default();
+    let mut durable = Vec::new();
+    let mut commands = vec![
+        Command::Queue(QueueCommand::Add {
+            item_id: QueueItemId(1),
+            input: input.clone(),
+            operation: Operation::Convert,
+            output_target,
+        }),
+        Command::System(SystemCommand::ToolsDiscovered {
+            availability: ToolAvailability::Available,
+        }),
+        Command::Session(SessionCommand::Start),
+        Command::Worker(WorkerCommand::ReserveNext {
+            claim_id: ClaimId(2),
+            run_id: RunId(3),
+        }),
+        Command::Worker(WorkerCommand::PrepareReserved {
+            item_id: QueueItemId(1),
+            claim_id: ClaimId(2),
+            run_id: RunId(3),
+            observation: None,
+            execution: settings.clone(),
+        }),
+        Command::Worker(WorkerCommand::Started {
+            item_id: QueueItemId(1),
+            claim_id: ClaimId(2),
+            run_id: RunId(3),
+        }),
+        Command::Worker(WorkerCommand::RecordAnalysis {
+            item_id: QueueItemId(1),
+            claim_id: ClaimId(2),
+            run_id: RunId(3),
+            result: Box::new(fixture_analysis(&settings)),
+        }),
+        Command::Worker(WorkerCommand::Output(OutputDelta::OutputStarted {
+            transaction: Box::new(transaction.clone()),
+        })),
+        Command::Worker(WorkerCommand::Output(OutputDelta::StagingCreated {
+            run_id: RunId(3),
+            initial,
+        })),
+        Command::Worker(WorkerCommand::Output(OutputDelta::OutputReady {
+            run_id: RunId(3),
+            staging_identity: staging_identity.clone(),
+        })),
+        Command::Worker(WorkerCommand::Output(OutputDelta::OutputCommitted {
+            run_id: RunId(3),
+            final_identity: staging_identity,
+        })),
+    ];
+    if replacement == Replacement::RetireOriginal {
+        commands.push(Command::Worker(WorkerCommand::Output(
+            OutputDelta::RetireOriginalIntent { run_id: RunId(3) },
+        )));
+        commands.push(Command::Worker(WorkerCommand::Output(
+            OutputDelta::OriginalRetired { run_id: RunId(3) },
+        )));
+    }
+    for command in commands {
+        let applied = apply(&mut state, command);
+        assert!(
+            !matches!(applied.reply, Reply::Rejected { .. }),
+            "fixture command rejected: {:?}",
+            applied.reply
+        );
+        durable.extend(applied.durable);
+    }
+    assert!(
+        state
+            .durable
+            .outputs
+            .get(&RunId(3))
+            .expect("settled transaction")
+            .is_settled()
+    );
+    let (mut writer, _replay) = JournalWriter::open(&journal_path).expect("journal writer");
+    writer
+        .append_batch(&durable)
+        .expect("settled fixture batch");
+    drop(writer);
+    SettledSuccessFixture {
+        journal_path,
+        input,
+        final_path,
+        staging: transaction.staging,
+    }
+}
+
+fn recover_settled_success(directory: &TestDirectory, fixture: &SettledSuccessFixture) {
+    let executable = std::env::current_exe().expect("test executable");
+    let engine = EngineRuntime::start(EngineConfig {
+        journal_path: fixture.journal_path.clone(),
+        config_path: directory.path().join("config.json"),
+        media_tools: ToolDiscovery::Available(MediaTools {
+            ffmpeg: executable.clone(),
+            ffprobe: executable,
+        }),
+        execution: execution(),
+    })
+    .expect("engine startup recovery");
+    let DriverEvent::Snapshot(snapshot) = engine.events.recv().expect("recovered snapshot") else {
+        panic!("expected recovered snapshot");
+    };
+    assert!(
+        matches!(
+            snapshot.durable.queue.first().expect("queue item").state,
+            crfty_core::QueueItemState::Finished(ItemOutcome::Converted)
+        ),
+        "settled success must recover as converted: {snapshot:?}"
+    );
+    assert!(fixture.final_path.exists());
+    assert!(!fixture.staging.exists());
+    engine.shutdown().expect("engine shutdown");
+}
+
+#[test]
+fn startup_recovery_labels_settled_keep_original_success_converted() {
+    let _serial = ENGINE_GUARD.lock().expect("engine guard");
+    let directory = TestDirectory::new("settled-keep-original-recovery");
+    let fixture = settled_success_journal(&directory, Replacement::KeepOriginal);
+    recover_settled_success(&directory, &fixture);
+    assert!(fixture.input.exists());
+}
+
+#[test]
+fn startup_recovery_labels_settled_retired_original_success_converted() {
+    let _serial = ENGINE_GUARD.lock().expect("engine guard");
+    let directory = TestDirectory::new("settled-retired-original-recovery");
+    let fixture = settled_success_journal(&directory, Replacement::RetireOriginal);
+    recover_settled_success(&directory, &fixture);
+    assert!(!fixture.input.exists());
+}
+
 fn fixture_analysis(settings: &ExecutionSettings) -> AnalysisResult {
     AnalysisResult {
         requested_target: settings.requested_target,

@@ -347,7 +347,16 @@ fn recover_startup(
             .get(&run_id)
             .is_none_or(crfty_core::OutputTransaction::is_settled);
         if output_settled {
-            let outcome = ItemOutcome::Stopped;
+            // A settled transaction may be the fully-successful terminal with
+            // only the `Terminal` record lost to the crash; derive the outcome
+            // it implies instead of demoting the run to `Stopped`.
+            let outcome = match (
+                state.conversion_runs.get(&run_id),
+                state.outputs.get(&run_id),
+            ) {
+                (Some(run), Some(transaction)) => crfty_core::settled_outcome(run, transaction),
+                _ => ItemOutcome::Stopped,
+            };
             if accepted(commands.submit(Command::Worker(WorkerCommand::Terminal {
                 item_id,
                 claim_id,
