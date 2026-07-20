@@ -30,9 +30,10 @@ const REAL_FIXTURE_AV1_PRESET: &str = "12";
 const REAL_FIXTURE_AV1_CRF: &str = "35";
 static REAL_MEDIA_TEST_LOCK: Mutex<()> = Mutex::new(());
 use crfty_engine::ab_av1::{
-    AbAv1Runtime, EncodeRequest, FaultInjection, JobTerminal, MediaTools, SearchRequest,
+    AbAv1Runtime, EncodeRequest, FaultInjection, JobTerminal, SearchRequest,
 };
 use crfty_engine::coordinator::{EngineConfig, EngineRuntime};
+use crfty_engine::tools::MediaTools;
 
 #[test]
 #[ignore = "requires CRFTY_FFMPEG and CRFTY_FFPROBE with libsvtav1 and libvmaf"]

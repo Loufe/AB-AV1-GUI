@@ -126,7 +126,7 @@ impl PhaseTracker {
 use crate::{
     ab_av1::{
         AbAv1Runtime, CancelMode, CancellationHandle, EncodeOutcome, EncodeRequest, JobFailureKind,
-        JobHandle, JobReport, JobTerminal, MediaTools, SearchOutcome, SearchRequest,
+        JobHandle, JobReport, JobTerminal, SearchOutcome, SearchRequest,
         Telemetry as AdapterTelemetry,
     },
     driver::{CommandSender, DriverEvent, DriverHandle, DriverStartError},
@@ -137,7 +137,7 @@ use crate::{
         self, RemuxCancellationHandle, RemuxHandle, RemuxReport, RemuxRequest, RemuxTelemetry,
         RemuxTerminal,
     },
-    tools::ToolDiscovery,
+    tools::{MediaTools, ToolDiscovery},
 };
 
 #[derive(Debug, Clone)]

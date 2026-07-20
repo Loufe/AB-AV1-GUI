@@ -7,7 +7,13 @@ use std::path::PathBuf;
 
 use crfty_core::{MediaTool, ToolAvailability};
 
-use crate::ab_av1::MediaTools;
+/// Absolute paths to the discovered FFmpeg binaries. Adapters (ab-av1,
+/// remux) consume these; discovery owns them.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct MediaTools {
+    pub ffmpeg: PathBuf,
+    pub ffprobe: PathBuf,
+}
 
 #[derive(Debug, Clone)]
 pub enum ToolDiscovery {

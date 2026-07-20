@@ -20,12 +20,11 @@ use crfty_core::{
     ToolRevisions, UnixMillis, VmafScore, WorkerCommand, apply, fold, replay,
 };
 use crfty_engine::{
-    ab_av1::MediaTools,
     coordinator::{EngineConfig, EngineRuntime},
     driver::{DriverEvent, DriverHandle},
     journal::JournalWriter,
     output::{ArtifactInspector, FixtureByteInspector, OutputManager},
-    tools::ToolDiscovery,
+    tools::{MediaTools, ToolDiscovery},
 };
 
 static TEMP_SEQUENCE: AtomicU64 = AtomicU64::new(0);

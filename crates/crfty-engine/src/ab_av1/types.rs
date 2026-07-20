@@ -2,12 +2,6 @@ use std::{fmt, path::PathBuf, time::Duration};
 
 use crfty_core::DecodeMode;
 
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct MediaTools {
-    pub ffmpeg: PathBuf,
-    pub ffprobe: PathBuf,
-}
-
 #[derive(Debug, Clone)]
 pub struct SearchRequest {
     pub input: PathBuf,
