@@ -177,6 +177,9 @@ impl EngineRuntime {
             AbAv1Runtime::start()
                 .map_err(|error| EngineStartError(format!("failed to start encoder: {error}")))?,
         );
+        // Unbounded by design for now: the supervisor loop feeds effects back
+        // into itself, so a bound risks deadlock. Capping belongs to the
+        // backpressure semantics owned by #41.
         let (effect_tx, effect_rx) = mpsc::channel();
         let mut driver =
             DriverHandle::start_with_effects(&config.journal_path, &config.config_path, effect_tx)
@@ -220,6 +223,8 @@ impl EngineRuntime {
             initial.durable,
         );
         let next_runtime_id = next_runtime_id(&recovered)?;
+        // Unbounded by design for now; capping consumer lag is part of the
+        // backpressure semantics owned by #41.
         let (public_event_tx, public_event_rx) = mpsc::channel();
         public_event_tx
             .send(DriverEvent::Snapshot(AppSnapshot {
@@ -620,11 +625,18 @@ fn supervise(
     while let Ok(effect) = effects.recv() {
         match effect {
             Effect::StartWorker => {
-                if let Some(previous) = worker.take()
-                    && previous.join().is_err()
-                {
-                    report_worker_crash(&commands, "previous session worker panicked");
-                    break;
+                if let Some(previous) = worker.take() {
+                    // A previous worker that is still winding down (e.g. the
+                    // session was force-stopped and restarted immediately)
+                    // would otherwise block this join for as long as its
+                    // current job keeps running. Force-cancel it first, the
+                    // same way StopDriver does; reset() below clears the
+                    // latch before the new worker starts.
+                    cancellation.force(None);
+                    if previous.join().is_err() {
+                        report_worker_crash(&commands, "previous session worker panicked");
+                        break;
+                    }
                 }
                 cancellation.reset();
                 let worker_commands = commands.clone();
