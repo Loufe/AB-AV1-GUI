@@ -75,6 +75,13 @@ export type ConfigDelta = { SettingsChanged: {
 	settings: Settings,
 } };
 
+/**
+ *  Why an output transaction settled as a conflict. `IdentityMismatch` means
+ *  observed files no longer match the ledger; `InspectionFailed` means the
+ *  filesystem could not be inspected or acted on to find out.
+ */
+export type ConflictKind = "IdentityMismatch" | "InspectionFailed";
+
 export type ContentKey = string;
 
 export type ConversionRun = {
@@ -97,6 +104,16 @@ export type DestructiveIdentity = {
 	size: number,
 	modified_ns: number | null,
 };
+
+/**
+ *  Bounded diagnostic text journaled with a failure — typically the tail of a
+ *  process's stderr. Producers must substitute run paths with placeholders
+ *  before construction; the durable model never sees a real path here.
+ * 
+ *  Deliberately no `Display` impl: the tail is payload for inspection surfaces,
+ *  not prose to be interpolated into messages.
+ */
+export type DiagnosticTail = string;
 
 export type DurableDelta = ({ QueueAdded: {
 	item: QueueItem,
@@ -160,6 +177,25 @@ export type ExecutionSettings = {
 	profile: AnalysisProfile,
 };
 
+/**
+ *  The durable description of a failed run: a stable kind for policy and
+ *  display grouping, a user-facing message, and a bounded diagnostic tail.
+ */
+export type FailureFacts = {
+	kind: FailureKind,
+	message: string,
+	diagnostic: DiagnosticTail,
+};
+
+/**
+ *  Which class of work failed. One variant per production failure site class
+ *  in the engine coordinator; `Internal` covers protocol and channel errors —
+ *  there is no open-ended escape variant.
+ */
+export type FailureKind = "SearchStart" | "SearchRun" | "EncodeStart" | "EncodeRun" | "RemuxStart" | "RemuxRun" | { AdapterPanicked: {
+	cleanup_failed: boolean,
+} } | "OutputPrepare" | "OutputPromote" | "OutputConflict" | "Internal";
+
 export type FileRecord = FileRecord_Serialize | FileRecord_Deserialize;
 
 export type FileRecord_Deserialize = {
@@ -194,9 +230,7 @@ export type ItemOutcome = "Analyzed" | "Converted" | "Remuxed" | ({ NotWorthwhil
 	attempts: AnalysisAttempt[],
 } }) & { Failed?: never; Skipped?: never } | "Stopped" | ({ Skipped: {
 	reason: SkipReason,
-} }) & { Failed?: never; NotWorthwhile?: never } | ({ Failed: {
-	message: string,
-} }) & { NotWorthwhile?: never; Skipped?: never };
+} }) & { Failed?: never; NotWorthwhile?: never } | ({ Failed: FailureFacts }) & { NotWorthwhile?: never; Skipped?: never };
 
 export type JobAction = ({ Analyze: {
 	selected_analysis: AnalysisResult | null,
@@ -253,7 +287,8 @@ export type OutputDelta = ({ OutputStarted: {
 	run_id: RunId,
 } }) & { AbandonStagingIntent?: never; Conflict?: never; OriginalRetired?: never; OutputCommitted?: never; OutputReady?: never; OutputStarted?: never; RetireOriginalIntent?: never } | ({ Conflict: {
 	run_id: RunId,
-	reason: string,
+	kind: ConflictKind,
+	detail: string,
 } }) & { AbandonStagingIntent?: never; Abandoned?: never; OriginalRetired?: never; OutputCommitted?: never; OutputReady?: never; OutputStarted?: never; RetireOriginalIntent?: never };
 
 export type OutputSettings = {
@@ -274,7 +309,8 @@ export type OutputState = "Started" | ({ Ready: {
 } }) & { AbandonIntent?: never; Committed?: never; Conflict?: never; Ready?: never; RetireIntent?: never } | ({ AbandonIntent: {
 	staging_identity: DestructiveIdentity,
 } }) & { Committed?: never; Conflict?: never; Ready?: never; RetireIntent?: never; Retired?: never } | "Abandoned" | ({ Conflict: {
-	reason: string,
+	kind: ConflictKind,
+	detail: string,
 } }) & { AbandonIntent?: never; Committed?: never; Ready?: never; RetireIntent?: never; Retired?: never };
 
 export type OutputTarget = "Replace" | ({ Suffix: {

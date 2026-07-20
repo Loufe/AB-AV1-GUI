@@ -134,7 +134,9 @@ const ROWS: QueueRowData[] = [
   },
   {
     item: item(6, "s01e06.wmv", "Convert", {
-      Finished: { Failed: { message: "ffprobe: moov atom not found" } },
+      Finished: {
+        Failed: { kind: "EncodeStart", message: "ffprobe: moov atom not found", diagnostic: "" },
+      },
     }),
     streams: "VC1 / WMAV2",
     sizeBytes: 1.38 * GIB,
@@ -142,7 +144,11 @@ const ROWS: QueueRowData[] = [
     timeConfidence: "exact",
     preciseCrf: false,
     status: deriveRowStatus(
-      { Finished: { Failed: { message: "ffprobe: moov atom not found" } } },
+      {
+        Finished: {
+          Failed: { kind: "EncodeStart", message: "ffprobe: moov atom not found", diagnostic: "" },
+        },
+      },
       null,
       null,
       null,

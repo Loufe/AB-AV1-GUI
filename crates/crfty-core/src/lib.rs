@@ -10,6 +10,7 @@
 //! or user-interface frameworks.
 
 mod constants;
+mod failure;
 mod job;
 mod journal;
 mod media;
@@ -27,6 +28,7 @@ mod state;
 /// back. Do not use this alias as a runtime type.
 pub type JsNumber = u32;
 
+pub use failure::{DIAGNOSTIC_TAIL_MAX_BYTES, DiagnosticTail, FailureFacts, FailureKind};
 pub use job::{
     AnalysisAttempt, AnalysisProfile, AnalysisResult, ClaimedJob, Crf, DecodeMode,
     DecodePreference, ExecutionSettings, HardwareDecoder, JobAction, JobPhase, JobSpec, Operation,
@@ -41,9 +43,9 @@ pub use media::{
     VideoMeta,
 };
 pub use output::{
-    ArtifactIdentity, ContentKey, DestructiveIdentity, DestructiveObservation, FileSystemFacts,
-    FileSystemId, OutputDelta, OutputRecoveryAction, OutputState, OutputTransaction,
-    RecoveryConflict, Replacement, recover_output,
+    ArtifactIdentity, ConflictKind, ContentKey, DestructiveIdentity, DestructiveObservation,
+    FileSystemFacts, FileSystemId, OutputDelta, OutputRecoveryAction, OutputState,
+    OutputTransaction, RecoveryConflict, Replacement, recover_output,
 };
 pub use policy::{
     Eligibility, MIN_VIDEO_PIXELS, SkipReason, evaluate_eligibility, select_analysis,

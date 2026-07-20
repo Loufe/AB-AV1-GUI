@@ -5,17 +5,18 @@ use proptest::prelude::*;
 use crate::reducer::validate_terminal;
 
 use crate::{
-    AnalysisProfile, AnalysisResult, AppState, ArtifactIdentity, ClaimId, Command, ContentKey, Crf,
-    DecodeMode, DecodePreference, DefaultOutputMode, DestructiveIdentity, DestructiveObservation,
-    DurableDelta, Effect, Eligibility, EphemeralDelta, ExecutionSettings, FileRecord, FileStamp,
-    FileSystemFacts, FileSystemId, ItemOutcome, JOURNAL_SCHEMA_VERSION, JobAction, JobPhase,
-    JobProgress, JournalEnvelope, JournalSequence, MediaContainer, MediaObservation, Operation,
-    OutputDelta, OutputRecoveryAction, OutputState, OutputTarget, OutputTransaction, PathBinding,
-    PathHash, QueueCommand, QueueItemId, QueueItemState, Replacement, Reply, RunId,
-    SearchMeasurement, SessionCommand, SessionState, Settings, SettingsCommand, SkipReason,
-    SystemCommand, Telemetry, ToolAvailability, ToolRevisions, VideoCodec, VideoMeta, VmafScore,
-    VmafTarget, WorkerCommand, apply, encode_record, evaluate_eligibility, recover_output, replay,
-    select_analysis, select_job_action,
+    AnalysisProfile, AnalysisResult, AppState, ArtifactIdentity, ClaimId, Command, ConflictKind,
+    ContentKey, Crf, DecodeMode, DecodePreference, DefaultOutputMode, DestructiveIdentity,
+    DestructiveObservation, DurableDelta, Effect, Eligibility, EphemeralDelta, ExecutionSettings,
+    FailureFacts, FailureKind, FileRecord, FileStamp, FileSystemFacts, FileSystemId, ItemOutcome,
+    JOURNAL_SCHEMA_VERSION, JobAction, JobPhase, JobProgress, JournalEnvelope, JournalSequence,
+    MediaContainer, MediaObservation, Operation, OutputDelta, OutputRecoveryAction, OutputState,
+    OutputTarget, OutputTransaction, PathBinding, PathHash, QueueCommand, QueueItemId,
+    QueueItemState, Replacement, Reply, RunId, SearchMeasurement, SessionCommand, SessionState,
+    Settings, SettingsCommand, SkipReason, SystemCommand, Telemetry, ToolAvailability,
+    ToolRevisions, VideoCodec, VideoMeta, VmafScore, VmafTarget, WorkerCommand, apply,
+    encode_record, evaluate_eligibility, recover_output, replay, select_analysis,
+    select_job_action,
 };
 
 fn execution() -> ExecutionSettings {
@@ -283,9 +284,7 @@ fn reducer_enforces_session_claim_and_terminal_ordering() {
             item_id: QueueItemId(1),
             claim_id: ClaimId(2),
             run_id: RunId(3),
-            outcome: ItemOutcome::Failed {
-                message: "fixture".to_owned(),
-            },
+            outcome: ItemOutcome::Failed(FailureFacts::new(FailureKind::Internal, "fixture")),
             final_telemetry: Some(Telemetry {
                 run_id: RunId(3),
                 sequence: 20,
@@ -380,9 +379,10 @@ fn durable_analysis_is_selected_for_the_same_content_and_profile() {
             item_id: QueueItemId(1),
             claim_id: ClaimId(2),
             run_id: RunId(3),
-            outcome: ItemOutcome::Failed {
-                message: "fixture boundary".to_owned(),
-            },
+            outcome: ItemOutcome::Failed(FailureFacts::new(
+                FailureKind::Internal,
+                "fixture boundary",
+            )),
             final_telemetry: None,
         }),
     );
@@ -429,9 +429,7 @@ fn reorder_fixture() -> AppState {
             item_id: QueueItemId(1),
             claim_id: ClaimId(20),
             run_id: RunId(21),
-            outcome: ItemOutcome::Failed {
-                message: "fixture".to_owned(),
-            },
+            outcome: ItemOutcome::Failed(FailureFacts::new(FailureKind::Internal, "fixture")),
             final_telemetry: None,
         }),
     );
@@ -600,9 +598,7 @@ fn reorder_of_the_only_pending_item_above_active_is_a_no_op() {
             item_id: QueueItemId(1),
             claim_id: ClaimId(20),
             run_id: RunId(21),
-            outcome: ItemOutcome::Failed {
-                message: "fixture".to_owned(),
-            },
+            outcome: ItemOutcome::Failed(FailureFacts::new(FailureKind::Internal, "fixture")),
             final_telemetry: None,
         }),
     );
@@ -743,9 +739,10 @@ fn media_record_and_analysis_checkpoint_replay_as_one_state() {
             item_id: QueueItemId(1),
             claim_id: ClaimId(2),
             run_id: RunId(3),
-            outcome: ItemOutcome::Failed {
-                message: "fixture boundary".to_owned(),
-            },
+            outcome: ItemOutcome::Failed(FailureFacts::new(
+                FailureKind::Internal,
+                "fixture boundary",
+            )),
             final_telemetry: None,
         }),
     );
@@ -838,7 +835,8 @@ fn converted_requires_a_successfully_committed_output() {
             &mut state,
             Command::Worker(WorkerCommand::Output(OutputDelta::Conflict {
                 run_id: RunId(3),
-                reason: "fixture conflict".to_owned(),
+                kind: ConflictKind::InspectionFailed,
+                detail: "fixture conflict".to_owned(),
             })),
         )
         .reply,
@@ -898,6 +896,68 @@ fn remuxed_requires_a_remux_action_and_committed_output() {
     output.run_id = RunId(3);
     assert!(validate_terminal(run, Some(&output), &ItemOutcome::Remuxed).is_ok());
     assert!(validate_terminal(run, Some(&output), &ItemOutcome::Converted).is_err());
+}
+
+#[test]
+fn failed_terminal_invariants_check_conflict_state_and_diagnostic_bound() {
+    let mut state = AppState::default();
+    let _added = apply(&mut state, add_command(QueueItemId(1), "video.mkv"));
+    let _started = start_session(&mut state);
+    let _reserved = apply(
+        &mut state,
+        Command::Worker(WorkerCommand::ReserveNext {
+            claim_id: ClaimId(2),
+            run_id: RunId(3),
+        }),
+    );
+    let prepared = apply(
+        &mut state,
+        Command::Worker(WorkerCommand::PrepareReserved {
+            item_id: QueueItemId(1),
+            claim_id: ClaimId(2),
+            run_id: RunId(3),
+            observation: Some(Box::new(media_observation("failed-content"))),
+            execution: execution(),
+        }),
+    );
+    assert!(matches!(prepared.reply, Reply::Claimed(Some(_))));
+    let run = state
+        .durable
+        .conversion_runs
+        .get(&RunId(3))
+        .expect("prepared run");
+
+    let conflict_failure = ItemOutcome::Failed(FailureFacts::new(
+        FailureKind::OutputConflict,
+        "output settled as a conflict",
+    ));
+    // OutputConflict asserts a conflicted transaction; without one it lies.
+    assert!(validate_terminal(run, None, &conflict_failure).is_err());
+    let mut conflicted = transaction(
+        OutputState::Conflict {
+            kind: ConflictKind::InspectionFailed,
+            detail: "fixture".to_owned(),
+        },
+        Replacement::KeepOriginal,
+    );
+    conflicted.run_id = RunId(3);
+    assert!(validate_terminal(run, Some(&conflicted), &conflict_failure).is_ok());
+    // The converse is NOT an invariant: a conflicted settlement followed by a
+    // Stopped terminal stays legal (cancellation racing a settlement failure).
+    assert!(validate_terminal(run, Some(&conflicted), &ItemOutcome::Stopped).is_ok());
+    // Other failure kinds carry no output requirement.
+    let plain_failure = ItemOutcome::Failed(FailureFacts::new(FailureKind::Internal, "fixture"));
+    assert!(validate_terminal(run, None, &plain_failure).is_ok());
+
+    // Replay-side bound enforcement: transparent deserialization can produce
+    // an oversized tail, which the terminal validation must reject.
+    let oversized = format!("\"{}\"", "a".repeat(crate::DIAGNOSTIC_TAIL_MAX_BYTES + 1));
+    let tail: crate::DiagnosticTail =
+        serde_json::from_str(&oversized).expect("transparent deserialization succeeds");
+    let unbounded = ItemOutcome::Failed(
+        FailureFacts::new(FailureKind::Internal, "fixture").with_diagnostic(tail),
+    );
+    assert!(validate_terminal(run, None, &unbounded).is_err());
 }
 
 #[test]

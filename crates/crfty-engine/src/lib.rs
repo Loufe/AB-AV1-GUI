@@ -19,5 +19,6 @@ pub mod output;
 pub mod remux;
 pub mod tools;
 
+mod failure;
 mod filesystem;
 mod process;

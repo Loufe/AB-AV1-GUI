@@ -257,7 +257,8 @@ impl<I: ArtifactInspector> OutputManager<I> {
             OutputRecoveryAction::Append(delta) => Ok(Some(delta)),
             OutputRecoveryAction::Conflict(conflict) => Ok(Some(OutputDelta::Conflict {
                 run_id: transaction.run_id,
-                reason: conflict.reason,
+                kind: conflict.kind,
+                detail: conflict.detail,
             })),
             OutputRecoveryAction::DeleteStaging { path, expected } => {
                 require_identity(&self.inspector, &path, &expected, "staging file changed")?;

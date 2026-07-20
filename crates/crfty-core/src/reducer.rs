@@ -671,7 +671,21 @@ pub(crate) fn validate_terminal(
                 }
             }
         },
-        ItemOutcome::Stopped | ItemOutcome::Failed { .. } => {}
+        ItemOutcome::Failed(facts) => {
+            facts.diagnostic.validate()?;
+            // An output-conflict failure asserts the transaction really did
+            // settle as a conflict. The converse is deliberately NOT an
+            // invariant: a conflicted settlement followed by a Stopped
+            // terminal is legal (cancellation racing a settlement failure).
+            if matches!(facts.kind, crate::FailureKind::OutputConflict)
+                && !output.is_some_and(|transaction| {
+                    matches!(transaction.state, crate::OutputState::Conflict { .. })
+                })
+            {
+                return Err("output-conflict failure requires a conflicted output transaction");
+            }
+        }
+        ItemOutcome::Stopped => {}
     }
     Ok(())
 }

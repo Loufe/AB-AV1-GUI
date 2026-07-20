@@ -12,11 +12,12 @@ use std::{
 
 use crfty_core::{
     AnalysisAttempt, AnalysisResult, AppSnapshot, CRF_FIXED_SCALE, ClaimId, ClaimedJob, Command,
-    Crf, DurableDelta, DurableState, Effect, ExecutionSettings, ItemOutcome, JobAction, JobPhase,
-    JobProgress, MAX_PERCENT_BASIS_POINTS, MAX_VMAF_SCORE, OutputDelta, OutputTarget,
-    OutputTransaction, PERCENT_BASIS_POINTS_SCALE, QueueCommand, QueueItemState, Replacement,
-    Reply, RunId, SearchMeasurement, SessionCommand, SettingsCommand, SkipReason, SystemCommand,
-    Telemetry, VMAF_SCORE_FIXED_SCALE, VmafScore, VmafTarget, WorkerCommand, fold,
+    ConflictKind, Crf, DurableDelta, DurableState, Effect, ExecutionSettings, FailureFacts,
+    FailureKind, ItemOutcome, JobAction, JobPhase, JobProgress, MAX_PERCENT_BASIS_POINTS,
+    MAX_VMAF_SCORE, OutputDelta, OutputTarget, OutputTransaction, PERCENT_BASIS_POINTS_SCALE,
+    QueueCommand, QueueItemState, Replacement, Reply, RunId, SearchMeasurement, SessionCommand,
+    SettingsCommand, SkipReason, SystemCommand, Telemetry, VMAF_SCORE_FIXED_SCALE, VmafScore,
+    VmafTarget, WorkerCommand, fold,
 };
 
 const FIRST_RUNTIME_ID: u64 = 1;
@@ -52,6 +53,7 @@ use crate::{
         Telemetry as AdapterTelemetry,
     },
     driver::{CommandSender, DriverEvent, DriverHandle, DriverStartError},
+    failure::scrub_tail,
     media::{DecodeResolver, MediaInspector},
     output::{MediaArtifactInspector, OutputManager},
     remux::{
@@ -334,7 +336,8 @@ fn recover_startup(
                 Ok(None) => break,
                 Err(error) => OutputDelta::Conflict {
                     run_id,
-                    reason: format!("startup output recovery failed: {error}"),
+                    kind: ConflictKind::InspectionFailed,
+                    detail: format!("startup output recovery failed: {error}"),
                 },
             };
             if !accepted(commands.submit(Command::Worker(WorkerCommand::Output(delta.clone())))) {
@@ -791,9 +794,10 @@ fn run_encode(
                 services.commands,
                 job,
                 &transaction,
-                ItemOutcome::Failed {
-                    message: error.to_string(),
-                },
+                ItemOutcome::Failed(FailureFacts::new(
+                    FailureKind::EncodeStart,
+                    error.to_string(),
+                )),
                 None,
             )?;
             return Ok(());
@@ -836,19 +840,41 @@ fn run_encode(
                 final_telemetry.as_ref().map(telemetry_progress),
             ),
         )?,
-        Ok(report) => abandon_output(
+        Ok(JobReport {
+            terminal: JobTerminal::Failed(failure),
+            final_telemetry,
+        }) => abandon_output(
             &manager,
             services.commands,
             job,
             &transaction,
-            ItemOutcome::Failed {
-                message: format!("encode failed: {:?}", report.terminal),
-            },
+            ItemOutcome::Failed(FailureFacts::new(FailureKind::EncodeRun, failure.message)),
             map_progress(
                 job.spec.run_id,
                 telemetry_sequence,
                 JobPhase::Encoding,
-                report.final_telemetry.as_ref().map(telemetry_progress),
+                final_telemetry.as_ref().map(telemetry_progress),
+            ),
+        )?,
+        Ok(JobReport {
+            terminal: JobTerminal::Panicked { cleanup_failure },
+            final_telemetry,
+        }) => abandon_output(
+            &manager,
+            services.commands,
+            job,
+            &transaction,
+            ItemOutcome::Failed(panicked_facts(
+                "encode adapter panicked",
+                cleanup_failure,
+                job,
+                &transaction,
+            )),
+            map_progress(
+                job.spec.run_id,
+                telemetry_sequence,
+                JobPhase::Encoding,
+                final_telemetry.as_ref().map(telemetry_progress),
             ),
         )?,
         Err(message) => abandon_output(
@@ -856,11 +882,38 @@ fn run_encode(
             services.commands,
             job,
             &transaction,
-            ItemOutcome::Failed { message },
+            ItemOutcome::Failed(FailureFacts::new(FailureKind::Internal, message)),
             None,
         )?,
     }
     Ok(())
+}
+
+/// Facts for an adapter panic: the cleanup error, if any, may embed run paths,
+/// so it travels as a scrubbed diagnostic rather than message prose.
+fn panicked_facts(
+    message: &str,
+    cleanup_failure: Option<String>,
+    job: &ClaimedJob,
+    transaction: &OutputTransaction,
+) -> FailureFacts {
+    let facts = FailureFacts::new(
+        FailureKind::AdapterPanicked {
+            cleanup_failed: cleanup_failure.is_some(),
+        },
+        message,
+    );
+    match cleanup_failure {
+        Some(cleanup) => facts.with_diagnostic(scrub_tail(
+            &cleanup,
+            &[
+                (job.spec.input.as_path(), "<input>"),
+                (transaction.staging.as_path(), "<staging>"),
+                (transaction.final_path.as_path(), "<output>"),
+            ],
+        )),
+        None => facts,
+    }
 }
 
 fn run_remux(
@@ -885,9 +938,10 @@ fn run_remux(
                 services.commands,
                 job,
                 &transaction,
-                ItemOutcome::Failed {
-                    message: error.to_string(),
-                },
+                ItemOutcome::Failed(FailureFacts::new(
+                    FailureKind::RemuxStart,
+                    error.to_string(),
+                )),
                 None,
             )?;
             return Ok(());
@@ -933,21 +987,22 @@ fn run_remux(
             terminal: RemuxTerminal::Failed(failure),
             final_telemetry,
         }) => {
-            let message = if failure.stderr_tail.trim().is_empty() {
-                failure.message
-            } else {
-                format!(
-                    "{}; FFmpeg stderr: {}",
-                    failure.message,
-                    failure.stderr_tail.trim()
-                )
-            };
+            let facts = FailureFacts::new(FailureKind::RemuxRun, failure.message).with_diagnostic(
+                scrub_tail(
+                    failure.stderr_tail.trim(),
+                    &[
+                        (job.spec.input.as_path(), "<input>"),
+                        (transaction.staging.as_path(), "<staging>"),
+                        (transaction.final_path.as_path(), "<output>"),
+                    ],
+                ),
+            );
             abandon_output(
                 &manager,
                 services.commands,
                 job,
                 &transaction,
-                ItemOutcome::Failed { message },
+                ItemOutcome::Failed(facts),
                 map_progress(
                     job.spec.run_id,
                     telemetry_sequence,
@@ -961,7 +1016,7 @@ fn run_remux(
             services.commands,
             job,
             &transaction,
-            ItemOutcome::Failed { message },
+            ItemOutcome::Failed(FailureFacts::new(FailureKind::Internal, message)),
             None,
         )?,
     }
@@ -987,7 +1042,12 @@ fn resolve_output_destination(
     let (final_path, replacement) = match resolve_output(job) {
         Ok(resolved) => resolved,
         Err(message) => {
-            terminal(commands, job, ItemOutcome::Failed { message }, None)?;
+            terminal(
+                commands,
+                job,
+                ItemOutcome::Failed(FailureFacts::new(FailureKind::OutputPrepare, message)),
+                None,
+            )?;
             return Ok(None);
         }
     };
@@ -997,9 +1057,10 @@ fn resolve_output_destination(
         terminal(
             commands,
             job,
-            ItemOutcome::Failed {
-                message: format!("failed to create output directory: {error}"),
-            },
+            ItemOutcome::Failed(FailureFacts::new(
+                FailureKind::OutputPrepare,
+                format!("failed to create output directory: {error}"),
+            )),
             None,
         )?;
         return Ok(None);
@@ -1052,9 +1113,10 @@ fn begin_output(
             terminal(
                 commands,
                 job,
-                ItemOutcome::Failed {
-                    message: error.to_string(),
-                },
+                ItemOutcome::Failed(FailureFacts::new(
+                    FailureKind::OutputPrepare,
+                    error.to_string(),
+                )),
                 None,
             )?;
             return Ok(None);
@@ -1099,9 +1161,10 @@ fn finish_successful_output(
             terminal(
                 commands,
                 job,
-                ItemOutcome::Failed {
-                    message: error.to_string(),
-                },
+                ItemOutcome::Failed(FailureFacts::new(
+                    FailureKind::OutputPromote,
+                    error.to_string(),
+                )),
                 map_progress(
                     job.spec.run_id,
                     telemetry_sequence,
@@ -1131,9 +1194,10 @@ fn finish_successful_output(
                 terminal(
                     commands,
                     job,
-                    ItemOutcome::Failed {
-                        message: error.to_string(),
-                    },
+                    ItemOutcome::Failed(FailureFacts::new(
+                        FailureKind::OutputConflict,
+                        error.to_string(),
+                    )),
                     map_progress(
                         job.spec.run_id,
                         telemetry_sequence,
@@ -1185,8 +1249,11 @@ fn search_with_fallback(
         };
         let handle = runtime
             .start_search(tools.clone(), request)
-            .map_err(|error| ItemOutcome::Failed {
-                message: error.to_string(),
+            .map_err(|error| {
+                ItemOutcome::Failed(FailureFacts::new(
+                    FailureKind::SearchStart,
+                    error.to_string(),
+                ))
             })?;
         let report = wait_for_report(
             commands,
@@ -1196,11 +1263,14 @@ fn search_with_fallback(
             JobPhase::Analyzing,
             telemetry_sequence,
         )
-        .map_err(|message| ItemOutcome::Failed { message })?;
+        .map_err(|message| {
+            ItemOutcome::Failed(FailureFacts::new(FailureKind::Internal, message))
+        })?;
         match report.terminal {
             JobTerminal::Completed(outcome) => {
-                let measured =
-                    measurement(outcome).map_err(|message| ItemOutcome::Failed { message })?;
+                let measured = measurement(outcome).map_err(|message| {
+                    ItemOutcome::Failed(FailureFacts::new(FailureKind::SearchRun, message))
+                })?;
                 return Ok(AnalysisResult {
                     requested_target: execution.requested_target,
                     successful_target: VmafTarget(target),
@@ -1213,24 +1283,37 @@ fn search_with_fallback(
             }
             JobTerminal::Failed(failure) => match failure.kind {
                 JobFailureKind::NoGoodCrf { last } => {
-                    let measured =
-                        measurement(last).map_err(|message| ItemOutcome::Failed { message })?;
+                    let measured = measurement(last).map_err(|message| {
+                        ItemOutcome::Failed(FailureFacts::new(FailureKind::SearchRun, message))
+                    })?;
                     failed_attempts.push(AnalysisAttempt {
                         target: VmafTarget(target),
                         last_measurement: Some(measured),
                     });
                 }
                 JobFailureKind::Other => {
-                    return Err(ItemOutcome::Failed {
-                        message: failure.message,
-                    });
+                    return Err(ItemOutcome::Failed(FailureFacts::new(
+                        FailureKind::SearchRun,
+                        failure.message,
+                    )));
                 }
             },
             JobTerminal::Cancelled => return Err(ItemOutcome::Stopped),
             JobTerminal::Panicked { cleanup_failure } => {
-                return Err(ItemOutcome::Failed {
-                    message: format!("analysis panicked; cleanup: {cleanup_failure:?}"),
-                });
+                let facts = FailureFacts::new(
+                    FailureKind::AdapterPanicked {
+                        cleanup_failed: cleanup_failure.is_some(),
+                    },
+                    "analysis adapter panicked",
+                );
+                let facts = match cleanup_failure {
+                    Some(cleanup) => facts.with_diagnostic(scrub_tail(
+                        &cleanup,
+                        &[(job.spec.input.as_path(), "<input>")],
+                    )),
+                    None => facts,
+                };
+                return Err(ItemOutcome::Failed(facts));
             }
         }
         if target <= execution.fallback_floor.0
@@ -1492,8 +1575,18 @@ fn submit_output(commands: &CommandSender, delta: OutputDelta) -> Result<(), Str
     )
 }
 
-fn settle_conflict(commands: &CommandSender, run_id: RunId, reason: String) -> Result<(), String> {
-    submit_output(commands, OutputDelta::Conflict { run_id, reason })
+/// Every caller reaches this after a filesystem inspection or action failed,
+/// so the conflict kind is baked in; identity mismatches are detected by the
+/// core recovery policy and arrive as deltas, not through this path.
+fn settle_conflict(commands: &CommandSender, run_id: RunId, detail: String) -> Result<(), String> {
+    submit_output(
+        commands,
+        OutputDelta::Conflict {
+            run_id,
+            kind: ConflictKind::InspectionFailed,
+            detail,
+        },
+    )
 }
 
 fn settle_abandoned(

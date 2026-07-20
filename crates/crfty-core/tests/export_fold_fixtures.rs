@@ -14,12 +14,13 @@
 use std::path::PathBuf;
 
 use crfty_core::{
-    AnalysisAttempt, AnalysisProfile, AnalysisResult, ArtifactIdentity, ClaimId, ContentKey, Crf,
-    DecodeMode, DecodePreference, DestructiveIdentity, DurableDelta, DurableState,
-    ExecutionSettings, FileStamp, FileSystemId, ItemOutcome, JobAction, JobSpec, MediaContainer,
-    MediaObservation, Operation, OutputDelta, OutputState, OutputTarget, OutputTransaction,
-    PathBinding, PathHash, QueueItem, QueueItemId, QueueItemState, Replacement, ReservedJob, RunId,
-    SearchMeasurement, SkipReason, VideoCodec, VideoMeta, VmafScore, VmafTarget, fold,
+    AnalysisAttempt, AnalysisProfile, AnalysisResult, ArtifactIdentity, ClaimId, ConflictKind,
+    ContentKey, Crf, DecodeMode, DecodePreference, DestructiveIdentity, DiagnosticTail,
+    DurableDelta, DurableState, ExecutionSettings, FailureFacts, FailureKind, FileStamp,
+    FileSystemId, ItemOutcome, JobAction, JobSpec, MediaContainer, MediaObservation, Operation,
+    OutputDelta, OutputState, OutputTarget, OutputTransaction, PathBinding, PathHash, QueueItem,
+    QueueItemId, QueueItemState, Replacement, ReservedJob, RunId, SearchMeasurement, SkipReason,
+    VideoCodec, VideoMeta, VmafScore, VmafTarget, fold,
 };
 use serde::Serialize;
 
@@ -460,9 +461,12 @@ fn scenarios() -> Vec<Scenario> {
                 1,
                 10,
                 100,
-                ItemOutcome::Failed {
-                    message: "encoder exited with status 1".to_owned(),
-                },
+                ItemOutcome::Failed(
+                    FailureFacts::new(FailureKind::EncodeRun, "encoder exited with status 1")
+                        .with_diagnostic(DiagnosticTail::truncated(
+                            "Error: <input>: unsupported bit depth",
+                        )),
+                ),
             )],
         ),
         scenario(
@@ -544,7 +548,8 @@ fn scenarios() -> Vec<Scenario> {
             [convert_prelude("ck-1"), vec![output_started(100)]].concat(),
             vec![DurableDelta::Output(OutputDelta::Conflict {
                 run_id: RunId(100),
-                reason: "final path changed since EncodeStarted".to_owned(),
+                kind: ConflictKind::IdentityMismatch,
+                detail: "final path changed since EncodeStarted".to_owned(),
             })],
         ),
         scenario(

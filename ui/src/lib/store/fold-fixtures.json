@@ -2807,7 +2807,9 @@
             "run_id": 100,
             "outcome": {
               "Failed": {
-                "message": "encoder exited with status 1"
+                "kind": "EncodeRun",
+                "message": "encoder exited with status 1",
+                "diagnostic": "Error: <input>: unsupported bit depth"
               }
             }
           }
@@ -2823,7 +2825,9 @@
             "state": {
               "Finished": {
                 "Failed": {
-                  "message": "encoder exited with status 1"
+                  "kind": "EncodeRun",
+                  "message": "encoder exited with status 1",
+                  "diagnostic": "Error: <input>: unsupported bit depth"
                 }
               }
             }
@@ -2892,7 +2896,9 @@
             "output_content_key": null,
             "outcome": {
               "Failed": {
-                "message": "encoder exited with status 1"
+                "kind": "EncodeRun",
+                "message": "encoder exited with status 1",
+                "diagnostic": "Error: <input>: unsupported bit depth"
               }
             }
           }
@@ -4358,7 +4364,8 @@
           "Output": {
             "Conflict": {
               "run_id": 100,
-              "reason": "final path changed since EncodeStarted"
+              "kind": "IdentityMismatch",
+              "detail": "final path changed since EncodeStarted"
             }
           }
         }
@@ -4432,7 +4439,8 @@
             "replacement": "RetireOriginal",
             "state": {
               "Conflict": {
-                "reason": "final path changed since EncodeStarted"
+                "kind": "IdentityMismatch",
+                "detail": "final path changed since EncodeStarted"
               }
             }
           }

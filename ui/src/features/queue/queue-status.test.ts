@@ -87,7 +87,12 @@ describe("deriveRowStatus", () => {
       kind: "stopped",
     });
     expect(
-      deriveRowStatus({ Finished: { Failed: { message: "boom" } } }, null, null, null),
+      deriveRowStatus(
+        { Finished: { Failed: { kind: "EncodeRun", message: "boom", diagnostic: "" } } },
+        null,
+        null,
+        null,
+      ),
     ).toEqual({ kind: "failed", message: "boom" });
   });
 

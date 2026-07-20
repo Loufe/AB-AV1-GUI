@@ -3,8 +3,9 @@ use std::{collections::BTreeMap, path::PathBuf};
 use serde::{Deserialize, Serialize};
 
 use crate::{
-    AnalysisAttempt, AnalysisResult, ContentKey, FileRecord, JobPhase, JobSpec, MediaObservation,
-    Operation, OutputDelta, OutputTarget, PathBinding, PathHash, ReservedJob, Settings, SkipReason,
+    AnalysisAttempt, AnalysisResult, ContentKey, FailureFacts, FileRecord, JobPhase, JobSpec,
+    MediaObservation, Operation, OutputDelta, OutputTarget, PathBinding, PathHash, ReservedJob,
+    Settings, SkipReason,
 };
 
 macro_rules! numeric_id {
@@ -57,7 +58,7 @@ pub enum ItemOutcome {
     NotWorthwhile { attempts: Vec<AnalysisAttempt> },
     Stopped,
     Skipped { reason: SkipReason },
-    Failed { message: String },
+    Failed(FailureFacts),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, specta::Type)]

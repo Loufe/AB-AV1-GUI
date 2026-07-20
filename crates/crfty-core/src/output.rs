@@ -57,6 +57,15 @@ pub enum Replacement {
     RetireOriginal,
 }
 
+/// Why an output transaction settled as a conflict. `IdentityMismatch` means
+/// observed files no longer match the ledger; `InspectionFailed` means the
+/// filesystem could not be inspected or acted on to find out.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, specta::Type)]
+pub enum ConflictKind {
+    IdentityMismatch,
+    InspectionFailed,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, specta::Type)]
 pub struct OutputTransaction {
     pub run_id: RunId,
@@ -90,7 +99,8 @@ pub enum OutputState {
     },
     Abandoned,
     Conflict {
-        reason: String,
+        kind: ConflictKind,
+        detail: String,
     },
 }
 
@@ -135,7 +145,8 @@ pub enum OutputDelta {
     },
     Conflict {
         run_id: RunId,
-        reason: String,
+        kind: ConflictKind,
+        detail: String,
     },
 }
 
@@ -205,11 +216,16 @@ impl OutputDelta {
                 },
             ),
             Self::Abandoned { run_id } => update_state(outputs, *run_id, OutputState::Abandoned),
-            Self::Conflict { run_id, reason } => update_state(
+            Self::Conflict {
+                run_id,
+                kind,
+                detail,
+            } => update_state(
                 outputs,
                 *run_id,
                 OutputState::Conflict {
-                    reason: reason.clone(),
+                    kind: *kind,
+                    detail: detail.clone(),
                 },
             ),
         }
@@ -237,7 +253,8 @@ pub struct FileSystemFacts {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RecoveryConflict {
-    pub reason: String,
+    pub kind: ConflictKind,
+    pub detail: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -420,8 +437,12 @@ fn observation_matches_preimage(
     }
 }
 
-fn conflict(reason: &str) -> OutputRecoveryAction {
+fn conflict(detail: &str) -> OutputRecoveryAction {
+    // Every conflict recover_output itself detects is an identity mismatch:
+    // the observed files no longer match the ledger. Inspection failures are
+    // reported by the engine, which cannot see this far.
     OutputRecoveryAction::Conflict(RecoveryConflict {
-        reason: reason.to_owned(),
+        kind: ConflictKind::IdentityMismatch,
+        detail: detail.to_owned(),
     })
 }

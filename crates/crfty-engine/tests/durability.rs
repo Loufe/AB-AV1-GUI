@@ -11,10 +11,10 @@ use std::{
 use crfty_core::{
     AnalysisProfile, AnalysisResult, AppState, ArtifactIdentity, ClaimId, Command, Crf,
     DestructiveIdentity, DurableDelta, DurableState, EphemeralDelta, ExecutionSettings,
-    ItemOutcome, JobPhase, JobProgress, Operation, OutputDelta, OutputTarget, QueueCommand,
-    QueueItemId, Replacement, Reply, RunId, SearchMeasurement, SessionCommand, Settings,
-    SettingsCommand, SystemCommand, Telemetry, ToolAvailability, ToolRevisions, VmafScore,
-    WorkerCommand, apply, fold, replay,
+    FailureFacts, FailureKind, ItemOutcome, JobPhase, JobProgress, Operation, OutputDelta,
+    OutputTarget, QueueCommand, QueueItemId, Replacement, Reply, RunId, SearchMeasurement,
+    SessionCommand, Settings, SettingsCommand, SystemCommand, Telemetry, ToolAvailability,
+    ToolRevisions, VmafScore, WorkerCommand, apply, fold, replay,
 };
 use crfty_engine::{
     ab_av1::MediaTools,
@@ -321,9 +321,7 @@ fn telemetry_pressure_coalesces_and_terminal_value_wins() {
                 item_id: QueueItemId(1),
                 claim_id: ClaimId(2),
                 run_id: RunId(3),
-                outcome: ItemOutcome::Failed {
-                    message: "fixture".to_owned(),
-                },
+                outcome: ItemOutcome::Failed(FailureFacts::new(FailureKind::Internal, "fixture")),
                 final_telemetry: Some(Telemetry {
                     run_id: RunId(3),
                     sequence: terminal_sequence,
@@ -383,9 +381,7 @@ fn terminal_publishes_final_telemetry_and_clear_before_item_finished() {
                 item_id: QueueItemId(1),
                 claim_id: ClaimId(2),
                 run_id: RunId(3),
-                outcome: ItemOutcome::Failed {
-                    message: "fixture".to_owned(),
-                },
+                outcome: ItemOutcome::Failed(FailureFacts::new(FailureKind::Internal, "fixture")),
                 final_telemetry: Some(Telemetry {
                     run_id: RunId(3),
                     sequence: final_sequence,
@@ -462,9 +458,7 @@ fn restart_after_fsynced_terminal_folds_to_finished_snapshot() {
             item_id: QueueItemId(1),
             claim_id: ClaimId(2),
             run_id: RunId(3),
-            outcome: ItemOutcome::Failed {
-                message: "fixture".to_owned(),
-            },
+            outcome: ItemOutcome::Failed(FailureFacts::new(FailureKind::Internal, "fixture")),
             final_telemetry: Some(Telemetry {
                 run_id: RunId(3),
                 sequence: 9,

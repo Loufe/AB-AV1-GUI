@@ -669,9 +669,10 @@ mod tests {
                 item_id: QueueItemId(1),
                 claim_id: ClaimId(2),
                 run_id: RunId(3),
-                outcome: ItemOutcome::Failed {
-                    message: "fixture".to_owned(),
-                },
+                outcome: ItemOutcome::Failed(crfty_core::FailureFacts::new(
+                    crfty_core::FailureKind::Internal,
+                    "fixture",
+                )),
                 final_telemetry: Some(Telemetry {
                     run_id: RunId(3),
                     sequence: 7,

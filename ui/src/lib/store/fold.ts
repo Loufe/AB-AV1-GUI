@@ -286,8 +286,8 @@ function foldOutput(
     return withOutputState(outputs, delta.Abandoned.run_id, "Abandoned");
   }
   if ("Conflict" in delta && delta.Conflict !== undefined) {
-    const { run_id, reason } = delta.Conflict;
-    return withOutputState(outputs, run_id, { Conflict: { reason } });
+    const { run_id, kind, detail } = delta.Conflict;
+    return withOutputState(outputs, run_id, { Conflict: { kind, detail } });
   }
   return outputs;
 }
