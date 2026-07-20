@@ -449,7 +449,21 @@
                 "width": 1920,
                 "height": 1080,
                 "rotation_degrees": 0,
-                "duration_ms": 120000
+                "duration_ms": 120000,
+                "size_bytes": 3000000,
+                "audio": [
+                  {
+                    "codec": "Aac",
+                    "channels": 6
+                  },
+                  {
+                    "codec": {
+                      "Other": "wmav2"
+                    },
+                    "channels": 2
+                  }
+                ],
+                "subtitle_count": 1
               }
             }
           }
@@ -476,7 +490,21 @@
               "width": 1920,
               "height": 1080,
               "rotation_degrees": 0,
-              "duration_ms": 120000
+              "duration_ms": 120000,
+              "size_bytes": 3000000,
+              "audio": [
+                {
+                  "codec": "Aac",
+                  "channels": 6
+                },
+                {
+                  "codec": {
+                    "Other": "wmav2"
+                  },
+                  "channels": 2
+                }
+              ],
+              "subtitle_count": 1
             },
             "analyses": []
           }
@@ -508,7 +536,21 @@
               "width": 1920,
               "height": 1080,
               "rotation_degrees": 0,
-              "duration_ms": 120000
+              "duration_ms": 120000,
+              "size_bytes": 3000000,
+              "audio": [
+                {
+                  "codec": "Aac",
+                  "channels": 6
+                },
+                {
+                  "codec": {
+                    "Other": "wmav2"
+                  },
+                  "channels": 2
+                }
+              ],
+              "subtitle_count": 1
             },
             "analyses": []
           }
@@ -536,7 +578,21 @@
                 "width": 1920,
                 "height": 1080,
                 "rotation_degrees": 0,
-                "duration_ms": 121000
+                "duration_ms": 121000,
+                "size_bytes": 3000000,
+                "audio": [
+                  {
+                    "codec": "Aac",
+                    "channels": 6
+                  },
+                  {
+                    "codec": {
+                      "Other": "wmav2"
+                    },
+                    "channels": 2
+                  }
+                ],
+                "subtitle_count": 1
               }
             }
           }
@@ -570,7 +626,21 @@
               "width": 1920,
               "height": 1080,
               "rotation_degrees": 0,
-              "duration_ms": 121000
+              "duration_ms": 121000,
+              "size_bytes": 3000000,
+              "audio": [
+                {
+                  "codec": "Aac",
+                  "channels": 6
+                },
+                {
+                  "codec": {
+                    "Other": "wmav2"
+                  },
+                  "channels": 2
+                }
+              ],
+              "subtitle_count": 1
             },
             "analyses": []
           }
@@ -984,7 +1054,21 @@
               "width": 1920,
               "height": 1080,
               "rotation_degrees": 0,
-              "duration_ms": 120000
+              "duration_ms": 120000,
+              "size_bytes": 3000000,
+              "audio": [
+                {
+                  "codec": "Aac",
+                  "channels": 6
+                },
+                {
+                  "codec": {
+                    "Other": "wmav2"
+                  },
+                  "channels": 2
+                }
+              ],
+              "subtitle_count": 1
             },
             "analyses": []
           }
@@ -1100,7 +1184,21 @@
               "width": 1920,
               "height": 1080,
               "rotation_degrees": 0,
-              "duration_ms": 120000
+              "duration_ms": 120000,
+              "size_bytes": 3000000,
+              "audio": [
+                {
+                  "codec": "Aac",
+                  "channels": 6
+                },
+                {
+                  "codec": {
+                    "Other": "wmav2"
+                  },
+                  "channels": 2
+                }
+              ],
+              "subtitle_count": 1
             },
             "analyses": [
               [
@@ -1315,7 +1413,21 @@
               "width": 1920,
               "height": 1080,
               "rotation_degrees": 0,
-              "duration_ms": 120000
+              "duration_ms": 120000,
+              "size_bytes": 3000000,
+              "audio": [
+                {
+                  "codec": "Aac",
+                  "channels": 6
+                },
+                {
+                  "codec": {
+                    "Other": "wmav2"
+                  },
+                  "channels": 2
+                }
+              ],
+              "subtitle_count": 1
             },
             "analyses": [
               [
@@ -1581,7 +1693,21 @@
               "width": 1920,
               "height": 1080,
               "rotation_degrees": 0,
-              "duration_ms": 120000
+              "duration_ms": 120000,
+              "size_bytes": 3000000,
+              "audio": [
+                {
+                  "codec": "Aac",
+                  "channels": 6
+                },
+                {
+                  "codec": {
+                    "Other": "wmav2"
+                  },
+                  "channels": 2
+                }
+              ],
+              "subtitle_count": 1
             },
             "analyses": [
               [
@@ -2018,7 +2144,21 @@
               "width": 1920,
               "height": 1080,
               "rotation_degrees": 0,
-              "duration_ms": 120000
+              "duration_ms": 120000,
+              "size_bytes": 3000000,
+              "audio": [
+                {
+                  "codec": "Aac",
+                  "channels": 6
+                },
+                {
+                  "codec": {
+                    "Other": "wmav2"
+                  },
+                  "channels": 2
+                }
+              ],
+              "subtitle_count": 1
             },
             "analyses": []
           }
@@ -2193,7 +2333,21 @@
               "width": 1920,
               "height": 1080,
               "rotation_degrees": 0,
-              "duration_ms": 120000
+              "duration_ms": 120000,
+              "size_bytes": 3000000,
+              "audio": [
+                {
+                  "codec": "Aac",
+                  "channels": 6
+                },
+                {
+                  "codec": {
+                    "Other": "wmav2"
+                  },
+                  "channels": 2
+                }
+              ],
+              "subtitle_count": 1
             },
             "analyses": []
           }
@@ -2348,7 +2502,21 @@
               "width": 1920,
               "height": 1080,
               "rotation_degrees": 0,
-              "duration_ms": 120000
+              "duration_ms": 120000,
+              "size_bytes": 3000000,
+              "audio": [
+                {
+                  "codec": "Aac",
+                  "channels": 6
+                },
+                {
+                  "codec": {
+                    "Other": "wmav2"
+                  },
+                  "channels": 2
+                }
+              ],
+              "subtitle_count": 1
             },
             "analyses": []
           }
@@ -2509,7 +2677,21 @@
               "width": 1920,
               "height": 1080,
               "rotation_degrees": 0,
-              "duration_ms": 120000
+              "duration_ms": 120000,
+              "size_bytes": 3000000,
+              "audio": [
+                {
+                  "codec": "Aac",
+                  "channels": 6
+                },
+                {
+                  "codec": {
+                    "Other": "wmav2"
+                  },
+                  "channels": 2
+                }
+              ],
+              "subtitle_count": 1
             },
             "analyses": []
           }
@@ -2657,7 +2839,21 @@
               "width": 1920,
               "height": 1080,
               "rotation_degrees": 0,
-              "duration_ms": 120000
+              "duration_ms": 120000,
+              "size_bytes": 3000000,
+              "audio": [
+                {
+                  "codec": "Aac",
+                  "channels": 6
+                },
+                {
+                  "codec": {
+                    "Other": "wmav2"
+                  },
+                  "channels": 2
+                }
+              ],
+              "subtitle_count": 1
             },
             "analyses": []
           }
@@ -2832,7 +3028,21 @@
               "width": 1920,
               "height": 1080,
               "rotation_degrees": 0,
-              "duration_ms": 120000
+              "duration_ms": 120000,
+              "size_bytes": 3000000,
+              "audio": [
+                {
+                  "codec": "Aac",
+                  "channels": 6
+                },
+                {
+                  "codec": {
+                    "Other": "wmav2"
+                  },
+                  "channels": 2
+                }
+              ],
+              "subtitle_count": 1
             },
             "analyses": []
           }
@@ -2987,7 +3197,21 @@
               "width": 1920,
               "height": 1080,
               "rotation_degrees": 0,
-              "duration_ms": 120000
+              "duration_ms": 120000,
+              "size_bytes": 3000000,
+              "audio": [
+                {
+                  "codec": "Aac",
+                  "channels": 6
+                },
+                {
+                  "codec": {
+                    "Other": "wmav2"
+                  },
+                  "channels": 2
+                }
+              ],
+              "subtitle_count": 1
             },
             "analyses": []
           }
@@ -3138,7 +3362,21 @@
               "width": 1920,
               "height": 1080,
               "rotation_degrees": 0,
-              "duration_ms": 120000
+              "duration_ms": 120000,
+              "size_bytes": 3000000,
+              "audio": [
+                {
+                  "codec": "Aac",
+                  "channels": 6
+                },
+                {
+                  "codec": {
+                    "Other": "wmav2"
+                  },
+                  "channels": 2
+                }
+              ],
+              "subtitle_count": 1
             },
             "analyses": []
           }
@@ -3281,7 +3519,21 @@
               "width": 1920,
               "height": 1080,
               "rotation_degrees": 0,
-              "duration_ms": 120000
+              "duration_ms": 120000,
+              "size_bytes": 3000000,
+              "audio": [
+                {
+                  "codec": "Aac",
+                  "channels": 6
+                },
+                {
+                  "codec": {
+                    "Other": "wmav2"
+                  },
+                  "channels": 2
+                }
+              ],
+              "subtitle_count": 1
             },
             "analyses": []
           }
@@ -3394,7 +3646,21 @@
               "width": 1920,
               "height": 1080,
               "rotation_degrees": 0,
-              "duration_ms": 120000
+              "duration_ms": 120000,
+              "size_bytes": 3000000,
+              "audio": [
+                {
+                  "codec": "Aac",
+                  "channels": 6
+                },
+                {
+                  "codec": {
+                    "Other": "wmav2"
+                  },
+                  "channels": 2
+                }
+              ],
+              "subtitle_count": 1
             },
             "analyses": []
           }
@@ -3495,7 +3761,21 @@
               "width": 1920,
               "height": 1080,
               "rotation_degrees": 0,
-              "duration_ms": 120000
+              "duration_ms": 120000,
+              "size_bytes": 3000000,
+              "audio": [
+                {
+                  "codec": "Aac",
+                  "channels": 6
+                },
+                {
+                  "codec": {
+                    "Other": "wmav2"
+                  },
+                  "channels": 2
+                }
+              ],
+              "subtitle_count": 1
             },
             "analyses": []
           }
@@ -3636,7 +3916,21 @@
               "width": 1920,
               "height": 1080,
               "rotation_degrees": 0,
-              "duration_ms": 120000
+              "duration_ms": 120000,
+              "size_bytes": 3000000,
+              "audio": [
+                {
+                  "codec": "Aac",
+                  "channels": 6
+                },
+                {
+                  "codec": {
+                    "Other": "wmav2"
+                  },
+                  "channels": 2
+                }
+              ],
+              "subtitle_count": 1
             },
             "analyses": []
           }
@@ -3751,7 +4045,21 @@
               "width": 1920,
               "height": 1080,
               "rotation_degrees": 0,
-              "duration_ms": 120000
+              "duration_ms": 120000,
+              "size_bytes": 3000000,
+              "audio": [
+                {
+                  "codec": "Aac",
+                  "channels": 6
+                },
+                {
+                  "codec": {
+                    "Other": "wmav2"
+                  },
+                  "channels": 2
+                }
+              ],
+              "subtitle_count": 1
             },
             "analyses": []
           }
@@ -3870,7 +4178,21 @@
               "width": 1920,
               "height": 1080,
               "rotation_degrees": 0,
-              "duration_ms": 120000
+              "duration_ms": 120000,
+              "size_bytes": 3000000,
+              "audio": [
+                {
+                  "codec": "Aac",
+                  "channels": 6
+                },
+                {
+                  "codec": {
+                    "Other": "wmav2"
+                  },
+                  "channels": 2
+                }
+              ],
+              "subtitle_count": 1
             },
             "analyses": []
           }
@@ -3974,7 +4296,21 @@
               "width": 1920,
               "height": 1080,
               "rotation_degrees": 0,
-              "duration_ms": 120000
+              "duration_ms": 120000,
+              "size_bytes": 3000000,
+              "audio": [
+                {
+                  "codec": "Aac",
+                  "channels": 6
+                },
+                {
+                  "codec": {
+                    "Other": "wmav2"
+                  },
+                  "channels": 2
+                }
+              ],
+              "subtitle_count": 1
             },
             "analyses": []
           }
@@ -4075,7 +4411,21 @@
               "width": 1920,
               "height": 1080,
               "rotation_degrees": 0,
-              "duration_ms": 120000
+              "duration_ms": 120000,
+              "size_bytes": 3000000,
+              "audio": [
+                {
+                  "codec": "Aac",
+                  "channels": 6
+                },
+                {
+                  "codec": {
+                    "Other": "wmav2"
+                  },
+                  "channels": 2
+                }
+              ],
+              "subtitle_count": 1
             },
             "analyses": []
           }
@@ -4170,7 +4520,21 @@
               "width": 1920,
               "height": 1080,
               "rotation_degrees": 0,
-              "duration_ms": 120000
+              "duration_ms": 120000,
+              "size_bytes": 3000000,
+              "audio": [
+                {
+                  "codec": "Aac",
+                  "channels": 6
+                },
+                {
+                  "codec": {
+                    "Other": "wmav2"
+                  },
+                  "channels": 2
+                }
+              ],
+              "subtitle_count": 1
             },
             "analyses": []
           }
@@ -4292,7 +4656,21 @@
               "width": 1920,
               "height": 1080,
               "rotation_degrees": 0,
-              "duration_ms": 120000
+              "duration_ms": 120000,
+              "size_bytes": 3000000,
+              "audio": [
+                {
+                  "codec": "Aac",
+                  "channels": 6
+                },
+                {
+                  "codec": {
+                    "Other": "wmav2"
+                  },
+                  "channels": 2
+                }
+              ],
+              "subtitle_count": 1
             },
             "analyses": []
           }
@@ -4408,7 +4786,21 @@
               "width": 1920,
               "height": 1080,
               "rotation_degrees": 0,
-              "duration_ms": 120000
+              "duration_ms": 120000,
+              "size_bytes": 3000000,
+              "audio": [
+                {
+                  "codec": "Aac",
+                  "channels": 6
+                },
+                {
+                  "codec": {
+                    "Other": "wmav2"
+                  },
+                  "channels": 2
+                }
+              ],
+              "subtitle_count": 1
             },
             "analyses": []
           }
@@ -4546,7 +4938,21 @@
               "width": 1920,
               "height": 1080,
               "rotation_degrees": 0,
-              "duration_ms": 120000
+              "duration_ms": 120000,
+              "size_bytes": 3000000,
+              "audio": [
+                {
+                  "codec": "Aac",
+                  "channels": 6
+                },
+                {
+                  "codec": {
+                    "Other": "wmav2"
+                  },
+                  "channels": 2
+                }
+              ],
+              "subtitle_count": 1
             },
             "analyses": []
           }
@@ -4678,7 +5084,21 @@
               "width": 1920,
               "height": 1080,
               "rotation_degrees": 0,
-              "duration_ms": 120000
+              "duration_ms": 120000,
+              "size_bytes": 3000000,
+              "audio": [
+                {
+                  "codec": "Aac",
+                  "channels": 6
+                },
+                {
+                  "codec": {
+                    "Other": "wmav2"
+                  },
+                  "channels": 2
+                }
+              ],
+              "subtitle_count": 1
             },
             "analyses": []
           }
@@ -4817,7 +5237,21 @@
               "width": 1920,
               "height": 1080,
               "rotation_degrees": 0,
-              "duration_ms": 120000
+              "duration_ms": 120000,
+              "size_bytes": 3000000,
+              "audio": [
+                {
+                  "codec": "Aac",
+                  "channels": 6
+                },
+                {
+                  "codec": {
+                    "Other": "wmav2"
+                  },
+                  "channels": 2
+                }
+              ],
+              "subtitle_count": 1
             },
             "analyses": []
           }
@@ -4933,7 +5367,21 @@
               "width": 1920,
               "height": 1080,
               "rotation_degrees": 0,
-              "duration_ms": 120000
+              "duration_ms": 120000,
+              "size_bytes": 3000000,
+              "audio": [
+                {
+                  "codec": "Aac",
+                  "channels": 6
+                },
+                {
+                  "codec": {
+                    "Other": "wmav2"
+                  },
+                  "channels": 2
+                }
+              ],
+              "subtitle_count": 1
             },
             "analyses": []
           }
@@ -5057,7 +5505,21 @@
               "width": 1920,
               "height": 1080,
               "rotation_degrees": 0,
-              "duration_ms": 120000
+              "duration_ms": 120000,
+              "size_bytes": 3000000,
+              "audio": [
+                {
+                  "codec": "Aac",
+                  "channels": 6
+                },
+                {
+                  "codec": {
+                    "Other": "wmav2"
+                  },
+                  "channels": 2
+                }
+              ],
+              "subtitle_count": 1
             },
             "analyses": []
           }

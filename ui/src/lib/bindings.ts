@@ -71,6 +71,18 @@ export type ArtifactIdentity_Serialize = {
 	destructive: DestructiveIdentity_Serialize,
 };
 
+export type AudioCodec = "Aac" | "Ac3" | "Eac3" | "Dts" | "Opus" | "Flac" | "Mp3" | { Other: string };
+
+/**
+ *  One audio stream of the inspected file. Consumers are remux-eligibility
+ *  policy and remux reporting, not the current view designs, so this stays a
+ *  summary rather than a full stream description.
+ */
+export type AudioStreamMeta = {
+	codec: AudioCodec,
+	channels: number,
+};
+
 export type ClaimId = number;
 
 export type CommandError = {
@@ -633,6 +645,14 @@ export type VideoMeta = {
 	height: number,
 	rotation_degrees: number,
 	duration_ms: number,
+	/**
+	 *  Byte size of the inspected file — a content fact and the authority for
+	 *  input size in views. `FileStamp.size` remains the freshness probe.
+	 *  Bitrate is derived in views, never stored.
+	 */
+	size_bytes: number,
+	audio: AudioStreamMeta[],
+	subtitle_count: number,
 };
 
 export type VmafScore = number;

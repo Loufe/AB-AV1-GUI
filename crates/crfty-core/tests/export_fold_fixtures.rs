@@ -14,13 +14,13 @@
 use std::path::PathBuf;
 
 use crfty_core::{
-    AnalysisAttempt, AnalysisProfile, AnalysisResult, ArtifactIdentity, ClaimId,
-    CompletionEvidence, ConflictKind, ContentKey, Crf, DecodeMode, DecodePreference,
-    DestructiveIdentity, DiagnosticTail, DurableDelta, DurableState, DurationMs, ExecutionSettings,
-    FailureFacts, FailureKind, FileStamp, FileSystemId, FileTimeNs, ItemOutcome, JobAction,
-    JobPhase, JobSpec, MediaContainer, MediaObservation, Operation, OutputDelta, OutputState,
-    OutputTarget, OutputTransaction, PathBinding, PathHash, PhaseSpan, QueueItem, QueueItemId,
-    QueueItemState, Replacement, ReservedJob, RunId, SearchMeasurement, SkipReason,
+    AnalysisAttempt, AnalysisProfile, AnalysisResult, ArtifactIdentity, AudioCodec,
+    AudioStreamMeta, ClaimId, CompletionEvidence, ConflictKind, ContentKey, Crf, DecodeMode,
+    DecodePreference, DestructiveIdentity, DiagnosticTail, DurableDelta, DurableState, DurationMs,
+    ExecutionSettings, FailureFacts, FailureKind, FileStamp, FileSystemId, FileTimeNs, ItemOutcome,
+    JobAction, JobPhase, JobSpec, MediaContainer, MediaObservation, Operation, OutputDelta,
+    OutputState, OutputTarget, OutputTransaction, PathBinding, PathHash, PhaseSpan, QueueItem,
+    QueueItemId, QueueItemState, Replacement, ReservedJob, RunId, SearchMeasurement, SkipReason,
     StreamByteSizes, UnixMillis, VideoCodec, VideoMeta, VmafScore, VmafTarget, fold,
 };
 use serde::Serialize;
@@ -148,6 +148,18 @@ fn video_meta(duration_ms: u64) -> VideoMeta {
         height: 1080,
         rotation_degrees: 0,
         duration_ms,
+        size_bytes: 3_000_000,
+        audio: vec![
+            AudioStreamMeta {
+                codec: AudioCodec::Aac,
+                channels: 6,
+            },
+            AudioStreamMeta {
+                codec: AudioCodec::Other("wmav2".to_owned()),
+                channels: 2,
+            },
+        ],
+        subtitle_count: 1,
     }
 }
 

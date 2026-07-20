@@ -253,6 +253,12 @@ fn media_observation(content: &str) -> MediaObservation {
             height: 720,
             rotation_degrees: 0,
             duration_ms: 60_000,
+            size_bytes: 10_000,
+            audio: vec![crate::AudioStreamMeta {
+                codec: crate::AudioCodec::Aac,
+                channels: 2,
+            }],
+            subtitle_count: 0,
         },
     }
 }
@@ -1535,6 +1541,12 @@ fn file_record_round_trips_through_json() {
         height: 720,
         rotation_degrees: 0,
         duration_ms: 60_000,
+        size_bytes: 10_000,
+        audio: vec![crate::AudioStreamMeta {
+            codec: crate::AudioCodec::Eac3,
+            channels: 6,
+        }],
+        subtitle_count: 2,
     });
     record.record_analysis(analysis());
     // serde_json rejects non-string map keys, so the profile-keyed index must

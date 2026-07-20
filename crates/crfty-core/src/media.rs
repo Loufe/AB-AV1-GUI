@@ -41,6 +41,27 @@ pub enum MediaContainer {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, specta::Type)]
+pub enum AudioCodec {
+    Aac,
+    Ac3,
+    Eac3,
+    Dts,
+    Opus,
+    Flac,
+    Mp3,
+    Other(String),
+}
+
+/// One audio stream of the inspected file. Consumers are remux-eligibility
+/// policy and remux reporting, not the current view designs, so this stays a
+/// summary rather than a full stream description.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, specta::Type)]
+pub struct AudioStreamMeta {
+    pub codec: AudioCodec,
+    pub channels: u16,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, specta::Type)]
 pub struct VideoMeta {
     pub codec: VideoCodec,
     pub container: MediaContainer,
@@ -49,6 +70,13 @@ pub struct VideoMeta {
     pub rotation_degrees: i16,
     #[specta(type = crate::JsNumber)]
     pub duration_ms: u64,
+    /// Byte size of the inspected file — a content fact and the authority for
+    /// input size in views. `FileStamp.size` remains the freshness probe.
+    /// Bitrate is derived in views, never stored.
+    #[specta(type = crate::JsNumber)]
+    pub size_bytes: u64,
+    pub audio: Vec<AudioStreamMeta>,
+    pub subtitle_count: u32,
 }
 
 impl VideoMeta {

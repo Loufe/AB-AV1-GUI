@@ -40,8 +40,8 @@ pub use journal::{
     replay,
 };
 pub use media::{
-    FileRecord, FileStamp, MediaContainer, MediaObservation, PathBinding, PathHash, VideoCodec,
-    VideoMeta,
+    AudioCodec, AudioStreamMeta, FileRecord, FileStamp, MediaContainer, MediaObservation,
+    PathBinding, PathHash, VideoCodec, VideoMeta,
 };
 pub use output::{
     ArtifactIdentity, ConflictKind, ContentKey, DestructiveIdentity, DestructiveObservation,
