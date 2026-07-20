@@ -892,126 +892,177 @@ fn run_encode(
 ) -> Result<(), String> {
     let PreparedOutput {
         manager,
-        transaction,
+        mut transaction,
     } = output;
-    let request = EncodeRequest {
-        input: job.spec.input.clone(),
-        output: transaction.staging.clone(),
-        crf: crf_to_f32(analysis.measurement.crf),
-        preset: analysis.profile.preset,
-        decode_mode: analysis.profile.decode_mode,
-    };
-    let handle = match services
-        .runtime
-        .start_encode(services.tools.clone(), request)
-    {
-        Ok(handle) => handle,
-        Err(error) => {
-            abandon_output(
-                &manager,
-                services.commands,
-                job,
-                &transaction,
-                ItemOutcome::Failed(FailureFacts::new(
-                    FailureKind::EncodeStart,
-                    error.to_string(),
-                )),
-                None,
-                tracker,
-            )?;
-            return Ok(());
+    let mut decode_mode = analysis.profile.decode_mode;
+    loop {
+        let request = EncodeRequest {
+            input: job.spec.input.clone(),
+            output: transaction.staging.clone(),
+            crf: crf_to_f32(analysis.measurement.crf),
+            preset: analysis.profile.preset,
+            decode_mode,
+        };
+        let handle = match services
+            .runtime
+            .start_encode(services.tools.clone(), request)
+        {
+            Ok(handle) => handle,
+            Err(error) => {
+                return abandon_output(
+                    &manager,
+                    services.commands,
+                    job,
+                    &transaction,
+                    ItemOutcome::Failed(FailureFacts::new(
+                        FailureKind::EncodeStart,
+                        error.to_string(),
+                    )),
+                    None,
+                    tracker,
+                );
+            }
+        };
+        let report = wait_for_report(
+            services.commands,
+            job.spec.run_id,
+            handle,
+            services.cancellation,
+            JobPhase::Encoding,
+            tracker,
+        );
+        match report {
+            Ok(JobReport {
+                terminal: JobTerminal::Completed(outcome),
+                final_telemetry,
+            }) => {
+                return finish_successful_output(
+                    services.commands,
+                    job,
+                    manager,
+                    transaction,
+                    SuccessfulJob::Encode {
+                        outcome,
+                        decode_mode,
+                    },
+                    final_telemetry.as_ref().map(telemetry_progress),
+                    tracker,
+                );
+            }
+            Ok(JobReport {
+                terminal: JobTerminal::Cancelled,
+                final_telemetry,
+            }) => {
+                return abandon_output(
+                    &manager,
+                    services.commands,
+                    job,
+                    &transaction,
+                    ItemOutcome::Stopped,
+                    map_progress(
+                        job.spec.run_id,
+                        tracker,
+                        JobPhase::Encoding,
+                        final_telemetry.as_ref().map(telemetry_progress),
+                    ),
+                    tracker,
+                );
+            }
+            Ok(JobReport {
+                terminal: JobTerminal::Failed(failure),
+                final_telemetry,
+            }) => {
+                // Hardware→software retry: hook BEFORE any abandonment so the
+                // still-Started transaction is reused. The failed attempt's
+                // adapter cleanup deleted the staging file, so restaging moves
+                // the journaled pin to a recreated one; once a transaction is
+                // abandoned the ledger refuses to restage, which is what makes
+                // retry-after-abandonment unrepresentable. The requested
+                // JobSpec is never rewritten — the divergence is recorded in
+                // the terminal evidence's `encode_decode`.
+                if matches!(decode_mode, DecodeMode::Hardware(_)) {
+                    match restage_for_retry(&manager, services.commands, &mut transaction) {
+                        Ok(()) => {
+                            eprintln!(
+                                "hardware-decode encode failed ({}); retrying once with software decode",
+                                failure.message
+                            );
+                            decode_mode = DecodeMode::Software;
+                            continue;
+                        }
+                        Err(restage_error) => {
+                            eprintln!(
+                                "staging could not be recreated for the software retry: {restage_error}"
+                            );
+                        }
+                    }
+                }
+                return abandon_output(
+                    &manager,
+                    services.commands,
+                    job,
+                    &transaction,
+                    ItemOutcome::Failed(FailureFacts::new(FailureKind::EncodeRun, failure.message)),
+                    map_progress(
+                        job.spec.run_id,
+                        tracker,
+                        JobPhase::Encoding,
+                        final_telemetry.as_ref().map(telemetry_progress),
+                    ),
+                    tracker,
+                );
+            }
+            Ok(JobReport {
+                terminal: JobTerminal::Panicked { cleanup_failure },
+                final_telemetry,
+            }) => {
+                return abandon_output(
+                    &manager,
+                    services.commands,
+                    job,
+                    &transaction,
+                    ItemOutcome::Failed(panicked_facts(
+                        "encode adapter panicked",
+                        cleanup_failure,
+                        job,
+                        &transaction,
+                    )),
+                    map_progress(
+                        job.spec.run_id,
+                        tracker,
+                        JobPhase::Encoding,
+                        final_telemetry.as_ref().map(telemetry_progress),
+                    ),
+                    tracker,
+                );
+            }
+            Err(message) => {
+                return abandon_output(
+                    &manager,
+                    services.commands,
+                    job,
+                    &transaction,
+                    ItemOutcome::Failed(FailureFacts::new(FailureKind::Internal, message)),
+                    None,
+                    tracker,
+                );
+            }
         }
-    };
-    let report = wait_for_report(
-        services.commands,
-        job.spec.run_id,
-        handle,
-        services.cancellation,
-        JobPhase::Encoding,
-        tracker,
-    );
-    match report {
-        Ok(JobReport {
-            terminal: JobTerminal::Completed(outcome),
-            final_telemetry,
-        }) => finish_successful_output(
-            services.commands,
-            job,
-            manager,
-            transaction,
-            SuccessfulJob::Encode {
-                outcome,
-                decode_mode: analysis.profile.decode_mode,
-            },
-            final_telemetry.as_ref().map(telemetry_progress),
-            tracker,
-        )?,
-        Ok(JobReport {
-            terminal: JobTerminal::Cancelled,
-            final_telemetry,
-        }) => abandon_output(
-            &manager,
-            services.commands,
-            job,
-            &transaction,
-            ItemOutcome::Stopped,
-            map_progress(
-                job.spec.run_id,
-                tracker,
-                JobPhase::Encoding,
-                final_telemetry.as_ref().map(telemetry_progress),
-            ),
-            tracker,
-        )?,
-        Ok(JobReport {
-            terminal: JobTerminal::Failed(failure),
-            final_telemetry,
-        }) => abandon_output(
-            &manager,
-            services.commands,
-            job,
-            &transaction,
-            ItemOutcome::Failed(FailureFacts::new(FailureKind::EncodeRun, failure.message)),
-            map_progress(
-                job.spec.run_id,
-                tracker,
-                JobPhase::Encoding,
-                final_telemetry.as_ref().map(telemetry_progress),
-            ),
-            tracker,
-        )?,
-        Ok(JobReport {
-            terminal: JobTerminal::Panicked { cleanup_failure },
-            final_telemetry,
-        }) => abandon_output(
-            &manager,
-            services.commands,
-            job,
-            &transaction,
-            ItemOutcome::Failed(panicked_facts(
-                "encode adapter panicked",
-                cleanup_failure,
-                job,
-                &transaction,
-            )),
-            map_progress(
-                job.spec.run_id,
-                tracker,
-                JobPhase::Encoding,
-                final_telemetry.as_ref().map(telemetry_progress),
-            ),
-            tracker,
-        )?,
-        Err(message) => abandon_output(
-            &manager,
-            services.commands,
-            job,
-            &transaction,
-            ItemOutcome::Failed(FailureFacts::new(FailureKind::Internal, message)),
-            None,
-            tracker,
-        )?,
     }
+}
+
+/// Moves the journaled staging pin to a freshly recreated empty staging file
+/// so a software-decode retry can reuse the still-Started transaction.
+fn restage_for_retry(
+    manager: &MediaOutputManager,
+    commands: &CommandSender,
+    transaction: &mut OutputTransaction,
+) -> Result<(), String> {
+    let delta = manager
+        .restage(transaction)
+        .map_err(|error| error.to_string())?;
+    submit_output(commands, delta.clone())?;
+    fold_transaction(transaction, delta);
     Ok(())
 }
 
@@ -1401,19 +1452,20 @@ fn search_with_fallback(
     tracker: &mut PhaseTracker,
 ) -> Result<AnalysisResult, ItemOutcome> {
     let execution = &job.spec.execution;
+    let mut profile = execution.profile.clone();
     let mut target = execution.requested_target.0;
     let mut failed_attempts = Vec::new();
     loop {
         let request = SearchRequest {
             input: job.spec.input.clone(),
             target_vmaf: f32::from(target),
-            max_encoded_percent: execution.profile.max_encoded_percent_basis_points as f32
+            max_encoded_percent: profile.max_encoded_percent_basis_points as f32
                 / PERCENT_BASIS_POINTS_SCALE as f32,
-            preset: execution.profile.preset,
-            samples: execution.profile.samples,
-            sample_duration: Duration::from_millis(execution.profile.sample_duration_ms),
-            thorough: execution.profile.thorough,
-            decode_mode: execution.profile.decode_mode,
+            preset: profile.preset,
+            samples: profile.samples,
+            sample_duration: Duration::from_millis(profile.sample_duration_ms),
+            thorough: profile.thorough,
+            decode_mode: profile.decode_mode,
         };
         let handle = runtime
             .start_search(tools.clone(), request)
@@ -1446,7 +1498,7 @@ fn search_with_fallback(
                     fallback_step: execution.fallback_step,
                     failed_attempts,
                     measurement: measured,
-                    profile: execution.profile.clone(),
+                    profile: profile.clone(),
                 });
             }
             JobTerminal::Failed(failure) => match failure.kind {
@@ -1460,6 +1512,24 @@ fn search_with_fallback(
                     });
                 }
                 JobFailureKind::Other => {
+                    // Hardware→software retry (parse-free trigger): any
+                    // non-NoGoodCrf search failure under hardware decode
+                    // restarts the whole VMAF ladder once with the software
+                    // profile. Attempts measured under hardware are discarded
+                    // so the recorded result is honest about the profile it
+                    // ran with; the widened `permitted_profiles` gate accepts
+                    // the divergent profile while the JobSpec stays as
+                    // requested.
+                    if matches!(profile.decode_mode, DecodeMode::Hardware(_)) {
+                        eprintln!(
+                            "hardware-decode search failed ({}); retrying with software decode",
+                            failure.message
+                        );
+                        profile.decode_mode = DecodeMode::Software;
+                        target = execution.requested_target.0;
+                        failed_attempts.clear();
+                        continue;
+                    }
                     return Err(ItemOutcome::Failed(FailureFacts::new(
                         FailureKind::SearchRun,
                         failure.message,

@@ -3,9 +3,10 @@ use std::{collections::BTreeMap, path::PathBuf};
 use serde::{Deserialize, Serialize};
 
 use crate::{
-    AnalysisAttempt, AnalysisResult, ContentKey, DecodeMode, DurationMs, FailureFacts, FileRecord,
-    JobPhase, JobSpec, MediaObservation, Operation, OutputDelta, OutputTarget, PathBinding,
-    PathHash, ReservedJob, Settings, SkipReason, UnixMillis, Verdict, VerdictKind,
+    AnalysisAttempt, AnalysisIntent, AnalysisResult, ContentKey, DecodeMode, DurationMs,
+    FailureFacts, FileRecord, JobPhase, JobSpec, MediaObservation, Operation, OutputDelta,
+    OutputTarget, PathBinding, PathHash, ReservedJob, Settings, SkipReason, UnixMillis, Verdict,
+    VerdictKind,
 };
 
 macro_rules! numeric_id {
@@ -37,6 +38,7 @@ pub struct QueueItem {
     pub id: QueueItemId,
     pub input: PathBuf,
     pub operation: Operation,
+    pub intent: AnalysisIntent,
     pub output_target: OutputTarget,
     pub state: QueueItemState,
 }

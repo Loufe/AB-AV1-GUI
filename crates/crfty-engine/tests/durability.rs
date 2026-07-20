@@ -12,8 +12,8 @@ use std::{
 };
 
 use crfty_core::{
-    AnalysisProfile, AnalysisResult, AppState, ArtifactIdentity, ClaimId, Command, Crf,
-    DestructiveIdentity, DurableDelta, DurableState, EphemeralDelta, ExecutionSettings,
+    AnalysisIntent, AnalysisProfile, AnalysisResult, AppState, ArtifactIdentity, ClaimId, Command,
+    Crf, DestructiveIdentity, DurableDelta, DurableState, EphemeralDelta, ExecutionSettings,
     FailureFacts, FailureKind, ItemOutcome, JobPhase, JobProgress, Operation, OutputDelta,
     OutputTarget, QueueCommand, QueueItemId, Replacement, Reply, RunId, SearchMeasurement,
     SessionCommand, Settings, SettingsCommand, SystemCommand, Telemetry, ToolAvailability,
@@ -50,6 +50,7 @@ fn add(item_id: QueueItemId) -> Command {
         item_id,
         input: PathBuf::from("video.mkv"),
         operation: Operation::Convert,
+        intent: AnalysisIntent::ReuseIfFresh,
         output_target: OutputTarget::Replace,
     })
 }
@@ -94,6 +95,7 @@ fn journal_lock_is_exclusive_and_records_replay() {
             id: QueueItemId(1),
             input: PathBuf::from("video.mkv"),
             operation: Operation::Convert,
+            intent: AnalysisIntent::ReuseIfFresh,
             output_target: OutputTarget::Replace,
             state: crfty_core::QueueItemState::Queued,
         },
@@ -117,6 +119,7 @@ fn journal_group_commit_is_one_atomic_replay_record() {
                 id,
                 input: PathBuf::from(format!("video-{}.mkv", id.0)),
                 operation: Operation::Convert,
+                intent: AnalysisIntent::ReuseIfFresh,
                 output_target: OutputTarget::Replace,
                 state: crfty_core::QueueItemState::Queued,
             },
@@ -640,6 +643,7 @@ fn engine_startup_recovers_an_active_partial_staging_transaction() {
             item_id: QueueItemId(1),
             input: input.clone(),
             operation: Operation::Convert,
+            intent: AnalysisIntent::ReuseIfFresh,
             output_target: OutputTarget::Replace,
         }),
         Command::System(SystemCommand::ToolsDiscovered {
@@ -754,6 +758,7 @@ fn engine_startup_derives_converted_from_a_settled_output_without_terminal() {
             item_id: QueueItemId(1),
             input: input.clone(),
             operation: Operation::Convert,
+            intent: AnalysisIntent::ReuseIfFresh,
             output_target: OutputTarget::Replace,
         }),
         Command::System(SystemCommand::ToolsDiscovered {
@@ -1018,6 +1023,59 @@ fn same_path_replacement_preserves_hardlink_sibling() {
     fold_output(&mut state, committed);
     assert_eq!(fs::read(&input).expect("new input bytes"), b"encoded");
     assert_eq!(fs::read(&sibling).expect("sibling bytes"), b"original");
+}
+
+#[test]
+fn restage_recreates_missing_staging_and_the_ready_pin_follows() {
+    let directory = TestDirectory::new("restage");
+    let input = directory.path().join("input.mp4");
+    let final_path = directory.path().join("input.mkv");
+    fs::write(&input, b"original").expect("input fixture");
+    let manager = OutputManager::new(FixtureByteInspector);
+    let started = manager
+        .prepare(
+            RunId(6),
+            &input,
+            &final_path,
+            Replacement::KeepOriginal,
+            false,
+        )
+        .expect("prepare");
+    let mut state = DurableState::default();
+    fold_output(
+        &mut state,
+        OutputDelta::OutputStarted {
+            transaction: Box::new(started.clone()),
+        },
+    );
+    // The failed hardware attempt's adapter cleanup removed staging entirely.
+    fs::remove_file(&started.staging).expect("simulate adapter cleanup");
+    let restaged = manager
+        .restage(&current(&state, RunId(6)))
+        .expect("restage delta");
+    assert!(matches!(restaged, OutputDelta::OutputRestaged { .. }));
+    fold_output(&mut state, restaged);
+    let transaction = current(&state, RunId(6));
+    assert!(transaction.staging.exists());
+    fs::write(&transaction.staging, b"encoded-by-retry").expect("retry encode");
+    let ready = manager
+        .mark_ready(&transaction)
+        .expect("ready after restage");
+    fold_output(&mut state, ready);
+    let committed = manager
+        .recover_once(&current(&state, RunId(6)))
+        .expect("promotion")
+        .expect("commit delta");
+    assert!(matches!(committed, OutputDelta::OutputCommitted { .. }));
+    fold_output(&mut state, committed);
+    assert_eq!(
+        fs::read(&final_path).expect("promoted retry output"),
+        b"encoded-by-retry"
+    );
+
+    // A settled transaction refuses to restage — retry-after-abandonment is
+    // unrepresentable, and this manager-side guard mirrors the ledger's.
+    assert!(manager.restage(&current(&state, RunId(6))).is_err());
 }
 
 #[test]

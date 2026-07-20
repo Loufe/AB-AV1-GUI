@@ -17,6 +17,7 @@
               "id": 1,
               "input": "videos/input-1.mp4",
               "operation": "Convert",
+              "intent": "ReuseIfFresh",
               "output_target": "Replace",
               "state": "Queued"
             }
@@ -28,6 +29,7 @@
               "id": 2,
               "input": "videos/input-2.mp4",
               "operation": "Convert",
+              "intent": "ReuseIfFresh",
               "output_target": "Replace",
               "state": "Queued"
             }
@@ -40,6 +42,7 @@
             "id": 1,
             "input": "videos/input-1.mp4",
             "operation": "Convert",
+            "intent": "ReuseIfFresh",
             "output_target": "Replace",
             "state": "Queued"
           },
@@ -47,6 +50,7 @@
             "id": 2,
             "input": "videos/input-2.mp4",
             "operation": "Convert",
+            "intent": "ReuseIfFresh",
             "output_target": "Replace",
             "state": "Queued"
           }
@@ -65,6 +69,7 @@
             "id": 1,
             "input": "videos/input-1.mp4",
             "operation": "Convert",
+            "intent": "ReuseIfFresh",
             "output_target": "Replace",
             "state": "Queued"
           },
@@ -72,6 +77,7 @@
             "id": 2,
             "input": "videos/input-2.mp4",
             "operation": "Convert",
+            "intent": "ReuseIfFresh",
             "output_target": "Replace",
             "state": "Queued"
           },
@@ -79,6 +85,7 @@
             "id": 3,
             "input": "videos/input-3.mp4",
             "operation": "Convert",
+            "intent": "ReuseIfFresh",
             "output_target": "Replace",
             "state": "Queued"
           }
@@ -101,6 +108,7 @@
             "id": 1,
             "input": "videos/input-1.mp4",
             "operation": "Convert",
+            "intent": "ReuseIfFresh",
             "output_target": "Replace",
             "state": "Queued"
           },
@@ -108,6 +116,7 @@
             "id": 3,
             "input": "videos/input-3.mp4",
             "operation": "Convert",
+            "intent": "ReuseIfFresh",
             "output_target": "Replace",
             "state": "Queued"
           }
@@ -126,6 +135,7 @@
             "id": 1,
             "input": "videos/input-1.mp4",
             "operation": "Convert",
+            "intent": "ReuseIfFresh",
             "output_target": "Replace",
             "state": "Queued"
           }
@@ -148,6 +158,7 @@
             "id": 1,
             "input": "videos/input-1.mp4",
             "operation": "Convert",
+            "intent": "ReuseIfFresh",
             "output_target": "Replace",
             "state": "Queued"
           }
@@ -166,6 +177,7 @@
             "id": 1,
             "input": "videos/input-1.mp4",
             "operation": "Convert",
+            "intent": "ReuseIfFresh",
             "output_target": "Replace",
             "state": "Queued"
           },
@@ -173,6 +185,7 @@
             "id": 2,
             "input": "videos/input-2.mp4",
             "operation": "Convert",
+            "intent": "ReuseIfFresh",
             "output_target": "Replace",
             "state": "Queued"
           },
@@ -180,6 +193,7 @@
             "id": 3,
             "input": "videos/input-3.mp4",
             "operation": "Convert",
+            "intent": "ReuseIfFresh",
             "output_target": "Replace",
             "state": "Queued"
           }
@@ -203,6 +217,7 @@
             "id": 3,
             "input": "videos/input-3.mp4",
             "operation": "Convert",
+            "intent": "ReuseIfFresh",
             "output_target": "Replace",
             "state": "Queued"
           },
@@ -210,6 +225,7 @@
             "id": 1,
             "input": "videos/input-1.mp4",
             "operation": "Convert",
+            "intent": "ReuseIfFresh",
             "output_target": "Replace",
             "state": "Queued"
           },
@@ -217,6 +233,7 @@
             "id": 2,
             "input": "videos/input-2.mp4",
             "operation": "Convert",
+            "intent": "ReuseIfFresh",
             "output_target": "Replace",
             "state": "Queued"
           }
@@ -235,6 +252,7 @@
             "id": 1,
             "input": "videos/input-1.mp4",
             "operation": "Convert",
+            "intent": "ReuseIfFresh",
             "output_target": "Replace",
             "state": "Queued"
           },
@@ -242,6 +260,7 @@
             "id": 2,
             "input": "videos/input-2.mp4",
             "operation": "Convert",
+            "intent": "ReuseIfFresh",
             "output_target": "Replace",
             "state": "Queued"
           },
@@ -249,6 +268,7 @@
             "id": 3,
             "input": "videos/input-3.mp4",
             "operation": "Convert",
+            "intent": "ReuseIfFresh",
             "output_target": "Replace",
             "state": "Queued"
           }
@@ -272,6 +292,7 @@
             "id": 2,
             "input": "videos/input-2.mp4",
             "operation": "Convert",
+            "intent": "ReuseIfFresh",
             "output_target": "Replace",
             "state": "Queued"
           },
@@ -279,6 +300,7 @@
             "id": 3,
             "input": "videos/input-3.mp4",
             "operation": "Convert",
+            "intent": "ReuseIfFresh",
             "output_target": "Replace",
             "state": "Queued"
           },
@@ -286,6 +308,7 @@
             "id": 1,
             "input": "videos/input-1.mp4",
             "operation": "Convert",
+            "intent": "ReuseIfFresh",
             "output_target": "Replace",
             "state": "Queued"
           }
@@ -304,6 +327,7 @@
             "id": 1,
             "input": "videos/input-1.mp4",
             "operation": "Convert",
+            "intent": "ReuseIfFresh",
             "output_target": "Replace",
             "state": "Queued"
           },
@@ -311,6 +335,7 @@
             "id": 2,
             "input": "videos/input-2.mp4",
             "operation": "Convert",
+            "intent": "ReuseIfFresh",
             "output_target": "Replace",
             "state": "Queued"
           },
@@ -318,6 +343,7 @@
             "id": 3,
             "input": "videos/input-3.mp4",
             "operation": "Convert",
+            "intent": "ReuseIfFresh",
             "output_target": "Replace",
             "state": "Queued"
           }
@@ -341,6 +367,7 @@
             "id": 2,
             "input": "videos/input-2.mp4",
             "operation": "Convert",
+            "intent": "ReuseIfFresh",
             "output_target": "Replace",
             "state": "Queued"
           },
@@ -348,6 +375,7 @@
             "id": 3,
             "input": "videos/input-3.mp4",
             "operation": "Convert",
+            "intent": "ReuseIfFresh",
             "output_target": "Replace",
             "state": "Queued"
           },
@@ -355,6 +383,7 @@
             "id": 1,
             "input": "videos/input-1.mp4",
             "operation": "Convert",
+            "intent": "ReuseIfFresh",
             "output_target": "Replace",
             "state": "Queued"
           }
@@ -373,6 +402,7 @@
             "id": 1,
             "input": "videos/input-1.mp4",
             "operation": "Convert",
+            "intent": "ReuseIfFresh",
             "output_target": "Replace",
             "state": "Queued"
           },
@@ -380,6 +410,7 @@
             "id": 2,
             "input": "videos/input-2.mp4",
             "operation": "Convert",
+            "intent": "ReuseIfFresh",
             "output_target": "Replace",
             "state": "Queued"
           }
@@ -403,6 +434,7 @@
             "id": 1,
             "input": "videos/input-1.mp4",
             "operation": "Convert",
+            "intent": "ReuseIfFresh",
             "output_target": "Replace",
             "state": "Queued"
           },
@@ -410,6 +442,7 @@
             "id": 2,
             "input": "videos/input-2.mp4",
             "operation": "Convert",
+            "intent": "ReuseIfFresh",
             "output_target": "Replace",
             "state": "Queued"
           }
@@ -660,6 +693,7 @@
             "id": 1,
             "input": "videos/input-1.mp4",
             "operation": "Convert",
+            "intent": "ReuseIfFresh",
             "output_target": "Replace",
             "state": "Queued"
           }
@@ -678,6 +712,7 @@
               "run_id": 100,
               "input": "videos/input-1.mp4",
               "operation": "Convert",
+              "intent": "ReuseIfFresh",
               "output_target": "Replace"
             }
           }
@@ -697,6 +732,7 @@
             "id": 1,
             "input": "videos/input-1.mp4",
             "operation": "Convert",
+            "intent": "ReuseIfFresh",
             "output_target": "Replace",
             "state": {
               "Running": {
@@ -720,6 +756,7 @@
             "id": 1,
             "input": "videos/input-1.mp4",
             "operation": "Convert",
+            "intent": "ReuseIfFresh",
             "output_target": "Replace",
             "state": "Queued"
           }
@@ -739,6 +776,7 @@
               "input": "videos/input-1.mp4",
               "content_key": null,
               "operation": "Convert",
+              "intent": "ReuseIfFresh",
               "output_target": "Replace",
               "execution": {
                 "requested_target": 95,
@@ -773,6 +811,7 @@
             "id": 1,
             "input": "videos/input-1.mp4",
             "operation": "Convert",
+            "intent": "ReuseIfFresh",
             "output_target": "Replace",
             "state": {
               "Claimed": {
@@ -794,6 +833,7 @@
               "input": "videos/input-1.mp4",
               "content_key": null,
               "operation": "Convert",
+              "intent": "ReuseIfFresh",
               "output_target": "Replace",
               "execution": {
                 "requested_target": 95,
@@ -837,6 +877,7 @@
             "id": 1,
             "input": "videos/input-1.mp4",
             "operation": "Convert",
+            "intent": "ReuseIfFresh",
             "output_target": "Replace",
             "state": "Queued"
           }
@@ -856,6 +897,7 @@
               "input": "videos/input-1.mp4",
               "content_key": "ck-1",
               "operation": "Convert",
+              "intent": "ReuseIfFresh",
               "output_target": "Replace",
               "execution": {
                 "requested_target": 95,
@@ -915,6 +957,7 @@
             "id": 1,
             "input": "videos/input-1.mp4",
             "operation": "Convert",
+            "intent": "ReuseIfFresh",
             "output_target": "Replace",
             "state": {
               "Claimed": {
@@ -936,6 +979,7 @@
               "input": "videos/input-1.mp4",
               "content_key": "ck-1",
               "operation": "Convert",
+              "intent": "ReuseIfFresh",
               "output_target": "Replace",
               "execution": {
                 "requested_target": 95,
@@ -1029,6 +1073,7 @@
             "id": 1,
             "input": "videos/input-1.mp4",
             "operation": "Convert",
+            "intent": "ReuseIfFresh",
             "output_target": "Replace",
             "state": {
               "Claimed": {
@@ -1087,6 +1132,7 @@
               "input": "videos/input-1.mp4",
               "content_key": "ck-1",
               "operation": "Convert",
+              "intent": "ReuseIfFresh",
               "output_target": "Replace",
               "execution": {
                 "requested_target": 95,
@@ -1160,6 +1206,7 @@
             "id": 1,
             "input": "videos/input-1.mp4",
             "operation": "Convert",
+            "intent": "ReuseIfFresh",
             "output_target": "Replace",
             "state": {
               "Claimed": {
@@ -1260,6 +1307,7 @@
               "input": "videos/input-1.mp4",
               "content_key": "ck-1",
               "operation": "Convert",
+              "intent": "ReuseIfFresh",
               "output_target": "Replace",
               "execution": {
                 "requested_target": 95,
@@ -1378,6 +1426,7 @@
             "id": 1,
             "input": "videos/input-1.mp4",
             "operation": "Convert",
+            "intent": "ReuseIfFresh",
             "output_target": "Replace",
             "state": {
               "Claimed": {
@@ -1390,6 +1439,7 @@
             "id": 2,
             "input": "videos/input-2.mp4",
             "operation": "Convert",
+            "intent": "ReuseIfFresh",
             "output_target": "Replace",
             "state": {
               "Claimed": {
@@ -1490,6 +1540,7 @@
               "input": "videos/input-1.mp4",
               "content_key": "ck-1",
               "operation": "Convert",
+              "intent": "ReuseIfFresh",
               "output_target": "Replace",
               "execution": {
                 "requested_target": 95,
@@ -1555,6 +1606,7 @@
               "input": "videos/input-2.mp4",
               "content_key": "ck-1",
               "operation": "Convert",
+              "intent": "ReuseIfFresh",
               "output_target": "Replace",
               "execution": {
                 "requested_target": 95,
@@ -1659,6 +1711,7 @@
             "id": 1,
             "input": "videos/input-1.mp4",
             "operation": "Convert",
+            "intent": "ReuseIfFresh",
             "output_target": "Replace",
             "state": {
               "Claimed": {
@@ -1671,6 +1724,7 @@
             "id": 2,
             "input": "videos/input-2.mp4",
             "operation": "Convert",
+            "intent": "ReuseIfFresh",
             "output_target": "Replace",
             "state": {
               "Claimed": {
@@ -1838,6 +1892,7 @@
               "input": "videos/input-1.mp4",
               "content_key": "ck-1",
               "operation": "Convert",
+              "intent": "ReuseIfFresh",
               "output_target": "Replace",
               "execution": {
                 "requested_target": 95,
@@ -1903,6 +1958,7 @@
               "input": "videos/input-2.mp4",
               "content_key": "ck-1",
               "operation": "Convert",
+              "intent": "ReuseIfFresh",
               "output_target": "Replace",
               "execution": {
                 "requested_target": 95,
@@ -1971,6 +2027,7 @@
             "id": 1,
             "input": "videos/input-1.mp4",
             "operation": "Convert",
+            "intent": "ReuseIfFresh",
             "output_target": "Replace",
             "state": {
               "Running": {
@@ -1992,6 +2049,7 @@
               "input": "videos/input-1.mp4",
               "content_key": null,
               "operation": "Convert",
+              "intent": "ReuseIfFresh",
               "output_target": "Replace",
               "execution": {
                 "requested_target": 95,
@@ -2053,6 +2111,7 @@
             "id": 1,
             "input": "videos/input-1.mp4",
             "operation": "Convert",
+            "intent": "ReuseIfFresh",
             "output_target": "Replace",
             "state": {
               "Finished": "Analyzed"
@@ -2071,6 +2130,7 @@
               "input": "videos/input-1.mp4",
               "content_key": null,
               "operation": "Convert",
+              "intent": "ReuseIfFresh",
               "output_target": "Replace",
               "execution": {
                 "requested_target": 95,
@@ -2123,6 +2183,7 @@
             "id": 1,
             "input": "videos/input-1.mp4",
             "operation": "Convert",
+            "intent": "ReuseIfFresh",
             "output_target": "Replace",
             "state": {
               "Running": {
@@ -2227,6 +2288,7 @@
               "input": "videos/input-1.mp4",
               "content_key": "ck-1",
               "operation": "Convert",
+              "intent": "ReuseIfFresh",
               "output_target": "Replace",
               "execution": {
                 "requested_target": 95,
@@ -2302,6 +2364,7 @@
             "id": 1,
             "input": "videos/input-1.mp4",
             "operation": "Convert",
+            "intent": "ReuseIfFresh",
             "output_target": "Replace",
             "state": {
               "Finished": {
@@ -2425,6 +2488,7 @@
               "input": "videos/input-1.mp4",
               "content_key": "ck-1",
               "operation": "Convert",
+              "intent": "ReuseIfFresh",
               "output_target": "Replace",
               "execution": {
                 "requested_target": 95,
@@ -2491,6 +2555,7 @@
             "id": 1,
             "input": "videos/input-1.mp4",
             "operation": "Convert",
+            "intent": "ReuseIfFresh",
             "output_target": "Replace",
             "state": {
               "Running": {
@@ -2595,6 +2660,7 @@
               "input": "videos/input-1.mp4",
               "content_key": "ck-1",
               "operation": "Convert",
+              "intent": "ReuseIfFresh",
               "output_target": "Replace",
               "execution": {
                 "requested_target": 95,
@@ -2663,6 +2729,7 @@
             "id": 1,
             "input": "videos/input-1.mp4",
             "operation": "Convert",
+            "intent": "ReuseIfFresh",
             "output_target": "Replace",
             "state": {
               "Finished": {
@@ -2779,6 +2846,7 @@
               "input": "videos/input-1.mp4",
               "content_key": "ck-1",
               "operation": "Convert",
+              "intent": "ReuseIfFresh",
               "output_target": "Replace",
               "execution": {
                 "requested_target": 95,
@@ -2838,6 +2906,7 @@
             "id": 1,
             "input": "videos/input-1.mp4",
             "operation": "Convert",
+            "intent": "ReuseIfFresh",
             "output_target": "Replace",
             "state": {
               "Running": {
@@ -2942,6 +3011,7 @@
               "input": "videos/input-1.mp4",
               "content_key": "ck-1",
               "operation": "Convert",
+              "intent": "ReuseIfFresh",
               "output_target": "Replace",
               "execution": {
                 "requested_target": 95,
@@ -3017,6 +3087,7 @@
             "id": 1,
             "input": "videos/input-1.mp4",
             "operation": "Convert",
+            "intent": "ReuseIfFresh",
             "output_target": "Replace",
             "state": {
               "Finished": {
@@ -3132,6 +3203,7 @@
               "input": "videos/input-1.mp4",
               "content_key": "ck-1",
               "operation": "Convert",
+              "intent": "ReuseIfFresh",
               "output_target": "Replace",
               "execution": {
                 "requested_target": 95,
@@ -3198,6 +3270,7 @@
             "id": 1,
             "input": "videos/input-1.mp4",
             "operation": "Convert",
+            "intent": "ReuseIfFresh",
             "output_target": "Replace",
             "state": {
               "Running": {
@@ -3302,6 +3375,7 @@
               "input": "videos/input-1.mp4",
               "content_key": "ck-1",
               "operation": "Convert",
+              "intent": "ReuseIfFresh",
               "output_target": "Replace",
               "execution": {
                 "requested_target": 95,
@@ -3365,6 +3439,7 @@
             "id": 1,
             "input": "videos/input-1.mp4",
             "operation": "Convert",
+            "intent": "ReuseIfFresh",
             "output_target": "Replace",
             "state": {
               "Finished": {
@@ -3476,6 +3551,7 @@
               "input": "videos/input-1.mp4",
               "content_key": "ck-1",
               "operation": "Convert",
+              "intent": "ReuseIfFresh",
               "output_target": "Replace",
               "execution": {
                 "requested_target": 95,
@@ -3530,6 +3606,7 @@
             "id": 1,
             "input": "videos/input-1.mp4",
             "operation": "Convert",
+            "intent": "ReuseIfFresh",
             "output_target": "Replace",
             "state": {
               "Running": {
@@ -3588,6 +3665,7 @@
               "input": "videos/input-1.mp4",
               "content_key": "ck-1",
               "operation": "Convert",
+              "intent": "ReuseIfFresh",
               "output_target": "Replace",
               "execution": {
                 "requested_target": 95,
@@ -3655,6 +3733,7 @@
             "id": 1,
             "input": "videos/input-1.mp4",
             "operation": "Convert",
+            "intent": "ReuseIfFresh",
             "output_target": "Replace",
             "state": {
               "Finished": {
@@ -3716,6 +3795,7 @@
               "input": "videos/input-1.mp4",
               "content_key": "ck-1",
               "operation": "Convert",
+              "intent": "ReuseIfFresh",
               "output_target": "Replace",
               "execution": {
                 "requested_target": 95,
@@ -3774,6 +3854,7 @@
             "id": 1,
             "input": "videos/input-1.mp4",
             "operation": "Convert",
+            "intent": "ReuseIfFresh",
             "output_target": "Replace",
             "state": {
               "Running": {
@@ -3832,6 +3913,7 @@
               "input": "videos/input-1.mp4",
               "content_key": "ck-1",
               "operation": "Convert",
+              "intent": "ReuseIfFresh",
               "output_target": "Replace",
               "execution": {
                 "requested_target": 95,
@@ -3913,6 +3995,7 @@
             "id": 1,
             "input": "videos/input-1.mp4",
             "operation": "Convert",
+            "intent": "ReuseIfFresh",
             "output_target": "Replace",
             "state": {
               "Finished": {
@@ -3997,6 +4080,7 @@
               "input": "videos/input-1.mp4",
               "content_key": "ck-1",
               "operation": "Convert",
+              "intent": "ReuseIfFresh",
               "output_target": "Replace",
               "execution": {
                 "requested_target": 95,
@@ -4069,6 +4153,7 @@
             "id": 1,
             "input": "videos/input-1.mp4",
             "operation": "Convert",
+            "intent": "ReuseIfFresh",
             "output_target": "Replace",
             "state": {
               "Running": {
@@ -4127,6 +4212,7 @@
               "input": "videos/input-1.mp4",
               "content_key": "ck-1",
               "operation": "Convert",
+              "intent": "ReuseIfFresh",
               "output_target": "Replace",
               "execution": {
                 "requested_target": 95,
@@ -4197,6 +4283,7 @@
             "id": 1,
             "input": "videos/input-1.mp4",
             "operation": "Convert",
+            "intent": "ReuseIfFresh",
             "output_target": "Replace",
             "state": {
               "Finished": {
@@ -4261,6 +4348,7 @@
               "input": "videos/input-1.mp4",
               "content_key": "ck-1",
               "operation": "Convert",
+              "intent": "ReuseIfFresh",
               "output_target": "Replace",
               "execution": {
                 "requested_target": 95,
@@ -4322,6 +4410,7 @@
             "id": 1,
             "input": "videos/input-1.mp4",
             "operation": "Convert",
+            "intent": "ReuseIfFresh",
             "output_target": "Replace",
             "state": {
               "Running": {
@@ -4380,6 +4469,7 @@
               "input": "videos/input-1.mp4",
               "content_key": "ck-1",
               "operation": "Convert",
+              "intent": "ReuseIfFresh",
               "output_target": "Replace",
               "execution": {
                 "requested_target": 95,
@@ -4441,6 +4531,7 @@
             "id": 1,
             "input": "videos/input-1.mp4",
             "operation": "Convert",
+            "intent": "ReuseIfFresh",
             "output_target": "Replace",
             "state": {
               "Finished": "Stopped"
@@ -4496,6 +4587,7 @@
               "input": "videos/input-1.mp4",
               "content_key": "ck-1",
               "operation": "Convert",
+              "intent": "ReuseIfFresh",
               "output_target": "Replace",
               "execution": {
                 "requested_target": 95,
@@ -4548,6 +4640,7 @@
             "id": 1,
             "input": "videos/input-1.mp4",
             "operation": "Convert",
+            "intent": "ReuseIfFresh",
             "output_target": "Replace",
             "state": {
               "Running": {
@@ -4636,6 +4729,7 @@
               "input": "videos/input-1.mp4",
               "content_key": "ck-1",
               "operation": "Convert",
+              "intent": "ReuseIfFresh",
               "output_target": "Replace",
               "execution": {
                 "requested_target": 95,
@@ -4685,6 +4779,7 @@
             "id": 1,
             "input": "videos/input-1.mp4",
             "operation": "Convert",
+            "intent": "ReuseIfFresh",
             "output_target": "Replace",
             "state": {
               "Running": {
@@ -4773,6 +4868,7 @@
               "input": "videos/input-1.mp4",
               "content_key": "ck-1",
               "operation": "Convert",
+              "intent": "ReuseIfFresh",
               "output_target": "Replace",
               "execution": {
                 "requested_target": 95,
@@ -4816,6 +4912,7 @@
             "id": 1,
             "input": "videos/input-1.mp4",
             "operation": "Convert",
+            "intent": "ReuseIfFresh",
             "output_target": "Replace",
             "state": {
               "Running": {
@@ -4920,6 +5017,7 @@
               "input": "videos/input-1.mp4",
               "content_key": "ck-1",
               "operation": "Convert",
+              "intent": "ReuseIfFresh",
               "output_target": "Replace",
               "execution": {
                 "requested_target": 95,
@@ -4969,6 +5067,7 @@
             "id": 1,
             "input": "videos/input-1.mp4",
             "operation": "Convert",
+            "intent": "ReuseIfFresh",
             "output_target": "Replace",
             "state": {
               "Running": {
@@ -5073,6 +5172,7 @@
               "input": "videos/input-1.mp4",
               "content_key": "ck-1",
               "operation": "Convert",
+              "intent": "ReuseIfFresh",
               "output_target": "Replace",
               "execution": {
                 "requested_target": 95,
@@ -5109,13 +5209,14 @@
       }
     },
     {
-      "name": "output_abandoned",
+      "name": "output_restaged",
       "initial": {
         "queue": [
           {
             "id": 1,
             "input": "videos/input-1.mp4",
             "operation": "Convert",
+            "intent": "ReuseIfFresh",
             "output_target": "Replace",
             "state": {
               "Running": {
@@ -5204,6 +5305,289 @@
               "input": "videos/input-1.mp4",
               "content_key": "ck-1",
               "operation": "Convert",
+              "intent": "ReuseIfFresh",
+              "output_target": "Replace",
+              "execution": {
+                "requested_target": 95,
+                "fallback_floor": 90,
+                "fallback_step": 1,
+                "overwrite_existing": false,
+                "decode_preference": "HardwarePreferred",
+                "profile": {
+                  "preset": 6,
+                  "max_encoded_percent_basis_points": 8000,
+                  "samples": null,
+                  "sample_duration_ms": 20000,
+                  "thorough": false,
+                  "decode_mode": "Software",
+                  "ab_av1_revision": "ab-av1-test",
+                  "ffmpeg_revision": "ffmpeg-test",
+                  "encoder_revision": "svt-av1-test"
+                }
+              },
+              "action": {
+                "Encode": {
+                  "selected_analysis": null
+                }
+              }
+            },
+            "analysis": null,
+            "output_content_key": null,
+            "outcome": null,
+            "started_at": 1752000000000,
+            "finished_at": null,
+            "phase_spans": []
+          }
+        }
+      },
+      "deltas": [
+        {
+          "Output": {
+            "OutputRestaged": {
+              "run_id": 100,
+              "staging_identity": {
+                "file_id": {
+                  "Unix": {
+                    "device": 1,
+                    "inode": 77
+                  }
+                },
+                "size": 0,
+                "modified_ns": "2500000"
+              }
+            }
+          }
+        }
+      ],
+      "expected": {
+        "queue": [
+          {
+            "id": 1,
+            "input": "videos/input-1.mp4",
+            "operation": "Convert",
+            "intent": "ReuseIfFresh",
+            "output_target": "Replace",
+            "state": {
+              "Running": {
+                "claim_id": 10,
+                "run_id": 100
+              }
+            }
+          }
+        ],
+        "paths": {
+          "path-1": {
+            "stamp": {
+              "size": 3000000,
+              "modified_ns": "1000000"
+            },
+            "content_key": "ck-1"
+          }
+        },
+        "records": {
+          "ck-1": {
+            "metadata": {
+              "codec": "H264",
+              "container": {
+                "Other": "mp4"
+              },
+              "width": 1920,
+              "height": 1080,
+              "rotation_degrees": 0,
+              "duration_ms": 120000,
+              "size_bytes": 3000000,
+              "audio": [
+                {
+                  "codec": "Aac",
+                  "channels": 6
+                },
+                {
+                  "codec": {
+                    "Other": "wmav2"
+                  },
+                  "channels": 2
+                }
+              ],
+              "subtitle_count": 1
+            },
+            "analyses": [],
+            "verdict": null
+          }
+        },
+        "outputs": {
+          "100": {
+            "run_id": 100,
+            "input": "videos/input-1.mp4",
+            "input_identity": {
+              "file_id": {
+                "Unix": {
+                  "device": 1,
+                  "inode": 42
+                }
+              },
+              "size": 3000000,
+              "modified_ns": "2000000"
+            },
+            "staging": "videos/.input-1.crfty-staging.mkv",
+            "initial_staging_identity": {
+              "file_id": {
+                "Unix": {
+                  "device": 1,
+                  "inode": 77
+                }
+              },
+              "size": 0,
+              "modified_ns": "2500000"
+            },
+            "final_path": "videos/input-1.mkv",
+            "final_preimage": null,
+            "replacement": "RetireOriginal",
+            "state": "Started"
+          }
+        },
+        "conversion_runs": {
+          "100": {
+            "spec": {
+              "item_id": 1,
+              "claim_id": 10,
+              "run_id": 100,
+              "input": "videos/input-1.mp4",
+              "content_key": "ck-1",
+              "operation": "Convert",
+              "intent": "ReuseIfFresh",
+              "output_target": "Replace",
+              "execution": {
+                "requested_target": 95,
+                "fallback_floor": 90,
+                "fallback_step": 1,
+                "overwrite_existing": false,
+                "decode_preference": "HardwarePreferred",
+                "profile": {
+                  "preset": 6,
+                  "max_encoded_percent_basis_points": 8000,
+                  "samples": null,
+                  "sample_duration_ms": 20000,
+                  "thorough": false,
+                  "decode_mode": "Software",
+                  "ab_av1_revision": "ab-av1-test",
+                  "ffmpeg_revision": "ffmpeg-test",
+                  "encoder_revision": "svt-av1-test"
+                }
+              },
+              "action": {
+                "Encode": {
+                  "selected_analysis": null
+                }
+              }
+            },
+            "analysis": null,
+            "output_content_key": null,
+            "outcome": null,
+            "started_at": 1752000000000,
+            "finished_at": null,
+            "phase_spans": []
+          }
+        }
+      }
+    },
+    {
+      "name": "output_abandoned",
+      "initial": {
+        "queue": [
+          {
+            "id": 1,
+            "input": "videos/input-1.mp4",
+            "operation": "Convert",
+            "intent": "ReuseIfFresh",
+            "output_target": "Replace",
+            "state": {
+              "Running": {
+                "claim_id": 10,
+                "run_id": 100
+              }
+            }
+          }
+        ],
+        "paths": {
+          "path-1": {
+            "stamp": {
+              "size": 3000000,
+              "modified_ns": "1000000"
+            },
+            "content_key": "ck-1"
+          }
+        },
+        "records": {
+          "ck-1": {
+            "metadata": {
+              "codec": "H264",
+              "container": {
+                "Other": "mp4"
+              },
+              "width": 1920,
+              "height": 1080,
+              "rotation_degrees": 0,
+              "duration_ms": 120000,
+              "size_bytes": 3000000,
+              "audio": [
+                {
+                  "codec": "Aac",
+                  "channels": 6
+                },
+                {
+                  "codec": {
+                    "Other": "wmav2"
+                  },
+                  "channels": 2
+                }
+              ],
+              "subtitle_count": 1
+            },
+            "analyses": [],
+            "verdict": null
+          }
+        },
+        "outputs": {
+          "100": {
+            "run_id": 100,
+            "input": "videos/input-1.mp4",
+            "input_identity": {
+              "file_id": {
+                "Unix": {
+                  "device": 1,
+                  "inode": 42
+                }
+              },
+              "size": 3000000,
+              "modified_ns": "2000000"
+            },
+            "staging": "videos/.input-1.crfty-staging.mkv",
+            "initial_staging_identity": {
+              "file_id": {
+                "Unix": {
+                  "device": 1,
+                  "inode": 42
+                }
+              },
+              "size": 0,
+              "modified_ns": "2000000"
+            },
+            "final_path": "videos/input-1.mkv",
+            "final_preimage": null,
+            "replacement": "RetireOriginal",
+            "state": "Started"
+          }
+        },
+        "conversion_runs": {
+          "100": {
+            "spec": {
+              "item_id": 1,
+              "claim_id": 10,
+              "run_id": 100,
+              "input": "videos/input-1.mp4",
+              "content_key": "ck-1",
+              "operation": "Convert",
+              "intent": "ReuseIfFresh",
               "output_target": "Replace",
               "execution": {
                 "requested_target": 95,
@@ -5270,6 +5654,7 @@
             "id": 1,
             "input": "videos/input-1.mp4",
             "operation": "Convert",
+            "intent": "ReuseIfFresh",
             "output_target": "Replace",
             "state": {
               "Running": {
@@ -5358,6 +5743,7 @@
               "input": "videos/input-1.mp4",
               "content_key": "ck-1",
               "operation": "Convert",
+              "intent": "ReuseIfFresh",
               "output_target": "Replace",
               "execution": {
                 "requested_target": 95,
@@ -5401,6 +5787,7 @@
             "id": 1,
             "input": "videos/input-1.mp4",
             "operation": "Convert",
+            "intent": "ReuseIfFresh",
             "output_target": "Replace",
             "state": {
               "Running": {
@@ -5489,6 +5876,7 @@
               "input": "videos/input-1.mp4",
               "content_key": "ck-1",
               "operation": "Convert",
+              "intent": "ReuseIfFresh",
               "output_target": "Replace",
               "execution": {
                 "requested_target": 95,
@@ -5540,6 +5928,7 @@
             "id": 1,
             "input": "videos/input-1.mp4",
             "operation": "Convert",
+            "intent": "ReuseIfFresh",
             "output_target": "Replace",
             "state": {
               "Running": {
@@ -5633,6 +6022,7 @@
               "input": "videos/input-1.mp4",
               "content_key": "ck-1",
               "operation": "Convert",
+              "intent": "ReuseIfFresh",
               "output_target": "Replace",
               "execution": {
                 "requested_target": 95,

@@ -10,6 +10,7 @@ function row(id: number): QueueRowData {
     id: id as QueueItemId,
     input: `/videos/${id}.mkv`,
     operation: "Convert",
+    intent: "ReuseIfFresh",
     output_target: "Replace",
     state: "Queued",
   };

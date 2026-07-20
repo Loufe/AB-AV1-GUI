@@ -1,6 +1,8 @@
 use std::path::PathBuf;
 
-use crfty_core::{Operation, OutputTarget, QueueCommand, QueueItemId, SessionCommand, Settings};
+use crfty_core::{
+    AnalysisIntent, Operation, OutputTarget, QueueCommand, QueueItemId, SessionCommand, Settings,
+};
 use serde::Serialize;
 use tauri::{State, ipc::Channel};
 use tauri_specta::{Builder, collect_commands};
@@ -33,6 +35,7 @@ fn queue_add(
     bridge: State<'_, Bridge>,
     input: PathBuf,
     operation: Operation,
+    intent: AnalysisIntent,
     output_target: OutputTarget,
 ) -> Result<(), CommandError> {
     let item_id = bridge.allocate_item_id();
@@ -40,6 +43,7 @@ fn queue_add(
         item_id,
         input,
         operation,
+        intent,
         output_target,
     })
 }

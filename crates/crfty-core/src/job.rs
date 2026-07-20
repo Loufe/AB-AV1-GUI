@@ -14,6 +14,16 @@ pub enum Operation {
     Convert,
 }
 
+/// Whether a queued item may reuse a durable analysis that already satisfies
+/// its execution settings. `Refresh` forces a fresh search even when a cached
+/// result qualifies; the new result still lands in the record's analysis
+/// index like any other.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, specta::Type)]
+pub enum AnalysisIntent {
+    ReuseIfFresh,
+    Refresh,
+}
+
 #[derive(
     Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize, specta::Type,
 )]
@@ -76,6 +86,13 @@ pub struct AnalysisProfile {
     #[specta(type = crate::JsNumber)]
     pub sample_duration_ms: u64,
     pub thorough: bool,
+    /// The decode mode the search actually ran with — part of the analysis
+    /// identity (ADR-007, per #33 §7): hardware and software decoders can
+    /// produce different decoded frames, so their VMAF measurements are not
+    /// interchangeable. The pin is decoder-granular: a Cuvid-recorded
+    /// analysis is not returned for a Qsv execution and re-searches instead.
+    /// Requested-vs-actual provenance lives on the run (`decode_preference`,
+    /// this field, and the terminal evidence's `encode_decode`).
     pub decode_mode: DecodeMode,
     pub ab_av1_revision: String,
     pub ffmpeg_revision: String,
@@ -210,7 +227,7 @@ impl AnalysisResult {
         if self.requested_target != execution.requested_target
             || self.fallback_floor != execution.fallback_floor
             || self.fallback_step != execution.fallback_step
-            || self.profile != execution.profile
+            || !crate::permitted_profiles(execution).contains(&self.profile)
         {
             return Err("analysis provenance does not match the claimed job");
         }
@@ -293,6 +310,7 @@ pub struct JobSpec {
     pub input: PathBuf,
     pub content_key: Option<crate::ContentKey>,
     pub operation: Operation,
+    pub intent: AnalysisIntent,
     pub output_target: OutputTarget,
     pub execution: ExecutionSettings,
     pub action: JobAction,
@@ -305,6 +323,7 @@ pub struct ReservedJob {
     pub run_id: RunId,
     pub input: PathBuf,
     pub operation: Operation,
+    pub intent: AnalysisIntent,
     pub output_target: OutputTarget,
 }
 

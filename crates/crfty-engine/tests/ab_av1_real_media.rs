@@ -12,8 +12,8 @@ use std::{
 };
 
 use crfty_core::{
-    AnalysisProfile, DecodeMode, DecodePreference, DurableDelta, ExecutionSettings, Operation,
-    OutputTarget, QueueCommand, QueueItemId, SessionCommand, VmafTarget,
+    AnalysisIntent, AnalysisProfile, DecodeMode, DecodePreference, DurableDelta, ExecutionSettings,
+    Operation, OutputTarget, QueueCommand, QueueItemId, SessionCommand, VmafTarget,
 };
 
 const REAL_CONTRACT_TARGET: VmafTarget = VmafTarget(80);
@@ -150,6 +150,7 @@ fn real_coordinator_analyzes_encodes_verifies_and_promotes() {
             item_id: QueueItemId(1),
             input: input.clone(),
             operation: Operation::Convert,
+            intent: AnalysisIntent::ReuseIfFresh,
             output_target: OutputTarget::Suffix {
                 suffix: "_av1".to_owned(),
             },
@@ -205,6 +206,7 @@ fn real_coordinator_remuxes_av1_mp4_without_reencoding() {
             item_id: QueueItemId(1),
             input: input.clone(),
             operation: Operation::Convert,
+            intent: AnalysisIntent::ReuseIfFresh,
             output_target: OutputTarget::Suffix {
                 suffix: "_remuxed".to_owned(),
             },

@@ -14,7 +14,7 @@
 use std::path::PathBuf;
 
 use crfty_core::{
-    AnalysisAttempt, AnalysisProfile, AnalysisResult, ArtifactIdentity, AudioCodec,
+    AnalysisAttempt, AnalysisIntent, AnalysisProfile, AnalysisResult, ArtifactIdentity, AudioCodec,
     AudioStreamMeta, ClaimId, CompletionEvidence, ConflictKind, ContentKey, Crf, DecodeMode,
     DecodePreference, DestructiveIdentity, DiagnosticTail, DurableDelta, DurableState, DurationMs,
     ExecutionSettings, FailureFacts, FailureKind, FileStamp, FileSystemId, FileTimeNs, ItemOutcome,
@@ -62,6 +62,7 @@ fn added(id: u64) -> DurableDelta {
             id: QueueItemId(id),
             input: PathBuf::from(format!("videos/input-{id}.mp4")),
             operation: Operation::Convert,
+            intent: AnalysisIntent::ReuseIfFresh,
             output_target: OutputTarget::Replace,
             state: QueueItemState::Queued,
         },
@@ -89,6 +90,7 @@ fn reserved(item: u64, claim: u64, run: u64) -> DurableDelta {
             run_id: RunId(run),
             input: PathBuf::from(format!("videos/input-{item}.mp4")),
             operation: Operation::Convert,
+            intent: AnalysisIntent::ReuseIfFresh,
             output_target: OutputTarget::Replace,
         }),
     }
@@ -225,6 +227,7 @@ fn prepared(item: u64, claim: u64, run: u64, key: Option<&str>, action: JobActio
             input: PathBuf::from(format!("videos/input-{item}.mp4")),
             content_key: key.map(|key| ContentKey(key.to_owned())),
             operation: Operation::Convert,
+            intent: AnalysisIntent::ReuseIfFresh,
             output_target: OutputTarget::Replace,
             execution: ExecutionSettings {
                 requested_target: VmafTarget(95),
@@ -610,6 +613,23 @@ fn scenarios() -> Vec<Scenario> {
             .concat(),
             vec![DurableDelta::Output(OutputDelta::OriginalRetired {
                 run_id: RunId(100),
+            })],
+        ),
+        scenario(
+            "output_restaged",
+            [convert_prelude("ck-1"), vec![output_started(100)]].concat(),
+            // An encode retry recreated the staging artifact; the journaled
+            // pin moves to the new identity while the state stays Started.
+            vec![DurableDelta::Output(OutputDelta::OutputRestaged {
+                run_id: RunId(100),
+                staging_identity: DestructiveIdentity {
+                    file_id: FileSystemId::Unix {
+                        device: 1,
+                        inode: 77,
+                    },
+                    size: 0,
+                    modified_ns: Some(FileTimeNs(2_500_000)),
+                },
             })],
         ),
         scenario(

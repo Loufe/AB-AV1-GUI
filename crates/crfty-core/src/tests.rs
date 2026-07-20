@@ -5,7 +5,7 @@ use proptest::prelude::*;
 use crate::reducer::validate_terminal;
 
 use crate::{
-    AnalysisProfile, AnalysisResult, AppState, ArtifactIdentity, ClaimId, Command,
+    AnalysisIntent, AnalysisProfile, AnalysisResult, AppState, ArtifactIdentity, ClaimId, Command,
     CompletionEvidence, ConflictKind, ContentKey, Crf, DecodeMode, DecodePreference,
     DefaultOutputMode, DestructiveIdentity, DestructiveObservation, DurableDelta, DurationMs,
     Effect, Eligibility, EphemeralDelta, ExecutionSettings, FailureFacts, FailureKind, FileRecord,
@@ -16,8 +16,8 @@ use crate::{
     Replacement, Reply, RunId, SearchMeasurement, SessionCommand, SessionState, Settings,
     SettingsCommand, SkipReason, StreamByteSizes, SystemCommand, Telemetry, ToolAvailability,
     ToolRevisions, UnixMillis, VideoCodec, VideoMeta, VmafScore, VmafTarget, WorkerCommand, apply,
-    encode_record, evaluate_eligibility, recover_output, replay, select_analysis,
-    select_job_action,
+    encode_record, evaluate_eligibility, permitted_profiles, recover_output, replay,
+    select_analysis, select_job_action,
 };
 
 fn execution() -> ExecutionSettings {
@@ -200,6 +200,7 @@ fn add_command(item_id: QueueItemId, input: impl Into<PathBuf>) -> Command {
         item_id,
         input: input.into(),
         operation: Operation::Convert,
+        intent: AnalysisIntent::ReuseIfFresh,
         output_target: OutputTarget::Replace,
     })
 }
@@ -661,6 +662,7 @@ fn policy_uses_post_rotation_pixel_floor_and_typed_av1_decisions() {
             Some(&metadata),
             Some(&record),
             Operation::Convert,
+            AnalysisIntent::ReuseIfFresh,
             &execution()
         ),
         JobAction::Remux
@@ -670,6 +672,7 @@ fn policy_uses_post_rotation_pixel_floor_and_typed_av1_decisions() {
             Some(&metadata),
             Some(&record),
             Operation::Analyze,
+            AnalysisIntent::ReuseIfFresh,
             &execution()
         ),
         JobAction::Analyze { .. }
@@ -1256,6 +1259,7 @@ fn journal_ignores_only_an_unterminated_final_record() {
             id: QueueItemId(1),
             input: PathBuf::from("one.mkv"),
             operation: Operation::Convert,
+            intent: AnalysisIntent::ReuseIfFresh,
             output_target: OutputTarget::Replace,
             state: QueueItemState::Queued,
         },
@@ -1291,6 +1295,7 @@ fn journal_degrades_on_nonfinal_corruption() {
                 id: QueueItemId(1),
                 input: PathBuf::from("one.mkv"),
                 operation: Operation::Convert,
+                intent: AnalysisIntent::ReuseIfFresh,
                 output_target: OutputTarget::Replace,
                 state: QueueItemState::Queued,
             },
@@ -1333,6 +1338,7 @@ fn replay_rejects_an_entire_semantically_invalid_batch() {
                     id: QueueItemId(1),
                     input: PathBuf::from("video.mkv"),
                     operation: Operation::Convert,
+                    intent: AnalysisIntent::ReuseIfFresh,
                     output_target: OutputTarget::Replace,
                     state: QueueItemState::Queued,
                 },
@@ -1553,6 +1559,7 @@ fn verdict_fixture(
                 input: PathBuf::from("video.mkv"),
                 content_key: key.map(|key| ContentKey(key.to_owned())),
                 operation: Operation::Convert,
+                intent: AnalysisIntent::ReuseIfFresh,
                 output_target: OutputTarget::Replace,
                 execution: execution(),
                 action: JobAction::Encode {
@@ -1709,6 +1716,7 @@ fn latest_decisive_run_wins_the_verdict() {
                 input: PathBuf::from("video.mkv"),
                 content_key: Some(ContentKey(key.to_owned())),
                 operation: Operation::Convert,
+                intent: AnalysisIntent::ReuseIfFresh,
                 output_target: OutputTarget::Replace,
                 execution: execution(),
                 action: JobAction::Encode {
@@ -1816,6 +1824,415 @@ fn verdict_freshness_is_a_stamp_match_against_the_settled_output() {
         decided_at: UnixMillis(5_000),
     };
     assert!(crate::verdict_applies(&not_worthwhile, None, None));
+}
+
+#[test]
+fn refresh_intent_forces_a_new_search_over_a_qualifying_cached_analysis() {
+    let mut record = FileRecord::new(media_observation("refresh-content").metadata);
+    record.record_analysis(analysis());
+    assert!(matches!(
+        select_job_action(
+            None,
+            Some(&record),
+            Operation::Convert,
+            AnalysisIntent::ReuseIfFresh,
+            &execution()
+        ),
+        JobAction::Encode {
+            selected_analysis: Some(_)
+        }
+    ));
+    assert_eq!(
+        select_job_action(
+            None,
+            Some(&record),
+            Operation::Convert,
+            AnalysisIntent::Refresh,
+            &execution()
+        ),
+        JobAction::Encode {
+            selected_analysis: None
+        }
+    );
+
+    // End to end: a Refresh item prepared against cached content journals a
+    // spec without reuse, and replay recomputes the same intent-aware action.
+    let mut state = AppState::default();
+    let mut bytes = Vec::new();
+    let mut sequence = 0_u64;
+    let _added = apply_and_journal(
+        &mut state,
+        &mut bytes,
+        &mut sequence,
+        add_command(QueueItemId(1), "video.mkv"),
+    );
+    let _started = start_session(&mut state);
+    let _reserved = apply_and_journal(
+        &mut state,
+        &mut bytes,
+        &mut sequence,
+        Command::Worker(WorkerCommand::ReserveNext {
+            claim_id: ClaimId(2),
+            run_id: RunId(3),
+        }),
+    );
+    let _prepared = apply_and_journal(
+        &mut state,
+        &mut bytes,
+        &mut sequence,
+        Command::Worker(WorkerCommand::PrepareReserved {
+            item_id: QueueItemId(1),
+            claim_id: ClaimId(2),
+            run_id: RunId(3),
+            observation: Some(Box::new(media_observation("refresh-content"))),
+            execution: execution(),
+        }),
+    );
+    let _recorded = apply_and_journal(
+        &mut state,
+        &mut bytes,
+        &mut sequence,
+        Command::Worker(WorkerCommand::RecordAnalysis {
+            item_id: QueueItemId(1),
+            claim_id: ClaimId(2),
+            run_id: RunId(3),
+            result: Box::new(analysis()),
+        }),
+    );
+    let _finished = apply_and_journal(
+        &mut state,
+        &mut bytes,
+        &mut sequence,
+        Command::Worker(WorkerCommand::Terminal {
+            item_id: QueueItemId(1),
+            claim_id: ClaimId(2),
+            run_id: RunId(3),
+            outcome: ItemOutcome::Failed(FailureFacts::new(FailureKind::Internal, "fixture")),
+            at: UnixMillis(1_000),
+            phase_spans: Vec::new(),
+            final_telemetry: None,
+        }),
+    );
+    let _refresh_added = apply_and_journal(
+        &mut state,
+        &mut bytes,
+        &mut sequence,
+        Command::Queue(QueueCommand::Add {
+            item_id: QueueItemId(4),
+            input: PathBuf::from("video.mkv"),
+            operation: Operation::Convert,
+            intent: AnalysisIntent::Refresh,
+            output_target: OutputTarget::Replace,
+        }),
+    );
+    let _reserved = apply_and_journal(
+        &mut state,
+        &mut bytes,
+        &mut sequence,
+        Command::Worker(WorkerCommand::ReserveNext {
+            claim_id: ClaimId(5),
+            run_id: RunId(6),
+        }),
+    );
+    let prepared = apply_and_journal(
+        &mut state,
+        &mut bytes,
+        &mut sequence,
+        Command::Worker(WorkerCommand::PrepareReserved {
+            item_id: QueueItemId(4),
+            claim_id: ClaimId(5),
+            run_id: RunId(6),
+            observation: Some(Box::new(media_observation("refresh-content"))),
+            execution: execution(),
+        }),
+    );
+    let Reply::Claimed(Some(job)) = prepared.reply else {
+        panic!("expected refreshed claim");
+    };
+    assert_eq!(job.spec.intent, AnalysisIntent::Refresh);
+    assert_eq!(
+        job.spec.action,
+        JobAction::Encode {
+            selected_analysis: None
+        }
+    );
+    let replayed = replay(&bytes);
+    assert!(replayed.corruption.is_none());
+    assert_eq!(replayed.state, state.durable);
+}
+
+#[test]
+fn software_fallback_analysis_is_permitted_under_a_hardware_spec() {
+    // The pure gate: a software-prepared run has no wider ladder; a
+    // hardware-prepared run also accepts its software-decode variant.
+    let software = execution();
+    assert_eq!(
+        permitted_profiles(&software),
+        vec![software.profile.clone()]
+    );
+    let mut hardware = execution();
+    hardware.profile.decode_mode = DecodeMode::Hardware(crate::HardwareDecoder::H264Cuvid);
+    let mut fallback_profile = hardware.profile.clone();
+    fallback_profile.decode_mode = DecodeMode::Software;
+    assert_eq!(
+        permitted_profiles(&hardware),
+        vec![hardware.profile.clone(), fallback_profile.clone()]
+    );
+
+    // Reducer + replay: the software-fallback result is recorded under the
+    // hardware spec; the journal replays it through the same widened gate.
+    let mut state = AppState::default();
+    let mut bytes = Vec::new();
+    let mut sequence = 0_u64;
+    let _added = apply_and_journal(
+        &mut state,
+        &mut bytes,
+        &mut sequence,
+        add_command(QueueItemId(1), "video.mkv"),
+    );
+    let _started = start_session(&mut state);
+    let _reserved = apply_and_journal(
+        &mut state,
+        &mut bytes,
+        &mut sequence,
+        Command::Worker(WorkerCommand::ReserveNext {
+            claim_id: ClaimId(2),
+            run_id: RunId(3),
+        }),
+    );
+    let prepared = apply_and_journal(
+        &mut state,
+        &mut bytes,
+        &mut sequence,
+        Command::Worker(WorkerCommand::PrepareReserved {
+            item_id: QueueItemId(1),
+            claim_id: ClaimId(2),
+            run_id: RunId(3),
+            observation: Some(Box::new(media_observation("ladder-content"))),
+            execution: hardware.clone(),
+        }),
+    );
+    let Reply::Claimed(Some(job)) = prepared.reply else {
+        panic!("expected hardware-prepared claim");
+    };
+    assert_eq!(
+        job.spec.execution.profile.decode_mode,
+        DecodeMode::Hardware(crate::HardwareDecoder::H264Cuvid)
+    );
+    // An unrelated profile is still rejected.
+    let mut wrong = analysis();
+    wrong.profile = hardware.profile.clone();
+    wrong.profile.preset = wrong.profile.preset.saturating_add(1);
+    let rejected = apply(
+        &mut state,
+        Command::Worker(WorkerCommand::RecordAnalysis {
+            item_id: QueueItemId(1),
+            claim_id: ClaimId(2),
+            run_id: RunId(3),
+            result: Box::new(wrong),
+        }),
+    );
+    assert!(matches!(rejected.reply, Reply::Rejected { .. }));
+    let mut fallback = analysis();
+    fallback.profile = fallback_profile;
+    let recorded = apply_and_journal(
+        &mut state,
+        &mut bytes,
+        &mut sequence,
+        Command::Worker(WorkerCommand::RecordAnalysis {
+            item_id: QueueItemId(1),
+            claim_id: ClaimId(2),
+            run_id: RunId(3),
+            result: Box::new(fallback),
+        }),
+    );
+    assert_eq!(recorded.reply, Reply::Accepted);
+    let replayed = replay(&bytes);
+    assert!(replayed.corruption.is_none());
+    assert_eq!(replayed.state, state.durable);
+
+    // The ladder is one-directional: a software-prepared run never records a
+    // hardware result.
+    let _finished = apply(
+        &mut state,
+        Command::Worker(WorkerCommand::Terminal {
+            item_id: QueueItemId(1),
+            claim_id: ClaimId(2),
+            run_id: RunId(3),
+            outcome: ItemOutcome::Failed(FailureFacts::new(FailureKind::Internal, "fixture")),
+            at: UnixMillis(1_000),
+            phase_spans: Vec::new(),
+            final_telemetry: None,
+        }),
+    );
+    let _added = apply(&mut state, add_command(QueueItemId(4), "again.mkv"));
+    let _claimed = reserve_and_prepare(&mut state, ClaimId(5), RunId(6), software);
+    let mut hardware_result = analysis();
+    hardware_result.profile.decode_mode = DecodeMode::Hardware(crate::HardwareDecoder::H264Cuvid);
+    let rejected = apply(
+        &mut state,
+        Command::Worker(WorkerCommand::RecordAnalysis {
+            item_id: QueueItemId(4),
+            claim_id: ClaimId(5),
+            run_id: RunId(6),
+            result: Box::new(hardware_result),
+        }),
+    );
+    assert!(matches!(rejected.reply, Reply::Rejected { .. }));
+}
+
+#[test]
+fn analyses_recorded_under_hardware_decode_are_not_reused_elsewhere() {
+    // The decode mode is part of the analysis identity (ADR-007): hardware
+    // and software measurements are not interchangeable, and the pin is
+    // decoder-granular — a Cuvid analysis re-searches under Qsv.
+    let mut hardware = execution();
+    hardware.profile.decode_mode = DecodeMode::Hardware(crate::HardwareDecoder::H264Cuvid);
+    let mut result = analysis();
+    result.profile = hardware.profile.clone();
+    let mut record = FileRecord::new(media_observation("pin-content").metadata);
+    record.record_analysis(result.clone());
+    assert_eq!(select_analysis(&record, &execution()), None);
+    let mut qsv = hardware.clone();
+    qsv.profile.decode_mode = DecodeMode::Hardware(crate::HardwareDecoder::H264Qsv);
+    assert_eq!(select_analysis(&record, &qsv), None);
+    assert_eq!(select_analysis(&record, &hardware), Some(result));
+}
+
+#[test]
+fn restage_moves_the_staging_pin_and_is_refused_after_abandonment() {
+    let mut state = AppState::default();
+    let mut bytes = Vec::new();
+    let mut sequence = 0_u64;
+    let _added = apply_and_journal(
+        &mut state,
+        &mut bytes,
+        &mut sequence,
+        add_command(QueueItemId(1), "video.mkv"),
+    );
+    let _started = start_session(&mut state);
+    for command in [
+        Command::Worker(WorkerCommand::ReserveNext {
+            claim_id: ClaimId(2),
+            run_id: RunId(3),
+        }),
+        Command::Worker(WorkerCommand::PrepareReserved {
+            item_id: QueueItemId(1),
+            claim_id: ClaimId(2),
+            run_id: RunId(3),
+            observation: None,
+            execution: execution(),
+        }),
+        Command::Worker(WorkerCommand::Started {
+            item_id: QueueItemId(1),
+            claim_id: ClaimId(2),
+            run_id: RunId(3),
+            at: UnixMillis(1_000),
+        }),
+        Command::Worker(WorkerCommand::RecordAnalysis {
+            item_id: QueueItemId(1),
+            claim_id: ClaimId(2),
+            run_id: RunId(3),
+            result: Box::new(analysis()),
+        }),
+    ] {
+        let applied = apply_and_journal(&mut state, &mut bytes, &mut sequence, command);
+        assert!(!matches!(applied.reply, Reply::Rejected { .. }));
+    }
+    let mut started = transaction(OutputState::Started, Replacement::KeepOriginal);
+    started.run_id = RunId(3);
+    let _output = apply_and_journal(
+        &mut state,
+        &mut bytes,
+        &mut sequence,
+        Command::Worker(WorkerCommand::Output(OutputDelta::OutputStarted {
+            transaction: Box::new(started),
+        })),
+    );
+    // The ready pin holds: an artifact on a different file id is rejected.
+    let stale = apply(
+        &mut state,
+        Command::Worker(WorkerCommand::Output(OutputDelta::OutputReady {
+            run_id: RunId(3),
+            staging_identity: identity("wrong", 5),
+        })),
+    );
+    assert!(matches!(stale.reply, Reply::Rejected { .. }));
+    // A restage must present a fresh empty artifact.
+    let nonempty = apply(
+        &mut state,
+        Command::Worker(WorkerCommand::Output(OutputDelta::OutputRestaged {
+            run_id: RunId(3),
+            staging_identity: destructive("fresh", 7),
+        })),
+    );
+    assert!(matches!(nonempty.reply, Reply::Rejected { .. }));
+    let restaged = apply_and_journal(
+        &mut state,
+        &mut bytes,
+        &mut sequence,
+        Command::Worker(WorkerCommand::Output(OutputDelta::OutputRestaged {
+            run_id: RunId(3),
+            staging_identity: destructive("fresh", 0),
+        })),
+    );
+    assert_eq!(restaged.reply, Reply::Accepted);
+    assert_eq!(
+        state
+            .durable
+            .outputs
+            .get(&RunId(3))
+            .expect("restaged transaction")
+            .initial_staging_identity,
+        destructive("fresh", 0)
+    );
+    // The ready pin follows the recreated staging file.
+    let ready = apply_and_journal(
+        &mut state,
+        &mut bytes,
+        &mut sequence,
+        Command::Worker(WorkerCommand::Output(OutputDelta::OutputReady {
+            run_id: RunId(3),
+            staging_identity: ArtifactIdentity {
+                content_key: ContentKey("ck-retry".to_owned()),
+                destructive: destructive("fresh", 9),
+            },
+        })),
+    );
+    assert_eq!(ready.reply, Reply::Accepted);
+    let replayed = replay(&bytes);
+    assert!(replayed.corruption.is_none());
+    assert_eq!(replayed.state, state.durable);
+
+    // Retry-after-abandonment is unrepresentable: a settled transaction
+    // refuses to restage.
+    let mut abandoned_state = active_state();
+    let mut abandoned = transaction(OutputState::Started, Replacement::KeepOriginal);
+    abandoned.run_id = RunId(3);
+    for delta in [
+        OutputDelta::OutputStarted {
+            transaction: Box::new(abandoned),
+        },
+        OutputDelta::AbandonStagingIntent {
+            run_id: RunId(3),
+            staging_identity: destructive("empty", 0),
+        },
+        OutputDelta::Abandoned { run_id: RunId(3) },
+    ] {
+        let applied = apply(
+            &mut abandoned_state,
+            Command::Worker(WorkerCommand::Output(delta)),
+        );
+        assert_eq!(applied.reply, Reply::Accepted);
+    }
+    let refused = apply(
+        &mut abandoned_state,
+        Command::Worker(WorkerCommand::Output(OutputDelta::OutputRestaged {
+            run_id: RunId(3),
+            staging_identity: destructive("fresh", 0),
+        })),
+    );
+    assert!(matches!(refused.reply, Reply::Rejected { .. }));
 }
 
 #[test]

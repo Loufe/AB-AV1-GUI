@@ -33,6 +33,7 @@ function queueItem(id: number): QueueItem {
     id,
     input: `videos/input-${id}.mp4`,
     operation: "Convert",
+    intent: "ReuseIfFresh",
     output_target: "Replace",
     state: "Queued",
   };

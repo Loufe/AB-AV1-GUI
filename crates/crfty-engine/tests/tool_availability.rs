@@ -15,11 +15,11 @@ use std::{
 };
 
 use crfty_core::{
-    AnalysisProfile, AnalysisResult, AppState, ClaimId, Command, Crf, EphemeralDelta,
-    ExecutionSettings, ItemOutcome, MediaTool, Operation, OutputDelta, OutputTarget, QueueCommand,
-    QueueItemId, QueueItemState, Replacement, Reply, RunId, SearchMeasurement, SessionCommand,
-    Settings, SettingsCommand, ToolAvailability, ToolRevisions, UnixMillis, VmafScore,
-    WorkerCommand, apply,
+    AnalysisIntent, AnalysisProfile, AnalysisResult, AppState, ClaimId, Command, Crf,
+    EphemeralDelta, ExecutionSettings, ItemOutcome, MediaTool, Operation, OutputDelta,
+    OutputTarget, QueueCommand, QueueItemId, QueueItemState, Replacement, Reply, RunId,
+    SearchMeasurement, SessionCommand, Settings, SettingsCommand, ToolAvailability, ToolRevisions,
+    UnixMillis, VmafScore, WorkerCommand, apply,
 };
 use crfty_engine::{
     ab_av1::MediaTools,
@@ -114,6 +114,7 @@ fn startup_without_tools_replays_and_serves_non_media_commands() {
                 item_id: QueueItemId(1),
                 input: PathBuf::from("video.mkv"),
                 operation: Operation::Convert,
+                intent: AnalysisIntent::ReuseIfFresh,
                 output_target: OutputTarget::Replace,
             }))
             .expect("seed add reply"),
@@ -156,6 +157,7 @@ fn startup_without_tools_replays_and_serves_non_media_commands() {
                 item_id: QueueItemId(2),
                 input: PathBuf::from("another.mkv"),
                 operation: Operation::Convert,
+                intent: AnalysisIntent::ReuseIfFresh,
                 output_target: OutputTarget::Replace,
             })
             .expect("tool-free add reply"),
@@ -223,6 +225,7 @@ fn startup_recovery_without_ffprobe_defers_output_settlement() {
             item_id: QueueItemId(1),
             input: input.clone(),
             operation: Operation::Convert,
+            intent: AnalysisIntent::ReuseIfFresh,
             output_target: OutputTarget::Replace,
         }),
         Command::System(crfty_core::SystemCommand::ToolsDiscovered {

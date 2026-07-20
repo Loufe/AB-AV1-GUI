@@ -1,8 +1,9 @@
 use serde::{Deserialize, Serialize};
 
 use crate::{
-    AnalysisResult, DestructiveIdentity, ExecutionSettings, FileRecord, FileStamp, JobAction,
-    MediaContainer, Operation, Verdict, VerdictKind, VideoCodec, VideoMeta,
+    AnalysisIntent, AnalysisProfile, AnalysisResult, DecodeMode, DestructiveIdentity,
+    ExecutionSettings, FileRecord, FileStamp, JobAction, MediaContainer, Operation, Verdict,
+    VerdictKind, VideoCodec, VideoMeta,
 };
 
 pub const MIN_VIDEO_PIXELS: u64 = 921_600;
@@ -108,11 +109,29 @@ pub fn verdict_applies(
     }
 }
 
+/// The analysis profiles a run may durably record: the prepared profile
+/// itself, plus its software-decode variant when the prepared profile decodes
+/// in hardware. This is the gate behind the hardware→software retry ladder —
+/// a search that fails under hardware decode retries once with software and
+/// records under the profile it actually ran with, while the requested
+/// `JobSpec` is never rewritten. A software-prepared run has no wider ladder.
+#[must_use]
+pub fn permitted_profiles(execution: &ExecutionSettings) -> Vec<AnalysisProfile> {
+    let mut profiles = vec![execution.profile.clone()];
+    if matches!(execution.profile.decode_mode, DecodeMode::Hardware(_)) {
+        let mut software = execution.profile.clone();
+        software.decode_mode = DecodeMode::Software;
+        profiles.push(software);
+    }
+    profiles
+}
+
 #[must_use]
 pub fn select_job_action(
     metadata: Option<&VideoMeta>,
     record: Option<&FileRecord>,
     operation: Operation,
+    intent: AnalysisIntent,
     execution: &ExecutionSettings,
 ) -> JobAction {
     if let Some(metadata) = metadata {
@@ -123,9 +142,12 @@ pub fn select_job_action(
         }
     }
 
-    let selected_analysis = record
-        .and_then(|known| select_analysis(known, execution))
-        .map(Box::new);
+    let selected_analysis = match intent {
+        AnalysisIntent::ReuseIfFresh => record
+            .and_then(|known| select_analysis(known, execution))
+            .map(Box::new),
+        AnalysisIntent::Refresh => None,
+    };
     match operation {
         Operation::Analyze => JobAction::Analyze { selected_analysis },
         Operation::Convert => JobAction::Encode { selected_analysis },

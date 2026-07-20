@@ -141,6 +141,16 @@ pub enum OutputDelta {
         run_id: RunId,
         staging_identity: ArtifactIdentity,
     },
+    /// The staging artifact was recreated for an in-transaction encode retry
+    /// (the failed attempt's adapter cleanup deletes staging). Valid only
+    /// while the transaction is Started; the journaled staging pin —
+    /// `initial_staging_identity`, which `OutputReady` verifies by file id —
+    /// moves to the recreated file. After abandonment the ledger refuses
+    /// this, so retry-after-abandon stays unrepresentable.
+    OutputRestaged {
+        run_id: RunId,
+        staging_identity: DestructiveIdentity,
+    },
     OutputCommitted {
         run_id: RunId,
         final_identity: ArtifactIdentity,
@@ -181,6 +191,14 @@ impl OutputDelta {
                     staging_identity: staging_identity.clone(),
                 },
             ),
+            Self::OutputRestaged {
+                run_id,
+                staging_identity,
+            } => {
+                if let Some(transaction) = outputs.get_mut(run_id) {
+                    transaction.initial_staging_identity = staging_identity.clone();
+                }
+            }
             Self::OutputCommitted {
                 run_id,
                 final_identity,

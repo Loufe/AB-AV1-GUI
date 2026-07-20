@@ -33,6 +33,7 @@ function item(
     id: id as QueueItemId,
     input: `C:\\Videos\\Season 1\\${name}`,
     operation,
+    intent: "ReuseIfFresh",
     output_target: operation === "Convert" ? "Replace" : { Suffix: { suffix: "_av1" } },
     state,
   };

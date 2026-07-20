@@ -164,6 +164,50 @@ impl<I: ArtifactInspector> OutputManager<I> {
         })
     }
 
+    /// Recreates the staging artifact for an in-transaction encode retry:
+    /// the failed attempt's adapter cleanup deletes staging, so the retry
+    /// needs a fresh empty file and a delta that moves the journaled staging
+    /// pin (`initial_staging_identity`) to it. Only a Started transaction can
+    /// restage — once abandoned or otherwise settled, a retry is
+    /// unrepresentable in the durable model.
+    pub fn restage(&self, transaction: &OutputTransaction) -> Result<OutputDelta, OutputError> {
+        if transaction.state != OutputState::Started {
+            return Err(OutputError::new(
+                "output transaction cannot restage from its current state",
+                io::Error::new(io::ErrorKind::InvalidInput, "invalid output state"),
+            ));
+        }
+        match std::fs::remove_file(&transaction.staging) {
+            Ok(()) => {}
+            Err(error) if error.kind() == io::ErrorKind::NotFound => {}
+            Err(error) => {
+                return Err(OutputError::new(
+                    "failed to remove stale staging before restage",
+                    error,
+                ));
+            }
+        }
+        let staging_file = OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&transaction.staging)
+            .map_err(|error| {
+                OutputError::new("failed to recreate staging file exclusively", error)
+            })?;
+        staging_file.sync_all().map_err(|error| {
+            OutputError::new("failed to synchronize recreated staging file", error)
+        })?;
+        drop(staging_file);
+        let staging_identity = self
+            .inspector
+            .inspect_file(&transaction.staging)
+            .map_err(|error| OutputError::new("failed to inspect recreated staging file", error))?;
+        Ok(OutputDelta::OutputRestaged {
+            run_id: transaction.run_id,
+            staging_identity,
+        })
+    }
+
     pub fn discard_unjournaled(&self, transaction: &OutputTransaction) -> Result<(), OutputError> {
         if transaction.state != OutputState::Started {
             return Err(OutputError::new(

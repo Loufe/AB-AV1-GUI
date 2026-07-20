@@ -6,7 +6,7 @@ import { invoke as __TAURI_INVOKE, Channel } from "@tauri-apps/api/core";
 export const commands = {
 	appInfo: () => __TAURI_INVOKE<AppInfo>("app_info"),
 	subscribe: (channel: Channel<ShellEvent_Deserialize>) => typedError<null, CommandError>(__TAURI_INVOKE("subscribe", { channel })),
-	queueAdd: (input: string, operation: Operation, outputTarget: OutputTarget) => typedError<null, CommandError>(__TAURI_INVOKE("queue_add", { input, operation, outputTarget })),
+	queueAdd: (input: string, operation: Operation, intent: AnalysisIntent, outputTarget: OutputTarget) => typedError<null, CommandError>(__TAURI_INVOKE("queue_add", { input, operation, intent, outputTarget })),
 	queueRemove: (itemId: QueueItemId) => typedError<null, CommandError>(__TAURI_INVOKE("queue_remove", { itemId })),
 	queueMove: (itemId: QueueItemId, before: number | null) => typedError<null, CommandError>(__TAURI_INVOKE("queue_move", { itemId, before })),
 	start: () => typedError<null, CommandError>(__TAURI_INVOKE("start")),
@@ -21,12 +21,29 @@ export type AnalysisAttempt = {
 	last_measurement: SearchMeasurement | null,
 };
 
+/**
+ *  Whether a queued item may reuse a durable analysis that already satisfies
+ *  its execution settings. `Refresh` forces a fresh search even when a cached
+ *  result qualifies; the new result still lands in the record's analysis
+ *  index like any other.
+ */
+export type AnalysisIntent = "ReuseIfFresh" | "Refresh";
+
 export type AnalysisProfile = {
 	preset: number,
 	max_encoded_percent_basis_points: number,
 	samples: number | null,
 	sample_duration_ms: number,
 	thorough: boolean,
+	/**
+	 *  The decode mode the search actually ran with — part of the analysis
+	 *  identity (ADR-007, per #33 §7): hardware and software decoders can
+	 *  produce different decoded frames, so their VMAF measurements are not
+	 *  interchangeable. The pin is decoder-granular: a Cuvid-recorded
+	 *  analysis is not returned for a Qsv execution and re-searches instead.
+	 *  Requested-vs-actual provenance lives on the run (`decode_preference`,
+	 *  this field, and the terminal evidence's `encode_decode`).
+	 */
 	decode_mode: DecodeMode,
 	ab_av1_revision: string,
 	ffmpeg_revision: string,
@@ -361,6 +378,7 @@ export type JobSpec = {
 	input: string,
 	content_key: ContentKey | null,
 	operation: Operation,
+	intent: AnalysisIntent,
 	output_target: OutputTarget,
 	execution: ExecutionSettings,
 	action: JobAction,
@@ -382,49 +400,73 @@ export type OutputDelta = OutputDelta_Serialize | OutputDelta_Deserialize;
 
 export type OutputDelta_Deserialize = ({ OutputStarted: {
 	transaction: OutputTransaction_Deserialize,
-} }) & { AbandonStagingIntent?: never; Abandoned?: never; Conflict?: never; OriginalRetired?: never; OutputCommitted?: never; OutputReady?: never; RetireOriginalIntent?: never } | ({ OutputReady: {
+} }) & { AbandonStagingIntent?: never; Abandoned?: never; Conflict?: never; OriginalRetired?: never; OutputCommitted?: never; OutputReady?: never; OutputRestaged?: never; RetireOriginalIntent?: never } | ({ OutputReady: {
 	run_id: RunId,
 	staging_identity: ArtifactIdentity_Deserialize,
-} }) & { AbandonStagingIntent?: never; Abandoned?: never; Conflict?: never; OriginalRetired?: never; OutputCommitted?: never; OutputStarted?: never; RetireOriginalIntent?: never } | ({ OutputCommitted: {
-	run_id: RunId,
-	final_identity: ArtifactIdentity_Deserialize,
-} }) & { AbandonStagingIntent?: never; Abandoned?: never; Conflict?: never; OriginalRetired?: never; OutputReady?: never; OutputStarted?: never; RetireOriginalIntent?: never } | ({ RetireOriginalIntent: {
-	run_id: RunId,
-} }) & { AbandonStagingIntent?: never; Abandoned?: never; Conflict?: never; OriginalRetired?: never; OutputCommitted?: never; OutputReady?: never; OutputStarted?: never } | ({ OriginalRetired: {
-	run_id: RunId,
-} }) & { AbandonStagingIntent?: never; Abandoned?: never; Conflict?: never; OutputCommitted?: never; OutputReady?: never; OutputStarted?: never; RetireOriginalIntent?: never } | ({ AbandonStagingIntent: {
+} }) & { AbandonStagingIntent?: never; Abandoned?: never; Conflict?: never; OriginalRetired?: never; OutputCommitted?: never; OutputRestaged?: never; OutputStarted?: never; RetireOriginalIntent?: never } | 
+/**
+ *  The staging artifact was recreated for an in-transaction encode retry
+ *  (the failed attempt's adapter cleanup deletes staging). Valid only
+ *  while the transaction is Started; the journaled staging pin —
+ *  `initial_staging_identity`, which `OutputReady` verifies by file id —
+ *  moves to the recreated file. After abandonment the ledger refuses
+ *  this, so retry-after-abandon stays unrepresentable.
+ */
+({ OutputRestaged: {
 	run_id: RunId,
 	staging_identity: DestructiveIdentity_Deserialize,
-} }) & { Abandoned?: never; Conflict?: never; OriginalRetired?: never; OutputCommitted?: never; OutputReady?: never; OutputStarted?: never; RetireOriginalIntent?: never } | ({ Abandoned: {
+} }) & { AbandonStagingIntent?: never; Abandoned?: never; Conflict?: never; OriginalRetired?: never; OutputCommitted?: never; OutputReady?: never; OutputStarted?: never; RetireOriginalIntent?: never } | ({ OutputCommitted: {
 	run_id: RunId,
-} }) & { AbandonStagingIntent?: never; Conflict?: never; OriginalRetired?: never; OutputCommitted?: never; OutputReady?: never; OutputStarted?: never; RetireOriginalIntent?: never } | ({ Conflict: {
+	final_identity: ArtifactIdentity_Deserialize,
+} }) & { AbandonStagingIntent?: never; Abandoned?: never; Conflict?: never; OriginalRetired?: never; OutputReady?: never; OutputRestaged?: never; OutputStarted?: never; RetireOriginalIntent?: never } | ({ RetireOriginalIntent: {
+	run_id: RunId,
+} }) & { AbandonStagingIntent?: never; Abandoned?: never; Conflict?: never; OriginalRetired?: never; OutputCommitted?: never; OutputReady?: never; OutputRestaged?: never; OutputStarted?: never } | ({ OriginalRetired: {
+	run_id: RunId,
+} }) & { AbandonStagingIntent?: never; Abandoned?: never; Conflict?: never; OutputCommitted?: never; OutputReady?: never; OutputRestaged?: never; OutputStarted?: never; RetireOriginalIntent?: never } | ({ AbandonStagingIntent: {
+	run_id: RunId,
+	staging_identity: DestructiveIdentity_Deserialize,
+} }) & { Abandoned?: never; Conflict?: never; OriginalRetired?: never; OutputCommitted?: never; OutputReady?: never; OutputRestaged?: never; OutputStarted?: never; RetireOriginalIntent?: never } | ({ Abandoned: {
+	run_id: RunId,
+} }) & { AbandonStagingIntent?: never; Conflict?: never; OriginalRetired?: never; OutputCommitted?: never; OutputReady?: never; OutputRestaged?: never; OutputStarted?: never; RetireOriginalIntent?: never } | ({ Conflict: {
 	run_id: RunId,
 	kind: ConflictKind,
 	detail: string,
-} }) & { AbandonStagingIntent?: never; Abandoned?: never; OriginalRetired?: never; OutputCommitted?: never; OutputReady?: never; OutputStarted?: never; RetireOriginalIntent?: never };
+} }) & { AbandonStagingIntent?: never; Abandoned?: never; OriginalRetired?: never; OutputCommitted?: never; OutputReady?: never; OutputRestaged?: never; OutputStarted?: never; RetireOriginalIntent?: never };
 
 export type OutputDelta_Serialize = ({ OutputStarted: {
 	transaction: OutputTransaction_Serialize,
-} }) & { AbandonStagingIntent?: never; Abandoned?: never; Conflict?: never; OriginalRetired?: never; OutputCommitted?: never; OutputReady?: never; RetireOriginalIntent?: never } | ({ OutputReady: {
+} }) & { AbandonStagingIntent?: never; Abandoned?: never; Conflict?: never; OriginalRetired?: never; OutputCommitted?: never; OutputReady?: never; OutputRestaged?: never; RetireOriginalIntent?: never } | ({ OutputReady: {
 	run_id: RunId,
 	staging_identity: ArtifactIdentity_Serialize,
-} }) & { AbandonStagingIntent?: never; Abandoned?: never; Conflict?: never; OriginalRetired?: never; OutputCommitted?: never; OutputStarted?: never; RetireOriginalIntent?: never } | ({ OutputCommitted: {
-	run_id: RunId,
-	final_identity: ArtifactIdentity_Serialize,
-} }) & { AbandonStagingIntent?: never; Abandoned?: never; Conflict?: never; OriginalRetired?: never; OutputReady?: never; OutputStarted?: never; RetireOriginalIntent?: never } | ({ RetireOriginalIntent: {
-	run_id: RunId,
-} }) & { AbandonStagingIntent?: never; Abandoned?: never; Conflict?: never; OriginalRetired?: never; OutputCommitted?: never; OutputReady?: never; OutputStarted?: never } | ({ OriginalRetired: {
-	run_id: RunId,
-} }) & { AbandonStagingIntent?: never; Abandoned?: never; Conflict?: never; OutputCommitted?: never; OutputReady?: never; OutputStarted?: never; RetireOriginalIntent?: never } | ({ AbandonStagingIntent: {
+} }) & { AbandonStagingIntent?: never; Abandoned?: never; Conflict?: never; OriginalRetired?: never; OutputCommitted?: never; OutputRestaged?: never; OutputStarted?: never; RetireOriginalIntent?: never } | 
+/**
+ *  The staging artifact was recreated for an in-transaction encode retry
+ *  (the failed attempt's adapter cleanup deletes staging). Valid only
+ *  while the transaction is Started; the journaled staging pin —
+ *  `initial_staging_identity`, which `OutputReady` verifies by file id —
+ *  moves to the recreated file. After abandonment the ledger refuses
+ *  this, so retry-after-abandon stays unrepresentable.
+ */
+({ OutputRestaged: {
 	run_id: RunId,
 	staging_identity: DestructiveIdentity_Serialize,
-} }) & { Abandoned?: never; Conflict?: never; OriginalRetired?: never; OutputCommitted?: never; OutputReady?: never; OutputStarted?: never; RetireOriginalIntent?: never } | ({ Abandoned: {
+} }) & { AbandonStagingIntent?: never; Abandoned?: never; Conflict?: never; OriginalRetired?: never; OutputCommitted?: never; OutputReady?: never; OutputStarted?: never; RetireOriginalIntent?: never } | ({ OutputCommitted: {
 	run_id: RunId,
-} }) & { AbandonStagingIntent?: never; Conflict?: never; OriginalRetired?: never; OutputCommitted?: never; OutputReady?: never; OutputStarted?: never; RetireOriginalIntent?: never } | ({ Conflict: {
+	final_identity: ArtifactIdentity_Serialize,
+} }) & { AbandonStagingIntent?: never; Abandoned?: never; Conflict?: never; OriginalRetired?: never; OutputReady?: never; OutputRestaged?: never; OutputStarted?: never; RetireOriginalIntent?: never } | ({ RetireOriginalIntent: {
+	run_id: RunId,
+} }) & { AbandonStagingIntent?: never; Abandoned?: never; Conflict?: never; OriginalRetired?: never; OutputCommitted?: never; OutputReady?: never; OutputRestaged?: never; OutputStarted?: never } | ({ OriginalRetired: {
+	run_id: RunId,
+} }) & { AbandonStagingIntent?: never; Abandoned?: never; Conflict?: never; OutputCommitted?: never; OutputReady?: never; OutputRestaged?: never; OutputStarted?: never; RetireOriginalIntent?: never } | ({ AbandonStagingIntent: {
+	run_id: RunId,
+	staging_identity: DestructiveIdentity_Serialize,
+} }) & { Abandoned?: never; Conflict?: never; OriginalRetired?: never; OutputCommitted?: never; OutputReady?: never; OutputRestaged?: never; OutputStarted?: never; RetireOriginalIntent?: never } | ({ Abandoned: {
+	run_id: RunId,
+} }) & { AbandonStagingIntent?: never; Conflict?: never; OriginalRetired?: never; OutputCommitted?: never; OutputReady?: never; OutputRestaged?: never; OutputStarted?: never; RetireOriginalIntent?: never } | ({ Conflict: {
 	run_id: RunId,
 	kind: ConflictKind,
 	detail: string,
-} }) & { AbandonStagingIntent?: never; Abandoned?: never; OriginalRetired?: never; OutputCommitted?: never; OutputReady?: never; OutputStarted?: never; RetireOriginalIntent?: never };
+} }) & { AbandonStagingIntent?: never; Abandoned?: never; OriginalRetired?: never; OutputCommitted?: never; OutputReady?: never; OutputRestaged?: never; OutputStarted?: never; RetireOriginalIntent?: never };
 
 export type OutputSettings = {
 	default_mode: DefaultOutputMode,
@@ -524,6 +566,7 @@ export type QueueItem = {
 	id: QueueItemId,
 	input: string,
 	operation: Operation,
+	intent: AnalysisIntent,
 	output_target: OutputTarget,
 	state: QueueItemState,
 };
@@ -549,6 +592,7 @@ export type ReservedJob = {
 	run_id: RunId,
 	input: string,
 	operation: Operation,
+	intent: AnalysisIntent,
 	output_target: OutputTarget,
 };
 

@@ -318,6 +318,16 @@ function foldOutput(
     const { run_id, staging_identity } = delta.OutputReady;
     return withOutputState(outputs, run_id, { Ready: { staging_identity } });
   }
+  if ("OutputRestaged" in delta && delta.OutputRestaged !== undefined) {
+    // An encode retry recreated the staging artifact: the journaled pin
+    // moves to the new identity while the state stays Started.
+    const { run_id, staging_identity } = delta.OutputRestaged;
+    const transaction = outputs[run_id];
+    if (transaction === undefined) {
+      return outputs;
+    }
+    return { ...outputs, [run_id]: { ...transaction, initial_staging_identity: staging_identity } };
+  }
   if ("OutputCommitted" in delta && delta.OutputCommitted !== undefined) {
     const { run_id, final_identity } = delta.OutputCommitted;
     return withOutputState(outputs, run_id, { Committed: { final_identity } });

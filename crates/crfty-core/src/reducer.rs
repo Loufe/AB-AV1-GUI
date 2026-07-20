@@ -4,8 +4,8 @@ use serde::Serialize;
 
 use crate::state::ConversionRun;
 use crate::{
-    AnalysisResult, AppState, ClaimId, ClaimedJob, CompletionEvidence, ConfigDelta, DecodeMode,
-    DecodePreference, DurableDelta, ExecutionSettings, ItemOutcome, JobAction, JobSpec,
+    AnalysisIntent, AnalysisResult, AppState, ClaimId, ClaimedJob, CompletionEvidence, ConfigDelta,
+    DecodeMode, DecodePreference, DurableDelta, ExecutionSettings, ItemOutcome, JobAction, JobSpec,
     MediaObservation, Operation, OutputDelta, OutputTarget, PhaseSpan, QueueItem, QueueItemId,
     QueueItemState, ReservedJob, RunId, SessionState, Settings, Telemetry, ToolAvailability,
     UnixMillis, fold, fold_config, select_job_action,
@@ -31,6 +31,7 @@ pub enum QueueCommand {
         item_id: QueueItemId,
         input: PathBuf,
         operation: Operation,
+        intent: AnalysisIntent,
         output_target: OutputTarget,
     },
     Remove {
@@ -230,6 +231,7 @@ fn apply_queue(state: &AppState, command: QueueCommand) -> Applied {
             item_id,
             input,
             operation,
+            intent,
             output_target,
         } => {
             if state.durable.queue.iter().any(|item| item.id == item_id) {
@@ -241,6 +243,7 @@ fn apply_queue(state: &AppState, command: QueueCommand) -> Applied {
                     id: item_id,
                     input,
                     operation,
+                    intent,
                     output_target,
                     state: QueueItemState::Queued,
                 },
@@ -375,6 +378,7 @@ fn apply_worker(state: &AppState, command: WorkerCommand) -> Applied {
                 run_id,
                 input: item.input.clone(),
                 operation: item.operation,
+                intent: item.intent,
                 output_target: item.output_target.clone(),
             };
             let mut applied = Applied::accepted();
@@ -423,7 +427,8 @@ fn apply_worker(state: &AppState, command: WorkerCommand) -> Applied {
                 .as_ref()
                 .map(|observed| &observed.metadata)
                 .or_else(|| record.map(|known| &known.metadata));
-            let action = select_job_action(metadata, record, item.operation, &execution);
+            let action =
+                select_job_action(metadata, record, item.operation, item.intent, &execution);
             if let Some(selected) = action.selected_analysis()
                 && let Err(reason) = selected.validate_reusable_for(&execution)
             {
@@ -436,6 +441,7 @@ fn apply_worker(state: &AppState, command: WorkerCommand) -> Applied {
                 input: item.input.clone(),
                 content_key,
                 operation: item.operation,
+                intent: item.intent,
                 output_target: item.output_target.clone(),
                 execution,
                 action,
@@ -784,6 +790,7 @@ fn output_run_id(delta: &OutputDelta) -> RunId {
     match delta {
         OutputDelta::OutputStarted { transaction } => transaction.run_id,
         OutputDelta::OutputReady { run_id, .. }
+        | OutputDelta::OutputRestaged { run_id, .. }
         | OutputDelta::OutputCommitted { run_id, .. }
         | OutputDelta::RetireOriginalIntent { run_id }
         | OutputDelta::OriginalRetired { run_id }
@@ -831,6 +838,17 @@ pub(crate) fn validate_output_delta(
             && staging_identity.destructive.file_id
                 == transaction.initial_staging_identity.file_id =>
         {
+            Ok(())
+        }
+        // An encode retry recreates the empty staging artifact in place; the
+        // pin moves with it. Only a Started transaction can restage — after
+        // abandonment (or any settlement) a retry is unrepresentable.
+        (
+            Some(transaction),
+            OutputDelta::OutputRestaged {
+                staging_identity, ..
+            },
+        ) if transaction.state == crate::OutputState::Started && staging_identity.size == 0 => {
             Ok(())
         }
         (Some(transaction), OutputDelta::OutputCommitted { final_identity, .. }) => {
