@@ -226,7 +226,6 @@ fn transaction(state: OutputState, replacement: Replacement) -> OutputTransactio
         input: PathBuf::from("input.mkv"),
         input_identity: destructive("input", 10),
         staging: PathBuf::from(".output.mkv.crfty-9.part"),
-        initial_staging_identity: destructive("empty", 0),
         final_path: PathBuf::from("output.mkv"),
         final_preimage: None,
         replacement,
@@ -990,14 +989,57 @@ fn output_ledger_rejects_skipped_and_mismatched_transitions() {
         })),
     );
     assert_eq!(accepted.reply, Reply::Accepted);
+    let ready_without_staging = apply(
+        &mut state,
+        Command::Worker(WorkerCommand::Output(OutputDelta::OutputReady {
+            run_id: RunId(3),
+            staging_identity: identity("staging", 8),
+        })),
+    );
+    assert!(matches!(
+        ready_without_staging.reply,
+        Reply::Rejected { .. }
+    ));
+    let staging_created = apply(
+        &mut state,
+        Command::Worker(WorkerCommand::Output(OutputDelta::StagingCreated {
+            run_id: RunId(3),
+            initial: destructive("staging", 0),
+        })),
+    );
+    assert_eq!(staging_created.reply, Reply::Accepted);
+    let repeated_staging = apply(
+        &mut state,
+        Command::Worker(WorkerCommand::Output(OutputDelta::StagingCreated {
+            run_id: RunId(3),
+            initial: destructive("staging", 0),
+        })),
+    );
+    assert!(matches!(repeated_staging.reply, Reply::Rejected { .. }));
     let empty_ready = apply(
         &mut state,
         Command::Worker(WorkerCommand::Output(OutputDelta::OutputReady {
             run_id: RunId(3),
-            staging_identity: identity("empty", 0),
+            staging_identity: identity("staging", 0),
         })),
     );
     assert!(matches!(empty_ready.reply, Reply::Rejected { .. }));
+    let foreign_ready = apply(
+        &mut state,
+        Command::Worker(WorkerCommand::Output(OutputDelta::OutputReady {
+            run_id: RunId(3),
+            staging_identity: identity("other", 8),
+        })),
+    );
+    assert!(matches!(foreign_ready.reply, Reply::Rejected { .. }));
+    let ready = apply(
+        &mut state,
+        Command::Worker(WorkerCommand::Output(OutputDelta::OutputReady {
+            run_id: RunId(3),
+            staging_identity: identity("staging", 8),
+        })),
+    );
+    assert_eq!(ready.reply, Reply::Accepted);
 }
 
 #[test]
@@ -1124,6 +1166,37 @@ fn recovery_covers_every_destructive_boundary() {
     assert!(matches!(
         recover_output(&started, &changed_partial),
         OutputRecoveryAction::Append(OutputDelta::AbandonStagingIntent { .. })
+    ));
+    let absent_staging = FileSystemFacts {
+        staging: DestructiveObservation::Absent,
+        ..started_facts.clone()
+    };
+    assert!(matches!(
+        recover_output(&started, &absent_staging),
+        OutputRecoveryAction::Append(OutputDelta::Abandoned { .. })
+    ));
+
+    let staging_created = transaction(
+        OutputState::StagingCreated {
+            initial: destructive("empty", 0),
+        },
+        Replacement::KeepOriginal,
+    );
+    assert!(matches!(
+        recover_output(&staging_created, &changed_partial),
+        OutputRecoveryAction::Append(OutputDelta::AbandonStagingIntent { .. })
+    ));
+    assert!(matches!(
+        recover_output(&staging_created, &absent_staging),
+        OutputRecoveryAction::Append(OutputDelta::Abandoned { .. })
+    ));
+    let foreign_staging = FileSystemFacts {
+        staging: DestructiveObservation::Present(destructive("foreign", 5)),
+        ..started_facts.clone()
+    };
+    assert!(matches!(
+        recover_output(&staging_created, &foreign_staging),
+        OutputRecoveryAction::Conflict(_)
     ));
 
     let ready_identity = identity("encoded", 7);

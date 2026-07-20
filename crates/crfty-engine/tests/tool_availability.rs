@@ -204,14 +204,17 @@ fn startup_recovery_without_ffprobe_defers_output_settlement() {
     fs::write(&input, b"input bytes").expect("input fixture");
     let manager = OutputManager::new(FixtureByteInspector);
     let transaction = manager
-        .prepare(
+        .plan(
             RunId(3),
             &input,
             &final_path,
             Replacement::RetireOriginal,
             false,
         )
-        .expect("prepare transaction");
+        .expect("plan transaction");
+    let initial = manager
+        .create_staging(&transaction)
+        .expect("create staging");
     fs::write(&transaction.staging, b"crash-left partial bytes").expect("partial staging");
 
     let settings = execution();
@@ -267,6 +270,10 @@ fn startup_recovery_without_ffprobe_defers_output_settlement() {
         }),
         Command::Worker(WorkerCommand::Output(OutputDelta::OutputStarted {
             transaction: Box::new(transaction.clone()),
+        })),
+        Command::Worker(WorkerCommand::Output(OutputDelta::StagingCreated {
+            run_id: RunId(3),
+            initial,
         })),
     ] {
         let applied = apply(&mut state, command);

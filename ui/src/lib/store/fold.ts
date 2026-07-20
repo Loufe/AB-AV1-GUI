@@ -240,6 +240,10 @@ function foldOutput(
     const { transaction } = delta.OutputStarted;
     return { ...outputs, [transaction.run_id]: transaction };
   }
+  if ("StagingCreated" in delta && delta.StagingCreated !== undefined) {
+    const { run_id, initial } = delta.StagingCreated;
+    return withOutputState(outputs, run_id, { StagingCreated: { initial } });
+  }
   if ("OutputReady" in delta && delta.OutputReady !== undefined) {
     const { run_id, staging_identity } = delta.OutputReady;
     return withOutputState(outputs, run_id, { Ready: { staging_identity } });

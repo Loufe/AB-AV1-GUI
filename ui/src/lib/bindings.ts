@@ -236,25 +236,28 @@ export type Operation = "Analyze" | "Convert";
 
 export type OutputDelta = ({ OutputStarted: {
 	transaction: OutputTransaction,
-} }) & { AbandonStagingIntent?: never; Abandoned?: never; Conflict?: never; OriginalRetired?: never; OutputCommitted?: never; OutputReady?: never; RetireOriginalIntent?: never } | ({ OutputReady: {
+} }) & { AbandonStagingIntent?: never; Abandoned?: never; Conflict?: never; OriginalRetired?: never; OutputCommitted?: never; OutputReady?: never; RetireOriginalIntent?: never; StagingCreated?: never } | ({ StagingCreated: {
+	run_id: RunId,
+	initial: DestructiveIdentity,
+} }) & { AbandonStagingIntent?: never; Abandoned?: never; Conflict?: never; OriginalRetired?: never; OutputCommitted?: never; OutputReady?: never; OutputStarted?: never; RetireOriginalIntent?: never } | ({ OutputReady: {
 	run_id: RunId,
 	staging_identity: ArtifactIdentity,
-} }) & { AbandonStagingIntent?: never; Abandoned?: never; Conflict?: never; OriginalRetired?: never; OutputCommitted?: never; OutputStarted?: never; RetireOriginalIntent?: never } | ({ OutputCommitted: {
+} }) & { AbandonStagingIntent?: never; Abandoned?: never; Conflict?: never; OriginalRetired?: never; OutputCommitted?: never; OutputStarted?: never; RetireOriginalIntent?: never; StagingCreated?: never } | ({ OutputCommitted: {
 	run_id: RunId,
 	final_identity: ArtifactIdentity,
-} }) & { AbandonStagingIntent?: never; Abandoned?: never; Conflict?: never; OriginalRetired?: never; OutputReady?: never; OutputStarted?: never; RetireOriginalIntent?: never } | ({ RetireOriginalIntent: {
+} }) & { AbandonStagingIntent?: never; Abandoned?: never; Conflict?: never; OriginalRetired?: never; OutputReady?: never; OutputStarted?: never; RetireOriginalIntent?: never; StagingCreated?: never } | ({ RetireOriginalIntent: {
 	run_id: RunId,
-} }) & { AbandonStagingIntent?: never; Abandoned?: never; Conflict?: never; OriginalRetired?: never; OutputCommitted?: never; OutputReady?: never; OutputStarted?: never } | ({ OriginalRetired: {
+} }) & { AbandonStagingIntent?: never; Abandoned?: never; Conflict?: never; OriginalRetired?: never; OutputCommitted?: never; OutputReady?: never; OutputStarted?: never; StagingCreated?: never } | ({ OriginalRetired: {
 	run_id: RunId,
-} }) & { AbandonStagingIntent?: never; Abandoned?: never; Conflict?: never; OutputCommitted?: never; OutputReady?: never; OutputStarted?: never; RetireOriginalIntent?: never } | ({ AbandonStagingIntent: {
+} }) & { AbandonStagingIntent?: never; Abandoned?: never; Conflict?: never; OutputCommitted?: never; OutputReady?: never; OutputStarted?: never; RetireOriginalIntent?: never; StagingCreated?: never } | ({ AbandonStagingIntent: {
 	run_id: RunId,
 	staging_identity: DestructiveIdentity,
-} }) & { Abandoned?: never; Conflict?: never; OriginalRetired?: never; OutputCommitted?: never; OutputReady?: never; OutputStarted?: never; RetireOriginalIntent?: never } | ({ Abandoned: {
+} }) & { Abandoned?: never; Conflict?: never; OriginalRetired?: never; OutputCommitted?: never; OutputReady?: never; OutputStarted?: never; RetireOriginalIntent?: never; StagingCreated?: never } | ({ Abandoned: {
 	run_id: RunId,
-} }) & { AbandonStagingIntent?: never; Conflict?: never; OriginalRetired?: never; OutputCommitted?: never; OutputReady?: never; OutputStarted?: never; RetireOriginalIntent?: never } | ({ Conflict: {
+} }) & { AbandonStagingIntent?: never; Conflict?: never; OriginalRetired?: never; OutputCommitted?: never; OutputReady?: never; OutputStarted?: never; RetireOriginalIntent?: never; StagingCreated?: never } | ({ Conflict: {
 	run_id: RunId,
 	reason: string,
-} }) & { AbandonStagingIntent?: never; Abandoned?: never; OriginalRetired?: never; OutputCommitted?: never; OutputReady?: never; OutputStarted?: never; RetireOriginalIntent?: never };
+} }) & { AbandonStagingIntent?: never; Abandoned?: never; OriginalRetired?: never; OutputCommitted?: never; OutputReady?: never; OutputStarted?: never; RetireOriginalIntent?: never; StagingCreated?: never };
 
 export type OutputSettings = {
 	default_mode: DefaultOutputMode,
@@ -263,19 +266,21 @@ export type OutputSettings = {
 	overwrite_existing: boolean,
 };
 
-export type OutputState = "Started" | ({ Ready: {
+export type OutputState = "Started" | ({ StagingCreated: {
+	initial: DestructiveIdentity,
+} }) & { AbandonIntent?: never; Committed?: never; Conflict?: never; Ready?: never; RetireIntent?: never; Retired?: never } | ({ Ready: {
 	staging_identity: ArtifactIdentity,
-} }) & { AbandonIntent?: never; Committed?: never; Conflict?: never; RetireIntent?: never; Retired?: never } | ({ Committed: {
+} }) & { AbandonIntent?: never; Committed?: never; Conflict?: never; RetireIntent?: never; Retired?: never; StagingCreated?: never } | ({ Committed: {
 	final_identity: ArtifactIdentity,
-} }) & { AbandonIntent?: never; Conflict?: never; Ready?: never; RetireIntent?: never; Retired?: never } | ({ RetireIntent: {
+} }) & { AbandonIntent?: never; Conflict?: never; Ready?: never; RetireIntent?: never; Retired?: never; StagingCreated?: never } | ({ RetireIntent: {
 	final_identity: ArtifactIdentity,
-} }) & { AbandonIntent?: never; Committed?: never; Conflict?: never; Ready?: never; Retired?: never } | ({ Retired: {
+} }) & { AbandonIntent?: never; Committed?: never; Conflict?: never; Ready?: never; Retired?: never; StagingCreated?: never } | ({ Retired: {
 	final_identity: ArtifactIdentity,
-} }) & { AbandonIntent?: never; Committed?: never; Conflict?: never; Ready?: never; RetireIntent?: never } | ({ AbandonIntent: {
+} }) & { AbandonIntent?: never; Committed?: never; Conflict?: never; Ready?: never; RetireIntent?: never; StagingCreated?: never } | ({ AbandonIntent: {
 	staging_identity: DestructiveIdentity,
-} }) & { Committed?: never; Conflict?: never; Ready?: never; RetireIntent?: never; Retired?: never } | "Abandoned" | ({ Conflict: {
+} }) & { Committed?: never; Conflict?: never; Ready?: never; RetireIntent?: never; Retired?: never; StagingCreated?: never } | "Abandoned" | ({ Conflict: {
 	reason: string,
-} }) & { AbandonIntent?: never; Committed?: never; Ready?: never; RetireIntent?: never; Retired?: never };
+} }) & { AbandonIntent?: never; Committed?: never; Ready?: never; RetireIntent?: never; Retired?: never; StagingCreated?: never };
 
 export type OutputTarget = "Replace" | ({ Suffix: {
 	suffix: string,
@@ -289,7 +294,6 @@ export type OutputTransaction = {
 	input: string,
 	input_identity: DestructiveIdentity,
 	staging: string,
-	initial_staging_identity: DestructiveIdentity,
 	final_path: string,
 	final_preimage: DestructiveIdentity | null,
 	replacement: Replacement,

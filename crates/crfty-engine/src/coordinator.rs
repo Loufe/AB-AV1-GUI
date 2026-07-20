@@ -1029,7 +1029,7 @@ fn begin_output(
     destination: OutputDestination,
 ) -> Result<Option<PreparedOutput>, String> {
     let manager = OutputManager::new(MediaArtifactInspector::new(tools.ffprobe.clone()));
-    let transaction = match manager.prepare(
+    let mut transaction = match manager.plan(
         job.spec.run_id,
         &job.spec.input,
         &destination.final_path,
@@ -1060,17 +1060,49 @@ fn begin_output(
             return Ok(None);
         }
     };
-    let started = OutputDelta::OutputStarted {
-        transaction: Box::new(transaction.clone()),
+    // The intent must be durable before the staging file exists: a crash
+    // after this submit is recovered from the journal (staging absent →
+    // abandoned), whereas a file created before the journal record would
+    // leak with no record to recover it from (#47).
+    submit_output(
+        commands,
+        OutputDelta::OutputStarted {
+            transaction: Box::new(transaction.clone()),
+        },
+    )?;
+    let initial = match manager.create_staging(&transaction) {
+        Ok(initial) => initial,
+        Err(error) => {
+            submit_output(
+                commands,
+                OutputDelta::Abandoned {
+                    run_id: job.spec.run_id,
+                },
+            )?;
+            terminal(
+                commands,
+                job,
+                ItemOutcome::Failed {
+                    message: error.to_string(),
+                },
+                None,
+            )?;
+            return Ok(None);
+        }
     };
-    if let Err(error) = submit_output(commands, started) {
-        return match manager.discard_unjournaled(&transaction) {
+    let created = OutputDelta::StagingCreated {
+        run_id: job.spec.run_id,
+        initial: initial.clone(),
+    };
+    if let Err(error) = submit_output(commands, created.clone()) {
+        return match manager.remove_staging(&transaction.staging, &initial) {
             Ok(()) => Err(error),
             Err(cleanup) => Err(format!(
                 "{error}; unjournaled staging cleanup failed: {cleanup}"
             )),
         };
     }
+    fold_transaction(&mut transaction, created);
     Ok(Some(PreparedOutput {
         manager,
         transaction,

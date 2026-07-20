@@ -228,12 +228,18 @@ fn output_started(run: u64) -> DurableDelta {
             input: PathBuf::from("videos/input-1.mp4"),
             input_identity: destructive(3_000_000),
             staging: PathBuf::from("videos/.input-1.crfty-staging.mkv"),
-            initial_staging_identity: destructive(0),
             final_path: PathBuf::from("videos/input-1.mkv"),
             final_preimage: None,
             replacement: Replacement::RetireOriginal,
             state: OutputState::Started,
         }),
+    })
+}
+
+fn output_staging_created(run: u64) -> DurableDelta {
+    DurableDelta::Output(OutputDelta::StagingCreated {
+        run_id: RunId(run),
+        initial: destructive(0),
     })
 }
 
@@ -422,6 +428,7 @@ fn scenarios() -> Vec<Scenario> {
                 convert_prelude("ck-1"),
                 vec![
                     output_started(100),
+                    output_staging_created(100),
                     output_ready(100, "ck-out"),
                     output_committed(100, "ck-out"),
                 ],
@@ -435,6 +442,7 @@ fn scenarios() -> Vec<Scenario> {
                 convert_prelude("ck-1"),
                 vec![
                     output_started(100),
+                    output_staging_created(100),
                     output_ready(100, "ck-out"),
                     output_committed(100, "ck-out"),
                     DurableDelta::Output(OutputDelta::RetireOriginalIntent { run_id: RunId(100) }),
@@ -448,7 +456,11 @@ fn scenarios() -> Vec<Scenario> {
             "item_finished_converted_without_commit",
             [
                 convert_prelude("ck-1"),
-                vec![output_started(100), output_ready(100, "ck-out")],
+                vec![
+                    output_started(100),
+                    output_staging_created(100),
+                    output_ready(100, "ck-out"),
+                ],
             ]
             .concat(),
             vec![finished(1, 10, 100, ItemOutcome::Converted)],
@@ -519,6 +531,7 @@ fn scenarios() -> Vec<Scenario> {
                 convert_prelude("ck-1"),
                 vec![
                     output_started(100),
+                    output_staging_created(100),
                     output_ready(100, "ck-out"),
                     output_committed(100, "ck-out"),
                 ],
@@ -527,6 +540,11 @@ fn scenarios() -> Vec<Scenario> {
             vec![DurableDelta::Output(OutputDelta::OriginalRetired {
                 run_id: RunId(100),
             })],
+        ),
+        scenario(
+            "output_staging_created",
+            [convert_prelude("ck-1"), vec![output_started(100)]].concat(),
+            vec![output_staging_created(100)],
         ),
         scenario(
             "output_abandoned",
