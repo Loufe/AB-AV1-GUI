@@ -15,7 +15,7 @@ use std::sync::{
 use crfty_core::{
     AnalysisProfile, AppSnapshot, ConfigDelta, DurableDelta, DurableState, EphemeralDelta,
     ExecutionSettings, QueueCommand, QueueItemId, Reply, SessionCommand, SessionState, Settings,
-    SettingsCommand, ToolRevisions, fold, fold_config,
+    SettingsCommand, ToolAvailability, ToolRevisions, fold, fold_config,
 };
 use crfty_engine::{
     coordinator::{EngineConfig, EngineRuntime, UserCommandSender},
@@ -75,6 +75,7 @@ enum Health {
 struct StreamState {
     model: AppSnapshot,
     session: SessionState,
+    tools: ToolAvailability,
     health: Health,
     subscriber: Option<Channel<ShellEvent>>,
     seq: u32,
@@ -85,6 +86,7 @@ impl StreamState {
         Self {
             model: AppSnapshot::default(),
             session: SessionState::Idle,
+            tools: ToolAvailability::default(),
             health,
             subscriber: None,
             seq: 0,
@@ -140,7 +142,10 @@ impl Bridge {
             .map_err(|error| format!("no application data directory: {error}"))?;
         std::fs::create_dir_all(&data_dir)
             .map_err(|error| format!("failed to create application data directory: {error}"))?;
-        let media_tools = discover_media_tools()?;
+        // Discovery is infallible: missing tools become typed availability
+        // state on the stream, never a startup failure that would hide the
+        // queue, history, or settings.
+        let media_tools = crfty_engine::tools::discover_media_tools();
         let revisions = ToolRevisions {
             ab_av1: INTERIM_TOOL_REVISION.to_owned(),
             ffmpeg: INTERIM_TOOL_REVISION.to_owned(),
@@ -171,9 +176,10 @@ impl Bridge {
     }
 
     /// Installs the webview's channel and replays current state into it:
-    /// snapshot first, then the session state (which a fresh connection would
-    /// otherwise only learn on its next transition), then any standing
-    /// degradation. All under the stream lock, so no delta interleaves.
+    /// snapshot first, then the session state and tool availability (which a
+    /// fresh connection would otherwise only learn on their next transition),
+    /// then any standing degradation. All under the stream lock, so no delta
+    /// interleaves.
     pub fn subscribe(&self, channel: Channel<ShellEvent>) {
         let mut stream = lock_stream(&self.stream);
         stream.subscriber = Some(channel);
@@ -183,6 +189,10 @@ impl Bridge {
         let session = stream.session.clone();
         stream.emit(StreamPayload::Ephemeral(EphemeralDelta::SessionChanged(
             session,
+        )));
+        let tools = stream.tools.clone();
+        stream.emit(StreamPayload::Ephemeral(EphemeralDelta::ToolsChanged(
+            tools,
         )));
         match stream.health.clone() {
             Health::Ok => {}
@@ -247,8 +257,10 @@ fn forward(
                 state.emit(StreamPayload::Config(delta));
             }
             DriverEvent::Ephemeral(delta) => {
-                if let EphemeralDelta::SessionChanged(session) = &delta {
-                    state.session = session.clone();
+                match &delta {
+                    EphemeralDelta::SessionChanged(session) => state.session = session.clone(),
+                    EphemeralDelta::ToolsChanged(tools) => state.tools = tools.clone(),
+                    _ => {}
                 }
                 state.emit(StreamPayload::Ephemeral(delta));
             }
@@ -296,39 +308,4 @@ fn map_reply(reply: Result<Reply, crfty_engine::driver::SubmitError>) -> Result<
         )),
         Err(error) => Err(CommandError::engine_unavailable(error.to_string())),
     }
-}
-
-/// Interim tool discovery until the vendor subsystem lands: explicit
-/// `CRFTY_FFMPEG`/`CRFTY_FFPROBE` paths win, then a PATH search.
-fn discover_media_tools() -> Result<crfty_engine::ab_av1::MediaTools, String> {
-    Ok(crfty_engine::ab_av1::MediaTools {
-        ffmpeg: discover_tool("CRFTY_FFMPEG", "ffmpeg")?,
-        ffprobe: discover_tool("CRFTY_FFPROBE", "ffprobe")?,
-    })
-}
-
-fn discover_tool(env_var: &str, binary: &str) -> Result<std::path::PathBuf, String> {
-    if let Some(configured) = std::env::var_os(env_var) {
-        let path = std::path::PathBuf::from(configured);
-        return if path.is_file() {
-            Ok(path)
-        } else {
-            Err(format!(
-                "{env_var} is set but does not point at a file: {}",
-                path.display()
-            ))
-        };
-    }
-    let file_name = if cfg!(windows) {
-        format!("{binary}.exe")
-    } else {
-        binary.to_owned()
-    };
-    std::env::var_os("PATH")
-        .map(|paths| std::env::split_paths(&paths).collect::<Vec<_>>())
-        .unwrap_or_default()
-        .into_iter()
-        .map(|directory| directory.join(&file_name))
-        .find(|candidate| candidate.is_file())
-        .ok_or_else(|| format!("{binary} was not found via {env_var} or PATH"))
 }

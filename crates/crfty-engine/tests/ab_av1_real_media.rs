@@ -306,7 +306,7 @@ fn real_engine_config(directory: &Path, tools: &MediaTools) -> EngineConfig {
     EngineConfig {
         journal_path: directory.join("state.jsonl"),
         config_path: directory.join("config.json"),
-        media_tools: tools.clone(),
+        media_tools: crfty_engine::tools::ToolDiscovery::Available(tools.clone()),
         execution: ExecutionSettings {
             requested_target: REAL_CONTRACT_TARGET,
             fallback_floor: REAL_CONTRACT_TARGET,

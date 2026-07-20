@@ -17,6 +17,7 @@ pub mod journal;
 pub mod media;
 pub mod output;
 pub mod remux;
+pub mod tools;
 
 mod filesystem;
 mod process;

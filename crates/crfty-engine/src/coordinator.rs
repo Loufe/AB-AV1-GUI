@@ -15,8 +15,8 @@ use crfty_core::{
     Crf, DurableDelta, DurableState, Effect, ExecutionSettings, ItemOutcome, JobAction, JobPhase,
     JobProgress, MAX_PERCENT_BASIS_POINTS, MAX_VMAF_SCORE, OutputDelta, OutputTarget,
     OutputTransaction, PERCENT_BASIS_POINTS_SCALE, QueueCommand, QueueItemState, Replacement,
-    Reply, RunId, SearchMeasurement, SessionCommand, SettingsCommand, SkipReason, Telemetry,
-    VMAF_SCORE_FIXED_SCALE, VmafScore, VmafTarget, WorkerCommand, fold,
+    Reply, RunId, SearchMeasurement, SessionCommand, SettingsCommand, SkipReason, SystemCommand,
+    Telemetry, VMAF_SCORE_FIXED_SCALE, VmafScore, VmafTarget, WorkerCommand, fold,
 };
 
 const FIRST_RUNTIME_ID: u64 = 1;
@@ -41,7 +41,7 @@ struct PreparedOutput {
 struct JobServices<'a> {
     commands: &'a CommandSender,
     runtime: &'a AbAv1Runtime,
-    config: &'a EngineConfig,
+    tools: &'a MediaTools,
     cancellation: &'a ActiveCancellation,
 }
 
@@ -58,13 +58,14 @@ use crate::{
         self, RemuxCancellationHandle, RemuxHandle, RemuxReport, RemuxRequest, RemuxTelemetry,
         RemuxTerminal,
     },
+    tools::ToolDiscovery,
 };
 
 #[derive(Debug, Clone)]
 pub struct EngineConfig {
     pub journal_path: PathBuf,
     pub config_path: PathBuf,
-    pub media_tools: MediaTools,
+    pub media_tools: ToolDiscovery,
     pub execution: ExecutionSettings,
 }
 
@@ -117,7 +118,28 @@ impl EngineRuntime {
                 )));
             }
         };
-        let recovered = recover_startup(&driver.commands, &config.media_tools, initial.durable);
+        // Availability is reported before recovery so the reducer's fail-closed
+        // default is replaced by the real discovery result ahead of any
+        // recovery events, and the ToolsChanged ephemeral is already queued
+        // when the startup drain below forwards non-durable events.
+        let discovered = driver
+            .commands
+            .submit(Command::System(SystemCommand::ToolsDiscovered {
+                availability: config.media_tools.availability(),
+            }))
+            .map_err(|error| {
+                EngineStartError(format!("failed to report tool availability: {error}"))
+            })?;
+        if !matches!(discovered, Reply::Accepted) {
+            return Err(EngineStartError(format!(
+                "tool availability report was not accepted: {discovered:?}"
+            )));
+        }
+        let recovered = recover_startup(
+            &driver.commands,
+            config.media_tools.tools(),
+            initial.durable,
+        );
         let next_runtime_id = next_runtime_id(&recovered)?;
         let (public_event_tx, public_event_rx) = mpsc::channel();
         public_event_tx
@@ -258,10 +280,11 @@ fn next_runtime_id(state: &DurableState) -> Result<u64, EngineStartError> {
 
 fn recover_startup(
     commands: &CommandSender,
-    tools: &MediaTools,
+    tools: Option<&MediaTools>,
     mut state: DurableState,
 ) -> DurableState {
-    let manager = OutputManager::new(MediaArtifactInspector::new(tools.ffprobe.clone()));
+    let manager =
+        tools.map(|tools| OutputManager::new(MediaArtifactInspector::new(tools.ffprobe.clone())));
     let active: Vec<_> = state
         .queue
         .iter()
@@ -298,6 +321,14 @@ fn recover_startup(
             if transaction.is_settled() {
                 break;
             }
+            // Without ffprobe an unsettled transaction cannot be inspected.
+            // Settling it blind could retire the ledger path to a possibly
+            // complete staging artifact, so leave the item active and the
+            // transaction untouched; the next startup with tools completes
+            // this recovery identically.
+            let Some(manager) = manager.as_ref() else {
+                break;
+            };
             let delta = match manager.recover_once(&transaction) {
                 Ok(Some(delta)) => delta,
                 Ok(None) => break,
@@ -546,8 +577,16 @@ fn run_session(
     cancellation: &ActiveCancellation,
     ids: &AtomicU64,
 ) -> Result<(), String> {
-    let inspector = MediaInspector::new(config.media_tools.ffprobe.clone());
-    let mut decoder_resolver = DecodeResolver::new(config.media_tools.ffmpeg.clone());
+    let Some(tools) = config.media_tools.tools() else {
+        // Unreachable past the reducer's session-start gate; finish the
+        // session gracefully rather than reporting a worker crash.
+        return require_accepted(
+            "finish tool-less worker session",
+            commands.submit(Command::Worker(WorkerCommand::Finished)),
+        );
+    };
+    let inspector = MediaInspector::new(tools.ffprobe.clone());
+    let mut decoder_resolver = DecodeResolver::new(tools.ffmpeg.clone());
     loop {
         let claim_id = ClaimId(ids.fetch_add(1, Ordering::Relaxed));
         let run_id = RunId(ids.fetch_add(1, Ordering::Relaxed));
@@ -615,7 +654,7 @@ fn run_session(
                 run_id,
             })),
         )?;
-        process_job(commands, runtime, config, cancellation, &job)?;
+        process_job(commands, runtime, tools, cancellation, &job)?;
     }
     require_accepted(
         "finish worker session",
@@ -626,7 +665,7 @@ fn run_session(
 fn process_job(
     commands: &CommandSender,
     runtime: &AbAv1Runtime,
-    config: &EngineConfig,
+    tools: &MediaTools,
     cancellation: &ActiveCancellation,
     job: &ClaimedJob,
 ) -> Result<(), String> {
@@ -634,7 +673,7 @@ fn process_job(
     let services = JobServices {
         commands,
         runtime,
-        config,
+        tools,
         cancellation,
     };
     publish_phase(
@@ -659,7 +698,7 @@ fn process_job(
             let Some(destination) = resolve_output_destination(commands, job)? else {
                 return Ok(());
             };
-            let Some(output) = begin_output(commands, config, job, destination)? else {
+            let Some(output) = begin_output(commands, tools, job, destination)? else {
                 return Ok(());
             };
             return run_remux(services, job, output, &mut telemetry_sequence);
@@ -681,7 +720,7 @@ fn process_job(
         let searched = match search_with_fallback(
             commands,
             runtime,
-            config,
+            tools,
             cancellation,
             job,
             &mut telemetry_sequence,
@@ -717,7 +756,7 @@ fn process_job(
     let Some(destination) = destination else {
         return Err("encode job has no resolved output destination".to_owned());
     };
-    let Some(output) = begin_output(commands, config, job, destination)? else {
+    let Some(output) = begin_output(commands, tools, job, destination)? else {
         return Ok(());
     };
     run_encode(services, job, output, analysis, &mut telemetry_sequence)
@@ -743,7 +782,7 @@ fn run_encode(
     };
     let handle = match services
         .runtime
-        .start_encode(services.config.media_tools.clone(), request)
+        .start_encode(services.tools.clone(), request)
     {
         Ok(handle) => handle,
         Err(error) => {
@@ -835,7 +874,7 @@ fn run_remux(
         transaction,
     } = output;
     let handle = match remux::start(RemuxRequest {
-        ffmpeg: services.config.media_tools.ffmpeg.clone(),
+        ffmpeg: services.tools.ffmpeg.clone(),
         input: job.spec.input.clone(),
         output: transaction.staging.clone(),
     }) {
@@ -985,13 +1024,11 @@ fn resolve_output_destination(
 
 fn begin_output(
     commands: &CommandSender,
-    config: &EngineConfig,
+    tools: &MediaTools,
     job: &ClaimedJob,
     destination: OutputDestination,
 ) -> Result<Option<PreparedOutput>, String> {
-    let manager = OutputManager::new(MediaArtifactInspector::new(
-        config.media_tools.ffprobe.clone(),
-    ));
+    let manager = OutputManager::new(MediaArtifactInspector::new(tools.ffprobe.clone()));
     let transaction = match manager.prepare(
         job.spec.run_id,
         &job.spec.input,
@@ -1126,7 +1163,7 @@ fn finish_successful_output(
 fn search_with_fallback(
     commands: &CommandSender,
     runtime: &AbAv1Runtime,
-    config: &EngineConfig,
+    tools: &MediaTools,
     cancellation: &ActiveCancellation,
     job: &ClaimedJob,
     telemetry_sequence: &mut u64,
@@ -1147,7 +1184,7 @@ fn search_with_fallback(
             decode_mode: execution.profile.decode_mode,
         };
         let handle = runtime
-            .start_search(config.media_tools.clone(), request)
+            .start_search(tools.clone(), request)
             .map_err(|error| ItemOutcome::Failed {
                 message: error.to_string(),
             })?;

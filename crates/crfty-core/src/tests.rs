@@ -7,14 +7,15 @@ use crate::reducer::validate_terminal;
 use crate::{
     AnalysisProfile, AnalysisResult, AppState, ArtifactIdentity, ClaimId, Command, ContentKey, Crf,
     DecodeMode, DecodePreference, DefaultOutputMode, DestructiveIdentity, DestructiveObservation,
-    DurableDelta, Effect, Eligibility, ExecutionSettings, FileRecord, FileStamp, FileSystemFacts,
-    FileSystemId, ItemOutcome, JOURNAL_SCHEMA_VERSION, JobAction, JobPhase, JobProgress,
-    JournalEnvelope, JournalSequence, MediaContainer, MediaObservation, Operation, OutputDelta,
-    OutputRecoveryAction, OutputState, OutputTarget, OutputTransaction, PathBinding, PathHash,
-    QueueCommand, QueueItemId, QueueItemState, Replacement, Reply, RunId, SearchMeasurement,
-    SessionCommand, SessionState, Settings, SettingsCommand, SkipReason, Telemetry, ToolRevisions,
-    VideoCodec, VideoMeta, VmafScore, VmafTarget, WorkerCommand, apply, encode_record,
-    evaluate_eligibility, recover_output, replay, select_analysis, select_job_action,
+    DurableDelta, Effect, Eligibility, EphemeralDelta, ExecutionSettings, FileRecord, FileStamp,
+    FileSystemFacts, FileSystemId, ItemOutcome, JOURNAL_SCHEMA_VERSION, JobAction, JobPhase,
+    JobProgress, JournalEnvelope, JournalSequence, MediaContainer, MediaObservation, Operation,
+    OutputDelta, OutputRecoveryAction, OutputState, OutputTarget, OutputTransaction, PathBinding,
+    PathHash, QueueCommand, QueueItemId, QueueItemState, Replacement, Reply, RunId,
+    SearchMeasurement, SessionCommand, SessionState, Settings, SettingsCommand, SkipReason,
+    SystemCommand, Telemetry, ToolAvailability, ToolRevisions, VideoCodec, VideoMeta, VmafScore,
+    VmafTarget, WorkerCommand, apply, encode_record, evaluate_eligibility, recover_output, replay,
+    select_analysis, select_job_action,
 };
 
 fn execution() -> ExecutionSettings {
@@ -111,7 +112,7 @@ fn settings_control_job_overwrite_and_hardware_decode_policy() {
     state.settings.output.overwrite_existing = true;
     state.settings.hardware_decode = false;
     let _added = apply(&mut state, add_command(QueueItemId(1), "video.mkv"));
-    let _started = apply(&mut state, Command::Session(SessionCommand::Start));
+    let _started = start_session(&mut state);
     let mut requested = execution();
     requested.profile.decode_mode = DecodeMode::Hardware(crate::HardwareDecoder::H264Qsv);
     let prepared = reserve_and_prepare(&mut state, ClaimId(2), RunId(3), requested);
@@ -124,6 +125,72 @@ fn settings_control_job_overwrite_and_hardware_decode_policy() {
         DecodePreference::SoftwareOnly
     );
     assert_eq!(job.spec.execution.profile.decode_mode, DecodeMode::Software);
+}
+
+#[test]
+fn session_start_requires_discovered_tools_and_discovery_is_idempotent() {
+    let mut state = AppState::default();
+    let _added = apply(&mut state, add_command(QueueItemId(1), "video.mkv"));
+    let blocked = apply(&mut state, Command::Session(SessionCommand::Start));
+    let Reply::Rejected { reason } = blocked.reply else {
+        panic!("expected fail-closed session start");
+    };
+    assert!(
+        reason.starts_with("media tools are unavailable"),
+        "{reason}"
+    );
+    assert_eq!(state.session, SessionState::Idle);
+
+    let discovered = apply(
+        &mut state,
+        Command::System(SystemCommand::ToolsDiscovered {
+            availability: ToolAvailability::Available,
+        }),
+    );
+    assert_eq!(discovered.reply, Reply::Accepted);
+    assert_eq!(
+        discovered.ephemeral,
+        vec![EphemeralDelta::ToolsChanged(ToolAvailability::Available)]
+    );
+    assert_eq!(state.tools, ToolAvailability::Available);
+
+    let unchanged = apply(
+        &mut state,
+        Command::System(SystemCommand::ToolsDiscovered {
+            availability: ToolAvailability::Available,
+        }),
+    );
+    assert_eq!(unchanged.reply, Reply::Accepted);
+    assert!(unchanged.ephemeral.is_empty());
+
+    let started = apply(&mut state, Command::Session(SessionCommand::Start));
+    assert_eq!(started.reply, Reply::Accepted);
+    assert_eq!(state.session, SessionState::Running);
+
+    let missing = apply(
+        &mut state,
+        Command::System(SystemCommand::ToolsDiscovered {
+            availability: ToolAvailability::Missing {
+                missing: vec![crate::MediaTool::Ffmpeg],
+                detail: "ffmpeg was not found".to_owned(),
+            },
+        }),
+    );
+    assert_eq!(missing.reply, Reply::Accepted);
+    assert!(matches!(state.tools, ToolAvailability::Missing { .. }));
+}
+
+/// Reports available tools, then starts the session. Nearly every session
+/// test needs both because `AppState` defaults to tools-missing (fail-closed).
+fn start_session(state: &mut AppState) -> crate::Applied {
+    let discovered = apply(
+        state,
+        Command::System(SystemCommand::ToolsDiscovered {
+            availability: ToolAvailability::Available,
+        }),
+    );
+    assert_eq!(discovered.reply, Reply::Accepted);
+    apply(state, Command::Session(SessionCommand::Start))
 }
 
 fn add_command(item_id: QueueItemId, input: impl Into<PathBuf>) -> Command {
@@ -193,7 +260,7 @@ fn reducer_enforces_session_claim_and_terminal_ordering() {
     let mut state = AppState::default();
     let add = apply(&mut state, add_command(QueueItemId(1), "video.mkv"));
     assert_eq!(add.reply, Reply::Accepted);
-    let start = apply(&mut state, Command::Session(SessionCommand::Start));
+    let start = start_session(&mut state);
     assert_eq!(start.effects, vec![Effect::StartWorker]);
     let claim = reserve_and_prepare(&mut state, ClaimId(2), RunId(3), execution());
     assert!(matches!(claim.reply, Reply::Claimed(Some(_))));
@@ -248,7 +315,7 @@ fn reservation_is_atomic_and_uses_current_queue_order() {
         }),
     );
     assert_eq!(moved.reply, Reply::Accepted);
-    let _started = apply(&mut state, Command::Session(SessionCommand::Start));
+    let _started = start_session(&mut state);
     let reserved = apply(
         &mut state,
         Command::Worker(WorkerCommand::ReserveNext {
@@ -275,7 +342,7 @@ fn reservation_is_atomic_and_uses_current_queue_order() {
 fn durable_analysis_is_selected_for_the_same_content_and_profile() {
     let mut state = AppState::default();
     let _added = apply(&mut state, add_command(QueueItemId(1), "first.mkv"));
-    let _started = apply(&mut state, Command::Session(SessionCommand::Start));
+    let _started = start_session(&mut state);
     let reserved = apply(
         &mut state,
         Command::Worker(WorkerCommand::ReserveNext {
@@ -352,7 +419,7 @@ fn reorder_fixture() -> AppState {
         let added = apply(&mut state, add_command(QueueItemId(id), "video.mkv"));
         assert_eq!(added.reply, Reply::Accepted);
     }
-    let start = apply(&mut state, Command::Session(SessionCommand::Start));
+    let start = start_session(&mut state);
     assert_eq!(start.reply, Reply::Accepted);
     let first = reserve_and_prepare(&mut state, ClaimId(20), RunId(21), execution());
     assert!(matches!(first.reply, Reply::Claimed(Some(_))));
@@ -523,7 +590,7 @@ fn reorder_of_the_only_pending_item_above_active_is_a_no_op() {
         let added = apply(&mut state, add_command(QueueItemId(id), "video.mkv"));
         assert_eq!(added.reply, Reply::Accepted);
     }
-    let start = apply(&mut state, Command::Session(SessionCommand::Start));
+    let start = start_session(&mut state);
     assert_eq!(start.reply, Reply::Accepted);
     let first = reserve_and_prepare(&mut state, ClaimId(20), RunId(21), execution());
     assert!(matches!(first.reply, Reply::Claimed(Some(_))));
@@ -635,7 +702,7 @@ fn media_record_and_analysis_checkpoint_replay_as_one_state() {
         &mut sequence,
         add_command(QueueItemId(1), "video.mkv"),
     );
-    let _started = apply(&mut state, Command::Session(SessionCommand::Start));
+    let _started = start_session(&mut state);
     let _reserved = apply_and_journal(
         &mut state,
         &mut bytes,
@@ -794,7 +861,7 @@ fn converted_requires_a_successfully_committed_output() {
 fn remuxed_requires_a_remux_action_and_committed_output() {
     let mut state = AppState::default();
     let _added = apply(&mut state, add_command(QueueItemId(1), "video.mp4"));
-    let _started = apply(&mut state, Command::Session(SessionCommand::Start));
+    let _started = start_session(&mut state);
     let _reserved = apply(
         &mut state,
         Command::Worker(WorkerCommand::ReserveNext {
@@ -837,7 +904,7 @@ fn remuxed_requires_a_remux_action_and_committed_output() {
 fn preparation_rejects_invalid_execution_settings() {
     let mut state = AppState::default();
     let _added = apply(&mut state, add_command(QueueItemId(1), "video.mkv"));
-    let _started = apply(&mut state, Command::Session(SessionCommand::Start));
+    let _started = start_session(&mut state);
     let mut invalid = execution();
     invalid.fallback_step = 0;
     let reserved = apply(
@@ -866,7 +933,7 @@ fn reserved_item_can_be_durably_stopped_before_preparation() {
     let mut state = AppState::default();
     let mut durable = Vec::new();
     durable.extend(apply(&mut state, add_command(QueueItemId(1), "video.mkv")).durable);
-    let _started = apply(&mut state, Command::Session(SessionCommand::Start));
+    let _started = start_session(&mut state);
     durable.extend(
         apply(
             &mut state,
@@ -1147,7 +1214,7 @@ proptest! {
 fn active_state() -> AppState {
     let mut state = AppState::default();
     let _added = apply(&mut state, add_command(QueueItemId(1), "video.mkv"));
-    let _started = apply(&mut state, Command::Session(SessionCommand::Start));
+    let _started = start_session(&mut state);
     let _claimed = reserve_and_prepare(&mut state, ClaimId(2), RunId(3), execution());
     let _running = apply(
         &mut state,

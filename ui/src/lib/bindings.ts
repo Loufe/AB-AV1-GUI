@@ -143,13 +143,13 @@ export type DurableState_Serialize = {
 	conversion_runs: { [key in RunId]: ConversionRun },
 };
 
-export type EphemeralDelta = ({ SessionChanged: SessionState }) & { CommandRejected?: never; Telemetry?: never; TelemetryCleared?: never; WorkerCrashed?: never } | ({ Telemetry: Telemetry }) & { CommandRejected?: never; SessionChanged?: never; TelemetryCleared?: never; WorkerCrashed?: never } | ({ TelemetryCleared: {
+export type EphemeralDelta = ({ SessionChanged: SessionState }) & { CommandRejected?: never; Telemetry?: never; TelemetryCleared?: never; ToolsChanged?: never; WorkerCrashed?: never } | ({ Telemetry: Telemetry }) & { CommandRejected?: never; SessionChanged?: never; TelemetryCleared?: never; ToolsChanged?: never; WorkerCrashed?: never } | ({ TelemetryCleared: {
 	run_id: RunId,
-} }) & { CommandRejected?: never; SessionChanged?: never; Telemetry?: never; WorkerCrashed?: never } | ({ WorkerCrashed: {
+} }) & { CommandRejected?: never; SessionChanged?: never; Telemetry?: never; ToolsChanged?: never; WorkerCrashed?: never } | ({ ToolsChanged: ToolAvailability }) & { CommandRejected?: never; SessionChanged?: never; Telemetry?: never; TelemetryCleared?: never; WorkerCrashed?: never } | ({ WorkerCrashed: {
 	message: string,
-} }) & { CommandRejected?: never; SessionChanged?: never; Telemetry?: never; TelemetryCleared?: never } | ({ CommandRejected: {
+} }) & { CommandRejected?: never; SessionChanged?: never; Telemetry?: never; TelemetryCleared?: never; ToolsChanged?: never } | ({ CommandRejected: {
 	reason: string,
-} }) & { SessionChanged?: never; Telemetry?: never; TelemetryCleared?: never; WorkerCrashed?: never };
+} }) & { SessionChanged?: never; Telemetry?: never; TelemetryCleared?: never; ToolsChanged?: never; WorkerCrashed?: never };
 
 export type ExecutionSettings = {
 	requested_target: VmafTarget,
@@ -229,6 +229,8 @@ export type MediaObservation = {
 	binding: PathBinding,
 	metadata: VideoMeta,
 };
+
+export type MediaTool = "Ffmpeg" | "Ffprobe";
 
 export type Operation = "Analyze" | "Convert";
 
@@ -397,6 +399,16 @@ export type Telemetry = {
 	phase: JobPhase,
 	progress: JobProgress,
 };
+
+/**
+ *  Whether external media tools are usable. Ephemeral state: discovery is a
+ *  filesystem fact reported to the reducer, never journaled. Fail-closed by
+ *  default so media work stays gated until discovery actually reports.
+ */
+export type ToolAvailability = "Available" | { Missing: {
+	missing: MediaTool[],
+	detail: string,
+} };
 
 export type VideoCodec = "Av1" | "H264" | "Hevc" | "Vp9" | { Other: string };
 

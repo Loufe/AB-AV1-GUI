@@ -157,7 +157,7 @@ fn run_coordinator_contract(
     let engine = EngineRuntime::start(EngineConfig {
         journal_path: output_dir.join("coordinator.jsonl"),
         config_path: output_dir.join("config.json"),
-        media_tools: tools,
+        media_tools: crfty_engine::tools::ToolDiscovery::Available(tools),
         execution: ExecutionSettings {
             requested_target: DEFAULT_VMAF_TARGET,
             fallback_floor: MIN_VMAF_FALLBACK_TARGET,

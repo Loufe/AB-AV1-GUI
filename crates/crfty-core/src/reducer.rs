@@ -7,7 +7,7 @@ use crate::{
     AnalysisResult, AppState, ClaimId, ClaimedJob, ConfigDelta, DecodeMode, DecodePreference,
     DurableDelta, ExecutionSettings, ItemOutcome, JobAction, JobSpec, MediaObservation, Operation,
     OutputDelta, OutputTarget, QueueItem, QueueItemId, QueueItemState, ReservedJob, RunId,
-    SessionState, Settings, Telemetry, fold, fold_config, select_job_action,
+    SessionState, Settings, Telemetry, ToolAvailability, fold, fold_config, select_job_action,
 };
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -91,9 +91,10 @@ pub enum WorkerCommand {
     Finished,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum SystemCommand {
     Shutdown,
+    ToolsDiscovered { availability: ToolAvailability },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, specta::Type)]
@@ -101,6 +102,7 @@ pub enum EphemeralDelta {
     SessionChanged(SessionState),
     Telemetry(Telemetry),
     TelemetryCleared { run_id: RunId },
+    ToolsChanged(ToolAvailability),
     WorkerCrashed { message: String },
     CommandRejected { reason: String },
 }
@@ -167,6 +169,15 @@ pub fn apply(state: &mut AppState, command: Command) -> Applied {
             applied.effects.push(Effect::StopDriver);
             applied
         }
+        Command::System(SystemCommand::ToolsDiscovered { availability }) => {
+            let mut applied = Applied::accepted();
+            if state.tools != availability {
+                applied
+                    .ephemeral
+                    .push(EphemeralDelta::ToolsChanged(availability));
+            }
+            applied
+        }
     };
     for delta in &applied.durable {
         fold(&mut state.durable, delta);
@@ -183,6 +194,7 @@ pub fn apply(state: &mut AppState, command: Command) -> Applied {
             EphemeralDelta::TelemetryCleared { run_id } => {
                 state.telemetry.remove(run_id);
             }
+            EphemeralDelta::ToolsChanged(availability) => state.tools = availability.clone(),
             EphemeralDelta::WorkerCrashed { .. } | EphemeralDelta::CommandRejected { .. } => {}
         }
     }
@@ -288,6 +300,9 @@ fn apply_queue(state: &AppState, command: QueueCommand) -> Applied {
 fn apply_session(state: &AppState, command: SessionCommand) -> Applied {
     match command {
         SessionCommand::Start if state.session == SessionState::Idle => {
+            if let ToolAvailability::Missing { detail, .. } = &state.tools {
+                return Applied::rejected(format!("media tools are unavailable: {detail}"));
+            }
             let mut applied = Applied::accepted();
             applied
                 .ephemeral

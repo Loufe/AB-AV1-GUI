@@ -13,7 +13,8 @@ use crfty_core::{
     DestructiveIdentity, DurableDelta, DurableState, EphemeralDelta, ExecutionSettings,
     ItemOutcome, JobPhase, JobProgress, Operation, OutputDelta, OutputTarget, QueueCommand,
     QueueItemId, Replacement, Reply, RunId, SearchMeasurement, SessionCommand, Settings,
-    SettingsCommand, Telemetry, ToolRevisions, VmafScore, WorkerCommand, apply, fold, replay,
+    SettingsCommand, SystemCommand, Telemetry, ToolAvailability, ToolRevisions, VmafScore,
+    WorkerCommand, apply, fold, replay,
 };
 use crfty_engine::{
     ab_av1::MediaTools,
@@ -21,6 +22,7 @@ use crfty_engine::{
     driver::{DriverEvent, DriverHandle},
     journal::JournalWriter,
     output::{ArtifactInspector, FixtureByteInspector, OutputManager},
+    tools::ToolDiscovery,
 };
 
 static TEMP_SEQUENCE: AtomicU64 = AtomicU64::new(0);
@@ -266,6 +268,15 @@ fn telemetry_pressure_coalesces_and_terminal_value_wins() {
     assert_eq!(
         driver
             .commands
+            .submit(Command::System(SystemCommand::ToolsDiscovered {
+                availability: ToolAvailability::Available,
+            }))
+            .expect("discovery reply"),
+        Reply::Accepted
+    );
+    assert_eq!(
+        driver
+            .commands
             .submit(Command::Session(SessionCommand::Start))
             .expect("start reply"),
         Reply::Accepted
@@ -343,6 +354,9 @@ fn terminal_publishes_final_telemetry_and_clear_before_item_finished() {
     .expect("driver");
     for command in [
         add(QueueItemId(1)),
+        Command::System(SystemCommand::ToolsDiscovered {
+            availability: ToolAvailability::Available,
+        }),
         Command::Session(SessionCommand::Start),
         Command::Worker(WorkerCommand::ReserveNext {
             claim_id: ClaimId(2),
@@ -424,6 +438,9 @@ fn restart_after_fsynced_terminal_folds_to_finished_snapshot() {
     let mut durable = Vec::new();
     for command in [
         add(QueueItemId(1)),
+        Command::System(SystemCommand::ToolsDiscovered {
+            availability: ToolAvailability::Available,
+        }),
         Command::Session(SessionCommand::Start),
         Command::Worker(WorkerCommand::ReserveNext {
             claim_id: ClaimId(2),
@@ -616,6 +633,9 @@ fn engine_startup_recovers_an_active_partial_staging_transaction() {
             operation: Operation::Convert,
             output_target: OutputTarget::Replace,
         }),
+        Command::System(SystemCommand::ToolsDiscovered {
+            availability: ToolAvailability::Available,
+        }),
         Command::Session(SessionCommand::Start),
         Command::Worker(WorkerCommand::ReserveNext {
             claim_id: ClaimId(2),
@@ -657,10 +677,10 @@ fn engine_startup_recovers_an_active_partial_staging_transaction() {
     let engine = EngineRuntime::start(EngineConfig {
         journal_path,
         config_path: directory.path().join("config.json"),
-        media_tools: MediaTools {
+        media_tools: ToolDiscovery::Available(MediaTools {
             ffmpeg: executable.clone(),
             ffprobe: executable,
-        },
+        }),
         execution: settings,
     })
     .expect("engine startup recovery");

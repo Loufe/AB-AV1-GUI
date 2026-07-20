@@ -122,6 +122,34 @@ pub struct AppState {
     pub settings: Settings,
     pub session: SessionState,
     pub telemetry: BTreeMap<RunId, Telemetry>,
+    pub tools: ToolAvailability,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, specta::Type)]
+pub enum MediaTool {
+    Ffmpeg,
+    Ffprobe,
+}
+
+/// Whether external media tools are usable. Ephemeral state: discovery is a
+/// filesystem fact reported to the reducer, never journaled. Fail-closed by
+/// default so media work stays gated until discovery actually reports.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, specta::Type)]
+pub enum ToolAvailability {
+    Available,
+    Missing {
+        missing: Vec<MediaTool>,
+        detail: String,
+    },
+}
+
+impl Default for ToolAvailability {
+    fn default() -> Self {
+        Self::Missing {
+            missing: vec![MediaTool::Ffmpeg, MediaTool::Ffprobe],
+            detail: "media tool discovery has not completed".to_owned(),
+        }
+    }
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, specta::Type)]

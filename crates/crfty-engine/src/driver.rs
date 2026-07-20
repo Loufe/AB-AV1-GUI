@@ -294,7 +294,9 @@ fn process_batch(
     let mut applied_batch = Vec::with_capacity(batch.len());
     for envelope in batch {
         let applied = if let Some(reason) = degraded {
-            if matches!(envelope.command, Command::System(SystemCommand::Shutdown)) {
+            // System commands (shutdown, tool availability) emit no durable
+            // deltas, so they stay usable over a corrupt journal.
+            if matches!(envelope.command, Command::System(_)) {
                 apply(state, envelope.command)
             } else {
                 crfty_core::Applied {
@@ -549,7 +551,8 @@ mod tests {
         AnalysisProfile, ClaimId, Command, ConfigDelta, DurableDelta, Effect, EphemeralDelta,
         ExecutionSettings, ItemOutcome, JobPhase, JobProgress, Operation, OutputTarget,
         QueueCommand, QueueItemId, Reply, RunId, SessionCommand, SessionState, Settings,
-        SettingsCommand, Telemetry, ToolRevisions, WorkerCommand, apply,
+        SettingsCommand, SystemCommand, Telemetry, ToolAvailability, ToolRevisions, WorkerCommand,
+        apply,
     };
 
     use super::{
@@ -639,6 +642,9 @@ mod tests {
                 input: PathBuf::from("video.mkv"),
                 operation: Operation::Convert,
                 output_target: OutputTarget::Replace,
+            }),
+            Command::System(SystemCommand::ToolsDiscovered {
+                availability: ToolAvailability::Available,
             }),
             Command::Session(SessionCommand::Start),
             Command::Worker(WorkerCommand::ReserveNext {

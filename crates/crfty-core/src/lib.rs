@@ -59,8 +59,8 @@ pub use settings::{
 };
 pub use state::{
     AppSnapshot, AppState, ClaimId, ConfigDelta, DurableDelta, DurableState, ItemOutcome,
-    JobProgress, JournalSequence, QueueItem, QueueItemId, QueueItemState, RunId, SessionState,
-    Telemetry, fold, fold_config,
+    JobProgress, JournalSequence, MediaTool, QueueItem, QueueItemId, QueueItemState, RunId,
+    SessionState, Telemetry, ToolAvailability, fold, fold_config,
 };
 
 #[cfg(test)]
