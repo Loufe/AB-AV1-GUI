@@ -1174,7 +1174,7 @@ fn run_remux(
             map_progress(
                 job.spec.run_id,
                 tracker,
-                JobPhase::Encoding,
+                JobPhase::Remuxing,
                 final_telemetry.map(remux_progress),
             ),
             tracker,
@@ -1202,7 +1202,7 @@ fn run_remux(
                 map_progress(
                     job.spec.run_id,
                     tracker,
-                    JobPhase::Encoding,
+                    JobPhase::Remuxing,
                     final_telemetry.map(remux_progress),
                 ),
                 tracker,
@@ -1664,7 +1664,7 @@ fn wait_for_remux_report(
     cancellation: &ActiveCancellation,
     tracker: &mut PhaseTracker,
 ) -> Result<RemuxReport, String> {
-    tracker.enter(JobPhase::Encoding);
+    tracker.enter(JobPhase::Remuxing);
     let _registration = cancellation.register(
         run_id,
         ActiveJobCancellation::Remux(handle.cancellation_handle()),
@@ -1683,7 +1683,7 @@ fn wait_for_remux_report(
                         commands.publish_telemetry(Telemetry {
                             run_id,
                             sequence: tracker.next_sequence(),
-                            phase: JobPhase::Encoding,
+                            phase: JobPhase::Remuxing,
                             progress: progress.clone(),
                         });
                         last_progress = Some(progress);

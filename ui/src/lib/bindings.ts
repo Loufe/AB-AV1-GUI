@@ -144,6 +144,14 @@ export type ConversionRun = {
 	spec: JobSpec,
 	analysis: AnalysisResult | null,
 	output_content_key: ContentKey | null,
+	/**
+	 *  Mirrors the owning queue item's `QueueItemState::Finished(outcome)`;
+	 *  both are written by the single `DurableDelta::ItemFinished` fold arm.
+	 *  The run keeps its own copy because it outlives the queue item (items
+	 *  can be removed once finished) and because journal replay uses
+	 *  `outcome.is_some()` as its "run already terminal" guard. Projections
+	 *  must not let the two diverge.
+	 */
 	outcome: ItemOutcome | null,
 	started_at: UnixMillis | null,
 	finished_at: UnixMillis | null,
@@ -367,7 +375,7 @@ export type JobAction = ({ Analyze: {
 	reason: SkipReason,
 } }) & { Analyze?: never; Encode?: never };
 
-export type JobPhase = "Preparing" | "Analyzing" | "Encoding" | "Verifying" | "Finalizing";
+export type JobPhase = "Preparing" | "Analyzing" | "Encoding" | "Remuxing" | "Verifying" | "Finalizing";
 
 export type JobProgress = "Phase" | ({ SearchBasisPoints: number }) & { OutputPositionMs?: never } | ({ OutputPositionMs: number }) & { SearchBasisPoints?: never };
 

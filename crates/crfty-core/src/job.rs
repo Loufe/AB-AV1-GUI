@@ -337,6 +337,7 @@ pub enum JobPhase {
     Preparing,
     Analyzing,
     Encoding,
+    Remuxing,
     Verifying,
     Finalizing,
 }

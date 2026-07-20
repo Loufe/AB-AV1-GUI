@@ -11,6 +11,7 @@ const PHASE_LABEL = {
   Preparing: "Preparing",
   Analyzing: "Analyzing",
   Encoding: "Converting",
+  Remuxing: "Remuxing",
   Verifying: "Verifying",
   Finalizing: "Finalizing",
 } as const;
