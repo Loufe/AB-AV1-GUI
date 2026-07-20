@@ -16,10 +16,10 @@ use crfty_core::{
     DurableState, DurationMs, Effect, ExecutionSettings, FailureFacts, FailureKind, ItemOutcome,
     JobAction, JobPhase, JobProgress, MAX_PERCENT_BASIS_POINTS, MAX_VMAF_SCORE, OutputDelta,
     OutputState, OutputTarget, OutputTransaction, PERCENT_BASIS_POINTS_SCALE, PhaseSpan,
-    QueueCommand, QueueItemState, Replacement, Reply, RunId, SearchMeasurement, SessionCommand,
-    SettingsCommand, SkipReason, StreamByteSizes, SystemCommand, Telemetry, UnixMillis,
-    VMAF_SCORE_FIXED_SCALE, VendorActivity, VendorCommand, VmafScore, VmafTarget, WorkerCommand,
-    fold,
+    ProjectionCommand, QueueCommand, QueueItemState, Replacement, Reply, RunId, SearchMeasurement,
+    SessionCommand, SettingsCommand, SkipReason, StreamByteSizes, SystemCommand, Telemetry,
+    UnixMillis, VMAF_SCORE_FIXED_SCALE, VendorActivity, VendorCommand, VmafScore, VmafTarget,
+    WorkerCommand, fold,
 };
 
 const FIRST_RUNTIME_ID: u64 = 1;
@@ -395,6 +395,13 @@ impl UserCommandSender {
         command: VendorCommand,
     ) -> Result<Reply, crate::driver::SubmitError> {
         self.inner.submit(Command::Vendor(command))
+    }
+
+    pub fn submit_projection(
+        &self,
+        command: ProjectionCommand,
+    ) -> Result<Reply, crate::driver::SubmitError> {
+        self.inner.submit(Command::Projection(command))
     }
 
     /// Operator consent to discard the corrupt journal tail identified by

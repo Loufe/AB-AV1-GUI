@@ -10,6 +10,7 @@ import type {
   DurableState_Deserialize,
   SessionState,
   Settings,
+  StatisticsPayload,
   ToolsState,
 } from "@/lib/bindings";
 import { emptyDurableState } from "@/lib/store/fold";
@@ -41,6 +42,12 @@ export interface AppStoreState {
    * this to null rather than guessing.
    */
   tools: ToolsState | null;
+  /**
+   * Latest Statistics answer. Fire-and-forget on the stream — never replayed
+   * on subscribe — so each snapshot resets it to null and the statistics
+   * view re-requests when it needs fresh numbers.
+   */
+  statistics: StatisticsPayload | null;
 }
 
 export function initialAppState(): AppStoreState {
@@ -50,6 +57,7 @@ export function initialAppState(): AppStoreState {
     session: "Idle",
     health: { degraded: null, unavailable: null, fatal: null, secondInstance: null },
     tools: null,
+    statistics: null,
   };
 }
 

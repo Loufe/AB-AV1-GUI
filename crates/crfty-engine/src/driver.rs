@@ -27,7 +27,7 @@ const DRIVER_TICK: Duration = Duration::from_millis(20);
 /// 20 ms tick), so a persistent failure never becomes a tight retry loop.
 const COMPACTION_RETRY_TICKS: u32 = 500;
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum DriverEvent {
     Snapshot(AppSnapshot),
     Durable(DurableDelta),

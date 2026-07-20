@@ -17,9 +17,9 @@ use std::{
 
 use crfty_core::{
     AnalysisProfile, AppSnapshot, ConfigDelta, CorruptionReport, CorruptionSignature, DurableDelta,
-    DurableState, EphemeralDelta, ExecutionSettings, QueueCommand, QueueItemId, Reply, RunId,
-    SessionCommand, SessionState, Settings, SettingsCommand, Telemetry, ToolsState, VendorCommand,
-    fold, fold_config,
+    DurableState, EphemeralDelta, ExecutionSettings, ProjectionCommand, QueueCommand, QueueItemId,
+    Reply, RunId, SessionCommand, SessionState, Settings, SettingsCommand, Telemetry, ToolsState,
+    VendorCommand, fold, fold_config,
 };
 use crfty_engine::{
     coordinator::{EngineConfig, EngineRuntime, ToolsConfig, UserCommandSender},
@@ -287,6 +287,11 @@ impl Bridge {
         map_reply(commands.submit_vendor(command))
     }
 
+    pub fn submit_projection(&self, command: ProjectionCommand) -> Result<(), CommandError> {
+        let commands = self.commands()?;
+        map_reply(commands.submit_projection(command))
+    }
+
     /// Passes through while degraded by design: acknowledgement is the one
     /// mutation a corrupt journal accepts, and the driver verifies the
     /// signature itself.
@@ -359,7 +364,12 @@ fn absorb(state: &mut StreamState, event: DriverEvent, next_item_id: &AtomicU64)
                 EphemeralDelta::TelemetryCleared { run_id } => {
                     state.telemetry.remove(run_id);
                 }
-                EphemeralDelta::WorkerCrashed { .. } | EphemeralDelta::CommandRejected { .. } => {}
+                // Statistics answers are fire-and-forget: not part of the
+                // read model, so a late subscriber never gets a replay and
+                // re-requests instead.
+                EphemeralDelta::Statistics(_)
+                | EphemeralDelta::WorkerCrashed { .. }
+                | EphemeralDelta::CommandRejected { .. } => {}
             }
             state.emit(StreamPayload::Ephemeral(delta));
         }

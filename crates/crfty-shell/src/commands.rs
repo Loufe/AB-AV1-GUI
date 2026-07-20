@@ -1,8 +1,8 @@
 use std::path::PathBuf;
 
 use crfty_core::{
-    AnalysisIntent, CorruptionSignature, Operation, OutputTarget, QueueCommand, QueueItemId,
-    SessionCommand, Settings, VendorCommand,
+    AnalysisIntent, CorruptionSignature, Operation, OutputTarget, ProjectionCommand, QueueCommand,
+    QueueItemId, SessionCommand, Settings, VendorCommand,
 };
 use serde::Serialize;
 use tauri::{State, ipc::Channel};
@@ -101,6 +101,18 @@ fn vendor_check(bridge: State<'_, Bridge>) -> Result<(), CommandError> {
     bridge.submit_vendor(VendorCommand::Check)
 }
 
+/// Ask for a fresh Statistics computation. The ack only confirms acceptance;
+/// the payload arrives as a sequenced `Statistics` ephemeral on the stream
+/// and is never replayed — re-request after (re)subscribing.
+#[tauri::command]
+#[specta::specta]
+fn request_statistics(
+    bridge: State<'_, Bridge>,
+    utc_offset_minutes: i32,
+) -> Result<(), CommandError> {
+    bridge.submit_projection(ProjectionCommand::RequestStatistics { utc_offset_minutes })
+}
+
 /// Consent to discard a corrupt journal tail. The signature must echo the
 /// one delivered on the `Degraded` payload — the driver rejects anything
 /// else, so a stale acknowledgement can never discard fresher bytes.
@@ -115,20 +127,28 @@ fn acknowledge_corruption(
 
 /// The complete command/event surface, shared by the running app and the
 /// bindings-export test so the two can never drift.
+///
+/// `HistoryRow` never crosses IPC — the frontend derives rows from the
+/// snapshot with a mirror of `crfty_core::history_rows` — but its type is
+/// exported so the mirror consumes the generated definition instead of
+/// hand-authoring a domain type.
 #[must_use]
 pub fn specta_builder() -> Builder<tauri::Wry> {
-    Builder::<tauri::Wry>::new().commands(collect_commands![
-        app_info,
-        subscribe,
-        queue_add,
-        queue_remove,
-        queue_move,
-        start,
-        stop_after_current,
-        force_stop,
-        set_settings,
-        vendor_install,
-        vendor_check,
-        acknowledge_corruption,
-    ])
+    Builder::<tauri::Wry>::new()
+        .commands(collect_commands![
+            app_info,
+            subscribe,
+            queue_add,
+            queue_remove,
+            queue_move,
+            start,
+            stop_after_current,
+            force_stop,
+            set_settings,
+            vendor_install,
+            vendor_check,
+            request_statistics,
+            acknowledge_corruption,
+        ])
+        .typ::<crfty_core::HistoryRow>()
 }

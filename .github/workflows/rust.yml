@@ -38,7 +38,7 @@ jobs:
       - name: Run tests
         run: cargo test --workspace --all-features --locked
       - name: Check generated artifact freshness
-        run: git diff --exit-code -- ui/src/lib/bindings.ts ui/src/lib/store/fold-fixtures.json
+        run: git diff --exit-code -- ui/src/lib/bindings.ts ui/src/lib/store/fold-fixtures.json ui/src/lib/projection/projection-fixtures.json
 
   supply-chain:
     name: Supply chain

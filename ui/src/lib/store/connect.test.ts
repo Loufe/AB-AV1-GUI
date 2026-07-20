@@ -4,6 +4,7 @@ import type {
   CorruptionReport,
   QueueItem,
   Settings,
+  StatisticsPayload,
   StreamPayload_Deserialize,
   Telemetry,
 } from "@/lib/bindings";
@@ -47,6 +48,40 @@ function queueItem(id: number): QueueItem {
 
 function telemetry(runId: number): Telemetry {
   return { run_id: runId, sequence: 1, phase: "Encoding", progress: "Phase" };
+}
+
+function statisticsPayload(): StatisticsPayload {
+  return {
+    utc_offset_minutes: 60,
+    converted_files: 1,
+    sized_converted_files: 1,
+    remuxed_files: 0,
+    not_worthwhile_files: 0,
+    total_input_bytes: 10_000,
+    total_output_bytes: 4_000,
+    total_saved_bytes: 6_000,
+    remux_saved_bytes: 0,
+    total_time_ms: 300_000,
+    gigabytes_per_hour: 111.76,
+    reduction_percent: { average: 60, minimum: 60, maximum: 60, count: 1 },
+    vmaf: { average: 95.12, minimum: 95.12, maximum: 95.12, count: 1 },
+    crf: { average: 24, minimum: 24, maximum: 24, count: 1 },
+    reduction_bins: [0, 0, 0, 0, 0, 0, 1, 0, 0, 0],
+    grew_count: 0,
+    codecs: [{ codec: "Hevc", count: 1 }],
+    cumulative_savings: [{ epoch_day: 20_000, cumulative_saved_bytes: 6_000 }],
+    first_epoch_day: 20_000,
+    last_epoch_day: 20_000,
+    runs: {
+      analyzed: 0,
+      converted: 1,
+      remuxed: 0,
+      not_worthwhile: 0,
+      stopped: 0,
+      skipped: 0,
+      failed: 0,
+    },
+  };
 }
 
 function corruptionReport(): CorruptionReport {
@@ -168,6 +203,17 @@ describe("applyPayload", () => {
     // snapshot itself resets to the unknown state rather than guessing.
     applyPayload(snapshot(queueItem(1)));
     expect(appStore.getState().tools).toBeNull();
+  });
+
+  it("stores the statistics answer until the next snapshot resets it", () => {
+    applyPayload({ Ephemeral: { Statistics: statisticsPayload() } });
+    expect(appStore.getState().statistics).toEqual(statisticsPayload());
+    expect(progressStore.getState().telemetry).toEqual({});
+
+    // Statistics are never replayed on subscribe; the snapshot resets the
+    // slot and the view re-requests.
+    applyPayload(snapshot(queueItem(1)));
+    expect(appStore.getState().statistics).toBeNull();
   });
 
   it("records standing health until the next snapshot", () => {

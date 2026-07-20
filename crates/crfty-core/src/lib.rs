@@ -10,12 +10,14 @@
 //! or user-interface frameworks.
 
 mod constants;
+mod estimation;
 mod failure;
 mod job;
 mod journal;
 mod media;
 mod output;
 mod policy;
+mod projection;
 mod reducer;
 mod settings;
 mod state;
@@ -29,6 +31,10 @@ mod time;
 /// back. Do not use this alias as a runtime type.
 pub type JsNumber = u32;
 
+pub use estimation::{
+    EstimateBasis, EstimateConfidence, EstimationModel, HistoricalTier, Quartiles,
+    ResolutionBucket, TimeEstimate, exclusive_quartiles,
+};
 pub use failure::{DIAGNOSTIC_TAIL_MAX_BYTES, DiagnosticTail, FailureFacts, FailureKind};
 pub use job::{
     AnalysisAttempt, AnalysisIntent, AnalysisProfile, AnalysisResult, ClaimedJob, Crf, DecodeMode,
@@ -54,9 +60,14 @@ pub use policy::{
     Eligibility, MIN_VIDEO_PIXELS, SkipReason, evaluate_eligibility, permitted_profiles,
     select_analysis, select_job_action, verdict_applies,
 };
+pub use projection::{
+    CodecCount, CumulativeSavingsPoint, HistoryRow, HistoryStatus, RunTotals, StatFact,
+    StatFactKind, StatisticsPayload, ValueSpread, collect_stat_facts, history_rows,
+    local_epoch_day, statistics,
+};
 pub use reducer::{
-    Applied, Command, Effect, EphemeralDelta, QueueCommand, Reply, SessionCommand, SettingsCommand,
-    SystemCommand, VendorCommand, WorkerCommand, apply,
+    Applied, Command, Effect, EphemeralDelta, ProjectionCommand, QueueCommand, Reply,
+    SessionCommand, SettingsCommand, SystemCommand, VendorCommand, WorkerCommand, apply,
 };
 pub use settings::{
     DEFAULT_OUTPUT_SUFFIX, DefaultOutputMode, OutputSettings, PrivacySettings, Settings,
