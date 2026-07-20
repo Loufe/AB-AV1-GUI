@@ -3,7 +3,7 @@ use std::{
     path::PathBuf,
     sync::{
         Arc, Mutex,
-        atomic::{AtomicU64, Ordering},
+        atomic::{AtomicBool, AtomicU64, Ordering},
         mpsc,
     },
     thread,
@@ -18,7 +18,8 @@ use crfty_core::{
     OutputState, OutputTarget, OutputTransaction, PERCENT_BASIS_POINTS_SCALE, PhaseSpan,
     QueueCommand, QueueItemState, Replacement, Reply, RunId, SearchMeasurement, SessionCommand,
     SettingsCommand, SkipReason, StreamByteSizes, SystemCommand, Telemetry, UnixMillis,
-    VMAF_SCORE_FIXED_SCALE, VmafScore, VmafTarget, WorkerCommand, fold,
+    VMAF_SCORE_FIXED_SCALE, VendorActivity, VendorCommand, VmafScore, VmafTarget, WorkerCommand,
+    fold,
 };
 
 const FIRST_RUNTIME_ID: u64 = 1;
@@ -137,15 +138,36 @@ use crate::{
         self, RemuxCancellationHandle, RemuxHandle, RemuxReport, RemuxRequest, RemuxTelemetry,
         RemuxTerminal,
     },
-    tools::{MediaTools, ToolDiscovery},
+    vendor::{
+        discovery::{self, CurrentTools, DiscoveredTools, DiscoveryReport, MediaTools},
+        download::HttpFetch,
+        install::{self as vendor_install, InstallError, InstallProgress},
+        manifest,
+    },
 };
 
 #[derive(Debug, Clone)]
 pub struct EngineConfig {
     pub journal_path: PathBuf,
     pub config_path: PathBuf,
-    pub media_tools: ToolDiscovery,
+    /// Root of the managed vendor tree (`current.json`, `installs/`,
+    /// `staging/`); the shell passes `<app data dir>/vendor`.
+    pub vendor_root: PathBuf,
+    pub tools: ToolsConfig,
+    /// Base execution settings. The profile carries no tool revisions — the
+    /// session worker composes the discovered revisions in before each claim,
+    /// so only [`ExecutionSettings::validate_base`] applies here.
     pub execution: ExecutionSettings,
+}
+
+#[derive(Debug, Clone)]
+pub enum ToolsConfig {
+    /// Run vendor discovery (explicit env paths > managed install > PATH)
+    /// against the vendor root at startup.
+    Discover,
+    /// Injected discovery outcome. Tests and the contract fixture pin tools
+    /// and revisions without touching the process environment.
+    Fixed(DiscoveredTools),
 }
 
 #[derive(Debug)]
@@ -184,7 +206,7 @@ pub struct EngineRuntime {
 
 impl EngineRuntime {
     pub fn start(config: EngineConfig) -> Result<Self, EngineStartError> {
-        config.execution.validate().map_err(|reason| {
+        config.execution.validate_base().map_err(|reason| {
             EngineStartError::Failed(format!("invalid engine execution settings: {reason}"))
         })?;
         let runtime = Arc::new(AbAv1Runtime::start().map_err(|error| {
@@ -213,6 +235,13 @@ impl EngineRuntime {
                 )));
             }
         };
+        let report = match &config.tools {
+            ToolsConfig::Discover => discovery::discover(&config.vendor_root),
+            ToolsConfig::Fixed(tools) => DiscoveryReport {
+                tools: tools.clone(),
+                update_available: false,
+            },
+        };
         // Availability is reported before recovery so the reducer's fail-closed
         // default is replaced by the real discovery result ahead of any
         // recovery events, and the ToolsChanged ephemeral is already queued
@@ -220,7 +249,8 @@ impl EngineRuntime {
         let discovered = driver
             .commands
             .submit(Command::System(SystemCommand::ToolsDiscovered {
-                availability: config.media_tools.availability(),
+                availability: report.tools.availability(),
+                update_available: report.update_available,
             }))
             .map_err(|error| {
                 EngineStartError::Failed(format!("failed to report tool availability: {error}"))
@@ -230,9 +260,13 @@ impl EngineRuntime {
                 "tool availability report was not accepted: {discovered:?}"
             )));
         }
+        let current_tools = match report.tools {
+            DiscoveredTools::Available(current) => Some(current),
+            DiscoveredTools::Missing { .. } => None,
+        };
         let recovered = recover_startup(
             &driver.commands,
-            config.media_tools.tools(),
+            current_tools.as_ref().map(|current| &current.media),
             initial.durable,
         );
         let next_runtime_id = next_runtime_id(&recovered)?;
@@ -266,9 +300,15 @@ impl EngineRuntime {
             .map_err(|error| {
                 EngineStartError::Failed(format!("failed to start event bridge: {error}"))
             })?;
+        // Written only by the vendor worker on successful activation, which
+        // the reducer permits only while the engine is fully idle; sessions
+        // snapshot it once at start. That serialization is what makes the
+        // shared slot race-free.
+        let tools_slot = Arc::new(Mutex::new(current_tools));
         let internal_commands = driver.commands.clone();
         let supervisor_commands = internal_commands.clone();
         let supervisor_runtime = Arc::clone(&runtime);
+        let supervisor_tools = Arc::clone(&tools_slot);
         let supervisor = thread::Builder::new()
             .name("crfty-job-supervisor".to_owned())
             .spawn(move || {
@@ -277,6 +317,7 @@ impl EngineRuntime {
                     supervisor_commands,
                     supervisor_runtime,
                     config,
+                    supervisor_tools,
                     next_runtime_id,
                 );
             })
@@ -347,6 +388,13 @@ impl UserCommandSender {
         command: SettingsCommand,
     ) -> Result<Reply, crate::driver::SubmitError> {
         self.inner.submit(Command::Settings(command))
+    }
+
+    pub fn submit_vendor(
+        &self,
+        command: VendorCommand,
+    ) -> Result<Reply, crate::driver::SubmitError> {
+        self.inner.submit(Command::Vendor(command))
     }
 
     /// Operator consent to discard the corrupt journal tail identified by
@@ -654,9 +702,11 @@ fn supervise(
     commands: CommandSender,
     runtime: Arc<AbAv1Runtime>,
     config: EngineConfig,
+    tools_slot: Arc<Mutex<Option<CurrentTools>>>,
     next_runtime_id: u64,
 ) {
     let cancellation = ActiveCancellation::new();
+    let vendor_cancelled = Arc::new(AtomicBool::new(false));
     let next_id = Arc::new(AtomicU64::new(next_runtime_id));
     let mut worker: Option<thread::JoinHandle<()>> = None;
     while let Ok(effect) = effects.recv() {
@@ -679,6 +729,7 @@ fn supervise(
                 let worker_commands = commands.clone();
                 let worker_runtime = Arc::clone(&runtime);
                 let worker_config = config.clone();
+                let worker_tools = Arc::clone(&tools_slot);
                 let worker_cancellation = cancellation.clone();
                 let worker_ids = Arc::clone(&next_id);
                 let spawned = thread::Builder::new()
@@ -689,6 +740,7 @@ fn supervise(
                                 &worker_commands,
                                 &worker_runtime,
                                 &worker_config,
+                                &worker_tools,
                                 &worker_cancellation,
                                 &worker_ids,
                             )
@@ -716,6 +768,23 @@ fn supervise(
                 }
             }
             Effect::KillActiveRun { run_id } => cancellation.force(Some(run_id)),
+            // The reducer serializes vendor work through the activity state,
+            // so at most one install runs; the thread is detached — status
+            // flows back as commands, and shutdown only flags cancellation.
+            Effect::VendorInstall => spawn_vendor_worker(
+                &commands,
+                &config,
+                &tools_slot,
+                &vendor_cancelled,
+                VendorTask::Install,
+            ),
+            Effect::VendorCheck => spawn_vendor_worker(
+                &commands,
+                &config,
+                &tools_slot,
+                &vendor_cancelled,
+                VendorTask::Check,
+            ),
             Effect::WriteSettings { .. } => {
                 report_worker_crash(
                     &commands,
@@ -725,6 +794,9 @@ fn supervise(
             }
             Effect::StopDriver => {
                 cancellation.force(None);
+                // Never join a mid-download vendor thread: it observes the
+                // flag between chunks and unwinds through its own cleanup.
+                vendor_cancelled.store(true, Ordering::Relaxed);
                 break;
             }
         }
@@ -746,14 +818,191 @@ fn report_worker_crash(commands: &CommandSender, message: &str) {
     }
 }
 
+#[derive(Clone, Copy)]
+enum VendorTask {
+    Install,
+    Check,
+}
+
+/// Download progress is re-reported only every this many bytes so the
+/// ordered stream carries a handful of updates per archive, not one per
+/// 128 KiB chunk.
+const VENDOR_PROGRESS_STEP_BYTES: u64 = 8 * 1024 * 1024;
+
+fn spawn_vendor_worker(
+    commands: &CommandSender,
+    config: &EngineConfig,
+    tools_slot: &Arc<Mutex<Option<CurrentTools>>>,
+    cancelled: &Arc<AtomicBool>,
+    task: VendorTask,
+) {
+    cancelled.store(false, Ordering::Relaxed);
+    let worker_commands = commands.clone();
+    let worker_config = config.clone();
+    let worker_tools = Arc::clone(tools_slot);
+    let worker_cancelled = Arc::clone(cancelled);
+    let spawned = thread::Builder::new()
+        .name("crfty-vendor-worker".to_owned())
+        .spawn(move || {
+            let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                run_vendor_task(
+                    &worker_commands,
+                    &worker_config,
+                    &worker_tools,
+                    &worker_cancelled,
+                    task,
+                );
+            }));
+            if result.is_err() {
+                submit_vendor_activity(
+                    &worker_commands,
+                    VendorActivity::Failed {
+                        detail: "the vendor worker panicked".to_owned(),
+                    },
+                );
+            }
+        });
+    if let Err(error) = spawned {
+        submit_vendor_activity(
+            commands,
+            VendorActivity::Failed {
+                detail: format!("failed to start the vendor worker: {error}"),
+            },
+        );
+    }
+}
+
+fn run_vendor_task(
+    commands: &CommandSender,
+    config: &EngineConfig,
+    tools_slot: &Mutex<Option<CurrentTools>>,
+    cancelled: &AtomicBool,
+    task: VendorTask,
+) {
+    match task {
+        VendorTask::Install => match run_vendor_install(commands, config, cancelled) {
+            Ok(()) => {
+                refresh_discovered_tools(commands, config, tools_slot);
+                submit_vendor_activity(commands, VendorActivity::Idle);
+            }
+            // A cancelled install is not a failure: the previous tools are
+            // untouched, so the activity simply returns to rest.
+            Err(InstallError::Cancelled) => submit_vendor_activity(commands, VendorActivity::Idle),
+            Err(InstallError::Failed(detail)) => {
+                submit_vendor_activity(commands, VendorActivity::Failed { detail });
+            }
+        },
+        VendorTask::Check => {
+            refresh_discovered_tools(commands, config, tools_slot);
+            submit_vendor_activity(commands, VendorActivity::Idle);
+        }
+    }
+}
+
+fn run_vendor_install(
+    commands: &CommandSender,
+    config: &EngineConfig,
+    cancelled: &AtomicBool,
+) -> Result<(), InstallError> {
+    if matches!(config.tools, ToolsConfig::Fixed(_)) {
+        return Err(InstallError::Failed(
+            "this engine instance runs with a fixed tool set".to_owned(),
+        ));
+    }
+    let Some(manifest) = manifest::current() else {
+        return Err(InstallError::Failed(
+            "no pinned FFmpeg build exists for this platform".to_owned(),
+        ));
+    };
+    let fetch = HttpFetch::new().map_err(InstallError::Failed)?;
+    let mut last_reported: u64 = 0;
+    let mut progress = |event: InstallProgress| match event {
+        InstallProgress::Downloading { received, total } => {
+            let complete = total.is_some_and(|total| received >= total);
+            if received.saturating_sub(last_reported) >= VENDOR_PROGRESS_STEP_BYTES || complete {
+                last_reported = received;
+                submit_vendor_activity(commands, VendorActivity::Downloading { received, total });
+            }
+        }
+        InstallProgress::Installing => {
+            submit_vendor_activity(commands, VendorActivity::Installing);
+        }
+    };
+    vendor_install::install(
+        &config.vendor_root,
+        manifest,
+        &fetch,
+        &mut progress,
+        cancelled,
+    )
+    .map(|_metadata| ())
+}
+
+/// Re-runs discovery, publishes the result, and updates the shared slot the
+/// next session snapshots. Discovery reads the freshly written
+/// `current.json`, so a successful install becomes active tools without
+/// trusting anything but the on-disk record — and explicit env overrides
+/// still win.
+fn refresh_discovered_tools(
+    commands: &CommandSender,
+    config: &EngineConfig,
+    tools_slot: &Mutex<Option<CurrentTools>>,
+) {
+    let report = match &config.tools {
+        ToolsConfig::Discover => discovery::discover(&config.vendor_root),
+        ToolsConfig::Fixed(tools) => DiscoveryReport {
+            tools: tools.clone(),
+            update_available: false,
+        },
+    };
+    let current = match &report.tools {
+        DiscoveredTools::Available(current) => Some(current.clone()),
+        DiscoveredTools::Missing { .. } => None,
+    };
+    {
+        let mut slot = match tools_slot.lock() {
+            Ok(slot) => slot,
+            Err(poisoned) => poisoned.into_inner(),
+        };
+        *slot = current;
+    }
+    match commands.submit(Command::System(SystemCommand::ToolsDiscovered {
+        availability: report.tools.availability(),
+        update_available: report.update_available,
+    })) {
+        Ok(Reply::Accepted) => {}
+        Ok(reply) => eprintln!("tool rediscovery report was not accepted: {reply:?}"),
+        Err(error) => eprintln!("failed to report rediscovered tools: {error}"),
+    }
+}
+
+fn submit_vendor_activity(commands: &CommandSender, activity: VendorActivity) {
+    match commands.submit(Command::System(SystemCommand::VendorProgress { activity })) {
+        Ok(Reply::Accepted) => {}
+        Ok(reply) => eprintln!("vendor progress report was not accepted: {reply:?}"),
+        Err(error) => eprintln!("failed to report vendor progress: {error}"),
+    }
+}
+
 fn run_session(
     commands: &CommandSender,
     runtime: &AbAv1Runtime,
     config: &EngineConfig,
+    tools_slot: &Mutex<Option<CurrentTools>>,
     cancellation: &ActiveCancellation,
     ids: &AtomicU64,
 ) -> Result<(), String> {
-    let Some(tools) = config.media_tools.tools() else {
+    // Snapshot the slot once: every claim in this session executes with the
+    // same binaries and revisions, and the reducer refuses vendor installs
+    // while a session runs, so the snapshot cannot go stale mid-session.
+    let current = {
+        let slot = match tools_slot.lock() {
+            Ok(slot) => slot,
+            Err(poisoned) => poisoned.into_inner(),
+        };
+        slot.clone()
+    };
+    let Some(current) = current else {
         // Unreachable past the reducer's session-start gate; finish the
         // session gracefully rather than reporting a worker crash.
         return require_accepted(
@@ -761,8 +1010,15 @@ fn run_session(
             commands.submit(Command::Worker(WorkerCommand::Finished)),
         );
     };
+    let tools = &current.media;
     let inspector = MediaInspector::new(tools.ffprobe.clone());
     let mut decoder_resolver = DecodeResolver::new(tools.ffmpeg.clone());
+    // Claim-time revision immutability: the composed revisions freeze into
+    // each JobSpec at PrepareReserved and survive any later tool swap.
+    let mut base_execution = config.execution.clone();
+    base_execution.profile.ab_av1_revision = current.revisions.ab_av1.clone();
+    base_execution.profile.ffmpeg_revision = current.revisions.ffmpeg.clone();
+    base_execution.profile.encoder_revision = current.revisions.encoder.clone();
     loop {
         let claim_id = ClaimId(ids.fetch_add(1, Ordering::Relaxed));
         let run_id = RunId(ids.fetch_add(1, Ordering::Relaxed));
@@ -786,7 +1042,7 @@ fn run_session(
                 None
             }
         };
-        let mut execution = config.execution.clone();
+        let mut execution = base_execution.clone();
         execution.profile.decode_mode =
             observation
                 .as_ref()

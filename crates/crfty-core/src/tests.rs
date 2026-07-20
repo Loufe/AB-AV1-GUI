@@ -16,21 +16,43 @@ use crate::{
     OutputTarget, OutputTransaction, PathBinding, PathHash, PhaseSpan, QueueCommand, QueueItemId,
     QueueItemState, Replacement, Reply, RunId, SearchMeasurement, SessionCommand, SessionState,
     Settings, SettingsCommand, SkipReason, StreamByteSizes, SystemCommand, Telemetry,
-    ToolAvailability, ToolRevisions, UnixMillis, VideoCodec, VideoMeta, VmafScore, VmafTarget,
-    WorkerCommand, apply, compaction_due, compaction_quiescent, corruption_signature,
-    encode_record, encode_snapshot, evaluate_eligibility, permitted_profiles, recover_output,
-    replay, select_analysis, select_job_action,
+    ToolAvailability, ToolRevisions, ToolSource, ToolsState, UnixMillis, VendorActivity,
+    VendorCommand, VideoCodec, VideoMeta, VmafScore, VmafTarget, WorkerCommand, apply,
+    compaction_due, compaction_quiescent, corruption_signature, encode_record, encode_snapshot,
+    evaluate_eligibility, permitted_profiles, recover_output, replay, select_analysis,
+    select_job_action,
 };
 
+fn revisions() -> ToolRevisions {
+    ToolRevisions {
+        ab_av1: "test-ab-av1".to_owned(),
+        ffmpeg: "test-ffmpeg".to_owned(),
+        encoder: "test-svt".to_owned(),
+    }
+}
+
+fn available() -> ToolAvailability {
+    ToolAvailability::Available {
+        source: ToolSource::System,
+        revisions: revisions(),
+    }
+}
+
 fn execution() -> ExecutionSettings {
-    ExecutionSettings::production(
-        AnalysisProfile::production(ToolRevisions {
-            ab_av1: "test-ab-av1".to_owned(),
-            ffmpeg: "test-ffmpeg".to_owned(),
-            encoder: "test-svt".to_owned(),
-        }),
-        false,
-    )
+    let mut profile = AnalysisProfile::production();
+    let revisions = revisions();
+    profile.ab_av1_revision = revisions.ab_av1;
+    profile.ffmpeg_revision = revisions.ffmpeg;
+    profile.encoder_revision = revisions.encoder;
+    ExecutionSettings::production(profile, false)
+}
+
+#[test]
+fn base_profile_is_valid_only_until_revisions_are_required() {
+    let base = ExecutionSettings::production(AnalysisProfile::production(), false);
+    assert_eq!(base.validate_base(), Ok(()));
+    assert_eq!(base.validate(), Err("tool revisions must not be empty"));
+    assert_eq!(execution().validate(), Ok(()));
 }
 
 fn analysis() -> AnalysisResult {
@@ -148,20 +170,26 @@ fn session_start_requires_discovered_tools_and_discovery_is_idempotent() {
     let discovered = apply(
         &mut state,
         Command::System(SystemCommand::ToolsDiscovered {
-            availability: ToolAvailability::Available,
+            availability: available(),
+            update_available: false,
         }),
     );
     assert_eq!(discovered.reply, Reply::Accepted);
     assert_eq!(
         discovered.ephemeral,
-        vec![EphemeralDelta::ToolsChanged(ToolAvailability::Available)]
+        vec![EphemeralDelta::ToolsChanged(ToolsState {
+            availability: available(),
+            activity: VendorActivity::Idle,
+            update_available: false,
+        })]
     );
-    assert_eq!(state.tools, ToolAvailability::Available);
+    assert_eq!(state.tools.availability, available());
 
     let unchanged = apply(
         &mut state,
         Command::System(SystemCommand::ToolsDiscovered {
-            availability: ToolAvailability::Available,
+            availability: available(),
+            update_available: false,
         }),
     );
     assert_eq!(unchanged.reply, Reply::Accepted);
@@ -178,10 +206,14 @@ fn session_start_requires_discovered_tools_and_discovery_is_idempotent() {
                 missing: vec![crate::MediaTool::Ffmpeg],
                 detail: "ffmpeg was not found".to_owned(),
             },
+            update_available: false,
         }),
     );
     assert_eq!(missing.reply, Reply::Accepted);
-    assert!(matches!(state.tools, ToolAvailability::Missing { .. }));
+    assert!(matches!(
+        state.tools.availability,
+        ToolAvailability::Missing { .. }
+    ));
 }
 
 /// Reports available tools, then starts the session. Nearly every session
@@ -190,11 +222,234 @@ fn start_session(state: &mut AppState) -> crate::Applied {
     let discovered = apply(
         state,
         Command::System(SystemCommand::ToolsDiscovered {
-            availability: ToolAvailability::Available,
+            availability: available(),
+            update_available: false,
         }),
     );
     assert_eq!(discovered.reply, Reply::Accepted);
     apply(state, Command::Session(SessionCommand::Start))
+}
+
+#[test]
+fn vendor_install_requires_a_fully_idle_engine() {
+    // Running session refuses an install.
+    let mut state = AppState::default();
+    let _added = apply(&mut state, add_command(QueueItemId(1), "video.mkv"));
+    let _started = start_session(&mut state);
+    assert_eq!(state.session, SessionState::Running);
+    let refused = apply(&mut state, Command::Vendor(VendorCommand::Install));
+    assert_eq!(
+        refused.reply,
+        Reply::Rejected {
+            reason: "vendor install requires an idle session".to_owned(),
+        }
+    );
+    assert!(refused.effects.is_empty());
+    assert_eq!(state.tools.activity, VendorActivity::Idle);
+
+    // Idle session but a crash-recovered active item still refuses.
+    let mut state = AppState::default();
+    let _added = apply(&mut state, add_command(QueueItemId(1), "video.mkv"));
+    let _started = start_session(&mut state);
+    let _reserved = apply(
+        &mut state,
+        Command::Worker(WorkerCommand::ReserveNext {
+            claim_id: ClaimId(2),
+            run_id: RunId(3),
+        }),
+    );
+    state.session = SessionState::Idle;
+    let refused = apply(&mut state, Command::Vendor(VendorCommand::Install));
+    assert_eq!(
+        refused.reply,
+        Reply::Rejected {
+            reason: "vendor install cannot start while a queue item is active".to_owned(),
+        }
+    );
+
+    // Fully idle accepts: activity transitions and the effect is emitted.
+    let mut state = AppState::default();
+    let accepted = apply(&mut state, Command::Vendor(VendorCommand::Install));
+    assert_eq!(accepted.reply, Reply::Accepted);
+    assert_eq!(accepted.effects, vec![Effect::VendorInstall]);
+    assert_eq!(
+        state.tools.activity,
+        VendorActivity::Downloading {
+            received: 0,
+            total: None,
+        }
+    );
+
+    // A second install while the first is in flight is refused.
+    let refused = apply(&mut state, Command::Vendor(VendorCommand::Install));
+    assert_eq!(
+        refused.reply,
+        Reply::Rejected {
+            reason: "a vendor operation is already in progress".to_owned(),
+        }
+    );
+    assert!(refused.effects.is_empty());
+}
+
+#[test]
+fn vendor_activity_serializes_workers_and_failed_is_restartable() {
+    let mut state = AppState::default();
+    let checking = apply(&mut state, Command::Vendor(VendorCommand::Check));
+    assert_eq!(checking.reply, Reply::Accepted);
+    assert_eq!(checking.effects, vec![Effect::VendorCheck]);
+    assert_eq!(state.tools.activity, VendorActivity::Checking);
+
+    // Checking blocks both vendor commands: at most one worker exists.
+    for command in [VendorCommand::Install, VendorCommand::Check] {
+        let refused = apply(&mut state, Command::Vendor(command));
+        assert_eq!(
+            refused.reply,
+            Reply::Rejected {
+                reason: "a vendor operation is already in progress".to_owned(),
+            }
+        );
+    }
+
+    // A failed operation is terminal for the worker, so both restart paths
+    // reopen from it.
+    let failed = apply(
+        &mut state,
+        Command::System(SystemCommand::VendorProgress {
+            activity: VendorActivity::Failed {
+                detail: "checksum mismatch".to_owned(),
+            },
+        }),
+    );
+    assert_eq!(failed.reply, Reply::Accepted);
+    assert!(matches!(
+        state.tools.activity,
+        VendorActivity::Failed { .. }
+    ));
+    let retried = apply(&mut state, Command::Vendor(VendorCommand::Install));
+    assert_eq!(retried.reply, Reply::Accepted);
+    assert_eq!(retried.effects, vec![Effect::VendorInstall]);
+}
+
+#[test]
+fn session_start_is_refused_while_the_vendor_swaps_tools() {
+    for activity in [
+        VendorActivity::Downloading {
+            received: 5,
+            total: Some(10),
+        },
+        VendorActivity::Installing,
+    ] {
+        let mut state = AppState::default();
+        let _added = apply(&mut state, add_command(QueueItemId(1), "video.mkv"));
+        let discovered = apply(
+            &mut state,
+            Command::System(SystemCommand::ToolsDiscovered {
+                availability: available(),
+                update_available: false,
+            }),
+        );
+        assert_eq!(discovered.reply, Reply::Accepted);
+        let progressed = apply(
+            &mut state,
+            Command::System(SystemCommand::VendorProgress {
+                activity: activity.clone(),
+            }),
+        );
+        assert_eq!(progressed.reply, Reply::Accepted);
+        let refused = apply(&mut state, Command::Session(SessionCommand::Start));
+        assert_eq!(
+            refused.reply,
+            Reply::Rejected {
+                reason: "a vendor install is in progress".to_owned(),
+            },
+            "start accepted during {activity:?}"
+        );
+        assert_eq!(state.session, SessionState::Idle);
+    }
+
+    // Checking does not block a start: it swaps no binaries.
+    let mut state = AppState::default();
+    let _added = apply(&mut state, add_command(QueueItemId(1), "video.mkv"));
+    let _discovered = apply(
+        &mut state,
+        Command::System(SystemCommand::ToolsDiscovered {
+            availability: available(),
+            update_available: false,
+        }),
+    );
+    let _checking = apply(
+        &mut state,
+        Command::System(SystemCommand::VendorProgress {
+            activity: VendorActivity::Checking,
+        }),
+    );
+    let started = apply(&mut state, Command::Session(SessionCommand::Start));
+    assert_eq!(started.reply, Reply::Accepted);
+}
+
+#[test]
+fn vendor_progress_and_discovery_compose_without_clobbering_each_other() {
+    let mut state = AppState::default();
+    let _install = apply(&mut state, Command::Vendor(VendorCommand::Install));
+    let progressed = apply(
+        &mut state,
+        Command::System(SystemCommand::VendorProgress {
+            activity: VendorActivity::Downloading {
+                received: 1_024,
+                total: Some(4_096),
+            },
+        }),
+    );
+    assert_eq!(
+        progressed.ephemeral,
+        vec![EphemeralDelta::ToolsChanged(ToolsState {
+            availability: ToolAvailability::default(),
+            activity: VendorActivity::Downloading {
+                received: 1_024,
+                total: Some(4_096),
+            },
+            update_available: false,
+        })]
+    );
+
+    // Discovery mid-flight (the post-install report) preserves the activity.
+    let discovered = apply(
+        &mut state,
+        Command::System(SystemCommand::ToolsDiscovered {
+            availability: ToolAvailability::Available {
+                source: ToolSource::Managed,
+                revisions: revisions(),
+            },
+            update_available: false,
+        }),
+    );
+    assert_eq!(discovered.reply, Reply::Accepted);
+    assert_eq!(
+        state.tools.activity,
+        VendorActivity::Downloading {
+            received: 1_024,
+            total: Some(4_096),
+        }
+    );
+    assert_eq!(
+        state.tools.availability,
+        ToolAvailability::Available {
+            source: ToolSource::Managed,
+            revisions: revisions(),
+        }
+    );
+
+    // Identical progress re-report emits nothing.
+    let unchanged = apply(
+        &mut state,
+        Command::System(SystemCommand::VendorProgress {
+            activity: VendorActivity::Downloading {
+                received: 1_024,
+                total: Some(4_096),
+            },
+        }),
+    );
+    assert!(unchanged.ephemeral.is_empty());
 }
 
 fn add_command(item_id: QueueItemId, input: impl Into<PathBuf>) -> Command {

@@ -17,14 +17,15 @@ use crfty_core::{
     FailureFacts, FailureKind, ItemOutcome, JobPhase, JobProgress, Operation, OutputDelta,
     OutputTarget, QueueCommand, QueueItemId, Replacement, Reply, RunId, SearchMeasurement,
     SessionCommand, Settings, SettingsCommand, SystemCommand, Telemetry, ToolAvailability,
-    ToolRevisions, UnixMillis, VmafScore, WorkerCommand, apply, corruption_signature, fold, replay,
+    ToolRevisions, ToolSource, UnixMillis, VmafScore, WorkerCommand, apply, corruption_signature,
+    fold, replay,
 };
 use crfty_engine::{
-    coordinator::{EngineConfig, EngineRuntime},
+    coordinator::{EngineConfig, EngineRuntime, ToolsConfig},
     driver::{DriverEvent, DriverHandle, DriverStartError},
     journal::JournalWriter,
     output::{ArtifactInspector, FixtureByteInspector, OutputManager},
-    tools::{MediaTools, ToolDiscovery},
+    vendor::discovery::{CurrentTools, DiscoveredTools, MediaTools},
 };
 
 static TEMP_SEQUENCE: AtomicU64 = AtomicU64::new(0);
@@ -34,14 +35,34 @@ static TEMP_SEQUENCE: AtomicU64 = AtomicU64::new(0);
 static ENGINE_GUARD: Mutex<()> = Mutex::new(());
 
 fn execution() -> ExecutionSettings {
-    ExecutionSettings::production(
-        AnalysisProfile::production(ToolRevisions {
+    let mut profile = AnalysisProfile::production();
+    profile.ab_av1_revision = "fixture".to_owned();
+    profile.ffmpeg_revision = "fixture".to_owned();
+    profile.encoder_revision = "fixture".to_owned();
+    ExecutionSettings::production(profile, false)
+}
+
+fn fixture_tools(media: MediaTools) -> ToolsConfig {
+    ToolsConfig::Fixed(DiscoveredTools::Available(CurrentTools {
+        media,
+        source: ToolSource::System,
+        revisions: ToolRevisions {
             ab_av1: "fixture".to_owned(),
             ffmpeg: "fixture".to_owned(),
             encoder: "fixture".to_owned(),
-        }),
-        false,
-    )
+        },
+    }))
+}
+
+fn fixture_available() -> ToolAvailability {
+    ToolAvailability::Available {
+        source: ToolSource::System,
+        revisions: ToolRevisions {
+            ab_av1: "fixture".to_owned(),
+            ffmpeg: "fixture".to_owned(),
+            encoder: "fixture".to_owned(),
+        },
+    }
 }
 
 fn add(item_id: QueueItemId) -> Command {
@@ -613,7 +634,8 @@ fn telemetry_pressure_coalesces_and_terminal_value_wins() {
         driver
             .commands
             .submit(Command::System(SystemCommand::ToolsDiscovered {
-                availability: ToolAvailability::Available,
+                availability: fixture_available(),
+                update_available: false,
             }))
             .expect("discovery reply"),
         Reply::Accepted
@@ -699,7 +721,8 @@ fn terminal_publishes_final_telemetry_and_clear_before_item_finished() {
     for command in [
         add(QueueItemId(1)),
         Command::System(SystemCommand::ToolsDiscovered {
-            availability: ToolAvailability::Available,
+            availability: fixture_available(),
+            update_available: false,
         }),
         Command::Session(SessionCommand::Start),
         Command::Worker(WorkerCommand::ReserveNext {
@@ -783,7 +806,8 @@ fn restart_after_fsynced_terminal_folds_to_finished_snapshot() {
     for command in [
         add(QueueItemId(1)),
         Command::System(SystemCommand::ToolsDiscovered {
-            availability: ToolAvailability::Available,
+            availability: fixture_available(),
+            update_available: false,
         }),
         Command::Session(SessionCommand::Start),
         Command::Worker(WorkerCommand::ReserveNext {
@@ -970,7 +994,8 @@ fn engine_startup_recovers_an_active_partial_staging_transaction() {
     let engine = EngineRuntime::start(EngineConfig {
         journal_path,
         config_path: directory.path().join("config.json"),
-        media_tools: ToolDiscovery::Available(MediaTools {
+        vendor_root: directory.path().join("vendor"),
+        tools: fixture_tools(MediaTools {
             ffmpeg: executable.clone(),
             ffprobe: executable,
         }),
@@ -1019,7 +1044,8 @@ fn journal_active_output_run(
             output_target: OutputTarget::Replace,
         }),
         Command::System(SystemCommand::ToolsDiscovered {
-            availability: ToolAvailability::Available,
+            availability: fixture_available(),
+            update_available: false,
         }),
         Command::Session(SessionCommand::Start),
         Command::Worker(WorkerCommand::ReserveNext {
@@ -1094,7 +1120,8 @@ fn engine_startup_abandons_intent_when_staging_was_never_created() {
     let engine = EngineRuntime::start(EngineConfig {
         journal_path,
         config_path: directory.path().join("config.json"),
-        media_tools: ToolDiscovery::Available(MediaTools {
+        vendor_root: directory.path().join("vendor"),
+        tools: fixture_tools(MediaTools {
             ffmpeg: executable.clone(),
             ffprobe: executable,
         }),
@@ -1145,7 +1172,8 @@ fn engine_startup_removes_staging_left_before_staging_created_was_durable() {
     let engine = EngineRuntime::start(EngineConfig {
         journal_path,
         config_path: directory.path().join("config.json"),
-        media_tools: ToolDiscovery::Available(MediaTools {
+        vendor_root: directory.path().join("vendor"),
+        tools: fixture_tools(MediaTools {
             ffmpeg: executable.clone(),
             ffprobe: executable,
         }),
@@ -1231,7 +1259,8 @@ fn settled_success_journal(
             output_target,
         }),
         Command::System(SystemCommand::ToolsDiscovered {
-            availability: ToolAvailability::Available,
+            availability: fixture_available(),
+            update_available: false,
         }),
         Command::Session(SessionCommand::Start),
         Command::Worker(WorkerCommand::ReserveNext {
@@ -1316,7 +1345,8 @@ fn recover_settled_success(directory: &TestDirectory, fixture: &SettledSuccessFi
     let engine = EngineRuntime::start(EngineConfig {
         journal_path: fixture.journal_path.clone(),
         config_path: directory.path().join("config.json"),
-        media_tools: ToolDiscovery::Available(MediaTools {
+        vendor_root: directory.path().join("vendor"),
+        tools: fixture_tools(MediaTools {
             ffmpeg: executable.clone(),
             ffprobe: executable,
         }),

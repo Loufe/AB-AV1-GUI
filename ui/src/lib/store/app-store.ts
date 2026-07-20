@@ -10,7 +10,7 @@ import type {
   DurableState_Deserialize,
   SessionState,
   Settings,
-  ToolAvailability,
+  ToolsState,
 } from "@/lib/bindings";
 import { emptyDurableState } from "@/lib/store/fold";
 
@@ -35,11 +35,12 @@ export interface AppStoreState {
   session: SessionState;
   health: Health;
   /**
-   * Standing tool availability; null until the stream delivers it. The shell
-   * replays ToolsChanged right after each snapshot (ADR-006 standing health),
-   * so the snapshot handler resets this to null rather than guessing.
+   * Standing tool state (availability, vendor activity, update flag); null
+   * until the stream delivers it. The shell replays ToolsChanged right after
+   * each snapshot (ADR-006 standing health), so the snapshot handler resets
+   * this to null rather than guessing.
    */
-  tools: ToolAvailability | null;
+  tools: ToolsState | null;
 }
 
 export function initialAppState(): AppStoreState {

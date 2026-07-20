@@ -520,9 +520,11 @@ fn persist_settings(
                     .rev()
                     .find_map(|effect| match effect {
                         Effect::WriteSettings { settings } => Some(settings.clone()),
-                        Effect::StartWorker | Effect::KillActiveRun { .. } | Effect::StopDriver => {
-                            None
-                        }
+                        Effect::StartWorker
+                        | Effect::KillActiveRun { .. }
+                        | Effect::VendorInstall
+                        | Effect::VendorCheck
+                        | Effect::StopDriver => None,
                     });
                 settings.map(|settings| (index, settings))
             });
@@ -659,7 +661,10 @@ fn reconcile_effects(effects: Vec<Effect>, state: &AppState) -> Vec<Effect> {
             }
             Effect::StartWorker => {}
             Effect::WriteSettings { .. } => {}
-            Effect::KillActiveRun { .. } | Effect::StopDriver => {
+            Effect::KillActiveRun { .. }
+            | Effect::VendorInstall
+            | Effect::VendorCheck
+            | Effect::StopDriver => {
                 if !reconciled.contains(&effect) {
                     reconciled.push(effect);
                 }
@@ -810,14 +815,13 @@ mod tests {
 
     #[test]
     fn terminal_publishes_ephemerals_before_the_durable_finish() {
-        let execution = ExecutionSettings::production(
-            AnalysisProfile::production(ToolRevisions {
-                ab_av1: "fixture".to_owned(),
-                ffmpeg: "fixture".to_owned(),
-                encoder: "fixture".to_owned(),
-            }),
-            false,
-        );
+        let execution = {
+            let mut profile = AnalysisProfile::production();
+            profile.ab_av1_revision = "fixture".to_owned();
+            profile.ffmpeg_revision = "fixture".to_owned();
+            profile.encoder_revision = "fixture".to_owned();
+            ExecutionSettings::production(profile, false)
+        };
         let mut state = AppState::default();
         for command in [
             Command::Queue(QueueCommand::Add {
@@ -828,7 +832,15 @@ mod tests {
                 output_target: OutputTarget::Replace,
             }),
             Command::System(SystemCommand::ToolsDiscovered {
-                availability: ToolAvailability::Available,
+                availability: ToolAvailability::Available {
+                    source: crfty_core::ToolSource::System,
+                    revisions: ToolRevisions {
+                        ab_av1: "fixture".to_owned(),
+                        ffmpeg: "fixture".to_owned(),
+                        encoder: "fixture".to_owned(),
+                    },
+                },
+                update_available: false,
             }),
             Command::Session(SessionCommand::Start),
             Command::Worker(WorkerCommand::ReserveNext {
