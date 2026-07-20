@@ -17,11 +17,12 @@ use crfty_core::{
     AnalysisAttempt, AnalysisIntent, AnalysisProfile, AnalysisResult, ArtifactIdentity, AudioCodec,
     AudioStreamMeta, ClaimId, CompletionEvidence, ConflictKind, ContentKey, Crf, DecodeMode,
     DecodePreference, DestructiveIdentity, DiagnosticTail, DurableDelta, DurableState, DurationMs,
-    ExecutionSettings, FailureFacts, FailureKind, FileStamp, FileSystemId, FileTimeNs, ItemOutcome,
-    JobAction, JobPhase, JobSpec, MediaContainer, MediaObservation, Operation, OutputDelta,
-    OutputState, OutputTarget, OutputTransaction, PathBinding, PathHash, PhaseSpan, QueueItem,
-    QueueItemId, QueueItemState, Replacement, ReservedJob, RunId, SearchMeasurement, SkipReason,
-    StreamByteSizes, UnixMillis, VideoCodec, VideoMeta, VmafScore, VmafTarget, fold,
+    ExecutionSettings, FailureFacts, FailureKind, FileStamp, FileSystemId, FileTimeNs, ImportPath,
+    ItemOutcome, JobAction, JobPhase, JobSpec, MediaContainer, MediaObservation, Operation,
+    OutputDelta, OutputState, OutputTarget, OutputTransaction, ParkedRecord, ParkedStatus,
+    PathBinding, PathHash, PhaseSpan, QueueItem, QueueItemId, QueueItemState, Replacement,
+    ReservedJob, RunId, SearchMeasurement, SkipReason, StreamByteSizes, UnixMillis, Verdict,
+    VerdictKind, VideoCodec, VideoMeta, VmafScore, VmafTarget, fold,
 };
 use serde::Serialize;
 
@@ -301,6 +302,77 @@ fn output_committed(run: u64, key: &str) -> DurableDelta {
         run_id: RunId(run),
         final_identity: artifact(key),
     })
+}
+
+fn parked_full() -> ParkedRecord {
+    ParkedRecord {
+        status: ParkedStatus::Converted,
+        size: Some(3_000_000),
+        modified_ns: Some(FileTimeNs(1_000_000)),
+        video_codec: Some(VideoCodec::H264),
+        width: Some(1920),
+        height: Some(1080),
+        duration_ms: Some(120_000),
+        output_size: Some(1_000_000),
+        encoding_time: Some(DurationMs(88_000)),
+        crf: Some(Crf(30_000)),
+        vmaf: Some(VmafScore(9_550)),
+        target: Some(VmafTarget(95)),
+        requested_target: Some(VmafTarget(95)),
+        floor_target: Some(VmafTarget(90)),
+        decided_at: UnixMillis(1_700_000_000_000),
+    }
+}
+
+fn parked_sparse() -> ParkedRecord {
+    ParkedRecord {
+        status: ParkedStatus::Scanned,
+        size: None,
+        modified_ns: None,
+        video_codec: None,
+        width: None,
+        height: None,
+        duration_ms: None,
+        output_size: None,
+        encoding_time: None,
+        crf: None,
+        vmaf: None,
+        target: None,
+        requested_target: None,
+        floor_target: None,
+        decided_at: UnixMillis(1_700_000_000_000),
+    }
+}
+
+fn history_imported() -> DurableDelta {
+    DurableDelta::HistoryImported {
+        records: vec![
+            (
+                ImportPath("c:/videos/decided.mkv".to_owned()),
+                parked_full(),
+            ),
+            (
+                ImportPath("//server/share/only-seen.mkv".to_owned()),
+                parked_sparse(),
+            ),
+        ],
+    }
+}
+
+fn adopted_verdict() -> Verdict {
+    Verdict {
+        kind: VerdictKind::Converted {
+            output_content_key: None,
+            input_size: Some(3_000_000),
+            output_size: Some(1_000_000),
+            encoding_time: Some(DurationMs(88_000)),
+            crf: Some(Crf(30_000)),
+            vmaf: Some(VmafScore(9_550)),
+            target: Some(VmafTarget(95)),
+        },
+        source_run: None,
+        decided_at: UnixMillis(1_700_000_000_000),
+    }
 }
 
 fn convert_prelude(key: &str) -> Vec<DurableDelta> {
@@ -678,6 +750,63 @@ fn scenarios() -> Vec<Scenario> {
             "output_ready_unknown_run",
             vec![],
             vec![output_ready(9, "ck-out")],
+        ),
+        scenario("history_imported", vec![], vec![history_imported()]),
+        scenario(
+            "parked_adopted_with_verdict",
+            vec![history_imported(), observed("path-1", "ck-1", 120_000)],
+            vec![DurableDelta::ParkedAdopted {
+                import_path: ImportPath("c:/videos/decided.mkv".to_owned()),
+                content_key: ContentKey("ck-1".to_owned()),
+                verdict: Some(adopted_verdict()),
+            }],
+        ),
+        scenario(
+            "parked_adopted_provenance_only",
+            vec![history_imported(), observed("path-1", "ck-1", 120_000)],
+            vec![DurableDelta::ParkedAdopted {
+                import_path: ImportPath("//server/share/only-seen.mkv".to_owned()),
+                content_key: ContentKey("ck-1".to_owned()),
+                verdict: None,
+            }],
+        ),
+        scenario(
+            "parked_adopted_missing_record",
+            vec![history_imported()],
+            vec![DurableDelta::ParkedAdopted {
+                import_path: ImportPath("c:/videos/decided.mkv".to_owned()),
+                content_key: ContentKey("ck-unseen".to_owned()),
+                verdict: Some(adopted_verdict()),
+            }],
+        ),
+        scenario(
+            "parked_retired",
+            vec![history_imported()],
+            vec![DurableDelta::ParkedRetired {
+                import_path: ImportPath("c:/videos/decided.mkv".to_owned()),
+            }],
+        ),
+        scenario(
+            "item_finished_converted_with_analysis_summary",
+            [
+                convert_prelude("ck-1"),
+                vec![
+                    recorded(100, analysis(6, 95)),
+                    output_started(100),
+                    output_staging_created(100),
+                    output_ready(100, "ck-out"),
+                    output_committed(100, "ck-out"),
+                ],
+            ]
+            .concat(),
+            // The verdict absorbs the measured summary: evidence sizes, the
+            // encoding phase total, and the analysis triple.
+            vec![finished(
+                1,
+                10,
+                100,
+                ItemOutcome::Converted(live_encode_evidence()),
+            )],
         ),
     ]
 }

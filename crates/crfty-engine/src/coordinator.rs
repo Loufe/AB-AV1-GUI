@@ -1,6 +1,6 @@
 use std::{
     fmt,
-    path::PathBuf,
+    path::{Path, PathBuf},
     sync::{
         Arc, Mutex,
         atomic::{AtomicBool, AtomicU64, Ordering},
@@ -13,13 +13,13 @@ use std::{
 use crfty_core::{
     AnalysisAttempt, AnalysisResult, AppSnapshot, CRF_FIXED_SCALE, ClaimId, ClaimedJob, Command,
     CompletionEvidence, ConflictKind, CorruptionSignature, Crf, DecodeMode, DurableDelta,
-    DurableState, DurationMs, Effect, ExecutionSettings, FailureFacts, FailureKind, ItemOutcome,
-    JobAction, JobPhase, JobProgress, MAX_PERCENT_BASIS_POINTS, MAX_VMAF_SCORE, OutputDelta,
-    OutputState, OutputTarget, OutputTransaction, PERCENT_BASIS_POINTS_SCALE, PhaseSpan,
-    ProjectionCommand, QueueCommand, QueueItemState, Replacement, Reply, RunId, SearchMeasurement,
-    SessionCommand, SettingsCommand, SkipReason, StreamByteSizes, SystemCommand, Telemetry,
-    UnixMillis, VMAF_SCORE_FIXED_SCALE, VendorActivity, VendorCommand, VmafScore, VmafTarget,
-    WorkerCommand, fold,
+    DurableState, DurationMs, Effect, ExecutionSettings, FailureFacts, FailureKind, HistoryCommand,
+    ItemOutcome, JobAction, JobPhase, JobProgress, MAX_PERCENT_BASIS_POINTS, MAX_VMAF_SCORE,
+    OutputDelta, OutputState, OutputTarget, OutputTransaction, PERCENT_BASIS_POINTS_SCALE,
+    PhaseSpan, ProjectionCommand, QueueCommand, QueueItemState, Replacement, Reply, RunId,
+    SearchMeasurement, SessionCommand, SettingsCommand, SkipReason, StreamByteSizes, SystemCommand,
+    Telemetry, UnixMillis, VMAF_SCORE_FIXED_SCALE, VendorActivity, VendorCommand, VmafScore,
+    VmafTarget, WorkerCommand, fold,
 };
 
 const FIRST_RUNTIME_ID: u64 = 1;
@@ -366,6 +366,14 @@ impl EngineRuntime {
     }
 }
 
+/// Outcome of a history import: how many records were parked and how many
+/// were skipped as duplicates of already-parked or already-adopted paths.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ImportSummary {
+    pub parked: u32,
+    pub skipped: u32,
+}
+
 #[derive(Clone)]
 pub struct UserCommandSender {
     inner: CommandSender,
@@ -402,6 +410,26 @@ impl UserCommandSender {
         command: ProjectionCommand,
     ) -> Result<Reply, crate::driver::SubmitError> {
         self.inner.submit(Command::Projection(command))
+    }
+
+    /// Read, strictly parse, and submit a history import file (see
+    /// `docs/HISTORY_IMPORT.md`). Every failure mode — unreadable or
+    /// oversized file, schema rejection, reducer rejection, degraded journal
+    /// — surfaces as a user-facing message.
+    pub fn import_history(&self, path: &Path) -> Result<ImportSummary, String> {
+        let records = crate::history_import::load_import_file(path, now_millis())
+            .map_err(|error| error.to_string())?;
+        let reply = self
+            .inner
+            .submit(Command::History(HistoryCommand::Import { records }))
+            .map_err(|error| format!("import submission failed: {error}"))?;
+        match reply {
+            Reply::Imported { parked, skipped } => Ok(ImportSummary { parked, skipped }),
+            Reply::Rejected { reason } | Reply::DurabilityUnknown { reason } => Err(reason),
+            Reply::Accepted | Reply::Reserved(_) | Reply::Claimed(_) => {
+                Err("import command returned an invalid reply".to_owned())
+            }
+        }
     }
 
     /// Operator consent to discard the corrupt journal tail identified by
@@ -1038,7 +1066,7 @@ fn run_session(
             Ok(Reply::Reserved(None) | Reply::Rejected { .. }) => break,
             Ok(Reply::DurabilityUnknown { reason }) => return Err(reason),
             Err(error) => return Err(format!("worker reservation failed: {error}")),
-            Ok(Reply::Accepted | Reply::Claimed(_)) => {
+            Ok(Reply::Accepted | Reply::Claimed(_) | Reply::Imported { .. }) => {
                 return Err("reservation command returned an invalid reply".to_owned());
             }
         };
@@ -1056,11 +1084,15 @@ fn run_session(
                 .map_or(crfty_core::DecodeMode::Software, |observed| {
                     decoder_resolver.resolve(execution.decode_preference, &observed.metadata.codec)
                 });
+        // The observed file's normalized spellings, matched against the
+        // parked import inbox by the reducer during preparation.
+        let import_paths = crate::history_import::import_path_candidates(&reserved.input);
         let prepared = commands.submit(Command::Worker(WorkerCommand::PrepareReserved {
             item_id: reserved.item_id,
             claim_id,
             run_id,
             observation,
+            import_paths,
             execution,
         }));
         let job = match prepared {
@@ -1083,7 +1115,12 @@ fn run_session(
                 }));
                 return Err(format!("worker preparation failed: {error}"));
             }
-            Ok(Reply::Accepted | Reply::Claimed(None) | Reply::Reserved(_)) => {
+            Ok(
+                Reply::Accepted
+                | Reply::Claimed(None)
+                | Reply::Reserved(_)
+                | Reply::Imported { .. },
+            ) => {
                 return Err("preparation command returned an invalid reply".to_owned());
             }
         };

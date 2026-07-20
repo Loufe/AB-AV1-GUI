@@ -5,11 +5,11 @@ use serde::Serialize;
 use crate::state::ConversionRun;
 use crate::{
     AnalysisIntent, AnalysisResult, AppState, ClaimId, ClaimedJob, CompletionEvidence, ConfigDelta,
-    CorruptionSignature, DecodeMode, DecodePreference, DurableDelta, ExecutionSettings,
+    CorruptionSignature, DecodeMode, DecodePreference, DurableDelta, ExecutionSettings, ImportPath,
     ItemOutcome, JobAction, JobSpec, MediaObservation, Operation, OutputDelta, OutputTarget,
-    PhaseSpan, QueueItem, QueueItemId, QueueItemState, ReservedJob, RunId, SessionState, Settings,
-    StatisticsPayload, Telemetry, ToolAvailability, ToolsState, UnixMillis, VendorActivity, fold,
-    fold_config, select_job_action, statistics,
+    ParkedRecord, ParkedResolution, PhaseSpan, QueueItem, QueueItemId, QueueItemState, ReservedJob,
+    RunId, SessionState, Settings, StatisticsPayload, Telemetry, ToolAvailability, ToolsState,
+    UnixMillis, VendorActivity, fold, fold_config, resolve_parked, select_job_action, statistics,
 };
 
 /// Sanity bound for a requester-supplied UTC offset: one day in minutes.
@@ -24,7 +24,22 @@ pub enum Command {
     Worker(WorkerCommand),
     Vendor(VendorCommand),
     Projection(ProjectionCommand),
+    History(HistoryCommand),
     System(SystemCommand),
+}
+
+/// Durable history-surface operations. Deliberately NOT a [`SystemCommand`]:
+/// system commands emit no durable deltas and stay usable over a corrupt
+/// journal, while history operations must be refused by the driver's
+/// degraded gate like any other durable write.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum HistoryCommand {
+    /// Park a parsed import batch. Keys already parked or already adopted
+    /// are skipped; an all-known batch is still accepted (a re-import is a
+    /// counted no-op, not an error).
+    Import {
+        records: Vec<(ImportPath, ParkedRecord)>,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -87,6 +102,11 @@ pub enum WorkerCommand {
         claim_id: ClaimId,
         run_id: RunId,
         observation: Option<Box<MediaObservation>>,
+        /// Normalized path spellings of the observed file (at most two:
+        /// canonical and merely-absolute), computed by the engine with the
+        /// same rule the import uses. Any that are parked resolve to
+        /// adoption or retirement alongside the observation.
+        import_paths: Vec<ImportPath>,
         execution: ExecutionSettings,
     },
     AbandonReservation {
@@ -181,6 +201,7 @@ pub enum Reply {
     Accepted,
     Reserved(Option<Box<ReservedJob>>),
     Claimed(Option<Box<ClaimedJob>>),
+    Imported { parked: u32, skipped: u32 },
     Rejected { reason: String },
     DurabilityUnknown { reason: String },
 }
@@ -242,6 +263,7 @@ pub fn apply(state: &mut AppState, command: Command) -> Applied {
                 ))));
             applied
         }
+        Command::History(command) => apply_history(state, command),
         Command::System(SystemCommand::Shutdown) => {
             let mut applied = Applied::accepted();
             applied.effects.push(Effect::StopDriver);
@@ -461,6 +483,45 @@ fn apply_vendor(state: &AppState, command: VendorCommand) -> Applied {
     }
 }
 
+fn apply_history(state: &AppState, command: HistoryCommand) -> Applied {
+    match command {
+        HistoryCommand::Import { records } => {
+            let mut applied = Applied::accepted();
+            let mut known: std::collections::BTreeSet<ImportPath> = state
+                .durable
+                .parked
+                .keys()
+                .cloned()
+                .chain(
+                    state
+                        .durable
+                        .records
+                        .values()
+                        .filter_map(|record| record.imported.clone()),
+                )
+                .collect();
+            let mut fresh: Vec<(ImportPath, ParkedRecord)> = Vec::new();
+            let mut skipped: u32 = 0;
+            for (import_path, parked) in records {
+                if known.contains(&import_path) {
+                    skipped = skipped.saturating_add(1);
+                } else {
+                    known.insert(import_path.clone());
+                    fresh.push((import_path, parked));
+                }
+            }
+            let parked = u32::try_from(fresh.len()).unwrap_or(u32::MAX);
+            if !fresh.is_empty() {
+                applied
+                    .durable
+                    .push(DurableDelta::HistoryImported { records: fresh });
+            }
+            applied.reply = Reply::Imported { parked, skipped };
+            applied
+        }
+    }
+}
+
 fn apply_session(state: &AppState, command: SessionCommand) -> Applied {
     match command {
         SessionCommand::Start if state.session == SessionState::Idle => {
@@ -552,6 +613,7 @@ fn apply_worker(state: &AppState, command: WorkerCommand) -> Applied {
             claim_id,
             run_id,
             observation,
+            import_paths,
             mut execution,
         } => {
             execution.overwrite_existing = state.settings.output.overwrite_existing;
@@ -617,11 +679,39 @@ fn apply_worker(state: &AppState, command: WorkerCommand) -> Applied {
                     .records
                     .get(&observation.binding.content_key)
                     .is_none_or(|record| record.metadata != observation.metadata);
+                // Parked import records resolve against the fresh
+                // observation. The deltas land AFTER MediaObserved so the
+                // content record exists when an adoption folds. A native
+                // verdict already on the record outranks an adopted one —
+                // provenance stays, the verdict does not regress.
+                let adoptions: Vec<DurableDelta> = import_paths
+                    .iter()
+                    .filter_map(|key| state.durable.parked.get(key).map(|parked| (key, parked)))
+                    .map(|(key, parked)| match resolve_parked(parked, &observation) {
+                        ParkedResolution::Adopt { verdict } => {
+                            let native_verdict_stands = state
+                                .durable
+                                .records
+                                .get(&observation.binding.content_key)
+                                .and_then(|record| record.verdict.as_ref())
+                                .is_some_and(|existing| existing.source_run.is_some());
+                            DurableDelta::ParkedAdopted {
+                                import_path: key.clone(),
+                                content_key: observation.binding.content_key.clone(),
+                                verdict: if native_verdict_stands { None } else { verdict },
+                            }
+                        }
+                        ParkedResolution::Retire => DurableDelta::ParkedRetired {
+                            import_path: key.clone(),
+                        },
+                    })
+                    .collect();
                 if path_changed || record_changed {
                     applied
                         .durable
                         .push(DurableDelta::MediaObserved { observation });
                 }
+                applied.durable.extend(adoptions);
             }
             applied.durable.push(DurableDelta::ItemPrepared {
                 spec: Box::new(spec.clone()),

@@ -4,9 +4,9 @@ use serde::{Deserialize, Serialize};
 
 use crate::{
     AnalysisAttempt, AnalysisIntent, AnalysisResult, ContentKey, DecodeMode, DurationMs,
-    FailureFacts, FileRecord, JobPhase, JobSpec, MediaObservation, Operation, OutputDelta,
-    OutputTarget, PathBinding, PathHash, ReservedJob, Settings, SkipReason, ToolRevisions,
-    UnixMillis, Verdict, VerdictKind,
+    FailureFacts, FileRecord, ImportPath, JobPhase, JobSpec, MediaObservation, Operation,
+    OutputDelta, OutputTarget, ParkedRecord, PathBinding, PathHash, ReservedJob, Settings,
+    SkipReason, ToolRevisions, UnixMillis, Verdict, VerdictKind,
 };
 
 macro_rules! numeric_id {
@@ -167,6 +167,26 @@ pub enum DurableDelta {
         phase_spans: Vec<PhaseSpan>,
     },
     Output(OutputDelta),
+    /// An import batch landing in the parked inbox. One delta per accepted
+    /// import; the reducer has already dropped keys that are parked or
+    /// adopted.
+    HistoryImported {
+        records: Vec<(ImportPath, ParkedRecord)>,
+    },
+    /// A parked record matched the observed file: the parked entry leaves
+    /// the inbox, the content record gains import provenance, and — when the
+    /// resolution decided one — an adopted verdict.
+    ParkedAdopted {
+        import_path: ImportPath,
+        content_key: ContentKey,
+        verdict: Option<Verdict>,
+    },
+    /// A parked record no longer describes the file at its path: stale
+    /// content, retired without adoption. Durable so replay converges and the
+    /// journal keeps an audit trail of every discarded imported claim.
+    ParkedRetired {
+        import_path: ImportPath,
+    },
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, specta::Type)]
@@ -176,6 +196,10 @@ pub struct DurableState {
     pub records: BTreeMap<ContentKey, FileRecord>,
     pub outputs: BTreeMap<RunId, crate::OutputTransaction>,
     pub conversion_runs: BTreeMap<RunId, ConversionRun>,
+    /// Imported history records not yet matched to a real file. The inbox
+    /// empties itself: prepare-time adoption or retirement removes entries;
+    /// nothing else writes here after an import.
+    pub parked: BTreeMap<ImportPath, ParkedRecord>,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -408,16 +432,34 @@ pub fn fold(state: &mut DurableState, delta: &DurableDelta) {
                 // Decisive outcomes upsert the record's verdict; the latest
                 // run wins because deltas fold in order. A success with no
                 // settled output content key (unsettled transaction) sets no
-                // verdict — the produced artifact cannot be named.
+                // verdict — the produced artifact cannot be named. The
+                // verdict absorbs the measured summary here, the single
+                // writer for both native and adopted verdicts' shape.
                 let kind = match outcome {
-                    ItemOutcome::Converted(_) => run
-                        .output_content_key
-                        .clone()
-                        .map(|output_content_key| VerdictKind::Converted { output_content_key }),
-                    ItemOutcome::Remuxed(_) => run
-                        .output_content_key
-                        .clone()
-                        .map(|output_content_key| VerdictKind::Remuxed { output_content_key }),
+                    ItemOutcome::Converted(evidence) => {
+                        run.output_content_key.clone().map(|output_content_key| {
+                            let (input_size, output_size) = evidence_sizes(evidence);
+                            VerdictKind::Converted {
+                                output_content_key: Some(output_content_key),
+                                input_size,
+                                output_size,
+                                encoding_time: encoding_duration(phase_spans),
+                                crf: run.analysis.as_ref().map(|found| found.measurement.crf),
+                                vmaf: run.analysis.as_ref().map(|found| found.measurement.score),
+                                target: run.analysis.as_ref().map(|found| found.successful_target),
+                            }
+                        })
+                    }
+                    ItemOutcome::Remuxed(evidence) => {
+                        run.output_content_key.clone().map(|output_content_key| {
+                            let (input_size, output_size) = evidence_sizes(evidence);
+                            VerdictKind::Remuxed {
+                                output_content_key,
+                                input_size,
+                                output_size,
+                            }
+                        })
+                    }
                     ItemOutcome::NotWorthwhile { .. } => Some(VerdictKind::NotWorthwhile {
                         requested: run.spec.execution.requested_target,
                         floor: run.spec.execution.fallback_floor,
@@ -433,14 +475,66 @@ pub fn fold(state: &mut DurableState, delta: &DurableDelta) {
                 {
                     record.verdict = Some(Verdict {
                         kind,
-                        source_run: *run_id,
+                        source_run: Some(*run_id),
                         decided_at: *at,
                     });
                 }
             }
         }
         DurableDelta::Output(delta) => delta.fold_into(&mut state.outputs),
+        DurableDelta::HistoryImported { records } => {
+            for (import_path, parked) in records {
+                state.parked.insert(import_path.clone(), parked.clone());
+            }
+        }
+        DurableDelta::ParkedAdopted {
+            import_path,
+            content_key,
+            verdict,
+        } => {
+            state.parked.remove(import_path);
+            if let Some(record) = state.records.get_mut(content_key) {
+                record.imported = Some(import_path.clone());
+                if let Some(verdict) = verdict {
+                    record.verdict = Some(verdict.clone());
+                }
+            }
+        }
+        DurableDelta::ParkedRetired { import_path } => {
+            state.parked.remove(import_path);
+        }
     }
+}
+
+/// Measured byte sizes from live evidence; a crash-recovered success carries
+/// none, and fabricating them would be dishonest.
+fn evidence_sizes(evidence: &CompletionEvidence) -> (Option<u64>, Option<u64>) {
+    match evidence {
+        CompletionEvidence::LiveEncode {
+            input_size,
+            output_size,
+            ..
+        }
+        | CompletionEvidence::LiveRemux {
+            input_size,
+            output_size,
+        } => (Some(*input_size), Some(*output_size)),
+        CompletionEvidence::RecoveredAtStartup => (None, None),
+    }
+}
+
+/// Total measured encoding time across the run's phase spans; `None` when no
+/// encoding phase was measured (recovered runs, empty spans).
+fn encoding_duration(spans: &[PhaseSpan]) -> Option<DurationMs> {
+    let mut measured = false;
+    let mut total: u64 = 0;
+    for span in spans {
+        if span.phase == JobPhase::Encoding {
+            measured = true;
+            total = total.saturating_add(span.duration.0);
+        }
+    }
+    measured.then_some(DurationMs(total))
 }
 
 fn set_item_state(queue: &mut [QueueItem], item_id: QueueItemId, item_state: QueueItemState) {

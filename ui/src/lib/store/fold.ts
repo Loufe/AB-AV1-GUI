@@ -9,6 +9,7 @@
 import type {
   AnalysisProfile,
   AnalysisResult,
+  CompletionEvidence,
   ConfigDelta,
   DecodeMode,
   DurableDelta,
@@ -35,7 +36,7 @@ import type {
 } from "@/lib/bindings";
 
 export function emptyDurableState(): DurableState_Deserialize {
-  return { queue: [], paths: {}, records: {}, outputs: {}, conversion_runs: {} };
+  return { queue: [], paths: {}, records: {}, outputs: {}, conversion_runs: {}, parked: {} };
 }
 
 export function foldDurable(
@@ -111,6 +112,36 @@ export function foldDurable(
   if ("Output" in delta && delta.Output !== undefined) {
     return { ...state, outputs: foldOutput(state.outputs, delta.Output) };
   }
+  if ("HistoryImported" in delta && delta.HistoryImported !== undefined) {
+    const parked = { ...state.parked };
+    for (const [importPath, record] of delta.HistoryImported.records) {
+      parked[importPath] = record;
+    }
+    return { ...state, parked };
+  }
+  if ("ParkedAdopted" in delta && delta.ParkedAdopted !== undefined) {
+    const { import_path, content_key, verdict } = delta.ParkedAdopted;
+    const parked = { ...state.parked };
+    delete parked[import_path];
+    let records = state.records;
+    const record = state.records[content_key];
+    if (record !== undefined) {
+      records = {
+        ...state.records,
+        [content_key]: {
+          ...record,
+          imported: import_path,
+          verdict: verdict ?? record.verdict,
+        },
+      };
+    }
+    return { ...state, parked, records };
+  }
+  if ("ParkedRetired" in delta && delta.ParkedRetired !== undefined) {
+    const parked = { ...state.parked };
+    delete parked[delta.ParkedRetired.import_path];
+    return { ...state, parked };
+  }
   return state;
 }
 
@@ -173,7 +204,9 @@ function foldMediaObserved(
   const { path_hash, binding, metadata } = observation;
   const existing = state.records[binding.content_key];
   const record: FileRecord_Deserialize =
-    existing === undefined ? { metadata, analyses: [], verdict: null } : { ...existing, metadata };
+    existing === undefined
+      ? { metadata, analyses: [], verdict: null, imported: null }
+      : { ...existing, metadata };
   return {
     ...state,
     paths: { ...state.paths, [path_hash]: binding },
@@ -234,9 +267,16 @@ function foldItemFinished(
   }
   // Decisive outcomes upsert the record's verdict; the latest run wins
   // because deltas fold in order. A success with no settled output content
-  // key sets no verdict (mirrors the Rust fold).
+  // key sets no verdict, and the verdict absorbs the measured summary
+  // (mirrors the Rust fold).
   let records = state.records;
-  const kind = verdictKind(outcome, outputContentKey, run.spec.execution);
+  const kind = verdictKind(
+    outcome,
+    outputContentKey,
+    run.spec.execution,
+    run.analysis,
+    phase_spans,
+  );
   const contentKey = run.spec.content_key;
   if (kind !== null && contentKey !== null) {
     const record = state.records[contentKey];
@@ -271,17 +311,35 @@ function verdictKind(
   outcome: ItemOutcome,
   outputContentKey: string | null,
   execution: ExecutionSettings,
+  analysis: AnalysisResult | null,
+  phaseSpans: PhaseSpan[],
 ): VerdictKind | null {
   if (typeof outcome !== "object") {
     return null;
   }
   if ("Converted" in outcome && outcome.Converted !== undefined) {
-    return outputContentKey === null
-      ? null
-      : { Converted: { output_content_key: outputContentKey } };
+    if (outputContentKey === null) {
+      return null;
+    }
+    const [input_size, output_size] = evidenceSizes(outcome.Converted);
+    return {
+      Converted: {
+        output_content_key: outputContentKey,
+        input_size,
+        output_size,
+        encoding_time: encodingDuration(phaseSpans),
+        crf: analysis === null ? null : analysis.measurement.crf,
+        vmaf: analysis === null ? null : analysis.measurement.score,
+        target: analysis === null ? null : analysis.successful_target,
+      },
+    };
   }
   if ("Remuxed" in outcome && outcome.Remuxed !== undefined) {
-    return outputContentKey === null ? null : { Remuxed: { output_content_key: outputContentKey } };
+    if (outputContentKey === null) {
+      return null;
+    }
+    const [input_size, output_size] = evidenceSizes(outcome.Remuxed);
+    return { Remuxed: { output_content_key: outputContentKey, input_size, output_size } };
   }
   if ("NotWorthwhile" in outcome && outcome.NotWorthwhile !== undefined) {
     return {
@@ -292,6 +350,34 @@ function verdictKind(
     };
   }
   return null;
+}
+
+// Measured byte sizes from live evidence; a crash-recovered success carries
+// none (mirrors evidence_sizes in the Rust fold).
+function evidenceSizes(evidence: CompletionEvidence): [number | null, number | null] {
+  if (typeof evidence === "object") {
+    if ("LiveEncode" in evidence && evidence.LiveEncode !== undefined) {
+      return [evidence.LiveEncode.input_size, evidence.LiveEncode.output_size];
+    }
+    if ("LiveRemux" in evidence && evidence.LiveRemux !== undefined) {
+      return [evidence.LiveRemux.input_size, evidence.LiveRemux.output_size];
+    }
+  }
+  return [null, null];
+}
+
+// Total measured encoding time across the run's phase spans; null when no
+// encoding phase was measured (mirrors encoding_duration in the Rust fold).
+function encodingDuration(spans: PhaseSpan[]): number | null {
+  let measured = false;
+  let total = 0;
+  for (const span of spans) {
+    if (span.phase === "Encoding") {
+      measured = true;
+      total += span.duration;
+    }
+  }
+  return measured ? total : null;
 }
 
 function committedContentKey(state: OutputState): string | null {

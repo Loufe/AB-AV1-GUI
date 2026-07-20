@@ -8,7 +8,7 @@ use serde::Serialize;
 use tauri::{State, ipc::Channel};
 use tauri_specta::{Builder, collect_commands};
 
-use crate::bridge::{Bridge, CommandError, ShellEvent};
+use crate::bridge::{Bridge, CommandError, ImportSummary, ShellEvent};
 
 #[derive(Debug, Clone, Serialize, specta::Type)]
 pub struct AppInfo {
@@ -113,6 +113,15 @@ fn request_statistics(
     bridge.submit_projection(ProjectionCommand::RequestStatistics { utc_offset_minutes })
 }
 
+/// Import a history file produced by the V2 converter script
+/// (`docs/HISTORY_IMPORT.md`). Records are parked durably and adopted as
+/// matching files are prepared.
+#[tauri::command]
+#[specta::specta]
+fn import_history(bridge: State<'_, Bridge>, path: PathBuf) -> Result<ImportSummary, CommandError> {
+    bridge.import_history(&path)
+}
+
 /// Consent to discard a corrupt journal tail. The signature must echo the
 /// one delivered on the `Degraded` payload — the driver rejects anything
 /// else, so a stale acknowledgement can never discard fresher bytes.
@@ -148,6 +157,7 @@ pub fn specta_builder() -> Builder<tauri::Wry> {
             vendor_install,
             vendor_check,
             request_statistics,
+            import_history,
             acknowledge_corruption,
         ])
         .typ::<crfty_core::HistoryRow>()

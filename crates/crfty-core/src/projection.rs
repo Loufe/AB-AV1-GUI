@@ -44,13 +44,13 @@ pub enum StatFactKind {
 
 /// One flattened fact per content with a standing verdict: the joined sizes,
 /// measured times, and media facts that Statistics and estimation consume.
-/// Legacy parked records (#39) will map into this same shape once they exist,
-/// which is how their facts reach Statistics without identity adoption.
+/// Adopted verdicts (#39) have no backing run; their summary comes from the
+/// verdict-carried fields the fold absorbed at adoption time.
 #[derive(Debug, Clone, PartialEq)]
 pub struct StatFact {
     pub content_key: ContentKey,
     pub kind: StatFactKind,
-    pub source_run: RunId,
+    pub source_run: Option<RunId>,
     /// When the deciding run finished; falls back to the verdict decision
     /// time when the run itself is no longer present.
     pub finished_at: UnixMillis,
@@ -99,13 +99,23 @@ pub fn collect_stat_facts(state: &DurableState) -> Vec<StatFact> {
         let Some(verdict) = &record.verdict else {
             continue;
         };
-        let run = state.conversion_runs.get(&verdict.source_run);
-        let (input_size_bytes, output_size_bytes) =
-            joined_sizes(verdict.source_run, run, state, record);
+        let run = verdict
+            .source_run
+            .and_then(|run_id| state.conversion_runs.get(&run_id));
+        let (input_size_bytes, output_size_bytes) = joined_sizes(verdict, run, state, record);
         let (analyzing_ms, encoding_ms) = phase_totals(run);
         let measurement = run
             .and_then(|run| run.analysis.as_ref())
             .map(|analysis| &analysis.measurement);
+        let (carried_encoding, carried_crf, carried_vmaf) = match &verdict.kind {
+            VerdictKind::Converted {
+                encoding_time,
+                crf,
+                vmaf,
+                ..
+            } => (*encoding_time, *crf, *vmaf),
+            VerdictKind::Remuxed { .. } | VerdictKind::NotWorthwhile { .. } => (None, None, None),
+        };
         let kind = match &verdict.kind {
             VerdictKind::Converted { .. } => StatFactKind::Converted,
             VerdictKind::Remuxed { .. } => StatFactKind::Remuxed,
@@ -129,13 +139,19 @@ pub fn collect_stat_facts(state: &DurableState) -> Vec<StatFact> {
             input_size_bytes,
             output_size_bytes,
             analyzing_ms,
-            encoding_ms,
+            encoding_ms: if run.is_none() {
+                carried_encoding.map_or(encoding_ms, |time| time.0)
+            } else {
+                encoding_ms
+            },
             vmaf: measurement
                 .filter(|_| is_converted)
-                .map(|measurement| measurement.score),
+                .map(|measurement| measurement.score)
+                .or(carried_vmaf),
             crf: measurement
                 .filter(|_| is_converted)
-                .map(|measurement| measurement.crf),
+                .map(|measurement| measurement.crf)
+                .or(carried_crf),
         });
     }
     facts
@@ -143,10 +159,11 @@ pub fn collect_stat_facts(state: &DurableState) -> Vec<StatFact> {
 
 /// Input/output sizes for the run backing a verdict. Live evidence is the
 /// authority; a crash-recovered success carries no sizes, so the settled
-/// output transaction supplies them; failing that, the record's inspected
-/// size covers the input and the output stays unknown.
+/// output transaction supplies them; failing that, the verdict-carried
+/// summary covers adopted verdicts with no backing run, and the record's
+/// inspected size covers the input while the output stays unknown.
 fn joined_sizes(
-    run_id: RunId,
+    verdict: &crate::Verdict,
     run: Option<&ConversionRun>,
     state: &DurableState,
     record: &FileRecord,
@@ -168,7 +185,9 @@ fn joined_sizes(
             CompletionEvidence::RecoveredAtStartup => {}
         }
     }
-    if let Some(transaction) = state.outputs.get(&run_id) {
+    if let Some(run_id) = verdict.source_run
+        && let Some(transaction) = state.outputs.get(&run_id)
+    {
         let output = match &transaction.state {
             OutputState::Committed { final_identity }
             | OutputState::RetireIntent { final_identity }
@@ -179,7 +198,23 @@ fn joined_sizes(
             return (Some(transaction.input_identity.size), output);
         }
     }
-    (Some(record.metadata.size_bytes), None)
+    let (carried_input, carried_output) = match &verdict.kind {
+        VerdictKind::Converted {
+            input_size,
+            output_size,
+            ..
+        }
+        | VerdictKind::Remuxed {
+            input_size,
+            output_size,
+            ..
+        } => (*input_size, *output_size),
+        VerdictKind::NotWorthwhile { .. } => (None, None),
+    };
+    (
+        carried_input.or(Some(record.metadata.size_bytes)),
+        carried_output,
+    )
 }
 
 pub(crate) fn phase_totals(run: Option<&ConversionRun>) -> (u64, u64) {
@@ -600,14 +635,20 @@ fn verdict_row(
             floor: *floor,
         },
     };
-    let run = state.conversion_runs.get(&verdict.source_run);
-    let (input_size, output_size) = joined_sizes(verdict.source_run, run, state, record);
+    let run = verdict
+        .source_run
+        .and_then(|run_id| state.conversion_runs.get(&run_id));
+    let (input_size, output_size) = joined_sizes(verdict, run, state, record);
     let measurement = run
         .and_then(|run| run.analysis.as_ref())
         .map(|analysis| &analysis.measurement)
         .filter(|_| status == HistoryStatus::Converted);
+    let (carried_crf, carried_vmaf) = match &verdict.kind {
+        VerdictKind::Converted { crf, vmaf, .. } => (*crf, *vmaf),
+        VerdictKind::Remuxed { .. } | VerdictKind::NotWorthwhile { .. } => (None, None),
+    };
     let mut row = base_row(content_key, record, status);
-    row.source_run = Some(verdict.source_run);
+    row.source_run = verdict.source_run;
     row.happened_at = Some(
         run.and_then(|run| run.finished_at)
             .unwrap_or(verdict.decided_at),
@@ -616,8 +657,12 @@ fn verdict_row(
         row.input_size_bytes = input_size;
     }
     row.output_size_bytes = output_size;
-    row.vmaf = measurement.map(|measurement| measurement.score);
-    row.crf = measurement.map(|measurement| measurement.crf);
+    row.vmaf = measurement
+        .map(|measurement| measurement.score)
+        .or(carried_vmaf);
+    row.crf = measurement
+        .map(|measurement| measurement.crf)
+        .or(carried_crf);
     row
 }
 
@@ -795,9 +840,15 @@ mod tests {
             let mut record = FileRecord::new(meta(VideoCodec::Hevc, *input));
             record.verdict = Some(Verdict {
                 kind: VerdictKind::Converted {
-                    output_content_key: key(&format!("output-{run:04}")),
+                    output_content_key: Some(key(&format!("output-{run:04}"))),
+                    input_size: None,
+                    output_size: None,
+                    encoding_time: None,
+                    crf: None,
+                    vmaf: None,
+                    target: None,
                 },
-                source_run: RunId(run),
+                source_run: Some(RunId(run)),
                 decided_at: finished,
             });
             state.records.insert(content_key.clone(), record);
@@ -903,9 +954,15 @@ mod tests {
         let mut record = FileRecord::new(meta(VideoCodec::H264, 5_000));
         record.verdict = Some(Verdict {
             kind: VerdictKind::Converted {
-                output_content_key: key("adopted-out"),
+                output_content_key: Some(key("adopted-out")),
+                input_size: None,
+                output_size: None,
+                encoding_time: None,
+                crf: None,
+                vmaf: None,
+                target: None,
             },
-            source_run: RunId(77),
+            source_run: Some(RunId(77)),
             decided_at: UnixMillis(DAY_MS * 19_000),
         });
         state.records.insert(content_key.clone(), record);
@@ -938,8 +995,10 @@ mod tests {
         record.verdict = Some(Verdict {
             kind: VerdictKind::Remuxed {
                 output_content_key: key("remuxed-out"),
+                input_size: None,
+                output_size: None,
             },
-            source_run: RunId(50),
+            source_run: Some(RunId(50)),
             decided_at: UnixMillis(DAY_MS * 20_000),
         });
         state.records.insert(content_key.clone(), record);
@@ -1020,7 +1079,7 @@ mod tests {
                 requested: VmafTarget(95),
                 floor: VmafTarget(90),
             },
-            source_run: RunId(9),
+            source_run: Some(RunId(9)),
             decided_at: UnixMillis(DAY_MS * 20_000),
         });
         state.records.insert(content_key.clone(), record);
@@ -1154,7 +1213,7 @@ mod tests {
                 requested: VmafTarget(95),
                 floor: VmafTarget(90),
             },
-            source_run: RunId(1),
+            source_run: Some(RunId(1)),
             decided_at: UnixMillis(0),
         });
         state.records.insert(content_key, record);

@@ -152,7 +152,7 @@ fn live_encode(input_size: u64, output_size: u64) -> CompletionEvidence {
 fn verdict(kind: VerdictKind, run: u64) -> Verdict {
     Verdict {
         kind,
-        source_run: RunId(run),
+        source_run: Some(RunId(run)),
         decided_at: FINISHED_AT,
     }
 }
@@ -160,7 +160,13 @@ fn verdict(kind: VerdictKind, run: u64) -> Verdict {
 fn converted_verdict(run: u64) -> Verdict {
     verdict(
         VerdictKind::Converted {
-            output_content_key: key(&format!("output-{run:04}")),
+            output_content_key: Some(key(&format!("output-{run:04}"))),
+            input_size: None,
+            output_size: None,
+            encoding_time: None,
+            crf: None,
+            vmaf: None,
+            target: None,
         },
         run,
     )
@@ -261,6 +267,8 @@ fn scenarios() -> Vec<Scenario> {
             Some(verdict(
                 VerdictKind::Remuxed {
                     output_content_key: key("remuxed-out"),
+                    input_size: None,
+                    output_size: None,
                 },
                 50,
             )),

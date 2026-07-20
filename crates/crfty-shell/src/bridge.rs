@@ -66,6 +66,14 @@ pub enum StreamPayload {
     },
 }
 
+/// Outcome of a history import: how many records were parked and how many
+/// were skipped as duplicates of already-parked or already-adopted paths.
+#[derive(Debug, Clone, Copy, Serialize, specta::Type)]
+pub struct ImportSummary {
+    pub parked: u32,
+    pub skipped: u32,
+}
+
 #[derive(Debug, Clone, Serialize, specta::Type)]
 pub struct CommandError {
     pub code: String,
@@ -292,6 +300,20 @@ impl Bridge {
         map_reply(commands.submit_projection(command))
     }
 
+    /// Reads and parses the import file in the engine, then submits it for
+    /// durable parking. Failures (unreadable/malformed file, degraded
+    /// journal) come back as one user-facing message.
+    pub fn import_history(&self, path: &std::path::Path) -> Result<ImportSummary, CommandError> {
+        let commands = self.commands()?;
+        commands
+            .import_history(path)
+            .map(|summary| ImportSummary {
+                parked: summary.parked,
+                skipped: summary.skipped,
+            })
+            .map_err(|message| CommandError::new("import_failed", message))
+    }
+
     /// Passes through while degraded by design: acknowledgement is the one
     /// mutation a corrupt journal accepts, and the driver verifies the
     /// signature itself.
@@ -416,10 +438,12 @@ fn map_reply(reply: Result<Reply, crfty_engine::driver::SubmitError>) -> Result<
         Ok(Reply::DurabilityUnknown { reason }) => {
             Err(CommandError::new("durability_unknown", reason))
         }
-        Ok(Reply::Reserved(_) | Reply::Claimed(_)) => Err(CommandError::new(
-            "internal",
-            "driver returned a worker reply to a user command",
-        )),
+        Ok(Reply::Reserved(_) | Reply::Claimed(_) | Reply::Imported { .. }) => {
+            Err(CommandError::new(
+                "internal",
+                "driver returned a worker reply to a user command",
+            ))
+        }
         Err(error) => Err(CommandError::engine_unavailable(error.to_string())),
     }
 }

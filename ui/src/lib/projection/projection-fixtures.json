@@ -8,7 +8,8 @@
         "paths": {},
         "records": {},
         "outputs": {},
-        "conversion_runs": {}
+        "conversion_runs": {},
+        "parked": {}
       },
       "expected_rows": []
     },
@@ -45,12 +46,19 @@
             "verdict": {
               "kind": {
                 "Converted": {
-                  "output_content_key": "output-0001"
+                  "output_content_key": "output-0001",
+                  "input_size": null,
+                  "output_size": null,
+                  "encoding_time": null,
+                  "crf": null,
+                  "vmaf": null,
+                  "target": null
                 }
               },
               "source_run": 1,
               "decided_at": 1728003600000
-            }
+            },
+            "imported": null
           }
         },
         "outputs": {},
@@ -144,7 +152,8 @@
               }
             ]
           }
-        }
+        },
+        "parked": {}
       },
       "expected_rows": [
         {
@@ -203,12 +212,19 @@
             "verdict": {
               "kind": {
                 "Converted": {
-                  "output_content_key": "output-0001"
+                  "output_content_key": "output-0001",
+                  "input_size": null,
+                  "output_size": null,
+                  "encoding_time": null,
+                  "crf": null,
+                  "vmaf": null,
+                  "target": null
                 }
               },
               "source_run": 1,
               "decided_at": 1728003600000
-            }
+            },
+            "imported": null
           }
         },
         "outputs": {
@@ -326,7 +342,8 @@
               }
             ]
           }
-        }
+        },
+        "parked": {}
       },
       "expected_rows": [
         {
@@ -385,16 +402,24 @@
             "verdict": {
               "kind": {
                 "Converted": {
-                  "output_content_key": "output-0077"
+                  "output_content_key": "output-0077",
+                  "input_size": null,
+                  "output_size": null,
+                  "encoding_time": null,
+                  "crf": null,
+                  "vmaf": null,
+                  "target": null
                 }
               },
               "source_run": 77,
               "decided_at": 1728003600000
-            }
+            },
+            "imported": null
           }
         },
         "outputs": {},
-        "conversion_runs": {}
+        "conversion_runs": {},
+        "parked": {}
       },
       "expected_rows": [
         {
@@ -453,12 +478,15 @@
             "verdict": {
               "kind": {
                 "Remuxed": {
-                  "output_content_key": "remuxed-out"
+                  "output_content_key": "remuxed-out",
+                  "input_size": null,
+                  "output_size": null
                 }
               },
               "source_run": 50,
               "decided_at": 1728003600000
-            }
+            },
+            "imported": null
           }
         },
         "outputs": {},
@@ -520,7 +548,8 @@
               }
             ]
           }
-        }
+        },
+        "parked": {}
       },
       "expected_rows": [
         {
@@ -585,7 +614,8 @@
               },
               "source_run": 9,
               "decided_at": 1728003600000
-            }
+            },
+            "imported": null
           }
         },
         "outputs": {},
@@ -669,7 +699,8 @@
               }
             ]
           }
-        }
+        },
+        "parked": {}
       },
       "expected_rows": [
         {
@@ -733,12 +764,19 @@
             "verdict": {
               "kind": {
                 "Converted": {
-                  "output_content_key": "output-0001"
+                  "output_content_key": "output-0001",
+                  "input_size": null,
+                  "output_size": null,
+                  "encoding_time": null,
+                  "crf": null,
+                  "vmaf": null,
+                  "target": null
                 }
               },
               "source_run": 1,
               "decided_at": 1728003600000
-            }
+            },
+            "imported": null
           },
           "fresh-failed": {
             "metadata": {
@@ -764,7 +802,8 @@
               "subtitle_count": 1
             },
             "analyses": [],
-            "verdict": null
+            "verdict": null,
+            "imported": null
           },
           "fresh-stopped": {
             "metadata": {
@@ -790,7 +829,8 @@
               "subtitle_count": 1
             },
             "analyses": [],
-            "verdict": null
+            "verdict": null,
+            "imported": null
           }
         },
         "outputs": {},
@@ -1046,7 +1086,8 @@
               }
             ]
           }
-        }
+        },
+        "parked": {}
       },
       "expected_rows": [
         {
@@ -1149,7 +1190,8 @@
               "subtitle_count": 1
             },
             "analyses": [],
-            "verdict": null
+            "verdict": null,
+            "imported": null
           }
         },
         "outputs": {},
@@ -1304,7 +1346,8 @@
               }
             ]
           }
-        }
+        },
+        "parked": {}
       },
       "expected_rows": []
     },
@@ -1406,11 +1449,13 @@
                 }
               ]
             ],
-            "verdict": null
+            "verdict": null,
+            "imported": null
           }
         },
         "outputs": {},
-        "conversion_runs": {}
+        "conversion_runs": {},
+        "parked": {}
       },
       "expected_rows": [
         {
@@ -1475,7 +1520,8 @@
               },
               "source_run": 1,
               "decided_at": 1728003600000
-            }
+            },
+            "imported": null
           },
           "seen-only": {
             "metadata": {
@@ -1501,11 +1547,13 @@
               "subtitle_count": 1
             },
             "analyses": [],
-            "verdict": null
+            "verdict": null,
+            "imported": null
           }
         },
         "outputs": {},
-        "conversion_runs": {}
+        "conversion_runs": {},
+        "parked": {}
       },
       "expected_rows": [
         {

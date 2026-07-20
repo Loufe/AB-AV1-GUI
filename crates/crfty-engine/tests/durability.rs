@@ -12,13 +12,15 @@ use std::{
 };
 
 use crfty_core::{
-    AnalysisIntent, AnalysisProfile, AnalysisResult, AppState, ArtifactIdentity, ClaimId, Command,
-    Crf, DestructiveIdentity, DurableDelta, DurableState, EphemeralDelta, ExecutionSettings,
-    FailureFacts, FailureKind, ItemOutcome, JobPhase, JobProgress, Operation, OutputDelta,
-    OutputTarget, QueueCommand, QueueItemId, Replacement, Reply, RunId, SearchMeasurement,
-    SessionCommand, Settings, SettingsCommand, SystemCommand, Telemetry, ToolAvailability,
-    ToolRevisions, ToolSource, UnixMillis, VmafScore, WorkerCommand, apply, corruption_signature,
-    fold, replay,
+    AnalysisIntent, AnalysisProfile, AnalysisResult, AppState, ArtifactIdentity, AudioCodec,
+    AudioStreamMeta, ClaimId, Command, ContentKey, Crf, DestructiveIdentity, DurableDelta,
+    DurableState, EphemeralDelta, ExecutionSettings, FailureFacts, FailureKind, FileStamp,
+    FileTimeNs, HistoryCommand, ItemOutcome, JobPhase, JobProgress, MediaContainer,
+    MediaObservation, Operation, OutputDelta, OutputTarget, PathBinding, PathHash, QueueCommand,
+    QueueItemId, Replacement, Reply, RunId, SearchMeasurement, SessionCommand, Settings,
+    SettingsCommand, SystemCommand, Telemetry, ToolAvailability, ToolRevisions, ToolSource,
+    UnixMillis, VerdictKind, VideoCodec, VideoMeta, VmafScore, VmafTarget, WorkerCommand, apply,
+    corruption_signature, fold, replay,
 };
 use crfty_engine::{
     coordinator::{EngineConfig, EngineRuntime, ToolsConfig},
@@ -613,6 +615,275 @@ fn acknowledgement_over_a_healthy_journal_is_rejected() {
     driver.shutdown().expect("healthy shutdown");
 }
 
+/// The import-file fixture per `docs/HISTORY_IMPORT.md`: one converted record
+/// whose stamp matches [`imported_media_observation`], and one scanned record
+/// that stays parked.
+fn import_fixture_json() -> &'static str {
+    r#"{
+        "import_version": 1,
+        "records": [
+            {
+                "path": "C:\\Videos\\Movie.mkv",
+                "status": "converted",
+                "size": 10000,
+                "modified_ns": "1",
+                "video_codec": "h264",
+                "width": 1280,
+                "height": 720,
+                "duration_ms": 60000,
+                "output_size": 4000,
+                "encoding_time_ms": 88000,
+                "crf_thousandths": 30000,
+                "vmaf_hundredths": 9550,
+                "target": 95,
+                "decided_at_ms": 1700000000000
+            },
+            { "path": "/mnt/media/other.mkv", "status": "scanned" }
+        ]
+    }"#
+}
+
+/// An observation whose stamp (size 10 000, mtime 1 ns) matches the converted
+/// record in [`import_fixture_json`], so preparation adopts its verdict.
+fn imported_media_observation() -> MediaObservation {
+    MediaObservation {
+        path_hash: PathHash("path-imported-movie".to_owned()),
+        binding: PathBinding {
+            stamp: FileStamp {
+                size: 10_000,
+                modified_ns: Some(FileTimeNs(1)),
+            },
+            content_key: ContentKey("imported-movie".to_owned()),
+        },
+        metadata: VideoMeta {
+            codec: VideoCodec::H264,
+            container: MediaContainer::Matroska,
+            width: 1_280,
+            height: 720,
+            rotation_degrees: 0,
+            duration_ms: 60_000,
+            size_bytes: 10_000,
+            audio: vec![AudioStreamMeta {
+                codec: AudioCodec::Aac,
+                channels: 2,
+            }],
+            subtitle_count: 0,
+        },
+    }
+}
+
+/// The phase-4 adoption arc (#39): an import parks records durably, the
+/// forced compaction folds it into a fresh snapshot generation while the
+/// driver runs, a restart replays it, preparation adopts the matching record
+/// onto the observed content, and re-imports are counted no-ops both before
+/// and after adoption.
+#[test]
+fn history_import_parks_compacts_adopts_and_reimports_as_noop() {
+    let directory = TestDirectory::new("history-import");
+    let journal_path = directory.path().join("state.jsonl");
+    let config_path = directory.path().join("config.json");
+    let import_file = directory.path().join("history-import.json");
+    fs::write(&import_file, import_fixture_json()).expect("write import fixture");
+    let records = crfty_engine::history_import::load_import_file(&import_file, UnixMillis(500))
+        .expect("load import fixture");
+    assert_eq!(records.len(), 2);
+
+    let driver = DriverHandle::start(&journal_path, &config_path).expect("driver");
+    let _snapshot = driver
+        .events()
+        .expect("event receiver")
+        .recv()
+        .expect("snapshot");
+    assert_eq!(
+        driver
+            .commands
+            .submit(add(QueueItemId(1)))
+            .expect("add reply"),
+        Reply::Accepted
+    );
+    assert_eq!(
+        driver
+            .commands
+            .submit(Command::History(HistoryCommand::Import {
+                records: records.clone(),
+            }))
+            .expect("import reply"),
+        Reply::Imported {
+            parked: 2,
+            skipped: 0
+        }
+    );
+
+    // The import forces a compaction at the next idle tick: the journal
+    // becomes a single snapshot-head generation while the driver runs.
+    let deadline = std::time::Instant::now() + Duration::from_secs(10);
+    loop {
+        if let Ok(bytes) = fs::read(&journal_path)
+            && bytes.iter().filter(|byte| **byte == b'\n').count() == 1
+        {
+            let replayed = replay(&bytes);
+            assert!(replayed.corruption.is_none());
+            assert_eq!(replayed.state.parked.len(), 2);
+            assert_eq!(replayed.state.queue.len(), 1);
+            break;
+        }
+        assert!(
+            std::time::Instant::now() < deadline,
+            "forced compaction did not run"
+        );
+        std::thread::sleep(Duration::from_millis(20));
+    }
+
+    // Re-importing the same file on the live driver parks nothing.
+    assert_eq!(
+        driver
+            .commands
+            .submit(Command::History(HistoryCommand::Import {
+                records: records.clone(),
+            }))
+            .expect("re-import reply"),
+        Reply::Imported {
+            parked: 0,
+            skipped: 2
+        }
+    );
+    driver.shutdown().expect("driver shutdown");
+
+    // A restart replays the compacted generation with the inbox intact.
+    let driver = DriverHandle::start(&journal_path, &config_path).expect("restarted driver");
+    let DriverEvent::Snapshot(snapshot) = driver
+        .events()
+        .expect("event receiver")
+        .recv()
+        .expect("restart snapshot")
+    else {
+        panic!("expected restart snapshot");
+    };
+    assert_eq!(snapshot.durable.parked.len(), 2);
+
+    // Prepare the queued item under the converted record's spelling: the
+    // stamps match, so the parked verdict is adopted onto the content.
+    for command in [
+        Command::System(SystemCommand::ToolsDiscovered {
+            availability: fixture_available(),
+            update_available: false,
+        }),
+        Command::Session(SessionCommand::Start),
+    ] {
+        assert_eq!(
+            driver.commands.submit(command).expect("setup reply"),
+            Reply::Accepted
+        );
+    }
+    assert!(matches!(
+        driver
+            .commands
+            .submit(Command::Worker(WorkerCommand::ReserveNext {
+                claim_id: ClaimId(2),
+                run_id: RunId(3),
+            }))
+            .expect("reservation reply"),
+        Reply::Reserved(Some(_))
+    ));
+    let movie_key = crfty_engine::history_import::normalize_import_path(r"C:\Videos\Movie.mkv");
+    assert!(matches!(
+        driver
+            .commands
+            .submit(Command::Worker(WorkerCommand::PrepareReserved {
+                item_id: QueueItemId(1),
+                claim_id: ClaimId(2),
+                run_id: RunId(3),
+                observation: Some(Box::new(imported_media_observation())),
+                import_paths: vec![movie_key.clone()],
+                execution: execution(),
+            }))
+            .expect("preparation reply"),
+        Reply::Claimed(Some(_))
+    ));
+    driver.shutdown().expect("mid-claim shutdown");
+
+    // The adoption is durable: the parked record is consumed and the observed
+    // content carries the adopted verdict and import provenance.
+    let driver = DriverHandle::start(&journal_path, &config_path).expect("post-adoption driver");
+    let DriverEvent::Snapshot(snapshot) = driver
+        .events()
+        .expect("event receiver")
+        .recv()
+        .expect("post-adoption snapshot")
+    else {
+        panic!("expected post-adoption snapshot");
+    };
+    assert_eq!(snapshot.durable.parked.len(), 1);
+    assert!(!snapshot.durable.parked.contains_key(&movie_key));
+    let record = snapshot
+        .durable
+        .records
+        .get(&ContentKey("imported-movie".to_owned()))
+        .expect("adopted record");
+    assert_eq!(record.imported, Some(movie_key));
+    let verdict = record.verdict.as_ref().expect("adopted verdict");
+    assert_eq!(verdict.source_run, None);
+    assert_eq!(verdict.decided_at, UnixMillis(1_700_000_000_000));
+    match &verdict.kind {
+        VerdictKind::Converted {
+            output_content_key,
+            input_size,
+            output_size,
+            encoding_time,
+            crf,
+            vmaf,
+            target,
+        } => {
+            assert_eq!(*output_content_key, None);
+            assert_eq!(*input_size, Some(10_000));
+            assert_eq!(*output_size, Some(4_000));
+            assert_eq!(*encoding_time, Some(crfty_core::DurationMs(88_000)));
+            assert_eq!(*crf, Some(Crf(30_000)));
+            assert_eq!(*vmaf, Some(VmafScore(9_550)));
+            assert_eq!(*target, Some(VmafTarget(95)));
+        }
+        other => panic!("expected an adopted converted verdict, got {other:?}"),
+    }
+
+    // A re-import now dedups against the still-parked record and the adopted
+    // provenance — still a complete no-op.
+    assert_eq!(
+        driver
+            .commands
+            .submit(Command::History(HistoryCommand::Import { records }))
+            .expect("post-adoption re-import reply"),
+        Reply::Imported {
+            parked: 0,
+            skipped: 2
+        }
+    );
+    driver.shutdown().expect("final shutdown");
+}
+
+/// Over a corrupt journal an import cannot be made durable; history commands
+/// fall under the degraded gate's blanket rejection.
+#[test]
+fn history_import_is_rejected_while_degraded() {
+    let directory = TestDirectory::new("import-degraded");
+    let path = directory.path().join("state.jsonl");
+    corrupt_journal_fixture(&path);
+    let driver =
+        DriverHandle::start(&path, directory.path().join("config.json")).expect("degraded driver");
+    let events = driver.events().expect("event receiver");
+    let _snapshot = events.recv().expect("snapshot");
+    let _degraded = events.recv().expect("degraded event");
+    let import_file = directory.path().join("history-import.json");
+    fs::write(&import_file, import_fixture_json()).expect("write import fixture");
+    let records = crfty_engine::history_import::load_import_file(&import_file, UnixMillis(500))
+        .expect("load import fixture");
+    let reply = driver
+        .commands
+        .submit(Command::History(HistoryCommand::Import { records }))
+        .expect("degraded import reply");
+    assert!(matches!(reply, Reply::Rejected { .. }));
+    driver.shutdown().expect("degraded shutdown");
+}
+
 #[test]
 fn telemetry_pressure_coalesces_and_terminal_value_wins() {
     let directory = TestDirectory::new("telemetry");
@@ -665,6 +936,7 @@ fn telemetry_pressure_coalesces_and_terminal_value_wins() {
                 claim_id: ClaimId(2),
                 run_id: RunId(3),
                 observation: None,
+                import_paths: Vec::new(),
                 execution: execution(),
             }))
             .expect("preparation reply"),
@@ -734,6 +1006,7 @@ fn terminal_publishes_final_telemetry_and_clear_before_item_finished() {
             claim_id: ClaimId(2),
             run_id: RunId(3),
             observation: None,
+            import_paths: Vec::new(),
             execution: execution(),
         }),
     ] {
@@ -819,6 +1092,7 @@ fn restart_after_fsynced_terminal_folds_to_finished_snapshot() {
             claim_id: ClaimId(2),
             run_id: RunId(3),
             observation: None,
+            import_paths: Vec::new(),
             execution: execution(),
         }),
         Command::Worker(WorkerCommand::Started {
@@ -1057,6 +1331,7 @@ fn journal_active_output_run(
             claim_id: ClaimId(2),
             run_id,
             observation: None,
+            import_paths: Vec::new(),
             execution: settings.clone(),
         }),
         Command::Worker(WorkerCommand::Started {
@@ -1272,6 +1547,7 @@ fn settled_success_journal(
             claim_id: ClaimId(2),
             run_id: RunId(3),
             observation: None,
+            import_paths: Vec::new(),
             execution: settings.clone(),
         }),
         Command::Worker(WorkerCommand::Started {

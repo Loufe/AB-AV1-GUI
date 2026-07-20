@@ -8,7 +8,8 @@
         "paths": {},
         "records": {},
         "outputs": {},
-        "conversion_runs": {}
+        "conversion_runs": {},
+        "parked": {}
       },
       "deltas": [
         {
@@ -58,7 +59,8 @@
         "paths": {},
         "records": {},
         "outputs": {},
-        "conversion_runs": {}
+        "conversion_runs": {},
+        "parked": {}
       }
     },
     {
@@ -93,7 +95,8 @@
         "paths": {},
         "records": {},
         "outputs": {},
-        "conversion_runs": {}
+        "conversion_runs": {},
+        "parked": {}
       },
       "deltas": [
         {
@@ -124,7 +127,8 @@
         "paths": {},
         "records": {},
         "outputs": {},
-        "conversion_runs": {}
+        "conversion_runs": {},
+        "parked": {}
       }
     },
     {
@@ -143,7 +147,8 @@
         "paths": {},
         "records": {},
         "outputs": {},
-        "conversion_runs": {}
+        "conversion_runs": {},
+        "parked": {}
       },
       "deltas": [
         {
@@ -166,7 +171,8 @@
         "paths": {},
         "records": {},
         "outputs": {},
-        "conversion_runs": {}
+        "conversion_runs": {},
+        "parked": {}
       }
     },
     {
@@ -201,7 +207,8 @@
         "paths": {},
         "records": {},
         "outputs": {},
-        "conversion_runs": {}
+        "conversion_runs": {},
+        "parked": {}
       },
       "deltas": [
         {
@@ -241,7 +248,8 @@
         "paths": {},
         "records": {},
         "outputs": {},
-        "conversion_runs": {}
+        "conversion_runs": {},
+        "parked": {}
       }
     },
     {
@@ -276,7 +284,8 @@
         "paths": {},
         "records": {},
         "outputs": {},
-        "conversion_runs": {}
+        "conversion_runs": {},
+        "parked": {}
       },
       "deltas": [
         {
@@ -316,7 +325,8 @@
         "paths": {},
         "records": {},
         "outputs": {},
-        "conversion_runs": {}
+        "conversion_runs": {},
+        "parked": {}
       }
     },
     {
@@ -351,7 +361,8 @@
         "paths": {},
         "records": {},
         "outputs": {},
-        "conversion_runs": {}
+        "conversion_runs": {},
+        "parked": {}
       },
       "deltas": [
         {
@@ -391,7 +402,8 @@
         "paths": {},
         "records": {},
         "outputs": {},
-        "conversion_runs": {}
+        "conversion_runs": {},
+        "parked": {}
       }
     },
     {
@@ -418,7 +430,8 @@
         "paths": {},
         "records": {},
         "outputs": {},
-        "conversion_runs": {}
+        "conversion_runs": {},
+        "parked": {}
       },
       "deltas": [
         {
@@ -450,7 +463,8 @@
         "paths": {},
         "records": {},
         "outputs": {},
-        "conversion_runs": {}
+        "conversion_runs": {},
+        "parked": {}
       }
     },
     {
@@ -460,7 +474,8 @@
         "paths": {},
         "records": {},
         "outputs": {},
-        "conversion_runs": {}
+        "conversion_runs": {},
+        "parked": {}
       },
       "deltas": [
         {
@@ -540,11 +555,13 @@
               "subtitle_count": 1
             },
             "analyses": [],
-            "verdict": null
+            "verdict": null,
+            "imported": null
           }
         },
         "outputs": {},
-        "conversion_runs": {}
+        "conversion_runs": {},
+        "parked": {}
       }
     },
     {
@@ -587,11 +604,13 @@
               "subtitle_count": 1
             },
             "analyses": [],
-            "verdict": null
+            "verdict": null,
+            "imported": null
           }
         },
         "outputs": {},
-        "conversion_runs": {}
+        "conversion_runs": {},
+        "parked": {}
       },
       "deltas": [
         {
@@ -678,11 +697,13 @@
               "subtitle_count": 1
             },
             "analyses": [],
-            "verdict": null
+            "verdict": null,
+            "imported": null
           }
         },
         "outputs": {},
-        "conversion_runs": {}
+        "conversion_runs": {},
+        "parked": {}
       }
     },
     {
@@ -701,7 +722,8 @@
         "paths": {},
         "records": {},
         "outputs": {},
-        "conversion_runs": {}
+        "conversion_runs": {},
+        "parked": {}
       },
       "deltas": [
         {
@@ -745,7 +767,8 @@
         "paths": {},
         "records": {},
         "outputs": {},
-        "conversion_runs": {}
+        "conversion_runs": {},
+        "parked": {}
       }
     },
     {
@@ -764,7 +787,8 @@
         "paths": {},
         "records": {},
         "outputs": {},
-        "conversion_runs": {}
+        "conversion_runs": {},
+        "parked": {}
       },
       "deltas": [
         {
@@ -866,7 +890,8 @@
             "finished_at": null,
             "phase_spans": []
           }
-        }
+        },
+        "parked": {}
       }
     },
     {
@@ -885,7 +910,8 @@
         "paths": {},
         "records": {},
         "outputs": {},
-        "conversion_runs": {}
+        "conversion_runs": {},
+        "parked": {}
       },
       "deltas": [
         {
@@ -1062,7 +1088,8 @@
             "finished_at": null,
             "phase_spans": []
           }
-        }
+        },
+        "parked": {}
       }
     },
     {
@@ -1119,7 +1146,8 @@
               "subtitle_count": 1
             },
             "analyses": [],
-            "verdict": null
+            "verdict": null,
+            "imported": null
           }
         },
         "outputs": {},
@@ -1165,7 +1193,8 @@
             "finished_at": null,
             "phase_spans": []
           }
-        }
+        },
+        "parked": {}
       },
       "deltas": [
         {
@@ -1294,7 +1323,8 @@
                 }
               ]
             ],
-            "verdict": null
+            "verdict": null,
+            "imported": null
           }
         },
         "outputs": {},
@@ -1365,7 +1395,8 @@
             "finished_at": null,
             "phase_spans": []
           }
-        }
+        },
+        "parked": {}
       }
     },
     {
@@ -1375,7 +1406,8 @@
         "paths": {},
         "records": {},
         "outputs": {},
-        "conversion_runs": {}
+        "conversion_runs": {},
+        "parked": {}
       },
       "deltas": [
         {
@@ -1415,7 +1447,8 @@
         "paths": {},
         "records": {},
         "outputs": {},
-        "conversion_runs": {}
+        "conversion_runs": {},
+        "parked": {}
       }
     },
     {
@@ -1527,7 +1560,8 @@
                 }
               ]
             ],
-            "verdict": null
+            "verdict": null,
+            "imported": null
           }
         },
         "outputs": {},
@@ -1639,7 +1673,8 @@
             "finished_at": null,
             "phase_spans": []
           }
-        }
+        },
+        "parked": {}
       },
       "deltas": [
         {
@@ -1879,7 +1914,8 @@
                 }
               ]
             ],
-            "verdict": null
+            "verdict": null,
+            "imported": null
           }
         },
         "outputs": {},
@@ -2016,7 +2052,8 @@
             "finished_at": null,
             "phase_spans": []
           }
-        }
+        },
+        "parked": {}
       }
     },
     {
@@ -2082,7 +2119,8 @@
             "finished_at": null,
             "phase_spans": []
           }
-        }
+        },
+        "parked": {}
       },
       "deltas": [
         {
@@ -2172,7 +2210,8 @@
               }
             ]
           }
-        }
+        },
+        "parked": {}
       }
     },
     {
@@ -2229,7 +2268,8 @@
               "subtitle_count": 1
             },
             "analyses": [],
-            "verdict": null
+            "verdict": null,
+            "imported": null
           }
         },
         "outputs": {
@@ -2311,7 +2351,8 @@
             "finished_at": null,
             "phase_spans": []
           }
-        }
+        },
+        "parked": {}
       },
       "deltas": [
         {
@@ -2414,12 +2455,19 @@
             "verdict": {
               "kind": {
                 "Converted": {
-                  "output_content_key": "ck-out"
+                  "output_content_key": "ck-out",
+                  "input_size": 3000000,
+                  "output_size": 1000000,
+                  "encoding_time": 88000,
+                  "crf": null,
+                  "vmaf": null,
+                  "target": null
                 }
               },
               "source_run": 100,
               "decided_at": 1752000090000
-            }
+            },
+            "imported": null
           }
         },
         "outputs": {
@@ -2524,7 +2572,8 @@
               }
             ]
           }
-        }
+        },
+        "parked": {}
       }
     },
     {
@@ -2581,7 +2630,8 @@
               "subtitle_count": 1
             },
             "analyses": [],
-            "verdict": null
+            "verdict": null,
+            "imported": null
           }
         },
         "outputs": {
@@ -2663,7 +2713,8 @@
             "finished_at": null,
             "phase_spans": []
           }
-        }
+        },
+        "parked": {}
       },
       "deltas": [
         {
@@ -2752,12 +2803,15 @@
             "verdict": {
               "kind": {
                 "Remuxed": {
-                  "output_content_key": "ck-out"
+                  "output_content_key": "ck-out",
+                  "input_size": 3000000,
+                  "output_size": 1000000
                 }
               },
               "source_run": 100,
               "decided_at": 1752000090000
-            }
+            },
+            "imported": null
           }
         },
         "outputs": {
@@ -2855,7 +2909,8 @@
               }
             ]
           }
-        }
+        },
+        "parked": {}
       }
     },
     {
@@ -2912,7 +2967,8 @@
               "subtitle_count": 1
             },
             "analyses": [],
-            "verdict": null
+            "verdict": null,
+            "imported": null
           }
         },
         "outputs": {
@@ -2994,7 +3050,8 @@
             "finished_at": null,
             "phase_spans": []
           }
-        }
+        },
+        "parked": {}
       },
       "deltas": [
         {
@@ -3094,7 +3151,8 @@
               "subtitle_count": 1
             },
             "analyses": [],
-            "verdict": null
+            "verdict": null,
+            "imported": null
           }
         },
         "outputs": {
@@ -3199,7 +3257,8 @@
               }
             ]
           }
-        }
+        },
+        "parked": {}
       }
     },
     {
@@ -3256,7 +3315,8 @@
               "subtitle_count": 1
             },
             "analyses": [],
-            "verdict": null
+            "verdict": null,
+            "imported": null
           }
         },
         "outputs": {
@@ -3338,7 +3398,8 @@
             "finished_at": null,
             "phase_spans": []
           }
-        }
+        },
+        "parked": {}
       },
       "deltas": [
         {
@@ -3417,12 +3478,19 @@
             "verdict": {
               "kind": {
                 "Converted": {
-                  "output_content_key": "ck-out"
+                  "output_content_key": "ck-out",
+                  "input_size": null,
+                  "output_size": null,
+                  "encoding_time": 88000,
+                  "crf": null,
+                  "vmaf": null,
+                  "target": null
                 }
               },
               "source_run": 100,
               "decided_at": 1752000090000
-            }
+            },
+            "imported": null
           }
         },
         "outputs": {
@@ -3515,7 +3583,8 @@
               }
             ]
           }
-        }
+        },
+        "parked": {}
       }
     },
     {
@@ -3572,7 +3641,8 @@
               "subtitle_count": 1
             },
             "analyses": [],
-            "verdict": null
+            "verdict": null,
+            "imported": null
           }
         },
         "outputs": {},
@@ -3618,7 +3688,8 @@
             "finished_at": null,
             "phase_spans": []
           }
-        }
+        },
+        "parked": {}
       },
       "deltas": [
         {
@@ -3702,7 +3773,8 @@
               "subtitle_count": 1
             },
             "analyses": [],
-            "verdict": null
+            "verdict": null,
+            "imported": null
           }
         },
         "outputs": {},
@@ -3763,7 +3835,8 @@
               }
             ]
           }
-        }
+        },
+        "parked": {}
       }
     },
     {
@@ -3820,7 +3893,8 @@
               "subtitle_count": 1
             },
             "analyses": [],
-            "verdict": null
+            "verdict": null,
+            "imported": null
           }
         },
         "outputs": {},
@@ -3866,7 +3940,8 @@
             "finished_at": null,
             "phase_spans": []
           }
-        }
+        },
+        "parked": {}
       },
       "deltas": [
         {
@@ -3987,7 +4062,8 @@
               },
               "source_run": 100,
               "decided_at": 1752000090000
-            }
+            },
+            "imported": null
           }
         },
         "outputs": {},
@@ -4062,7 +4138,8 @@
               }
             ]
           }
-        }
+        },
+        "parked": {}
       }
     },
     {
@@ -4119,7 +4196,8 @@
               "subtitle_count": 1
             },
             "analyses": [],
-            "verdict": null
+            "verdict": null,
+            "imported": null
           }
         },
         "outputs": {},
@@ -4165,7 +4243,8 @@
             "finished_at": null,
             "phase_spans": []
           }
-        }
+        },
+        "parked": {}
       },
       "deltas": [
         {
@@ -4255,7 +4334,8 @@
               "subtitle_count": 1
             },
             "analyses": [],
-            "verdict": null
+            "verdict": null,
+            "imported": null
           }
         },
         "outputs": {},
@@ -4319,7 +4399,8 @@
               }
             ]
           }
-        }
+        },
+        "parked": {}
       }
     },
     {
@@ -4376,7 +4457,8 @@
               "subtitle_count": 1
             },
             "analyses": [],
-            "verdict": null
+            "verdict": null,
+            "imported": null
           }
         },
         "outputs": {},
@@ -4422,7 +4504,8 @@
             "finished_at": null,
             "phase_spans": []
           }
-        }
+        },
+        "parked": {}
       },
       "deltas": [
         {
@@ -4494,7 +4577,8 @@
               "subtitle_count": 1
             },
             "analyses": [],
-            "verdict": null
+            "verdict": null,
+            "imported": null
           }
         },
         "outputs": {},
@@ -4549,7 +4633,8 @@
               }
             ]
           }
-        }
+        },
+        "parked": {}
       }
     },
     {
@@ -4606,7 +4691,8 @@
               "subtitle_count": 1
             },
             "analyses": [],
-            "verdict": null
+            "verdict": null,
+            "imported": null
           }
         },
         "outputs": {
@@ -4672,7 +4758,8 @@
             "finished_at": null,
             "phase_spans": []
           }
-        }
+        },
+        "parked": {}
       },
       "deltas": [
         {
@@ -4735,7 +4822,8 @@
               "subtitle_count": 1
             },
             "analyses": [],
-            "verdict": null
+            "verdict": null,
+            "imported": null
           }
         },
         "outputs": {
@@ -4801,7 +4889,8 @@
             "finished_at": null,
             "phase_spans": []
           }
-        }
+        },
+        "parked": {}
       }
     },
     {
@@ -4858,7 +4947,8 @@
               "subtitle_count": 1
             },
             "analyses": [],
-            "verdict": null
+            "verdict": null,
+            "imported": null
           }
         },
         "outputs": {
@@ -4940,7 +5030,8 @@
             "finished_at": null,
             "phase_spans": []
           }
-        }
+        },
+        "parked": {}
       },
       "deltas": [
         {
@@ -5003,7 +5094,8 @@
               "subtitle_count": 1
             },
             "analyses": [],
-            "verdict": null
+            "verdict": null,
+            "imported": null
           }
         },
         "outputs": {
@@ -5085,7 +5177,8 @@
             "finished_at": null,
             "phase_spans": []
           }
-        }
+        },
+        "parked": {}
       }
     },
     {
@@ -5142,7 +5235,8 @@
               "subtitle_count": 1
             },
             "analyses": [],
-            "verdict": null
+            "verdict": null,
+            "imported": null
           }
         },
         "outputs": {
@@ -5208,7 +5302,8 @@
             "finished_at": null,
             "phase_spans": []
           }
-        }
+        },
+        "parked": {}
       },
       "deltas": [
         {
@@ -5281,7 +5376,8 @@
               "subtitle_count": 1
             },
             "analyses": [],
-            "verdict": null
+            "verdict": null,
+            "imported": null
           }
         },
         "outputs": {
@@ -5360,7 +5456,8 @@
             "finished_at": null,
             "phase_spans": []
           }
-        }
+        },
+        "parked": {}
       }
     },
     {
@@ -5417,7 +5514,8 @@
               "subtitle_count": 1
             },
             "analyses": [],
-            "verdict": null
+            "verdict": null,
+            "imported": null
           }
         },
         "outputs": {
@@ -5496,7 +5594,8 @@
             "finished_at": null,
             "phase_spans": []
           }
-        }
+        },
+        "parked": {}
       },
       "deltas": [
         {
@@ -5569,7 +5668,8 @@
               "subtitle_count": 1
             },
             "analyses": [],
-            "verdict": null
+            "verdict": null,
+            "imported": null
           }
         },
         "outputs": {
@@ -5648,7 +5748,8 @@
             "finished_at": null,
             "phase_spans": []
           }
-        }
+        },
+        "parked": {}
       }
     },
     {
@@ -5705,7 +5806,8 @@
               "subtitle_count": 1
             },
             "analyses": [],
-            "verdict": null
+            "verdict": null,
+            "imported": null
           }
         },
         "outputs": {
@@ -5771,7 +5873,8 @@
             "finished_at": null,
             "phase_spans": []
           }
-        }
+        },
+        "parked": {}
       },
       "deltas": [
         {
@@ -5851,7 +5954,8 @@
               "subtitle_count": 1
             },
             "analyses": [],
-            "verdict": null
+            "verdict": null,
+            "imported": null
           }
         },
         "outputs": {
@@ -5917,7 +6021,8 @@
             "finished_at": null,
             "phase_spans": []
           }
-        }
+        },
+        "parked": {}
       }
     },
     {
@@ -5974,7 +6079,8 @@
               "subtitle_count": 1
             },
             "analyses": [],
-            "verdict": null
+            "verdict": null,
+            "imported": null
           }
         },
         "outputs": {
@@ -6040,7 +6146,8 @@
             "finished_at": null,
             "phase_spans": []
           }
-        }
+        },
+        "parked": {}
       },
       "deltas": [
         {
@@ -6105,7 +6212,8 @@
               "subtitle_count": 1
             },
             "analyses": [],
-            "verdict": null
+            "verdict": null,
+            "imported": null
           }
         },
         "outputs": {
@@ -6176,7 +6284,8 @@
             "finished_at": null,
             "phase_spans": []
           }
-        }
+        },
+        "parked": {}
       }
     },
     {
@@ -6186,7 +6295,8 @@
         "paths": {},
         "records": {},
         "outputs": {},
-        "conversion_runs": {}
+        "conversion_runs": {},
+        "parked": {}
       },
       "deltas": [
         {
@@ -6215,7 +6325,1122 @@
         "paths": {},
         "records": {},
         "outputs": {},
-        "conversion_runs": {}
+        "conversion_runs": {},
+        "parked": {}
+      }
+    },
+    {
+      "name": "history_imported",
+      "initial": {
+        "queue": [],
+        "paths": {},
+        "records": {},
+        "outputs": {},
+        "conversion_runs": {},
+        "parked": {}
+      },
+      "deltas": [
+        {
+          "HistoryImported": {
+            "records": [
+              [
+                "c:/videos/decided.mkv",
+                {
+                  "status": "Converted",
+                  "size": 3000000,
+                  "modified_ns": "1000000",
+                  "video_codec": "H264",
+                  "width": 1920,
+                  "height": 1080,
+                  "duration_ms": 120000,
+                  "output_size": 1000000,
+                  "encoding_time": 88000,
+                  "crf": 30000,
+                  "vmaf": 9550,
+                  "target": 95,
+                  "requested_target": 95,
+                  "floor_target": 90,
+                  "decided_at": 1700000000000
+                }
+              ],
+              [
+                "//server/share/only-seen.mkv",
+                {
+                  "status": "Scanned",
+                  "size": null,
+                  "modified_ns": null,
+                  "video_codec": null,
+                  "width": null,
+                  "height": null,
+                  "duration_ms": null,
+                  "output_size": null,
+                  "encoding_time": null,
+                  "crf": null,
+                  "vmaf": null,
+                  "target": null,
+                  "requested_target": null,
+                  "floor_target": null,
+                  "decided_at": 1700000000000
+                }
+              ]
+            ]
+          }
+        }
+      ],
+      "expected": {
+        "queue": [],
+        "paths": {},
+        "records": {},
+        "outputs": {},
+        "conversion_runs": {},
+        "parked": {
+          "//server/share/only-seen.mkv": {
+            "status": "Scanned",
+            "size": null,
+            "modified_ns": null,
+            "video_codec": null,
+            "width": null,
+            "height": null,
+            "duration_ms": null,
+            "output_size": null,
+            "encoding_time": null,
+            "crf": null,
+            "vmaf": null,
+            "target": null,
+            "requested_target": null,
+            "floor_target": null,
+            "decided_at": 1700000000000
+          },
+          "c:/videos/decided.mkv": {
+            "status": "Converted",
+            "size": 3000000,
+            "modified_ns": "1000000",
+            "video_codec": "H264",
+            "width": 1920,
+            "height": 1080,
+            "duration_ms": 120000,
+            "output_size": 1000000,
+            "encoding_time": 88000,
+            "crf": 30000,
+            "vmaf": 9550,
+            "target": 95,
+            "requested_target": 95,
+            "floor_target": 90,
+            "decided_at": 1700000000000
+          }
+        }
+      }
+    },
+    {
+      "name": "parked_adopted_with_verdict",
+      "initial": {
+        "queue": [],
+        "paths": {
+          "path-1": {
+            "stamp": {
+              "size": 3000000,
+              "modified_ns": "1000000"
+            },
+            "content_key": "ck-1"
+          }
+        },
+        "records": {
+          "ck-1": {
+            "metadata": {
+              "codec": "H264",
+              "container": {
+                "Other": "mp4"
+              },
+              "width": 1920,
+              "height": 1080,
+              "rotation_degrees": 0,
+              "duration_ms": 120000,
+              "size_bytes": 3000000,
+              "audio": [
+                {
+                  "codec": "Aac",
+                  "channels": 6
+                },
+                {
+                  "codec": {
+                    "Other": "wmav2"
+                  },
+                  "channels": 2
+                }
+              ],
+              "subtitle_count": 1
+            },
+            "analyses": [],
+            "verdict": null,
+            "imported": null
+          }
+        },
+        "outputs": {},
+        "conversion_runs": {},
+        "parked": {
+          "//server/share/only-seen.mkv": {
+            "status": "Scanned",
+            "size": null,
+            "modified_ns": null,
+            "video_codec": null,
+            "width": null,
+            "height": null,
+            "duration_ms": null,
+            "output_size": null,
+            "encoding_time": null,
+            "crf": null,
+            "vmaf": null,
+            "target": null,
+            "requested_target": null,
+            "floor_target": null,
+            "decided_at": 1700000000000
+          },
+          "c:/videos/decided.mkv": {
+            "status": "Converted",
+            "size": 3000000,
+            "modified_ns": "1000000",
+            "video_codec": "H264",
+            "width": 1920,
+            "height": 1080,
+            "duration_ms": 120000,
+            "output_size": 1000000,
+            "encoding_time": 88000,
+            "crf": 30000,
+            "vmaf": 9550,
+            "target": 95,
+            "requested_target": 95,
+            "floor_target": 90,
+            "decided_at": 1700000000000
+          }
+        }
+      },
+      "deltas": [
+        {
+          "ParkedAdopted": {
+            "import_path": "c:/videos/decided.mkv",
+            "content_key": "ck-1",
+            "verdict": {
+              "kind": {
+                "Converted": {
+                  "output_content_key": null,
+                  "input_size": 3000000,
+                  "output_size": 1000000,
+                  "encoding_time": 88000,
+                  "crf": 30000,
+                  "vmaf": 9550,
+                  "target": 95
+                }
+              },
+              "source_run": null,
+              "decided_at": 1700000000000
+            }
+          }
+        }
+      ],
+      "expected": {
+        "queue": [],
+        "paths": {
+          "path-1": {
+            "stamp": {
+              "size": 3000000,
+              "modified_ns": "1000000"
+            },
+            "content_key": "ck-1"
+          }
+        },
+        "records": {
+          "ck-1": {
+            "metadata": {
+              "codec": "H264",
+              "container": {
+                "Other": "mp4"
+              },
+              "width": 1920,
+              "height": 1080,
+              "rotation_degrees": 0,
+              "duration_ms": 120000,
+              "size_bytes": 3000000,
+              "audio": [
+                {
+                  "codec": "Aac",
+                  "channels": 6
+                },
+                {
+                  "codec": {
+                    "Other": "wmav2"
+                  },
+                  "channels": 2
+                }
+              ],
+              "subtitle_count": 1
+            },
+            "analyses": [],
+            "verdict": {
+              "kind": {
+                "Converted": {
+                  "output_content_key": null,
+                  "input_size": 3000000,
+                  "output_size": 1000000,
+                  "encoding_time": 88000,
+                  "crf": 30000,
+                  "vmaf": 9550,
+                  "target": 95
+                }
+              },
+              "source_run": null,
+              "decided_at": 1700000000000
+            },
+            "imported": "c:/videos/decided.mkv"
+          }
+        },
+        "outputs": {},
+        "conversion_runs": {},
+        "parked": {
+          "//server/share/only-seen.mkv": {
+            "status": "Scanned",
+            "size": null,
+            "modified_ns": null,
+            "video_codec": null,
+            "width": null,
+            "height": null,
+            "duration_ms": null,
+            "output_size": null,
+            "encoding_time": null,
+            "crf": null,
+            "vmaf": null,
+            "target": null,
+            "requested_target": null,
+            "floor_target": null,
+            "decided_at": 1700000000000
+          }
+        }
+      }
+    },
+    {
+      "name": "parked_adopted_provenance_only",
+      "initial": {
+        "queue": [],
+        "paths": {
+          "path-1": {
+            "stamp": {
+              "size": 3000000,
+              "modified_ns": "1000000"
+            },
+            "content_key": "ck-1"
+          }
+        },
+        "records": {
+          "ck-1": {
+            "metadata": {
+              "codec": "H264",
+              "container": {
+                "Other": "mp4"
+              },
+              "width": 1920,
+              "height": 1080,
+              "rotation_degrees": 0,
+              "duration_ms": 120000,
+              "size_bytes": 3000000,
+              "audio": [
+                {
+                  "codec": "Aac",
+                  "channels": 6
+                },
+                {
+                  "codec": {
+                    "Other": "wmav2"
+                  },
+                  "channels": 2
+                }
+              ],
+              "subtitle_count": 1
+            },
+            "analyses": [],
+            "verdict": null,
+            "imported": null
+          }
+        },
+        "outputs": {},
+        "conversion_runs": {},
+        "parked": {
+          "//server/share/only-seen.mkv": {
+            "status": "Scanned",
+            "size": null,
+            "modified_ns": null,
+            "video_codec": null,
+            "width": null,
+            "height": null,
+            "duration_ms": null,
+            "output_size": null,
+            "encoding_time": null,
+            "crf": null,
+            "vmaf": null,
+            "target": null,
+            "requested_target": null,
+            "floor_target": null,
+            "decided_at": 1700000000000
+          },
+          "c:/videos/decided.mkv": {
+            "status": "Converted",
+            "size": 3000000,
+            "modified_ns": "1000000",
+            "video_codec": "H264",
+            "width": 1920,
+            "height": 1080,
+            "duration_ms": 120000,
+            "output_size": 1000000,
+            "encoding_time": 88000,
+            "crf": 30000,
+            "vmaf": 9550,
+            "target": 95,
+            "requested_target": 95,
+            "floor_target": 90,
+            "decided_at": 1700000000000
+          }
+        }
+      },
+      "deltas": [
+        {
+          "ParkedAdopted": {
+            "import_path": "//server/share/only-seen.mkv",
+            "content_key": "ck-1",
+            "verdict": null
+          }
+        }
+      ],
+      "expected": {
+        "queue": [],
+        "paths": {
+          "path-1": {
+            "stamp": {
+              "size": 3000000,
+              "modified_ns": "1000000"
+            },
+            "content_key": "ck-1"
+          }
+        },
+        "records": {
+          "ck-1": {
+            "metadata": {
+              "codec": "H264",
+              "container": {
+                "Other": "mp4"
+              },
+              "width": 1920,
+              "height": 1080,
+              "rotation_degrees": 0,
+              "duration_ms": 120000,
+              "size_bytes": 3000000,
+              "audio": [
+                {
+                  "codec": "Aac",
+                  "channels": 6
+                },
+                {
+                  "codec": {
+                    "Other": "wmav2"
+                  },
+                  "channels": 2
+                }
+              ],
+              "subtitle_count": 1
+            },
+            "analyses": [],
+            "verdict": null,
+            "imported": "//server/share/only-seen.mkv"
+          }
+        },
+        "outputs": {},
+        "conversion_runs": {},
+        "parked": {
+          "c:/videos/decided.mkv": {
+            "status": "Converted",
+            "size": 3000000,
+            "modified_ns": "1000000",
+            "video_codec": "H264",
+            "width": 1920,
+            "height": 1080,
+            "duration_ms": 120000,
+            "output_size": 1000000,
+            "encoding_time": 88000,
+            "crf": 30000,
+            "vmaf": 9550,
+            "target": 95,
+            "requested_target": 95,
+            "floor_target": 90,
+            "decided_at": 1700000000000
+          }
+        }
+      }
+    },
+    {
+      "name": "parked_adopted_missing_record",
+      "initial": {
+        "queue": [],
+        "paths": {},
+        "records": {},
+        "outputs": {},
+        "conversion_runs": {},
+        "parked": {
+          "//server/share/only-seen.mkv": {
+            "status": "Scanned",
+            "size": null,
+            "modified_ns": null,
+            "video_codec": null,
+            "width": null,
+            "height": null,
+            "duration_ms": null,
+            "output_size": null,
+            "encoding_time": null,
+            "crf": null,
+            "vmaf": null,
+            "target": null,
+            "requested_target": null,
+            "floor_target": null,
+            "decided_at": 1700000000000
+          },
+          "c:/videos/decided.mkv": {
+            "status": "Converted",
+            "size": 3000000,
+            "modified_ns": "1000000",
+            "video_codec": "H264",
+            "width": 1920,
+            "height": 1080,
+            "duration_ms": 120000,
+            "output_size": 1000000,
+            "encoding_time": 88000,
+            "crf": 30000,
+            "vmaf": 9550,
+            "target": 95,
+            "requested_target": 95,
+            "floor_target": 90,
+            "decided_at": 1700000000000
+          }
+        }
+      },
+      "deltas": [
+        {
+          "ParkedAdopted": {
+            "import_path": "c:/videos/decided.mkv",
+            "content_key": "ck-unseen",
+            "verdict": {
+              "kind": {
+                "Converted": {
+                  "output_content_key": null,
+                  "input_size": 3000000,
+                  "output_size": 1000000,
+                  "encoding_time": 88000,
+                  "crf": 30000,
+                  "vmaf": 9550,
+                  "target": 95
+                }
+              },
+              "source_run": null,
+              "decided_at": 1700000000000
+            }
+          }
+        }
+      ],
+      "expected": {
+        "queue": [],
+        "paths": {},
+        "records": {},
+        "outputs": {},
+        "conversion_runs": {},
+        "parked": {
+          "//server/share/only-seen.mkv": {
+            "status": "Scanned",
+            "size": null,
+            "modified_ns": null,
+            "video_codec": null,
+            "width": null,
+            "height": null,
+            "duration_ms": null,
+            "output_size": null,
+            "encoding_time": null,
+            "crf": null,
+            "vmaf": null,
+            "target": null,
+            "requested_target": null,
+            "floor_target": null,
+            "decided_at": 1700000000000
+          }
+        }
+      }
+    },
+    {
+      "name": "parked_retired",
+      "initial": {
+        "queue": [],
+        "paths": {},
+        "records": {},
+        "outputs": {},
+        "conversion_runs": {},
+        "parked": {
+          "//server/share/only-seen.mkv": {
+            "status": "Scanned",
+            "size": null,
+            "modified_ns": null,
+            "video_codec": null,
+            "width": null,
+            "height": null,
+            "duration_ms": null,
+            "output_size": null,
+            "encoding_time": null,
+            "crf": null,
+            "vmaf": null,
+            "target": null,
+            "requested_target": null,
+            "floor_target": null,
+            "decided_at": 1700000000000
+          },
+          "c:/videos/decided.mkv": {
+            "status": "Converted",
+            "size": 3000000,
+            "modified_ns": "1000000",
+            "video_codec": "H264",
+            "width": 1920,
+            "height": 1080,
+            "duration_ms": 120000,
+            "output_size": 1000000,
+            "encoding_time": 88000,
+            "crf": 30000,
+            "vmaf": 9550,
+            "target": 95,
+            "requested_target": 95,
+            "floor_target": 90,
+            "decided_at": 1700000000000
+          }
+        }
+      },
+      "deltas": [
+        {
+          "ParkedRetired": {
+            "import_path": "c:/videos/decided.mkv"
+          }
+        }
+      ],
+      "expected": {
+        "queue": [],
+        "paths": {},
+        "records": {},
+        "outputs": {},
+        "conversion_runs": {},
+        "parked": {
+          "//server/share/only-seen.mkv": {
+            "status": "Scanned",
+            "size": null,
+            "modified_ns": null,
+            "video_codec": null,
+            "width": null,
+            "height": null,
+            "duration_ms": null,
+            "output_size": null,
+            "encoding_time": null,
+            "crf": null,
+            "vmaf": null,
+            "target": null,
+            "requested_target": null,
+            "floor_target": null,
+            "decided_at": 1700000000000
+          }
+        }
+      }
+    },
+    {
+      "name": "item_finished_converted_with_analysis_summary",
+      "initial": {
+        "queue": [
+          {
+            "id": 1,
+            "input": "videos/input-1.mp4",
+            "operation": "Convert",
+            "intent": "ReuseIfFresh",
+            "output_target": "Replace",
+            "state": {
+              "Running": {
+                "claim_id": 10,
+                "run_id": 100
+              }
+            }
+          }
+        ],
+        "paths": {
+          "path-1": {
+            "stamp": {
+              "size": 3000000,
+              "modified_ns": "1000000"
+            },
+            "content_key": "ck-1"
+          }
+        },
+        "records": {
+          "ck-1": {
+            "metadata": {
+              "codec": "H264",
+              "container": {
+                "Other": "mp4"
+              },
+              "width": 1920,
+              "height": 1080,
+              "rotation_degrees": 0,
+              "duration_ms": 120000,
+              "size_bytes": 3000000,
+              "audio": [
+                {
+                  "codec": "Aac",
+                  "channels": 6
+                },
+                {
+                  "codec": {
+                    "Other": "wmav2"
+                  },
+                  "channels": 2
+                }
+              ],
+              "subtitle_count": 1
+            },
+            "analyses": [
+              [
+                {
+                  "preset": 6,
+                  "max_encoded_percent_basis_points": 8000,
+                  "samples": null,
+                  "sample_duration_ms": 20000,
+                  "thorough": false,
+                  "decode_mode": "Software",
+                  "ab_av1_revision": "ab-av1-test",
+                  "ffmpeg_revision": "ffmpeg-test",
+                  "encoder_revision": "svt-av1-test"
+                },
+                {
+                  "95": {
+                    "requested_target": 95,
+                    "successful_target": 95,
+                    "fallback_floor": 90,
+                    "fallback_step": 1,
+                    "failed_attempts": [],
+                    "measurement": {
+                      "crf": 30,
+                      "score": 9550,
+                      "predicted_size": 1000000,
+                      "predicted_percent_basis_points": 4200,
+                      "predicted_duration_ms": 60000,
+                      "from_cache": false
+                    },
+                    "profile": {
+                      "preset": 6,
+                      "max_encoded_percent_basis_points": 8000,
+                      "samples": null,
+                      "sample_duration_ms": 20000,
+                      "thorough": false,
+                      "decode_mode": "Software",
+                      "ab_av1_revision": "ab-av1-test",
+                      "ffmpeg_revision": "ffmpeg-test",
+                      "encoder_revision": "svt-av1-test"
+                    }
+                  }
+                }
+              ]
+            ],
+            "verdict": null,
+            "imported": null
+          }
+        },
+        "outputs": {
+          "100": {
+            "run_id": 100,
+            "input": "videos/input-1.mp4",
+            "input_identity": {
+              "file_id": {
+                "Unix": {
+                  "device": 1,
+                  "inode": 42
+                }
+              },
+              "size": 3000000,
+              "modified_ns": "2000000"
+            },
+            "staging": "videos/.input-1.crfty-staging.mkv",
+            "final_path": "videos/input-1.mkv",
+            "final_preimage": null,
+            "replacement": "RetireOriginal",
+            "state": {
+              "Committed": {
+                "final_identity": {
+                  "content_key": "ck-out",
+                  "destructive": {
+                    "file_id": {
+                      "Unix": {
+                        "device": 1,
+                        "inode": 42
+                      }
+                    },
+                    "size": 1000000,
+                    "modified_ns": "2000000"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "conversion_runs": {
+          "100": {
+            "spec": {
+              "item_id": 1,
+              "claim_id": 10,
+              "run_id": 100,
+              "input": "videos/input-1.mp4",
+              "content_key": "ck-1",
+              "operation": "Convert",
+              "intent": "ReuseIfFresh",
+              "output_target": "Replace",
+              "execution": {
+                "requested_target": 95,
+                "fallback_floor": 90,
+                "fallback_step": 1,
+                "overwrite_existing": false,
+                "decode_preference": "HardwarePreferred",
+                "profile": {
+                  "preset": 6,
+                  "max_encoded_percent_basis_points": 8000,
+                  "samples": null,
+                  "sample_duration_ms": 20000,
+                  "thorough": false,
+                  "decode_mode": "Software",
+                  "ab_av1_revision": "ab-av1-test",
+                  "ffmpeg_revision": "ffmpeg-test",
+                  "encoder_revision": "svt-av1-test"
+                }
+              },
+              "action": {
+                "Encode": {
+                  "selected_analysis": null
+                }
+              }
+            },
+            "analysis": {
+              "requested_target": 95,
+              "successful_target": 95,
+              "fallback_floor": 90,
+              "fallback_step": 1,
+              "failed_attempts": [],
+              "measurement": {
+                "crf": 30,
+                "score": 9550,
+                "predicted_size": 1000000,
+                "predicted_percent_basis_points": 4200,
+                "predicted_duration_ms": 60000,
+                "from_cache": false
+              },
+              "profile": {
+                "preset": 6,
+                "max_encoded_percent_basis_points": 8000,
+                "samples": null,
+                "sample_duration_ms": 20000,
+                "thorough": false,
+                "decode_mode": "Software",
+                "ab_av1_revision": "ab-av1-test",
+                "ffmpeg_revision": "ffmpeg-test",
+                "encoder_revision": "svt-av1-test"
+              }
+            },
+            "output_content_key": null,
+            "outcome": null,
+            "started_at": 1752000000000,
+            "finished_at": null,
+            "phase_spans": []
+          }
+        },
+        "parked": {}
+      },
+      "deltas": [
+        {
+          "ItemFinished": {
+            "item_id": 1,
+            "claim_id": 10,
+            "run_id": 100,
+            "outcome": {
+              "Converted": {
+                "LiveEncode": {
+                  "input_size": 3000000,
+                  "output_size": 1000000,
+                  "stream_sizes": {
+                    "video": 850000,
+                    "audio": 120000,
+                    "subtitle": 5000,
+                    "other": 25000
+                  },
+                  "encode_decode": "Software"
+                }
+              }
+            },
+            "at": 1752000090000,
+            "phase_spans": [
+              {
+                "phase": "Preparing",
+                "duration": 150
+              },
+              {
+                "phase": "Encoding",
+                "duration": 88000
+              }
+            ]
+          }
+        }
+      ],
+      "expected": {
+        "queue": [
+          {
+            "id": 1,
+            "input": "videos/input-1.mp4",
+            "operation": "Convert",
+            "intent": "ReuseIfFresh",
+            "output_target": "Replace",
+            "state": {
+              "Finished": {
+                "Converted": {
+                  "LiveEncode": {
+                    "input_size": 3000000,
+                    "output_size": 1000000,
+                    "stream_sizes": {
+                      "video": 850000,
+                      "audio": 120000,
+                      "subtitle": 5000,
+                      "other": 25000
+                    },
+                    "encode_decode": "Software"
+                  }
+                }
+              }
+            }
+          }
+        ],
+        "paths": {
+          "path-1": {
+            "stamp": {
+              "size": 3000000,
+              "modified_ns": "1000000"
+            },
+            "content_key": "ck-1"
+          }
+        },
+        "records": {
+          "ck-1": {
+            "metadata": {
+              "codec": "H264",
+              "container": {
+                "Other": "mp4"
+              },
+              "width": 1920,
+              "height": 1080,
+              "rotation_degrees": 0,
+              "duration_ms": 120000,
+              "size_bytes": 3000000,
+              "audio": [
+                {
+                  "codec": "Aac",
+                  "channels": 6
+                },
+                {
+                  "codec": {
+                    "Other": "wmav2"
+                  },
+                  "channels": 2
+                }
+              ],
+              "subtitle_count": 1
+            },
+            "analyses": [
+              [
+                {
+                  "preset": 6,
+                  "max_encoded_percent_basis_points": 8000,
+                  "samples": null,
+                  "sample_duration_ms": 20000,
+                  "thorough": false,
+                  "decode_mode": "Software",
+                  "ab_av1_revision": "ab-av1-test",
+                  "ffmpeg_revision": "ffmpeg-test",
+                  "encoder_revision": "svt-av1-test"
+                },
+                {
+                  "95": {
+                    "requested_target": 95,
+                    "successful_target": 95,
+                    "fallback_floor": 90,
+                    "fallback_step": 1,
+                    "failed_attempts": [],
+                    "measurement": {
+                      "crf": 30,
+                      "score": 9550,
+                      "predicted_size": 1000000,
+                      "predicted_percent_basis_points": 4200,
+                      "predicted_duration_ms": 60000,
+                      "from_cache": false
+                    },
+                    "profile": {
+                      "preset": 6,
+                      "max_encoded_percent_basis_points": 8000,
+                      "samples": null,
+                      "sample_duration_ms": 20000,
+                      "thorough": false,
+                      "decode_mode": "Software",
+                      "ab_av1_revision": "ab-av1-test",
+                      "ffmpeg_revision": "ffmpeg-test",
+                      "encoder_revision": "svt-av1-test"
+                    }
+                  }
+                }
+              ]
+            ],
+            "verdict": {
+              "kind": {
+                "Converted": {
+                  "output_content_key": "ck-out",
+                  "input_size": 3000000,
+                  "output_size": 1000000,
+                  "encoding_time": 88000,
+                  "crf": 30,
+                  "vmaf": 9550,
+                  "target": 95
+                }
+              },
+              "source_run": 100,
+              "decided_at": 1752000090000
+            },
+            "imported": null
+          }
+        },
+        "outputs": {
+          "100": {
+            "run_id": 100,
+            "input": "videos/input-1.mp4",
+            "input_identity": {
+              "file_id": {
+                "Unix": {
+                  "device": 1,
+                  "inode": 42
+                }
+              },
+              "size": 3000000,
+              "modified_ns": "2000000"
+            },
+            "staging": "videos/.input-1.crfty-staging.mkv",
+            "final_path": "videos/input-1.mkv",
+            "final_preimage": null,
+            "replacement": "RetireOriginal",
+            "state": {
+              "Committed": {
+                "final_identity": {
+                  "content_key": "ck-out",
+                  "destructive": {
+                    "file_id": {
+                      "Unix": {
+                        "device": 1,
+                        "inode": 42
+                      }
+                    },
+                    "size": 1000000,
+                    "modified_ns": "2000000"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "conversion_runs": {
+          "100": {
+            "spec": {
+              "item_id": 1,
+              "claim_id": 10,
+              "run_id": 100,
+              "input": "videos/input-1.mp4",
+              "content_key": "ck-1",
+              "operation": "Convert",
+              "intent": "ReuseIfFresh",
+              "output_target": "Replace",
+              "execution": {
+                "requested_target": 95,
+                "fallback_floor": 90,
+                "fallback_step": 1,
+                "overwrite_existing": false,
+                "decode_preference": "HardwarePreferred",
+                "profile": {
+                  "preset": 6,
+                  "max_encoded_percent_basis_points": 8000,
+                  "samples": null,
+                  "sample_duration_ms": 20000,
+                  "thorough": false,
+                  "decode_mode": "Software",
+                  "ab_av1_revision": "ab-av1-test",
+                  "ffmpeg_revision": "ffmpeg-test",
+                  "encoder_revision": "svt-av1-test"
+                }
+              },
+              "action": {
+                "Encode": {
+                  "selected_analysis": null
+                }
+              }
+            },
+            "analysis": {
+              "requested_target": 95,
+              "successful_target": 95,
+              "fallback_floor": 90,
+              "fallback_step": 1,
+              "failed_attempts": [],
+              "measurement": {
+                "crf": 30,
+                "score": 9550,
+                "predicted_size": 1000000,
+                "predicted_percent_basis_points": 4200,
+                "predicted_duration_ms": 60000,
+                "from_cache": false
+              },
+              "profile": {
+                "preset": 6,
+                "max_encoded_percent_basis_points": 8000,
+                "samples": null,
+                "sample_duration_ms": 20000,
+                "thorough": false,
+                "decode_mode": "Software",
+                "ab_av1_revision": "ab-av1-test",
+                "ffmpeg_revision": "ffmpeg-test",
+                "encoder_revision": "svt-av1-test"
+              }
+            },
+            "output_content_key": "ck-out",
+            "outcome": {
+              "Converted": {
+                "LiveEncode": {
+                  "input_size": 3000000,
+                  "output_size": 1000000,
+                  "stream_sizes": {
+                    "video": 850000,
+                    "audio": 120000,
+                    "subtitle": 5000,
+                    "other": 25000
+                  },
+                  "encode_decode": "Software"
+                }
+              }
+            },
+            "started_at": 1752000000000,
+            "finished_at": 1752000090000,
+            "phase_spans": [
+              {
+                "phase": "Preparing",
+                "duration": 150
+              },
+              {
+                "phase": "Encoding",
+                "duration": 88000
+              }
+            ]
+          }
+        },
+        "parked": {}
       }
     }
   ]

@@ -278,6 +278,11 @@ fn run_driver(
         let _result = events.send(DriverEvent::Degraded(report.clone()));
     }
     let mut compaction_backoff: u32 = 0;
+    // A history import must not linger as journal deltas: the parked records
+    // carry cleartext paths, and adoption semantics assume the inbox state is
+    // the snapshot. Imports therefore force a compaction at the next idle
+    // tick, retried until one actually lands.
+    let mut force_compact_pending = false;
     loop {
         let first = match receiver.recv_timeout(DRIVER_TICK) {
             Ok(envelope) => envelope,
@@ -285,8 +290,17 @@ fn run_driver(
                 emit_latest_telemetry(&state, &events, &telemetry);
                 if compaction_backoff > 0 {
                     compaction_backoff = compaction_backoff.saturating_sub(1);
-                } else if !maybe_compact(&state, &mut persistence, degraded.is_some(), false) {
-                    compaction_backoff = COMPACTION_RETRY_TICKS;
+                } else {
+                    match maybe_compact(
+                        &state,
+                        &mut persistence,
+                        degraded.is_some(),
+                        force_compact_pending,
+                    ) {
+                        CompactionOutcome::Compacted => force_compact_pending = false,
+                        CompactionOutcome::Skipped => {}
+                        CompactionOutcome::Failed => compaction_backoff = COMPACTION_RETRY_TICKS,
+                    }
                 }
                 continue;
             }
@@ -296,7 +310,7 @@ fn run_driver(
         let mut batch = vec![first];
         batch.extend(receiver.try_iter());
         for batch in split_batch_at_settings(batch) {
-            let should_stop = process_batch(
+            let outcome = process_batch(
                 &mut state,
                 &mut persistence.journal,
                 &mut persistence.config,
@@ -305,47 +319,55 @@ fn run_driver(
                 &events,
                 effect_sink.as_ref(),
             );
-            if should_stop {
+            force_compact_pending = force_compact_pending || outcome.imported_history;
+            if outcome.should_stop {
                 return;
             }
         }
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum CompactionOutcome {
+    /// A snapshot was written; the journal is a fresh generation.
+    Compacted,
+    /// Nothing to do: degraded, not quiescent, or not due by size policy.
+    Skipped,
+    /// A compaction was attempted and failed; the caller backs off and the
+    /// old journal generation remains authoritative.
+    Failed,
+}
+
 /// Compact the journal at the driver's idle tick (#33 §10). The writer
 /// barrier is implicit: the driver thread is the only journal writer and it
 /// sits between batches here. `force` bypasses the size policy (but never the
 /// quiescence or degraded checks) for the durable transforms that require a
-/// fresh generation — scrub, corruption acknowledgment, adoption.
-///
-/// Returns `false` only when a due compaction was attempted and failed, so
-/// the caller backs off instead of retrying every tick; the old journal
-/// generation remains authoritative in that case.
+/// fresh generation — scrub, corruption acknowledgment, history import.
 fn maybe_compact(
     state: &AppState,
     persistence: &mut DriverPersistence,
     degraded: bool,
     force: bool,
-) -> bool {
+) -> CompactionOutcome {
     if degraded || !compaction_quiescent(state) {
-        return true;
+        return CompactionOutcome::Skipped;
     }
     if !force {
         let journal_bytes = persistence.journal.journal_bytes();
         // Floor check first: measuring live state serializes all of it, which
         // is not free on every idle tick.
         if journal_bytes < COMPACTION_IDLE_MIN_JOURNAL_BYTES {
-            return true;
+            return CompactionOutcome::Skipped;
         }
         let live_bytes = match serde_json::to_vec(&state.durable) {
             Ok(encoded) => u64::try_from(encoded.len()).unwrap_or(u64::MAX),
             Err(error) => {
                 eprintln!("skipping compaction; failed to measure live state: {error}");
-                return false;
+                return CompactionOutcome::Failed;
             }
         };
         if !compaction_due(journal_bytes, live_bytes) {
-            return true;
+            return CompactionOutcome::Skipped;
         }
     }
     match persistence.journal.compact(
@@ -353,10 +375,10 @@ fn maybe_compact(
         env!("CARGO_PKG_VERSION"),
         crate::coordinator::now_millis(),
     ) {
-        Ok(()) => true,
+        Ok(()) => CompactionOutcome::Compacted,
         Err(error) => {
             eprintln!("journal compaction failed; old journal remains authoritative: {error}");
-            false
+            CompactionOutcome::Failed
         }
     }
 }
@@ -381,6 +403,13 @@ fn split_batch_at_settings(batch: Vec<Envelope>) -> Vec<Vec<Envelope>> {
     groups
 }
 
+struct BatchOutcome {
+    should_stop: bool,
+    /// The batch's durable deltas contained a `HistoryImported`; the caller
+    /// schedules a forced compaction.
+    imported_history: bool,
+}
+
 fn process_batch(
     state: &mut AppState,
     writer: &mut impl JournalSink,
@@ -389,7 +418,7 @@ fn process_batch(
     batch: Vec<Envelope>,
     events: &mpsc::Sender<DriverEvent>,
     effect_sink: Option<&mpsc::Sender<Effect>>,
-) -> bool {
+) -> BatchOutcome {
     let settings_before = state.settings.clone();
     let mut durable = Vec::new();
     let mut applied_batch = Vec::with_capacity(batch.len());
@@ -428,10 +457,16 @@ fn process_batch(
             Ok(token) => Some(token),
             Err(error) => {
                 fail_batch(applied_batch, events, error);
-                return true;
+                return BatchOutcome {
+                    should_stop: true,
+                    imported_history: false,
+                };
             }
         }
     };
+    let imported_history = durable
+        .iter()
+        .any(|delta| matches!(delta, DurableDelta::HistoryImported { .. }));
     persist_settings(state, config, &settings_before, &mut applied_batch);
     let should_stop = emit_batch(durability, applied_batch, state, events, effect_sink);
     // Sent after the batch's own events so a rejection issued while still
@@ -439,7 +474,10 @@ fn process_batch(
     if recovered {
         let _result = events.send(DriverEvent::Recovered);
     }
-    should_stop
+    BatchOutcome {
+        should_stop,
+        imported_history,
+    }
 }
 
 /// Recovery is consent to discard the corrupt tail — but only the tail the
@@ -731,8 +769,9 @@ mod tests {
     };
 
     use super::{
-        AppState, ConfigSink, DriverEvent, DriverPersistence, Envelope, JournalError, JournalSink,
-        maybe_compact, process_batch, reconcile_effects, split_batch_at_settings,
+        AppState, CompactionOutcome, ConfigSink, DriverEvent, DriverPersistence, Envelope,
+        JournalError, JournalSink, maybe_compact, process_batch, reconcile_effects,
+        split_batch_at_settings,
     };
     use crate::{
         config::ConfigStore,
@@ -785,7 +824,8 @@ mod tests {
             vec![envelope],
             &event_tx,
             None,
-        );
+        )
+        .should_stop;
         assert!(stopped);
         assert!(matches!(
             reply_rx.recv().expect("failure reply"),
@@ -852,6 +892,7 @@ mod tests {
                 claim_id: ClaimId(2),
                 run_id: RunId(3),
                 observation: None,
+                import_paths: Vec::new(),
                 execution,
             }),
         ] {
@@ -881,15 +922,18 @@ mod tests {
             reply: reply_tx,
         };
         let (event_tx, event_rx) = mpsc::channel();
-        assert!(!process_batch(
-            &mut state,
-            &mut NoopJournal,
-            &mut AcceptingConfig,
-            &mut None,
-            vec![envelope],
-            &event_tx,
-            None,
-        ));
+        assert!(
+            !process_batch(
+                &mut state,
+                &mut NoopJournal,
+                &mut AcceptingConfig,
+                &mut None,
+                vec![envelope],
+                &event_tx,
+                None,
+            )
+            .should_stop
+        );
         assert_eq!(reply_rx.recv().expect("terminal reply"), Reply::Accepted);
         let observed: Vec<&'static str> = event_rx
             .try_iter()
@@ -943,15 +987,18 @@ mod tests {
             writes: Vec::new(),
             failure: None,
         };
-        assert!(!process_batch(
-            &mut state,
-            &mut NoopJournal,
-            &mut config,
-            &mut None,
-            batch,
-            &event_tx,
-            None,
-        ));
+        assert!(
+            !process_batch(
+                &mut state,
+                &mut NoopJournal,
+                &mut config,
+                &mut None,
+                batch,
+                &event_tx,
+                None,
+            )
+            .should_stop
+        );
         assert_eq!(config.writes, vec![second.clone()]);
         assert_eq!(state.settings, second.clone());
         assert_eq!(first_reply_rx.recv().expect("first reply"), Reply::Accepted);
@@ -983,15 +1030,18 @@ mod tests {
             writes: Vec::new(),
             failure: Some("config sync failed".to_owned()),
         };
-        assert!(!process_batch(
-            &mut state,
-            &mut NoopJournal,
-            &mut config,
-            &mut None,
-            vec![envelope],
-            &event_tx,
-            None,
-        ));
+        assert!(
+            !process_batch(
+                &mut state,
+                &mut NoopJournal,
+                &mut config,
+                &mut None,
+                vec![envelope],
+                &event_tx,
+                None,
+            )
+            .should_stop
+        );
         assert_eq!(state.settings, Settings::default());
         assert!(matches!(
             reply_rx.recv().expect("rejected reply"),
@@ -1002,6 +1052,79 @@ mod tests {
             DriverEvent::Ephemeral(crfty_core::EphemeralDelta::CommandRejected { .. })
         ));
         assert!(event_rx.try_recv().is_err());
+    }
+
+    #[test]
+    fn import_batches_flag_a_forced_compaction() {
+        let record = crfty_core::ParkedRecord {
+            status: crfty_core::ParkedStatus::Scanned,
+            size: None,
+            modified_ns: None,
+            video_codec: None,
+            width: None,
+            height: None,
+            duration_ms: None,
+            output_size: None,
+            encoding_time: None,
+            crf: None,
+            vmaf: None,
+            target: None,
+            requested_target: None,
+            floor_target: None,
+            decided_at: UnixMillis(1),
+        };
+        let (reply_tx, reply_rx) = mpsc::sync_channel(1);
+        let envelope = Envelope {
+            command: Command::History(crfty_core::HistoryCommand::Import {
+                records: vec![(
+                    crfty_core::ImportPath("c:/videos/movie.mkv".to_owned()),
+                    record,
+                )],
+            }),
+            reply: reply_tx,
+        };
+        let (event_tx, _event_rx) = mpsc::channel();
+        let mut state = AppState::default();
+        let outcome = process_batch(
+            &mut state,
+            &mut NoopJournal,
+            &mut AcceptingConfig,
+            &mut None,
+            vec![envelope],
+            &event_tx,
+            None,
+        );
+        assert!(!outcome.should_stop);
+        assert!(outcome.imported_history);
+        assert_eq!(
+            reply_rx.recv().expect("import reply"),
+            Reply::Imported {
+                parked: 1,
+                skipped: 0
+            }
+        );
+        // An ordinary durable batch does not schedule a forced compaction.
+        let (reply_tx, _reply_rx) = mpsc::sync_channel(1);
+        let envelope = Envelope {
+            command: Command::Queue(QueueCommand::Add {
+                item_id: QueueItemId(1),
+                input: PathBuf::from("video.mkv"),
+                operation: Operation::Convert,
+                intent: AnalysisIntent::ReuseIfFresh,
+                output_target: OutputTarget::Replace,
+            }),
+            reply: reply_tx,
+        };
+        let outcome = process_batch(
+            &mut state,
+            &mut NoopJournal,
+            &mut AcceptingConfig,
+            &mut None,
+            vec![envelope],
+            &event_tx,
+            None,
+        );
+        assert!(!outcome.imported_history);
     }
 
     #[test]
@@ -1045,19 +1168,31 @@ mod tests {
 
         // Degraded skips compaction even when forced; the corrupt journal is
         // evidence and must stay byte-identical.
-        assert!(maybe_compact(&state, &mut persistence, true, true));
+        assert_eq!(
+            maybe_compact(&state, &mut persistence, true, true),
+            CompactionOutcome::Skipped
+        );
         assert_eq!(std::fs::read(&journal_path).expect("journal bytes"), before);
         // A non-quiescent state (active session) also skips a forced request.
         state.session = SessionState::Running;
-        assert!(maybe_compact(&state, &mut persistence, false, true));
+        assert_eq!(
+            maybe_compact(&state, &mut persistence, false, true),
+            CompactionOutcome::Skipped
+        );
         assert_eq!(std::fs::read(&journal_path).expect("journal bytes"), before);
         // Below the size floor, an unforced idle tick leaves the journal alone.
         state.session = SessionState::Idle;
-        assert!(maybe_compact(&state, &mut persistence, false, false));
+        assert_eq!(
+            maybe_compact(&state, &mut persistence, false, false),
+            CompactionOutcome::Skipped
+        );
         assert_eq!(std::fs::read(&journal_path).expect("journal bytes"), before);
 
         // Quiescent + forced compacts to a single snapshot head line.
-        assert!(maybe_compact(&state, &mut persistence, false, true));
+        assert_eq!(
+            maybe_compact(&state, &mut persistence, false, true),
+            CompactionOutcome::Compacted
+        );
         let bytes = std::fs::read(&journal_path).expect("compacted journal");
         assert_eq!(bytes.iter().filter(|byte| **byte == b'\n').count(), 1);
         let replayed = crfty_core::replay(&bytes);
@@ -1117,15 +1252,18 @@ mod tests {
         // discarding different bytes than the ones on disk.
         let (wrong, wrong_reply) = envelope(crfty_core::corruption_signature(b"different tail"));
         let (event_tx, event_rx) = mpsc::channel();
-        assert!(!process_batch(
-            &mut state,
-            &mut journal,
-            &mut AcceptingConfig,
-            &mut degraded,
-            vec![wrong],
-            &event_tx,
-            None,
-        ));
+        assert!(
+            !process_batch(
+                &mut state,
+                &mut journal,
+                &mut AcceptingConfig,
+                &mut degraded,
+                vec![wrong],
+                &event_tx,
+                None,
+            )
+            .should_stop
+        );
         assert!(matches!(
             wrong_reply.recv().expect("wrong-signature reply"),
             Reply::Rejected { .. }
@@ -1139,15 +1277,18 @@ mod tests {
         // The matching signature archives the corrupt file, compacts the
         // valid prefix, clears degraded, and announces recovery last.
         let (matching, matching_reply) = envelope(corruption.signature);
-        assert!(!process_batch(
-            &mut state,
-            &mut journal,
-            &mut AcceptingConfig,
-            &mut degraded,
-            vec![matching],
-            &event_tx,
-            None,
-        ));
+        assert!(
+            !process_batch(
+                &mut state,
+                &mut journal,
+                &mut AcceptingConfig,
+                &mut degraded,
+                vec![matching],
+                &event_tx,
+                None,
+            )
+            .should_stop
+        );
         assert_eq!(
             matching_reply.recv().expect("matching reply"),
             Reply::Accepted
@@ -1191,15 +1332,18 @@ mod tests {
         };
         let (event_tx, event_rx) = mpsc::channel();
         let mut state = AppState::default();
-        assert!(!process_batch(
-            &mut state,
-            &mut NoopJournal,
-            &mut AcceptingConfig,
-            &mut None,
-            vec![envelope],
-            &event_tx,
-            None,
-        ));
+        assert!(
+            !process_batch(
+                &mut state,
+                &mut NoopJournal,
+                &mut AcceptingConfig,
+                &mut None,
+                vec![envelope],
+                &event_tx,
+                None,
+            )
+            .should_stop
+        );
         assert!(matches!(
             reply_rx.recv().expect("healthy-ack reply"),
             Reply::Rejected { .. }

@@ -48,8 +48,9 @@ pub use journal::{
     corruption_signature, encode_record, encode_snapshot, replay,
 };
 pub use media::{
-    AudioCodec, AudioStreamMeta, FileRecord, FileStamp, MediaContainer, MediaObservation,
-    PathBinding, PathHash, Verdict, VerdictKind, VideoCodec, VideoMeta,
+    AudioCodec, AudioStreamMeta, FileRecord, FileStamp, ImportPath, MediaContainer,
+    MediaObservation, ParkedRecord, ParkedStatus, PathBinding, PathHash, Verdict, VerdictKind,
+    VideoCodec, VideoMeta,
 };
 pub use output::{
     ArtifactIdentity, ConflictKind, ContentKey, DestructiveIdentity, DestructiveObservation,
@@ -57,8 +58,8 @@ pub use output::{
     OutputTransaction, RecoveryConflict, Replacement, recover_output,
 };
 pub use policy::{
-    Eligibility, MIN_VIDEO_PIXELS, SkipReason, evaluate_eligibility, permitted_profiles,
-    select_analysis, select_job_action, verdict_applies,
+    Eligibility, MIN_VIDEO_PIXELS, ParkedResolution, SkipReason, evaluate_eligibility,
+    permitted_profiles, resolve_parked, select_analysis, select_job_action, verdict_applies,
 };
 pub use projection::{
     CodecCount, CumulativeSavingsPoint, HistoryRow, HistoryStatus, RunTotals, StatFact,
@@ -66,8 +67,8 @@ pub use projection::{
     local_epoch_day, statistics,
 };
 pub use reducer::{
-    Applied, Command, Effect, EphemeralDelta, ProjectionCommand, QueueCommand, Reply,
-    SessionCommand, SettingsCommand, SystemCommand, VendorCommand, WorkerCommand, apply,
+    Applied, Command, Effect, EphemeralDelta, HistoryCommand, ProjectionCommand, QueueCommand,
+    Reply, SessionCommand, SettingsCommand, SystemCommand, VendorCommand, WorkerCommand, apply,
 };
 pub use settings::{
     DEFAULT_OUTPUT_SUFFIX, DefaultOutputMode, OutputSettings, PrivacySettings, Settings,
@@ -85,7 +86,7 @@ pub use time::{DurationMs, FileTimeNs, UnixMillis};
 mod tests;
 pub use constants::{
     CRF_FIXED_SCALE, DEFAULT_ENCODING_PRESET, DEFAULT_MAX_ENCODED_PERCENT_BASIS_POINTS,
-    DEFAULT_SAMPLE_DURATION_MS, DEFAULT_VMAF_TARGET, MAX_ENCODING_PRESET, MAX_PERCENT_BASIS_POINTS,
-    MAX_VMAF_SCORE, MIN_VMAF_FALLBACK_TARGET, PERCENT_BASIS_POINTS_SCALE, VMAF_FALLBACK_STEP,
-    VMAF_SCORE_FIXED_SCALE,
+    DEFAULT_SAMPLE_DURATION_MS, DEFAULT_VMAF_TARGET, IMPORT_MTIME_TOLERANCE_NS,
+    MAX_ENCODING_PRESET, MAX_PERCENT_BASIS_POINTS, MAX_VMAF_SCORE, MIN_VMAF_FALLBACK_TARGET,
+    PERCENT_BASIS_POINTS_SCALE, VMAF_FALLBACK_STEP, VMAF_SCORE_FIXED_SCALE,
 };

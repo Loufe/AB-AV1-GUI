@@ -409,9 +409,15 @@ mod tests {
         let mut record = FileRecord::new(source);
         record.verdict = Some(Verdict {
             kind: VerdictKind::Converted {
-                output_content_key: ContentKey(format!("out-{run:04}")),
+                output_content_key: Some(ContentKey(format!("out-{run:04}"))),
+                input_size: None,
+                output_size: None,
+                encoding_time: None,
+                crf: None,
+                vmaf: None,
+                target: None,
             },
-            source_run: RunId(run),
+            source_run: Some(RunId(run)),
             decided_at: UnixMillis(1_000_000),
         });
         state.records.insert(content_key.clone(), record);
@@ -455,7 +461,7 @@ mod tests {
                 requested: VmafTarget(95),
                 floor: VmafTarget(90),
             },
-            source_run: RunId(run),
+            source_run: Some(RunId(run)),
             decided_at: UnixMillis(1_000_000),
         });
         state.records.insert(content_key.clone(), record);

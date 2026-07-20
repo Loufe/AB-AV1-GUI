@@ -2,7 +2,10 @@ use std::collections::BTreeMap;
 
 use serde::{Deserialize, Serialize};
 
-use crate::{AnalysisProfile, AnalysisResult, ContentKey, RunId, UnixMillis, VmafTarget};
+use crate::{
+    AnalysisProfile, AnalysisResult, ContentKey, Crf, DurationMs, RunId, UnixMillis, VmafScore,
+    VmafTarget,
+};
 
 const HALF_ROTATION_DEGREES: i16 = 180;
 const QUARTER_ROTATION_DEGREES: i16 = 90;
@@ -11,6 +14,16 @@ const QUARTER_ROTATION_DEGREES: i16 = 90;
     Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize, specta::Type,
 )]
 pub struct PathHash(pub String);
+
+/// The normalized source-path key an imported history record is parked
+/// under. Normalization is v3's own documented rule (verbatim prefixes
+/// stripped, backslashes to slashes, lowercased) applied by the engine at
+/// import and at prepare time, so both sides of the match meet on the same
+/// spelling. Cleartext PII — a phase-5 scrub target.
+#[derive(
+    Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize, specta::Type,
+)]
+pub struct ImportPath(pub String);
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, specta::Type)]
 pub struct FileStamp {
@@ -117,21 +130,42 @@ pub struct MediaObservation {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, specta::Type)]
 pub struct Verdict {
     pub kind: VerdictKind,
-    pub source_run: RunId,
+    /// `None`: decided before this app existed — the verdict was adopted
+    /// from a history import and no conversion run backs it.
+    pub source_run: Option<RunId>,
     pub decided_at: UnixMillis,
 }
 
 /// Summary fields only: the full attempt list stays on the run outcome, and
 /// the produced artifact's full identity stays on the settled output
-/// transaction (`outputs[source_run]`). If settled-transaction pruning ever
-/// lands, the verdict must absorb an output-stamp summary at that point.
+/// transaction (`outputs[source_run]`). The measured summary (sizes, encode
+/// duration, achieved quality) is absorbed here at fold time so consumers
+/// never branch on provenance; every summary field is nullable because a
+/// history import — and a crash-recovered native success — cannot honestly
+/// supply it.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, specta::Type)]
 pub enum VerdictKind {
     Converted {
-        output_content_key: ContentKey,
+        /// `None`: adopted from a history import — the produced output was
+        /// never content-hashed.
+        output_content_key: Option<ContentKey>,
+        #[specta(type = Option<crate::JsNumber>)]
+        input_size: Option<u64>,
+        #[specta(type = Option<crate::JsNumber>)]
+        output_size: Option<u64>,
+        encoding_time: Option<DurationMs>,
+        crf: Option<Crf>,
+        vmaf: Option<VmafScore>,
+        target: Option<VmafTarget>,
     },
     Remuxed {
+        /// Required: imports never carry remuxes, so every remux verdict
+        /// names a settled, content-hashed output.
         output_content_key: ContentKey,
+        #[specta(type = Option<crate::JsNumber>)]
+        input_size: Option<u64>,
+        #[specta(type = Option<crate::JsNumber>)]
+        output_size: Option<u64>,
     },
     NotWorthwhile {
         requested: VmafTarget,
@@ -150,6 +184,9 @@ pub struct FileRecord {
     #[specta(type = AnalysisIndexEntries)]
     pub analyses: BTreeMap<AnalysisProfile, BTreeMap<VmafTarget, AnalysisResult>>,
     pub verdict: Option<Verdict>,
+    /// Provenance of a history-import adoption, and the re-import guard:
+    /// keys recorded here (or still parked) are skipped by later imports.
+    pub imported: Option<ImportPath>,
 }
 
 mod analysis_index {
@@ -182,6 +219,7 @@ impl FileRecord {
             metadata,
             analyses: BTreeMap::new(),
             verdict: None,
+            imported: None,
         }
     }
 
@@ -191,4 +229,47 @@ impl FileRecord {
             .or_default()
             .insert(result.successful_target, result);
     }
+}
+
+/// The decisive standing of an imported history record.
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize, specta::Type,
+)]
+pub enum ParkedStatus {
+    Scanned,
+    Analyzed,
+    NotWorthwhile,
+    Converted,
+}
+
+/// An imported history record waiting to be matched against a real file.
+/// Every field the import schema marks optional is nullable — the import
+/// carries what the source record actually said, nothing synthesized.
+/// Fixed-point integers only: durable state derives `Eq`, so any float
+/// representation is the converter script's problem, never this crate's.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, specta::Type)]
+pub struct ParkedRecord {
+    pub status: ParkedStatus,
+    /// Byte size of the source file when the record was decided: both the
+    /// freshness-stamp probe and the input size for a converted record's
+    /// summary.
+    #[specta(type = Option<crate::JsNumber>)]
+    pub size: Option<u64>,
+    pub modified_ns: Option<crate::FileTimeNs>,
+    pub video_codec: Option<VideoCodec>,
+    pub width: Option<u32>,
+    pub height: Option<u32>,
+    #[specta(type = Option<crate::JsNumber>)]
+    pub duration_ms: Option<u64>,
+    #[specta(type = Option<crate::JsNumber>)]
+    pub output_size: Option<u64>,
+    pub encoding_time: Option<DurationMs>,
+    pub crf: Option<Crf>,
+    pub vmaf: Option<VmafScore>,
+    pub target: Option<VmafTarget>,
+    pub requested_target: Option<VmafTarget>,
+    pub floor_target: Option<VmafTarget>,
+    /// When the source record was decided, falling back to the import
+    /// instant when the source carried no timestamp.
+    pub decided_at: UnixMillis,
 }

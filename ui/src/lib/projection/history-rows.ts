@@ -21,11 +21,12 @@ import type {
 
 /**
  * Input/output sizes for the run backing a verdict, joined in evidence →
- * settled-transaction → metadata order (mirrors `joined_sizes`). Queue and
- * analysis views share this join.
+ * settled-transaction → verdict-carried-summary → metadata order (mirrors
+ * `joined_sizes`). The carried tier covers adopted verdicts with no backing
+ * run. Queue and analysis views share this join.
  */
 export function joinedSizes(
-  runId: RunId,
+  verdict: Verdict,
   run: ConversionRun | undefined,
   state: DurableState_Deserialize,
   record: FileRecord_Deserialize,
@@ -47,7 +48,7 @@ export function joinedSizes(
       }
     }
   }
-  const transaction = state.outputs[runId];
+  const transaction = verdict.source_run === null ? undefined : state.outputs[verdict.source_run];
   if (transaction !== undefined) {
     const transactionState = transaction.state;
     if (typeof transactionState === "object") {
@@ -64,7 +65,19 @@ export function joinedSizes(
       }
     }
   }
-  return { input: record.metadata.size_bytes, output: null };
+  const carried = carriedSizes(verdict);
+  return { input: carried.input ?? record.metadata.size_bytes, output: carried.output };
+}
+
+function carriedSizes(verdict: Verdict): { input: number | null; output: number | null } {
+  const kind = verdict.kind;
+  if ("Converted" in kind && kind.Converted !== undefined) {
+    return { input: kind.Converted.input_size, output: kind.Converted.output_size };
+  }
+  if ("Remuxed" in kind && kind.Remuxed !== undefined) {
+    return { input: kind.Remuxed.input_size, output: kind.Remuxed.output_size };
+  }
+  return { input: null, output: null };
 }
 
 /**
@@ -172,9 +185,14 @@ function verdictRow(
       },
     };
   }
-  const run: ConversionRun | undefined = state.conversion_runs[verdict.source_run];
-  const { input, output } = joinedSizes(verdict.source_run, run, state, record);
+  const run: ConversionRun | undefined =
+    verdict.source_run === null ? undefined : state.conversion_runs[verdict.source_run];
+  const { input, output } = joinedSizes(verdict, run, state, record);
   const measurement = status === "Converted" ? (run?.analysis?.measurement ?? null) : null;
+  const carried =
+    "Converted" in kind && kind.Converted !== undefined
+      ? { crf: kind.Converted.crf, vmaf: kind.Converted.vmaf }
+      : { crf: null, vmaf: null };
   const row = baseRow(contentKey, record, status);
   row.source_run = verdict.source_run;
   row.happened_at = run?.finished_at ?? verdict.decided_at;
@@ -182,8 +200,8 @@ function verdictRow(
     row.input_size_bytes = input;
   }
   row.output_size_bytes = output;
-  row.vmaf = measurement === null ? null : measurement.score;
-  row.crf = measurement === null ? null : measurement.crf;
+  row.vmaf = measurement === null ? carried.vmaf : measurement.score;
+  row.crf = measurement === null ? carried.crf : measurement.crf;
   return row;
 }
 

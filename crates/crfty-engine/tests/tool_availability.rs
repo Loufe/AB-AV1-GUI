@@ -254,6 +254,7 @@ fn startup_recovery_without_ffprobe_defers_output_settlement() {
             claim_id: ClaimId(2),
             run_id: RunId(3),
             observation: None,
+            import_paths: Vec::new(),
             execution: settings.clone(),
         }),
         Command::Worker(WorkerCommand::Started {
