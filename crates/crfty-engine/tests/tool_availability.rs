@@ -573,3 +573,99 @@ fn managed_record_escaping_the_vendor_root_is_rejected() {
     );
     assert!(!report.update_available);
 }
+
+/// Waits for vendor-driven ephemeral tool updates until `predicate` accepts
+/// one, panicking on stream close.
+fn wait_for_tools_state(
+    events: &std::sync::mpsc::Receiver<DriverEvent>,
+    predicate: impl Fn(&ToolsState) -> bool,
+    what: &str,
+) -> ToolsState {
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+    loop {
+        let remaining = deadline
+            .checked_duration_since(std::time::Instant::now())
+            .unwrap_or_else(|| panic!("timed out waiting for {what}"));
+        let event = events
+            .recv_timeout(remaining)
+            .unwrap_or_else(|error| panic!("stream ended waiting for {what}: {error}"));
+        if let DriverEvent::Ephemeral(EphemeralDelta::ToolsChanged(tools)) = event
+            && predicate(&tools)
+        {
+            return tools;
+        }
+    }
+}
+
+#[test]
+fn vendor_check_rediscovers_tools_and_returns_to_idle() {
+    let _serial = ENGINE_GUARD.lock().expect("engine guard");
+    let directory = TestDirectory::new("vendor-check-cycle");
+    let executable = fixture_path_directory(&directory).join(tool_file_name("ffmpeg"));
+    let tools = ToolsConfig::Fixed(DiscoveredTools::Available(CurrentTools {
+        media: MediaTools {
+            ffmpeg: executable.clone(),
+            ffprobe: executable,
+        },
+        source: ToolSource::Explicit,
+        revisions: ToolRevisions {
+            ab_av1: "fixture".to_owned(),
+            ffmpeg: "fixture".to_owned(),
+            encoder: "fixture".to_owned(),
+        },
+    }));
+    let engine = EngineRuntime::start(engine_config(&directory, tools)).expect("engine start");
+    assert_eq!(
+        engine
+            .commands
+            .submit_vendor(crfty_core::VendorCommand::Check)
+            .expect("vendor check reply"),
+        Reply::Accepted
+    );
+    // The reducer flips activity to Checking, then the vendor worker
+    // republishes discovery and settles back to Idle.
+    wait_for_tools_state(
+        &engine.events,
+        |tools| tools.activity == crfty_core::VendorActivity::Checking,
+        "checking activity",
+    );
+    let settled = wait_for_tools_state(
+        &engine.events,
+        |tools| tools.activity == crfty_core::VendorActivity::Idle,
+        "idle after check",
+    );
+    assert!(
+        matches!(
+            settled.availability,
+            ToolAvailability::Available {
+                source: ToolSource::Explicit,
+                ..
+            }
+        ),
+        "{settled:?}"
+    );
+}
+
+#[test]
+fn vendor_install_on_a_fixed_tool_engine_fails_typed() {
+    let _serial = ENGINE_GUARD.lock().expect("engine guard");
+    let directory = TestDirectory::new("vendor-install-fixed");
+    let engine =
+        EngineRuntime::start(engine_config(&directory, missing_tools())).expect("engine start");
+    assert_eq!(
+        engine
+            .commands
+            .submit_vendor(crfty_core::VendorCommand::Install)
+            .expect("vendor install reply"),
+        Reply::Accepted
+    );
+    let failed = wait_for_tools_state(
+        &engine.events,
+        |tools| matches!(tools.activity, crfty_core::VendorActivity::Failed { .. }),
+        "typed install failure",
+    );
+    let crfty_core::VendorActivity::Failed { detail } = failed.activity else {
+        unreachable!();
+    };
+    assert!(detail.contains("fixed tool set"), "{detail}");
+}

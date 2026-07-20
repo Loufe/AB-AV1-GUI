@@ -13,6 +13,8 @@ export const commands = {
 	stopAfterCurrent: () => typedError<null, CommandError>(__TAURI_INVOKE("stop_after_current")),
 	forceStop: () => typedError<null, CommandError>(__TAURI_INVOKE("force_stop")),
 	setSettings: (settings: Settings) => typedError<null, CommandError>(__TAURI_INVOKE("set_settings", { settings })),
+	vendorInstall: () => typedError<null, CommandError>(__TAURI_INVOKE("vendor_install")),
+	vendorCheck: () => typedError<null, CommandError>(__TAURI_INVOKE("vendor_check")),
 };
 
 /* Types */

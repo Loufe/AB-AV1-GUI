@@ -15,7 +15,7 @@ use std::sync::{
 use crfty_core::{
     AnalysisProfile, AppSnapshot, ConfigDelta, DurableDelta, DurableState, EphemeralDelta,
     ExecutionSettings, QueueCommand, QueueItemId, Reply, SessionCommand, SessionState, Settings,
-    SettingsCommand, ToolsState, fold, fold_config,
+    SettingsCommand, ToolsState, VendorCommand, fold, fold_config,
 };
 use crfty_engine::{
     coordinator::{EngineConfig, EngineRuntime, ToolsConfig, UserCommandSender},
@@ -211,6 +211,11 @@ impl Bridge {
     pub fn submit_settings(&self, settings: Settings) -> Result<(), CommandError> {
         let commands = self.commands()?;
         map_reply(commands.submit_settings(SettingsCommand::Set { settings }))
+    }
+
+    pub fn submit_vendor(&self, command: VendorCommand) -> Result<(), CommandError> {
+        let commands = self.commands()?;
+        map_reply(commands.submit_vendor(command))
     }
 
     fn commands(&self) -> Result<&UserCommandSender, CommandError> {

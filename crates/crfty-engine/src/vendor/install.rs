@@ -24,6 +24,15 @@ pub enum InstallError {
     Failed(String),
 }
 
+/// Phase progress emitted while an install runs. `Downloading` fires per
+/// chunk (the caller throttles); `Installing` fires once, when the verified
+/// archive moves into extraction and promotion.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum InstallProgress {
+    Downloading { received: u64, total: Option<u64> },
+    Installing,
+}
+
 impl From<DownloadError> for InstallError {
     fn from(error: DownloadError) -> Self {
         match error {
@@ -34,14 +43,13 @@ impl From<DownloadError> for InstallError {
 }
 
 /// Downloads, verifies, extracts, and atomically activates the manifest's
-/// FFmpeg build under `vendor_root`. `progress` receives `(received, total)`
-/// during the download phase; `cancelled` aborts between download chunks and
-/// between phases — never mid-promote.
+/// FFmpeg build under `vendor_root`. `cancelled` aborts between download
+/// chunks and between phases — never mid-promote.
 pub fn install(
     vendor_root: &Path,
     manifest: &VendorManifest,
     fetch: &dyn Fetch,
-    progress: &mut dyn FnMut(u64, Option<u64>),
+    progress: &mut dyn FnMut(InstallProgress),
     cancelled: &AtomicBool,
 ) -> Result<InstalledMetadata, InstallError> {
     let staging = vendor_root.join(STAGING_DIR_NAME);
@@ -52,12 +60,13 @@ pub fn install(
         manifest.url,
         manifest.sha256_hex,
         &staging,
-        progress,
+        &mut |received, total| progress(InstallProgress::Downloading { received, total }),
         cancelled,
     )?;
     if cancelled.load(Ordering::Relaxed) {
         return Err(InstallError::Cancelled);
     }
+    progress(InstallProgress::Installing);
     let staged = tempfile::Builder::new()
         .prefix("install-")
         .tempdir_in(&staging)

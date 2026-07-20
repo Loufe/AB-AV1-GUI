@@ -3,7 +3,7 @@ use std::{
     path::PathBuf,
     sync::{
         Arc, Mutex,
-        atomic::{AtomicU64, Ordering},
+        atomic::{AtomicBool, AtomicU64, Ordering},
         mpsc,
     },
     thread,
@@ -17,8 +17,8 @@ use crfty_core::{
     JobProgress, MAX_PERCENT_BASIS_POINTS, MAX_VMAF_SCORE, OutputDelta, OutputState, OutputTarget,
     OutputTransaction, PERCENT_BASIS_POINTS_SCALE, PhaseSpan, QueueCommand, QueueItemState,
     Replacement, Reply, RunId, SearchMeasurement, SessionCommand, SettingsCommand, SkipReason,
-    StreamByteSizes, SystemCommand, Telemetry, UnixMillis, VMAF_SCORE_FIXED_SCALE, VmafScore,
-    VmafTarget, WorkerCommand, fold,
+    StreamByteSizes, SystemCommand, Telemetry, UnixMillis, VMAF_SCORE_FIXED_SCALE, VendorActivity,
+    VendorCommand, VmafScore, VmafTarget, WorkerCommand, fold,
 };
 
 const FIRST_RUNTIME_ID: u64 = 1;
@@ -137,7 +137,12 @@ use crate::{
         self, RemuxCancellationHandle, RemuxHandle, RemuxReport, RemuxRequest, RemuxTelemetry,
         RemuxTerminal,
     },
-    vendor::discovery::{self, CurrentTools, DiscoveredTools, DiscoveryReport},
+    vendor::{
+        discovery::{self, CurrentTools, DiscoveredTools, DiscoveryReport},
+        download::HttpFetch,
+        install::{self as vendor_install, InstallError, InstallProgress},
+        manifest,
+    },
 };
 
 #[derive(Debug, Clone)]
@@ -360,6 +365,13 @@ impl UserCommandSender {
         command: SettingsCommand,
     ) -> Result<Reply, crate::driver::SubmitError> {
         self.inner.submit(Command::Settings(command))
+    }
+
+    pub fn submit_vendor(
+        &self,
+        command: VendorCommand,
+    ) -> Result<Reply, crate::driver::SubmitError> {
+        self.inner.submit(Command::Vendor(command))
     }
 }
 
@@ -651,6 +663,7 @@ fn supervise(
     next_runtime_id: u64,
 ) {
     let cancellation = ActiveCancellation::new();
+    let vendor_cancelled = Arc::new(AtomicBool::new(false));
     let next_id = Arc::new(AtomicU64::new(next_runtime_id));
     let mut worker: Option<thread::JoinHandle<()>> = None;
     while let Ok(effect) = effects.recv() {
@@ -705,9 +718,23 @@ fn supervise(
                 }
             }
             Effect::KillActiveRun { run_id } => cancellation.force(Some(run_id)),
-            // The vendor worker arrives with the install pipeline; until the
-            // shell exposes vendor commands the reducer cannot emit these.
-            Effect::VendorInstall | Effect::VendorCheck => {}
+            // The reducer serializes vendor work through the activity state,
+            // so at most one install runs; the thread is detached — status
+            // flows back as commands, and shutdown only flags cancellation.
+            Effect::VendorInstall => spawn_vendor_worker(
+                &commands,
+                &config,
+                &tools_slot,
+                &vendor_cancelled,
+                VendorTask::Install,
+            ),
+            Effect::VendorCheck => spawn_vendor_worker(
+                &commands,
+                &config,
+                &tools_slot,
+                &vendor_cancelled,
+                VendorTask::Check,
+            ),
             Effect::WriteSettings { .. } => {
                 report_worker_crash(
                     &commands,
@@ -717,6 +744,9 @@ fn supervise(
             }
             Effect::StopDriver => {
                 cancellation.force(None);
+                // Never join a mid-download vendor thread: it observes the
+                // flag between chunks and unwinds through its own cleanup.
+                vendor_cancelled.store(true, Ordering::Relaxed);
                 break;
             }
         }
@@ -735,6 +765,172 @@ fn report_worker_crash(commands: &CommandSender, message: &str) {
         Ok(Reply::Accepted) => {}
         Ok(reply) => eprintln!("failed to report worker crash ({message}): {reply:?}"),
         Err(error) => eprintln!("failed to report worker crash ({message}): {error}"),
+    }
+}
+
+#[derive(Clone, Copy)]
+enum VendorTask {
+    Install,
+    Check,
+}
+
+/// Download progress is re-reported only every this many bytes so the
+/// ordered stream carries a handful of updates per archive, not one per
+/// 128 KiB chunk.
+const VENDOR_PROGRESS_STEP_BYTES: u64 = 8 * 1024 * 1024;
+
+fn spawn_vendor_worker(
+    commands: &CommandSender,
+    config: &EngineConfig,
+    tools_slot: &Arc<Mutex<Option<CurrentTools>>>,
+    cancelled: &Arc<AtomicBool>,
+    task: VendorTask,
+) {
+    cancelled.store(false, Ordering::Relaxed);
+    let worker_commands = commands.clone();
+    let worker_config = config.clone();
+    let worker_tools = Arc::clone(tools_slot);
+    let worker_cancelled = Arc::clone(cancelled);
+    let spawned = thread::Builder::new()
+        .name("crfty-vendor-worker".to_owned())
+        .spawn(move || {
+            let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                run_vendor_task(
+                    &worker_commands,
+                    &worker_config,
+                    &worker_tools,
+                    &worker_cancelled,
+                    task,
+                );
+            }));
+            if result.is_err() {
+                submit_vendor_activity(
+                    &worker_commands,
+                    VendorActivity::Failed {
+                        detail: "the vendor worker panicked".to_owned(),
+                    },
+                );
+            }
+        });
+    if let Err(error) = spawned {
+        submit_vendor_activity(
+            commands,
+            VendorActivity::Failed {
+                detail: format!("failed to start the vendor worker: {error}"),
+            },
+        );
+    }
+}
+
+fn run_vendor_task(
+    commands: &CommandSender,
+    config: &EngineConfig,
+    tools_slot: &Mutex<Option<CurrentTools>>,
+    cancelled: &AtomicBool,
+    task: VendorTask,
+) {
+    match task {
+        VendorTask::Install => match run_vendor_install(commands, config, cancelled) {
+            Ok(()) => {
+                refresh_discovered_tools(commands, config, tools_slot);
+                submit_vendor_activity(commands, VendorActivity::Idle);
+            }
+            // A cancelled install is not a failure: the previous tools are
+            // untouched, so the activity simply returns to rest.
+            Err(InstallError::Cancelled) => submit_vendor_activity(commands, VendorActivity::Idle),
+            Err(InstallError::Failed(detail)) => {
+                submit_vendor_activity(commands, VendorActivity::Failed { detail });
+            }
+        },
+        VendorTask::Check => {
+            refresh_discovered_tools(commands, config, tools_slot);
+            submit_vendor_activity(commands, VendorActivity::Idle);
+        }
+    }
+}
+
+fn run_vendor_install(
+    commands: &CommandSender,
+    config: &EngineConfig,
+    cancelled: &AtomicBool,
+) -> Result<(), InstallError> {
+    if matches!(config.tools, ToolsConfig::Fixed(_)) {
+        return Err(InstallError::Failed(
+            "this engine instance runs with a fixed tool set".to_owned(),
+        ));
+    }
+    let Some(manifest) = manifest::current() else {
+        return Err(InstallError::Failed(
+            "no pinned FFmpeg build exists for this platform".to_owned(),
+        ));
+    };
+    let fetch = HttpFetch::new().map_err(InstallError::Failed)?;
+    let mut last_reported: u64 = 0;
+    let mut progress = |event: InstallProgress| match event {
+        InstallProgress::Downloading { received, total } => {
+            let complete = total.is_some_and(|total| received >= total);
+            if received.saturating_sub(last_reported) >= VENDOR_PROGRESS_STEP_BYTES || complete {
+                last_reported = received;
+                submit_vendor_activity(commands, VendorActivity::Downloading { received, total });
+            }
+        }
+        InstallProgress::Installing => {
+            submit_vendor_activity(commands, VendorActivity::Installing);
+        }
+    };
+    vendor_install::install(
+        &config.vendor_root,
+        manifest,
+        &fetch,
+        &mut progress,
+        cancelled,
+    )
+    .map(|_metadata| ())
+}
+
+/// Re-runs discovery, publishes the result, and updates the shared slot the
+/// next session snapshots. Discovery reads the freshly written
+/// `current.json`, so a successful install becomes active tools without
+/// trusting anything but the on-disk record — and explicit env overrides
+/// still win.
+fn refresh_discovered_tools(
+    commands: &CommandSender,
+    config: &EngineConfig,
+    tools_slot: &Mutex<Option<CurrentTools>>,
+) {
+    let report = match &config.tools {
+        ToolsConfig::Discover => discovery::discover(&config.vendor_root),
+        ToolsConfig::Fixed(tools) => DiscoveryReport {
+            tools: tools.clone(),
+            update_available: false,
+        },
+    };
+    let current = match &report.tools {
+        DiscoveredTools::Available(current) => Some(current.clone()),
+        DiscoveredTools::Missing { .. } => None,
+    };
+    {
+        let mut slot = match tools_slot.lock() {
+            Ok(slot) => slot,
+            Err(poisoned) => poisoned.into_inner(),
+        };
+        *slot = current;
+    }
+    match commands.submit(Command::System(SystemCommand::ToolsDiscovered {
+        availability: report.tools.availability(),
+        update_available: report.update_available,
+    })) {
+        Ok(Reply::Accepted) => {}
+        Ok(reply) => eprintln!("tool rediscovery report was not accepted: {reply:?}"),
+        Err(error) => eprintln!("failed to report rediscovered tools: {error}"),
+    }
+}
+
+fn submit_vendor_activity(commands: &CommandSender, activity: VendorActivity) {
+    match commands.submit(Command::System(SystemCommand::VendorProgress { activity })) {
+        Ok(Reply::Accepted) => {}
+        Ok(reply) => eprintln!("vendor progress report was not accepted: {reply:?}"),
+        Err(error) => eprintln!("failed to report vendor progress: {error}"),
     }
 }
 

@@ -88,7 +88,7 @@ fn run_install(
         vendor_root,
         manifest,
         &ArchiveFetch { archive },
-        &mut |_received, _total| {},
+        &mut |_progress| {},
         &cancelled,
     )
 }
@@ -224,7 +224,7 @@ fn cancellation_before_the_download_leaves_nothing_behind() {
         vendor.path(),
         &manifest,
         &ArchiveFetch { archive },
-        &mut |_received, _total| {},
+        &mut |_progress| {},
         &cancelled,
     );
     assert_eq!(result.unwrap_err(), InstallError::Cancelled);

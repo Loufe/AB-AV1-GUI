@@ -2,6 +2,7 @@ use std::path::PathBuf;
 
 use crfty_core::{
     AnalysisIntent, Operation, OutputTarget, QueueCommand, QueueItemId, SessionCommand, Settings,
+    VendorCommand,
 };
 use serde::Serialize;
 use tauri::{State, ipc::Channel};
@@ -88,6 +89,18 @@ fn set_settings(bridge: State<'_, Bridge>, settings: Settings) -> Result<(), Com
     bridge.submit_settings(settings)
 }
 
+#[tauri::command]
+#[specta::specta]
+fn vendor_install(bridge: State<'_, Bridge>) -> Result<(), CommandError> {
+    bridge.submit_vendor(VendorCommand::Install)
+}
+
+#[tauri::command]
+#[specta::specta]
+fn vendor_check(bridge: State<'_, Bridge>) -> Result<(), CommandError> {
+    bridge.submit_vendor(VendorCommand::Check)
+}
+
 /// The complete command/event surface, shared by the running app and the
 /// bindings-export test so the two can never drift.
 #[must_use]
@@ -102,5 +115,7 @@ pub fn specta_builder() -> Builder<tauri::Wry> {
         stop_after_current,
         force_stop,
         set_settings,
+        vendor_install,
+        vendor_check,
     ])
 }
