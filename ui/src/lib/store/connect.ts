@@ -64,6 +64,13 @@ export function applyPayload(payload: StreamPayload_Deserialize): void {
       console.warn("command rejected by the engine", delta.CommandRejected.reason);
       return;
     }
+    if ("QueueAddSummary" in delta && delta.QueueAddSummary !== undefined) {
+      // Routine outcome of every add, not an error: one neutral line.
+      const { added, skipped } = delta.QueueAddSummary;
+      const skippedCount = skipped.reduce((total, [, count]) => total + count, 0);
+      toast(skippedCount > 0 ? `Added ${added} · Skipped ${skippedCount}` : `Added ${added}`);
+      return;
+    }
     if ("ToolsChanged" in delta && delta.ToolsChanged !== undefined) {
       const tools = delta.ToolsChanged;
       appStore.setState((state) => ({ ...state, tools }));

@@ -13,14 +13,14 @@ use crate::{
     FileRecord, FileStamp, FileSystemFacts, FileSystemId, FileTimeNs, ItemOutcome,
     JOURNAL_SCHEMA_VERSION, JobAction, JobPhase, JobProgress, JournalEnvelope, JournalSequence,
     MediaContainer, MediaObservation, Operation, OutputDelta, OutputRecoveryAction, OutputState,
-    OutputTarget, OutputTransaction, PathBinding, PathHash, PhaseSpan, QueueCommand, QueueItemId,
-    QueueItemState, Replacement, Reply, RunId, SearchMeasurement, SessionCommand, SessionState,
-    Settings, SettingsCommand, SkipReason, StreamByteSizes, SystemCommand, Telemetry,
-    ToolAvailability, ToolRevisions, ToolSource, ToolsState, UnixMillis, VendorActivity,
-    VendorCommand, VideoCodec, VideoMeta, VmafScore, VmafTarget, WorkerCommand, apply,
-    compaction_due, compaction_quiescent, corruption_signature, encode_record, encode_snapshot,
-    evaluate_eligibility, permitted_profiles, recover_output, replay, select_analysis,
-    select_job_action,
+    OutputTarget, OutputTransaction, OverwriteDecision, PathBinding, PathHash, PhaseSpan,
+    QueueAddRequest, QueueCommand, QueueItemId, QueueItemState, Replacement, Reply, RunId,
+    SearchMeasurement, SessionCommand, SessionState, Settings, SettingsCommand, SkipReason,
+    StreamByteSizes, SystemCommand, Telemetry, ToolAvailability, ToolRevisions, ToolSource,
+    ToolsState, UnixMillis, VendorActivity, VendorCommand, VideoCodec, VideoMeta, VmafScore,
+    VmafTarget, WorkerCommand, apply, compaction_due, compaction_quiescent, corruption_signature,
+    encode_record, encode_snapshot, evaluate_eligibility, permitted_profiles, recover_output,
+    replay, select_analysis, select_job_action,
 };
 
 fn revisions() -> ToolRevisions {
@@ -453,13 +453,24 @@ fn vendor_progress_and_discovery_compose_without_clobbering_each_other() {
 }
 
 fn add_command(item_id: QueueItemId, input: impl Into<PathBuf>) -> Command {
-    Command::Queue(QueueCommand::Add {
+    Command::Queue(QueueCommand::AddMany {
+        requests: vec![add_request(item_id, input)],
+    })
+}
+
+/// A convert add with no enqueue facts: absent facts fail open, so the item
+/// always enqueues (unless its path is already queued).
+fn add_request(item_id: QueueItemId, input: impl Into<PathBuf>) -> QueueAddRequest {
+    QueueAddRequest {
         item_id,
         input: input.into(),
+        path_hash: None,
+        stamp: None,
         operation: Operation::Convert,
         intent: AnalysisIntent::ReuseIfFresh,
         output_target: OutputTarget::Replace,
-    })
+        overwrite: OverwriteDecision::FollowSettings,
+    }
 }
 
 fn identity(name: &str, size: u64) -> ArtifactIdentity {
@@ -685,7 +696,10 @@ fn durable_analysis_is_selected_for_the_same_content_and_profile() {
 fn reorder_fixture() -> AppState {
     let mut state = AppState::default();
     for id in 1..=5 {
-        let added = apply(&mut state, add_command(QueueItemId(id), "video.mkv"));
+        let added = apply(
+            &mut state,
+            add_command(QueueItemId(id), format!("video-{id}.mkv")),
+        );
         assert_eq!(added.reply, Reply::Accepted);
     }
     let start = start_session(&mut state);
@@ -856,7 +870,10 @@ fn reorder_destinations_around_active_pending_and_finished_items() {
 fn reorder_of_the_only_pending_item_above_active_is_a_no_op() {
     let mut state = AppState::default();
     for id in 1..=3 {
-        let added = apply(&mut state, add_command(QueueItemId(id), "video.mkv"));
+        let added = apply(
+            &mut state,
+            add_command(QueueItemId(id), format!("video-{id}.mkv")),
+        );
         assert_eq!(added.reply, Reply::Accepted);
     }
     let start = start_session(&mut state);
@@ -1561,6 +1578,7 @@ fn journal_ignores_only_an_unterminated_final_record() {
             operation: Operation::Convert,
             intent: AnalysisIntent::ReuseIfFresh,
             output_target: OutputTarget::Replace,
+            overwrite: OverwriteDecision::FollowSettings,
             state: QueueItemState::Queued,
         },
     };
@@ -1596,6 +1614,7 @@ fn journal_degrades_on_nonfinal_corruption() {
                 operation: Operation::Convert,
                 intent: AnalysisIntent::ReuseIfFresh,
                 output_target: OutputTarget::Replace,
+                overwrite: OverwriteDecision::FollowSettings,
                 state: QueueItemState::Queued,
             },
         }],
@@ -1707,6 +1726,7 @@ fn queue_added_delta(id: u64, name: &str) -> DurableDelta {
             operation: Operation::Convert,
             intent: AnalysisIntent::ReuseIfFresh,
             output_target: OutputTarget::Replace,
+            overwrite: OverwriteDecision::FollowSettings,
             state: QueueItemState::Queued,
         },
     }
@@ -1904,6 +1924,7 @@ fn replay_rejects_an_entire_semantically_invalid_batch() {
                     operation: Operation::Convert,
                     intent: AnalysisIntent::ReuseIfFresh,
                     output_target: OutputTarget::Replace,
+                    overwrite: OverwriteDecision::FollowSettings,
                     state: QueueItemState::Queued,
                 },
             },
@@ -2880,6 +2901,143 @@ fn enqueue_time_skip_reasons_are_never_terminal_outcomes() {
 }
 
 #[test]
+fn add_many_judges_each_request_and_reports_one_summary() {
+    // A fresh-bound path whose content carries a Converted verdict — the
+    // enqueue tier's ProbableDuplicate case.
+    let (durable, path_hash, stamp) = enqueue_fixture(Some(converted_verdict(RunId(9))));
+    let mut state = AppState {
+        durable,
+        ..AppState::default()
+    };
+    let batch = Command::Queue(QueueCommand::AddMany {
+        requests: vec![
+            // Fresh binding + decisive verdict: filtered at add.
+            QueueAddRequest {
+                path_hash: Some(path_hash.clone()),
+                stamp: Some(stamp.clone()),
+                ..add_request(QueueItemId(1), "known.mkv")
+            },
+            // No enqueue facts: fails open and enqueues.
+            add_request(QueueItemId(2), "new.mkv"),
+            // Same path as a request accepted earlier in this batch.
+            add_request(QueueItemId(3), "new.mkv"),
+            // Refresh bypasses the verdict skip even on the known content.
+            QueueAddRequest {
+                path_hash: Some(path_hash),
+                stamp: Some(stamp),
+                intent: AnalysisIntent::Refresh,
+                ..add_request(QueueItemId(4), "known-again.mkv")
+            },
+        ],
+    });
+    let applied = apply(&mut state, batch);
+    assert_eq!(applied.reply, Reply::Accepted);
+    let added_ids: Vec<QueueItemId> = state.durable.queue.iter().map(|item| item.id).collect();
+    assert_eq!(added_ids, vec![QueueItemId(2), QueueItemId(4)]);
+    assert_eq!(
+        applied.ephemeral,
+        vec![EphemeralDelta::QueueAddSummary {
+            added: 2,
+            skipped: vec![
+                (
+                    SkipReason::ProbableDuplicate {
+                        source_run: RunId(9)
+                    },
+                    1
+                ),
+                (SkipReason::AlreadyQueued, 1),
+            ],
+        }]
+    );
+}
+
+#[test]
+fn add_many_skips_a_queued_path_until_it_finishes() {
+    let mut state = AppState::default();
+    let first = apply(&mut state, add_command(QueueItemId(1), "video.mkv"));
+    assert_eq!(first.reply, Reply::Accepted);
+    // The path is pending: a re-add counts into the summary and adds nothing.
+    let readd = apply(&mut state, add_command(QueueItemId(2), "video.mkv"));
+    assert_eq!(readd.reply, Reply::Accepted);
+    assert!(readd.durable.is_empty());
+    assert_eq!(
+        readd.ephemeral,
+        vec![EphemeralDelta::QueueAddSummary {
+            added: 0,
+            skipped: vec![(SkipReason::AlreadyQueued, 1)],
+        }]
+    );
+    // Once the standing item is finished, the same path enqueues again.
+    state.durable.queue[0].state = QueueItemState::Finished(ItemOutcome::Stopped);
+    let after_finish = apply(&mut state, add_command(QueueItemId(3), "video.mkv"));
+    assert_eq!(after_finish.durable.len(), 1);
+    assert_eq!(state.durable.queue.len(), 2);
+}
+
+#[test]
+fn add_many_rejects_the_whole_batch_on_an_item_id_collision() {
+    let mut state = AppState::default();
+    let _first = apply(&mut state, add_command(QueueItemId(1), "one.mkv"));
+    for requests in [
+        vec![add_request(QueueItemId(1), "two.mkv")],
+        vec![
+            add_request(QueueItemId(2), "two.mkv"),
+            add_request(QueueItemId(2), "three.mkv"),
+        ],
+    ] {
+        let applied = apply(
+            &mut state,
+            Command::Queue(QueueCommand::AddMany { requests }),
+        );
+        assert!(matches!(applied.reply, Reply::Rejected { .. }));
+        assert!(applied.durable.is_empty());
+    }
+    assert_eq!(state.durable.queue.len(), 1);
+}
+
+#[test]
+fn add_many_is_allowed_while_a_session_runs() {
+    let mut state = active_state();
+    assert_eq!(state.session, SessionState::Running);
+    let applied = apply(&mut state, add_command(QueueItemId(9), "late.mkv"));
+    assert_eq!(applied.reply, Reply::Accepted);
+    assert_eq!(applied.durable.len(), 1);
+}
+
+#[test]
+fn prepare_resolves_overwrite_from_the_item_not_the_settings() {
+    let cases = [
+        (OverwriteDecision::FollowSettings, true, true),
+        (OverwriteDecision::FollowSettings, false, false),
+        (OverwriteDecision::Allow, false, true),
+        (OverwriteDecision::Deny, true, false),
+    ];
+    for (decision, settings_overwrite, expected) in cases {
+        let mut state = AppState::default();
+        state.settings.output.overwrite_existing = settings_overwrite;
+        let added = apply(
+            &mut state,
+            Command::Queue(QueueCommand::AddMany {
+                requests: vec![QueueAddRequest {
+                    overwrite: decision,
+                    ..add_request(QueueItemId(1), "video.mkv")
+                }],
+            }),
+        );
+        assert_eq!(added.reply, Reply::Accepted);
+        let _started = start_session(&mut state);
+        let claimed = reserve_and_prepare(&mut state, ClaimId(2), RunId(3), execution());
+        let Reply::Claimed(Some(job)) = claimed.reply else {
+            panic!("expected a claim for {decision:?}");
+        };
+        assert_eq!(
+            job.spec.execution.overwrite_existing, expected,
+            "{decision:?} under overwrite_existing={settings_overwrite}"
+        );
+    }
+}
+
+#[test]
 fn refresh_intent_forces_a_new_search_over_a_qualifying_cached_analysis() {
     let mut record = FileRecord::new(media_observation("refresh-content").metadata);
     record.record_analysis(analysis());
@@ -2970,12 +3128,11 @@ fn refresh_intent_forces_a_new_search_over_a_qualifying_cached_analysis() {
         &mut state,
         &mut bytes,
         &mut sequence,
-        Command::Queue(QueueCommand::Add {
-            item_id: QueueItemId(4),
-            input: PathBuf::from("video.mkv"),
-            operation: Operation::Convert,
-            intent: AnalysisIntent::Refresh,
-            output_target: OutputTarget::Replace,
+        Command::Queue(QueueCommand::AddMany {
+            requests: vec![QueueAddRequest {
+                intent: AnalysisIntent::Refresh,
+                ..add_request(QueueItemId(4), "video.mkv")
+            }],
         }),
     );
     let _reserved = apply_and_journal(

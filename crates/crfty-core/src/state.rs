@@ -5,8 +5,8 @@ use serde::{Deserialize, Serialize};
 use crate::{
     AnalysisAttempt, AnalysisIntent, AnalysisResult, ContentKey, DecodeMode, DurationMs,
     FailureFacts, FileRecord, JobPhase, JobSpec, MediaObservation, Operation, OutputDelta,
-    OutputTarget, PathBinding, PathHash, ReservedJob, Settings, SkipReason, ToolRevisions,
-    UnixMillis, Verdict, VerdictKind,
+    OutputTarget, OverwriteDecision, PathBinding, PathHash, ReservedJob, Settings, SkipReason,
+    ToolRevisions, UnixMillis, Verdict, VerdictKind,
 };
 
 macro_rules! numeric_id {
@@ -40,6 +40,7 @@ pub struct QueueItem {
     pub operation: Operation,
     pub intent: AnalysisIntent,
     pub output_target: OutputTarget,
+    pub overwrite: OverwriteDecision,
     pub state: QueueItemState,
 }
 

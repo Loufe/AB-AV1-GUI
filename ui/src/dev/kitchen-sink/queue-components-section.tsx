@@ -35,6 +35,7 @@ function item(
     operation,
     intent: "ReuseIfFresh",
     output_target: operation === "Convert" ? "Replace" : { Suffix: { suffix: "_av1" } },
+    overwrite: "FollowSettings",
     state,
   };
 }

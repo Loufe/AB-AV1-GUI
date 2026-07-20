@@ -17,10 +17,26 @@ use std::{
 use crfty_core::{
     AnalysisIntent, AnalysisProfile, AnalysisResult, AppState, ClaimId, Command, Crf,
     EphemeralDelta, ExecutionSettings, ItemOutcome, MediaTool, Operation, OutputDelta,
-    OutputTarget, QueueCommand, QueueItemId, QueueItemState, Replacement, Reply, RunId,
-    SearchMeasurement, SessionCommand, Settings, SettingsCommand, ToolAvailability, ToolRevisions,
-    ToolSource, ToolsState, UnixMillis, VmafScore, WorkerCommand, apply,
+    OutputTarget, OverwriteDecision, QueueAddRequest, QueueCommand, QueueItemId, QueueItemState,
+    Replacement, Reply, RunId, SearchMeasurement, SessionCommand, Settings, SettingsCommand,
+    ToolAvailability, ToolRevisions, ToolSource, ToolsState, UnixMillis, VmafScore, WorkerCommand,
+    apply,
 };
+
+fn add_one(item_id: QueueItemId, input: PathBuf) -> QueueCommand {
+    QueueCommand::AddMany {
+        requests: vec![QueueAddRequest {
+            item_id,
+            input,
+            path_hash: None,
+            stamp: None,
+            operation: Operation::Convert,
+            intent: AnalysisIntent::ReuseIfFresh,
+            output_target: OutputTarget::Replace,
+            overwrite: OverwriteDecision::FollowSettings,
+        }],
+    }
+}
 use crfty_engine::{
     ab_av1::AB_AV1_REVISION,
     coordinator::{EngineConfig, EngineRuntime, ToolsConfig},
@@ -119,13 +135,10 @@ fn startup_without_tools_replays_and_serves_non_media_commands() {
     assert_eq!(
         seeder
             .commands
-            .submit(Command::Queue(QueueCommand::Add {
-                item_id: QueueItemId(1),
-                input: PathBuf::from("video.mkv"),
-                operation: Operation::Convert,
-                intent: AnalysisIntent::ReuseIfFresh,
-                output_target: OutputTarget::Replace,
-            }))
+            .submit(Command::Queue(add_one(
+                QueueItemId(1),
+                PathBuf::from("video.mkv"),
+            )))
             .expect("seed add reply"),
         Reply::Accepted
     );
@@ -162,13 +175,7 @@ fn startup_without_tools_replays_and_serves_non_media_commands() {
     assert_eq!(
         engine
             .commands
-            .submit_queue(QueueCommand::Add {
-                item_id: QueueItemId(2),
-                input: PathBuf::from("another.mkv"),
-                operation: Operation::Convert,
-                intent: AnalysisIntent::ReuseIfFresh,
-                output_target: OutputTarget::Replace,
-            })
+            .submit_queue(add_one(QueueItemId(2), PathBuf::from("another.mkv")))
             .expect("tool-free add reply"),
         Reply::Accepted
     );
@@ -233,13 +240,7 @@ fn startup_recovery_without_ffprobe_defers_output_settlement() {
     let mut state = AppState::default();
     let mut durable = Vec::new();
     for command in [
-        Command::Queue(QueueCommand::Add {
-            item_id: QueueItemId(1),
-            input: input.clone(),
-            operation: Operation::Convert,
-            intent: AnalysisIntent::ReuseIfFresh,
-            output_target: OutputTarget::Replace,
-        }),
+        Command::Queue(add_one(QueueItemId(1), input.clone())),
         Command::System(crfty_core::SystemCommand::ToolsDiscovered {
             availability: fixture_available(),
             update_available: false,

@@ -19,9 +19,10 @@ use crfty_core::{
     DecodePreference, DestructiveIdentity, DiagnosticTail, DurableDelta, DurableState, DurationMs,
     ExecutionSettings, FailureFacts, FailureKind, FileStamp, FileSystemId, FileTimeNs, ItemOutcome,
     JobAction, JobPhase, JobSpec, MediaContainer, MediaObservation, Operation, OutputDelta,
-    OutputState, OutputTarget, OutputTransaction, PathBinding, PathHash, PhaseSpan, QueueItem,
-    QueueItemId, QueueItemState, Replacement, ReservedJob, RunId, SearchMeasurement, SkipReason,
-    StreamByteSizes, UnixMillis, VideoCodec, VideoMeta, VmafScore, VmafTarget, fold,
+    OutputState, OutputTarget, OutputTransaction, OverwriteDecision, PathBinding, PathHash,
+    PhaseSpan, QueueItem, QueueItemId, QueueItemState, Replacement, ReservedJob, RunId,
+    SearchMeasurement, SkipReason, StreamByteSizes, UnixMillis, VideoCodec, VideoMeta, VmafScore,
+    VmafTarget, fold,
 };
 use serde::Serialize;
 
@@ -57,6 +58,10 @@ fn scenario(name: &'static str, prelude: Vec<DurableDelta>, deltas: Vec<DurableD
 }
 
 fn added(id: u64) -> DurableDelta {
+    added_with_overwrite(id, OverwriteDecision::FollowSettings)
+}
+
+fn added_with_overwrite(id: u64, overwrite: OverwriteDecision) -> DurableDelta {
     DurableDelta::QueueAdded {
         item: QueueItem {
             id: QueueItemId(id),
@@ -64,6 +69,7 @@ fn added(id: u64) -> DurableDelta {
             operation: Operation::Convert,
             intent: AnalysisIntent::ReuseIfFresh,
             output_target: OutputTarget::Replace,
+            overwrite,
             state: QueueItemState::Queued,
         },
     }
@@ -324,6 +330,14 @@ fn convert_prelude(key: &str) -> Vec<DurableDelta> {
 fn scenarios() -> Vec<Scenario> {
     vec![
         scenario("queue_added", vec![], vec![added(1), added(2)]),
+        scenario(
+            "queue_added_overwrite_decisions",
+            vec![],
+            vec![
+                added_with_overwrite(1, OverwriteDecision::Allow),
+                added_with_overwrite(2, OverwriteDecision::Deny),
+            ],
+        ),
         scenario(
             "queue_removed",
             vec![added(1), added(2), added(3)],

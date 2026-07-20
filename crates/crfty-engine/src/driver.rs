@@ -725,10 +725,25 @@ mod tests {
     use crfty_core::{
         AnalysisIntent, AnalysisProfile, ClaimId, Command, ConfigDelta, DurableDelta, Effect,
         EphemeralDelta, ExecutionSettings, ItemOutcome, JobPhase, JobProgress, Operation,
-        OutputTarget, QueueCommand, QueueItemId, Reply, RunId, SessionCommand, SessionState,
-        Settings, SettingsCommand, SystemCommand, Telemetry, ToolAvailability, ToolRevisions,
-        UnixMillis, WorkerCommand, apply,
+        OutputTarget, OverwriteDecision, QueueAddRequest, QueueCommand, QueueItemId, Reply, RunId,
+        SessionCommand, SessionState, Settings, SettingsCommand, SystemCommand, Telemetry,
+        ToolAvailability, ToolRevisions, UnixMillis, WorkerCommand, apply,
     };
+
+    fn add_command(id: u64, input: &str) -> Command {
+        Command::Queue(QueueCommand::AddMany {
+            requests: vec![QueueAddRequest {
+                item_id: QueueItemId(id),
+                input: PathBuf::from(input),
+                path_hash: None,
+                stamp: None,
+                operation: Operation::Convert,
+                intent: AnalysisIntent::ReuseIfFresh,
+                output_target: OutputTarget::Replace,
+                overwrite: OverwriteDecision::FollowSettings,
+            }],
+        })
+    }
 
     use super::{
         AppState, ConfigSink, DriverEvent, DriverPersistence, Envelope, JournalError, JournalSink,
@@ -766,13 +781,7 @@ mod tests {
     fn journal_failure_emits_no_durable_delta_and_stops_driver() {
         let (reply_tx, reply_rx) = mpsc::sync_channel(1);
         let envelope = Envelope {
-            command: Command::Queue(QueueCommand::Add {
-                item_id: QueueItemId(1),
-                input: PathBuf::from("video.mkv"),
-                operation: Operation::Convert,
-                intent: AnalysisIntent::ReuseIfFresh,
-                output_target: OutputTarget::Replace,
-            }),
+            command: add_command(1, "video.mkv"),
             reply: reply_tx,
         };
         let (event_tx, event_rx) = mpsc::channel();
@@ -824,13 +833,7 @@ mod tests {
         };
         let mut state = AppState::default();
         for command in [
-            Command::Queue(QueueCommand::Add {
-                item_id: QueueItemId(1),
-                input: PathBuf::from("video.mkv"),
-                operation: Operation::Convert,
-                intent: AnalysisIntent::ReuseIfFresh,
-                output_target: OutputTarget::Replace,
-            }),
+            add_command(1, "video.mkv"),
             Command::System(SystemCommand::ToolsDiscovered {
                 availability: ToolAvailability::Available {
                     source: crfty_core::ToolSource::System,
@@ -1014,16 +1017,7 @@ mod tests {
     }
 
     fn add_item(state: &mut AppState, id: u64) -> Vec<DurableDelta> {
-        let applied = apply(
-            state,
-            Command::Queue(QueueCommand::Add {
-                item_id: QueueItemId(id),
-                input: PathBuf::from(format!("video-{id}.mkv")),
-                operation: Operation::Convert,
-                intent: AnalysisIntent::ReuseIfFresh,
-                output_target: OutputTarget::Replace,
-            }),
-        );
+        let applied = apply(state, add_command(id, &format!("video-{id}.mkv")));
         assert_eq!(applied.reply, Reply::Accepted);
         applied.durable
     }
@@ -1223,13 +1217,7 @@ mod tests {
         };
         let settings = Settings::default();
         let groups = split_batch_at_settings(vec![
-            envelope(Command::Queue(QueueCommand::Add {
-                item_id: QueueItemId(1),
-                input: PathBuf::from("one.mkv"),
-                operation: Operation::Convert,
-                intent: AnalysisIntent::ReuseIfFresh,
-                output_target: OutputTarget::Replace,
-            })),
+            envelope(add_command(1, "one.mkv")),
             envelope(Command::Settings(SettingsCommand::Set {
                 settings: settings.clone(),
             })),

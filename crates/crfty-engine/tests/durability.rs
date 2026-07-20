@@ -15,10 +15,10 @@ use crfty_core::{
     AnalysisIntent, AnalysisProfile, AnalysisResult, AppState, ArtifactIdentity, ClaimId, Command,
     Crf, DestructiveIdentity, DurableDelta, DurableState, EphemeralDelta, ExecutionSettings,
     FailureFacts, FailureKind, ItemOutcome, JobPhase, JobProgress, Operation, OutputDelta,
-    OutputTarget, QueueCommand, QueueItemId, Replacement, Reply, RunId, SearchMeasurement,
-    SessionCommand, Settings, SettingsCommand, SystemCommand, Telemetry, ToolAvailability,
-    ToolRevisions, ToolSource, UnixMillis, VmafScore, WorkerCommand, apply, corruption_signature,
-    fold, replay,
+    OutputTarget, OverwriteDecision, QueueAddRequest, QueueCommand, QueueItemId, Replacement,
+    Reply, RunId, SearchMeasurement, SessionCommand, Settings, SettingsCommand, SystemCommand,
+    Telemetry, ToolAvailability, ToolRevisions, ToolSource, UnixMillis, VmafScore, WorkerCommand,
+    apply, corruption_signature, fold, replay,
 };
 use crfty_engine::{
     coordinator::{EngineConfig, EngineRuntime, ToolsConfig},
@@ -66,12 +66,21 @@ fn fixture_available() -> ToolAvailability {
 }
 
 fn add(item_id: QueueItemId) -> Command {
-    Command::Queue(QueueCommand::Add {
-        item_id,
-        input: PathBuf::from("video.mkv"),
-        operation: Operation::Convert,
-        intent: AnalysisIntent::ReuseIfFresh,
-        output_target: OutputTarget::Replace,
+    add_input(item_id, PathBuf::from(format!("video-{}.mkv", item_id.0)))
+}
+
+fn add_input(item_id: QueueItemId, input: PathBuf) -> Command {
+    Command::Queue(QueueCommand::AddMany {
+        requests: vec![QueueAddRequest {
+            item_id,
+            input,
+            path_hash: None,
+            stamp: None,
+            operation: Operation::Convert,
+            intent: AnalysisIntent::ReuseIfFresh,
+            output_target: OutputTarget::Replace,
+            overwrite: OverwriteDecision::FollowSettings,
+        }],
     })
 }
 
@@ -133,6 +142,7 @@ fn journal_records_replay() {
             operation: Operation::Convert,
             intent: AnalysisIntent::ReuseIfFresh,
             output_target: OutputTarget::Replace,
+            overwrite: OverwriteDecision::FollowSettings,
             state: crfty_core::QueueItemState::Queued,
         },
     };
@@ -151,6 +161,7 @@ fn queue_added(id: QueueItemId) -> DurableDelta {
             operation: Operation::Convert,
             intent: AnalysisIntent::ReuseIfFresh,
             output_target: OutputTarget::Replace,
+            overwrite: OverwriteDecision::FollowSettings,
             state: crfty_core::QueueItemState::Queued,
         },
     }
@@ -323,6 +334,7 @@ fn journal_group_commit_is_one_atomic_replay_record() {
                 operation: Operation::Convert,
                 intent: AnalysisIntent::ReuseIfFresh,
                 output_target: OutputTarget::Replace,
+                overwrite: OverwriteDecision::FollowSettings,
                 state: crfty_core::QueueItemState::Queued,
             },
         })
@@ -356,6 +368,16 @@ fn driver_persists_before_emitting_and_replays_after_restart() {
         .submit(add(QueueItemId(7)))
         .expect("driver reply");
     assert_eq!(reply, Reply::Accepted);
+    // Per-command emit order: ephemerals precede the durable deltas they
+    // summarize, matching the reducer's Applied partitions.
+    assert!(matches!(
+        driver
+            .events()
+            .expect("event receiver")
+            .recv()
+            .expect("summary event"),
+        DriverEvent::Ephemeral(EphemeralDelta::QueueAddSummary { added: 1, .. })
+    ));
     assert!(matches!(
         driver
             .events()
@@ -1036,13 +1058,7 @@ fn journal_active_output_run(
     let settings = execution();
     let run_id = transaction.run_id;
     let mut commands = vec![
-        Command::Queue(QueueCommand::Add {
-            item_id: QueueItemId(1),
-            input: input.to_path_buf(),
-            operation: Operation::Convert,
-            intent: AnalysisIntent::ReuseIfFresh,
-            output_target: OutputTarget::Replace,
-        }),
+        add_input(QueueItemId(1), input.to_path_buf()),
         Command::System(SystemCommand::ToolsDiscovered {
             availability: fixture_available(),
             update_available: false,
@@ -1251,12 +1267,17 @@ fn settled_success_journal(
     let mut state = AppState::default();
     let mut durable = Vec::new();
     let mut commands = vec![
-        Command::Queue(QueueCommand::Add {
-            item_id: QueueItemId(1),
-            input: input.clone(),
-            operation: Operation::Convert,
-            intent: AnalysisIntent::ReuseIfFresh,
-            output_target,
+        Command::Queue(QueueCommand::AddMany {
+            requests: vec![QueueAddRequest {
+                item_id: QueueItemId(1),
+                input: input.clone(),
+                path_hash: None,
+                stamp: None,
+                operation: Operation::Convert,
+                intent: AnalysisIntent::ReuseIfFresh,
+                output_target,
+                overwrite: OverwriteDecision::FollowSettings,
+            }],
         }),
         Command::System(SystemCommand::ToolsDiscovered {
             availability: fixture_available(),

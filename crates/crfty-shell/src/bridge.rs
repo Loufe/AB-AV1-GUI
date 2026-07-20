@@ -359,7 +359,9 @@ fn absorb(state: &mut StreamState, event: DriverEvent, next_item_id: &AtomicU64)
                 EphemeralDelta::TelemetryCleared { run_id } => {
                     state.telemetry.remove(run_id);
                 }
-                EphemeralDelta::WorkerCrashed { .. } | EphemeralDelta::CommandRejected { .. } => {}
+                EphemeralDelta::WorkerCrashed { .. }
+                | EphemeralDelta::CommandRejected { .. }
+                | EphemeralDelta::QueueAddSummary { .. } => {}
             }
             state.emit(StreamPayload::Ephemeral(delta));
         }

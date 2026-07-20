@@ -304,13 +304,22 @@ export type DurableState_Serialize = {
 /**  A duration in milliseconds, measured engine-side with a monotonic clock. */
 export type DurationMs = number;
 
-export type EphemeralDelta = ({ SessionChanged: SessionState }) & { CommandRejected?: never; Telemetry?: never; TelemetryCleared?: never; ToolsChanged?: never; WorkerCrashed?: never } | ({ Telemetry: Telemetry }) & { CommandRejected?: never; SessionChanged?: never; TelemetryCleared?: never; ToolsChanged?: never; WorkerCrashed?: never } | ({ TelemetryCleared: {
+export type EphemeralDelta = ({ SessionChanged: SessionState }) & { CommandRejected?: never; QueueAddSummary?: never; Telemetry?: never; TelemetryCleared?: never; ToolsChanged?: never; WorkerCrashed?: never } | ({ Telemetry: Telemetry }) & { CommandRejected?: never; QueueAddSummary?: never; SessionChanged?: never; TelemetryCleared?: never; ToolsChanged?: never; WorkerCrashed?: never } | ({ TelemetryCleared: {
 	run_id: RunId,
-} }) & { CommandRejected?: never; SessionChanged?: never; Telemetry?: never; ToolsChanged?: never; WorkerCrashed?: never } | ({ ToolsChanged: ToolsState }) & { CommandRejected?: never; SessionChanged?: never; Telemetry?: never; TelemetryCleared?: never; WorkerCrashed?: never } | ({ WorkerCrashed: {
+} }) & { CommandRejected?: never; QueueAddSummary?: never; SessionChanged?: never; Telemetry?: never; ToolsChanged?: never; WorkerCrashed?: never } | ({ ToolsChanged: ToolsState }) & { CommandRejected?: never; QueueAddSummary?: never; SessionChanged?: never; Telemetry?: never; TelemetryCleared?: never; WorkerCrashed?: never } | ({ WorkerCrashed: {
 	message: string,
-} }) & { CommandRejected?: never; SessionChanged?: never; Telemetry?: never; TelemetryCleared?: never; ToolsChanged?: never } | ({ CommandRejected: {
+} }) & { CommandRejected?: never; QueueAddSummary?: never; SessionChanged?: never; Telemetry?: never; TelemetryCleared?: never; ToolsChanged?: never } | ({ CommandRejected: {
 	reason: string,
-} }) & { SessionChanged?: never; Telemetry?: never; TelemetryCleared?: never; ToolsChanged?: never; WorkerCrashed?: never };
+} }) & { QueueAddSummary?: never; SessionChanged?: never; Telemetry?: never; TelemetryCleared?: never; ToolsChanged?: never; WorkerCrashed?: never } | 
+/**
+ *  Disposition counts for one [`QueueCommand::AddMany`] batch. Reasons
+ *  carry their payloads, so distinct payloads (different source runs)
+ *  count as separate entries — consumers sum across entries.
+ */
+({ QueueAddSummary: {
+	added: number,
+	skipped: ([SkipReason, number])[],
+} }) & { CommandRejected?: never; SessionChanged?: never; Telemetry?: never; TelemetryCleared?: never; ToolsChanged?: never; WorkerCrashed?: never };
 
 export type ExecutionSettings = {
 	requested_target: VmafTarget,
@@ -581,6 +590,15 @@ export type OutputTransaction_Serialize = {
 	state: OutputState_Serialize,
 };
 
+/**
+ *  Per-item override of the destination-conflict rule. `FollowSettings`
+ *  resolves from the output settings as they stand when the item is claimed;
+ *  `Allow` and `Deny` pin the item's behavior regardless of later settings
+ *  changes. This is how an `OutputExists` skip becomes resolvable without
+ *  touching an active job: edit the item to `Allow` and retry.
+ */
+export type OverwriteDecision = "FollowSettings" | "Allow" | "Deny";
+
 export type PathBinding = {
 	stamp: FileStamp,
 	content_key: ContentKey,
@@ -609,6 +627,7 @@ export type QueueItem = {
 	operation: Operation,
 	intent: AnalysisIntent,
 	output_target: OutputTarget,
+	overwrite: OverwriteDecision,
 	state: QueueItemState,
 };
 

@@ -19,6 +19,7 @@
               "operation": "Convert",
               "intent": "ReuseIfFresh",
               "output_target": "Replace",
+              "overwrite": "FollowSettings",
               "state": "Queued"
             }
           }
@@ -31,6 +32,7 @@
               "operation": "Convert",
               "intent": "ReuseIfFresh",
               "output_target": "Replace",
+              "overwrite": "FollowSettings",
               "state": "Queued"
             }
           }
@@ -44,6 +46,7 @@
             "operation": "Convert",
             "intent": "ReuseIfFresh",
             "output_target": "Replace",
+            "overwrite": "FollowSettings",
             "state": "Queued"
           },
           {
@@ -52,6 +55,71 @@
             "operation": "Convert",
             "intent": "ReuseIfFresh",
             "output_target": "Replace",
+            "overwrite": "FollowSettings",
+            "state": "Queued"
+          }
+        ],
+        "paths": {},
+        "records": {},
+        "outputs": {},
+        "conversion_runs": {}
+      }
+    },
+    {
+      "name": "queue_added_overwrite_decisions",
+      "initial": {
+        "queue": [],
+        "paths": {},
+        "records": {},
+        "outputs": {},
+        "conversion_runs": {}
+      },
+      "deltas": [
+        {
+          "QueueAdded": {
+            "item": {
+              "id": 1,
+              "input": "videos/input-1.mp4",
+              "operation": "Convert",
+              "intent": "ReuseIfFresh",
+              "output_target": "Replace",
+              "overwrite": "Allow",
+              "state": "Queued"
+            }
+          }
+        },
+        {
+          "QueueAdded": {
+            "item": {
+              "id": 2,
+              "input": "videos/input-2.mp4",
+              "operation": "Convert",
+              "intent": "ReuseIfFresh",
+              "output_target": "Replace",
+              "overwrite": "Deny",
+              "state": "Queued"
+            }
+          }
+        }
+      ],
+      "expected": {
+        "queue": [
+          {
+            "id": 1,
+            "input": "videos/input-1.mp4",
+            "operation": "Convert",
+            "intent": "ReuseIfFresh",
+            "output_target": "Replace",
+            "overwrite": "Allow",
+            "state": "Queued"
+          },
+          {
+            "id": 2,
+            "input": "videos/input-2.mp4",
+            "operation": "Convert",
+            "intent": "ReuseIfFresh",
+            "output_target": "Replace",
+            "overwrite": "Deny",
             "state": "Queued"
           }
         ],
@@ -71,6 +139,7 @@
             "operation": "Convert",
             "intent": "ReuseIfFresh",
             "output_target": "Replace",
+            "overwrite": "FollowSettings",
             "state": "Queued"
           },
           {
@@ -79,6 +148,7 @@
             "operation": "Convert",
             "intent": "ReuseIfFresh",
             "output_target": "Replace",
+            "overwrite": "FollowSettings",
             "state": "Queued"
           },
           {
@@ -87,6 +157,7 @@
             "operation": "Convert",
             "intent": "ReuseIfFresh",
             "output_target": "Replace",
+            "overwrite": "FollowSettings",
             "state": "Queued"
           }
         ],
@@ -110,6 +181,7 @@
             "operation": "Convert",
             "intent": "ReuseIfFresh",
             "output_target": "Replace",
+            "overwrite": "FollowSettings",
             "state": "Queued"
           },
           {
@@ -118,6 +190,7 @@
             "operation": "Convert",
             "intent": "ReuseIfFresh",
             "output_target": "Replace",
+            "overwrite": "FollowSettings",
             "state": "Queued"
           }
         ],
@@ -137,6 +210,7 @@
             "operation": "Convert",
             "intent": "ReuseIfFresh",
             "output_target": "Replace",
+            "overwrite": "FollowSettings",
             "state": "Queued"
           }
         ],
@@ -160,6 +234,7 @@
             "operation": "Convert",
             "intent": "ReuseIfFresh",
             "output_target": "Replace",
+            "overwrite": "FollowSettings",
             "state": "Queued"
           }
         ],
@@ -179,6 +254,7 @@
             "operation": "Convert",
             "intent": "ReuseIfFresh",
             "output_target": "Replace",
+            "overwrite": "FollowSettings",
             "state": "Queued"
           },
           {
@@ -187,6 +263,7 @@
             "operation": "Convert",
             "intent": "ReuseIfFresh",
             "output_target": "Replace",
+            "overwrite": "FollowSettings",
             "state": "Queued"
           },
           {
@@ -195,6 +272,7 @@
             "operation": "Convert",
             "intent": "ReuseIfFresh",
             "output_target": "Replace",
+            "overwrite": "FollowSettings",
             "state": "Queued"
           }
         ],
@@ -219,6 +297,7 @@
             "operation": "Convert",
             "intent": "ReuseIfFresh",
             "output_target": "Replace",
+            "overwrite": "FollowSettings",
             "state": "Queued"
           },
           {
@@ -227,6 +306,7 @@
             "operation": "Convert",
             "intent": "ReuseIfFresh",
             "output_target": "Replace",
+            "overwrite": "FollowSettings",
             "state": "Queued"
           },
           {
@@ -235,6 +315,7 @@
             "operation": "Convert",
             "intent": "ReuseIfFresh",
             "output_target": "Replace",
+            "overwrite": "FollowSettings",
             "state": "Queued"
           }
         ],
@@ -254,6 +335,7 @@
             "operation": "Convert",
             "intent": "ReuseIfFresh",
             "output_target": "Replace",
+            "overwrite": "FollowSettings",
             "state": "Queued"
           },
           {
@@ -262,6 +344,7 @@
             "operation": "Convert",
             "intent": "ReuseIfFresh",
             "output_target": "Replace",
+            "overwrite": "FollowSettings",
             "state": "Queued"
           },
           {
@@ -270,6 +353,7 @@
             "operation": "Convert",
             "intent": "ReuseIfFresh",
             "output_target": "Replace",
+            "overwrite": "FollowSettings",
             "state": "Queued"
           }
         ],
@@ -294,6 +378,7 @@
             "operation": "Convert",
             "intent": "ReuseIfFresh",
             "output_target": "Replace",
+            "overwrite": "FollowSettings",
             "state": "Queued"
           },
           {
@@ -302,6 +387,7 @@
             "operation": "Convert",
             "intent": "ReuseIfFresh",
             "output_target": "Replace",
+            "overwrite": "FollowSettings",
             "state": "Queued"
           },
           {
@@ -310,6 +396,7 @@
             "operation": "Convert",
             "intent": "ReuseIfFresh",
             "output_target": "Replace",
+            "overwrite": "FollowSettings",
             "state": "Queued"
           }
         ],
@@ -329,6 +416,7 @@
             "operation": "Convert",
             "intent": "ReuseIfFresh",
             "output_target": "Replace",
+            "overwrite": "FollowSettings",
             "state": "Queued"
           },
           {
@@ -337,6 +425,7 @@
             "operation": "Convert",
             "intent": "ReuseIfFresh",
             "output_target": "Replace",
+            "overwrite": "FollowSettings",
             "state": "Queued"
           },
           {
@@ -345,6 +434,7 @@
             "operation": "Convert",
             "intent": "ReuseIfFresh",
             "output_target": "Replace",
+            "overwrite": "FollowSettings",
             "state": "Queued"
           }
         ],
@@ -369,6 +459,7 @@
             "operation": "Convert",
             "intent": "ReuseIfFresh",
             "output_target": "Replace",
+            "overwrite": "FollowSettings",
             "state": "Queued"
           },
           {
@@ -377,6 +468,7 @@
             "operation": "Convert",
             "intent": "ReuseIfFresh",
             "output_target": "Replace",
+            "overwrite": "FollowSettings",
             "state": "Queued"
           },
           {
@@ -385,6 +477,7 @@
             "operation": "Convert",
             "intent": "ReuseIfFresh",
             "output_target": "Replace",
+            "overwrite": "FollowSettings",
             "state": "Queued"
           }
         ],
@@ -404,6 +497,7 @@
             "operation": "Convert",
             "intent": "ReuseIfFresh",
             "output_target": "Replace",
+            "overwrite": "FollowSettings",
             "state": "Queued"
           },
           {
@@ -412,6 +506,7 @@
             "operation": "Convert",
             "intent": "ReuseIfFresh",
             "output_target": "Replace",
+            "overwrite": "FollowSettings",
             "state": "Queued"
           }
         ],
@@ -436,6 +531,7 @@
             "operation": "Convert",
             "intent": "ReuseIfFresh",
             "output_target": "Replace",
+            "overwrite": "FollowSettings",
             "state": "Queued"
           },
           {
@@ -444,6 +540,7 @@
             "operation": "Convert",
             "intent": "ReuseIfFresh",
             "output_target": "Replace",
+            "overwrite": "FollowSettings",
             "state": "Queued"
           }
         ],
@@ -695,6 +792,7 @@
             "operation": "Convert",
             "intent": "ReuseIfFresh",
             "output_target": "Replace",
+            "overwrite": "FollowSettings",
             "state": "Queued"
           }
         ],
@@ -734,6 +832,7 @@
             "operation": "Convert",
             "intent": "ReuseIfFresh",
             "output_target": "Replace",
+            "overwrite": "FollowSettings",
             "state": {
               "Running": {
                 "claim_id": 10,
@@ -758,6 +857,7 @@
             "operation": "Convert",
             "intent": "ReuseIfFresh",
             "output_target": "Replace",
+            "overwrite": "FollowSettings",
             "state": "Queued"
           }
         ],
@@ -813,6 +913,7 @@
             "operation": "Convert",
             "intent": "ReuseIfFresh",
             "output_target": "Replace",
+            "overwrite": "FollowSettings",
             "state": {
               "Claimed": {
                 "claim_id": 10,
@@ -879,6 +980,7 @@
             "operation": "Convert",
             "intent": "ReuseIfFresh",
             "output_target": "Replace",
+            "overwrite": "FollowSettings",
             "state": "Queued"
           }
         ],
@@ -959,6 +1061,7 @@
             "operation": "Convert",
             "intent": "ReuseIfFresh",
             "output_target": "Replace",
+            "overwrite": "FollowSettings",
             "state": {
               "Claimed": {
                 "claim_id": 10,
@@ -1075,6 +1178,7 @@
             "operation": "Convert",
             "intent": "ReuseIfFresh",
             "output_target": "Replace",
+            "overwrite": "FollowSettings",
             "state": {
               "Claimed": {
                 "claim_id": 10,
@@ -1208,6 +1312,7 @@
             "operation": "Convert",
             "intent": "ReuseIfFresh",
             "output_target": "Replace",
+            "overwrite": "FollowSettings",
             "state": {
               "Claimed": {
                 "claim_id": 10,
@@ -1428,6 +1533,7 @@
             "operation": "Convert",
             "intent": "ReuseIfFresh",
             "output_target": "Replace",
+            "overwrite": "FollowSettings",
             "state": {
               "Claimed": {
                 "claim_id": 10,
@@ -1441,6 +1547,7 @@
             "operation": "Convert",
             "intent": "ReuseIfFresh",
             "output_target": "Replace",
+            "overwrite": "FollowSettings",
             "state": {
               "Claimed": {
                 "claim_id": 11,
@@ -1713,6 +1820,7 @@
             "operation": "Convert",
             "intent": "ReuseIfFresh",
             "output_target": "Replace",
+            "overwrite": "FollowSettings",
             "state": {
               "Claimed": {
                 "claim_id": 10,
@@ -1726,6 +1834,7 @@
             "operation": "Convert",
             "intent": "ReuseIfFresh",
             "output_target": "Replace",
+            "overwrite": "FollowSettings",
             "state": {
               "Claimed": {
                 "claim_id": 11,
@@ -2029,6 +2138,7 @@
             "operation": "Convert",
             "intent": "ReuseIfFresh",
             "output_target": "Replace",
+            "overwrite": "FollowSettings",
             "state": {
               "Running": {
                 "claim_id": 10,
@@ -2113,6 +2223,7 @@
             "operation": "Convert",
             "intent": "ReuseIfFresh",
             "output_target": "Replace",
+            "overwrite": "FollowSettings",
             "state": {
               "Finished": "Analyzed"
             }
@@ -2185,6 +2296,7 @@
             "operation": "Convert",
             "intent": "ReuseIfFresh",
             "output_target": "Replace",
+            "overwrite": "FollowSettings",
             "state": {
               "Running": {
                 "claim_id": 10,
@@ -2356,6 +2468,7 @@
             "operation": "Convert",
             "intent": "ReuseIfFresh",
             "output_target": "Replace",
+            "overwrite": "FollowSettings",
             "state": {
               "Finished": {
                 "Converted": {
@@ -2537,6 +2650,7 @@
             "operation": "Convert",
             "intent": "ReuseIfFresh",
             "output_target": "Replace",
+            "overwrite": "FollowSettings",
             "state": {
               "Running": {
                 "claim_id": 10,
@@ -2701,6 +2815,7 @@
             "operation": "Convert",
             "intent": "ReuseIfFresh",
             "output_target": "Replace",
+            "overwrite": "FollowSettings",
             "state": {
               "Finished": {
                 "Remuxed": {
@@ -2868,6 +2983,7 @@
             "operation": "Convert",
             "intent": "ReuseIfFresh",
             "output_target": "Replace",
+            "overwrite": "FollowSettings",
             "state": {
               "Running": {
                 "claim_id": 10,
@@ -3039,6 +3155,7 @@
             "operation": "Convert",
             "intent": "ReuseIfFresh",
             "output_target": "Replace",
+            "overwrite": "FollowSettings",
             "state": {
               "Finished": {
                 "Converted": {
@@ -3212,6 +3329,7 @@
             "operation": "Convert",
             "intent": "ReuseIfFresh",
             "output_target": "Replace",
+            "overwrite": "FollowSettings",
             "state": {
               "Running": {
                 "claim_id": 10,
@@ -3371,6 +3489,7 @@
             "operation": "Convert",
             "intent": "ReuseIfFresh",
             "output_target": "Replace",
+            "overwrite": "FollowSettings",
             "state": {
               "Finished": {
                 "Converted": "RecoveredAtStartup"
@@ -3528,6 +3647,7 @@
             "operation": "Convert",
             "intent": "ReuseIfFresh",
             "output_target": "Replace",
+            "overwrite": "FollowSettings",
             "state": {
               "Running": {
                 "claim_id": 10,
@@ -3655,6 +3775,7 @@
             "operation": "Convert",
             "intent": "ReuseIfFresh",
             "output_target": "Replace",
+            "overwrite": "FollowSettings",
             "state": {
               "Finished": {
                 "Failed": {
@@ -3776,6 +3897,7 @@
             "operation": "Convert",
             "intent": "ReuseIfFresh",
             "output_target": "Replace",
+            "overwrite": "FollowSettings",
             "state": {
               "Running": {
                 "claim_id": 10,
@@ -3917,6 +4039,7 @@
             "operation": "Convert",
             "intent": "ReuseIfFresh",
             "output_target": "Replace",
+            "overwrite": "FollowSettings",
             "state": {
               "Finished": {
                 "NotWorthwhile": {
@@ -4075,6 +4198,7 @@
             "operation": "Convert",
             "intent": "ReuseIfFresh",
             "output_target": "Replace",
+            "overwrite": "FollowSettings",
             "state": {
               "Running": {
                 "claim_id": 10,
@@ -4205,6 +4329,7 @@
             "operation": "Convert",
             "intent": "ReuseIfFresh",
             "output_target": "Replace",
+            "overwrite": "FollowSettings",
             "state": {
               "Finished": {
                 "Skipped": {
@@ -4332,6 +4457,7 @@
             "operation": "Convert",
             "intent": "ReuseIfFresh",
             "output_target": "Replace",
+            "overwrite": "FollowSettings",
             "state": {
               "Running": {
                 "claim_id": 10,
@@ -4453,6 +4579,7 @@
             "operation": "Convert",
             "intent": "ReuseIfFresh",
             "output_target": "Replace",
+            "overwrite": "FollowSettings",
             "state": {
               "Finished": "Stopped"
             }
@@ -4562,6 +4689,7 @@
             "operation": "Convert",
             "intent": "ReuseIfFresh",
             "output_target": "Replace",
+            "overwrite": "FollowSettings",
             "state": {
               "Running": {
                 "claim_id": 10,
@@ -4691,6 +4819,7 @@
             "operation": "Convert",
             "intent": "ReuseIfFresh",
             "output_target": "Replace",
+            "overwrite": "FollowSettings",
             "state": {
               "Running": {
                 "claim_id": 10,
@@ -4814,6 +4943,7 @@
             "operation": "Convert",
             "intent": "ReuseIfFresh",
             "output_target": "Replace",
+            "overwrite": "FollowSettings",
             "state": {
               "Running": {
                 "claim_id": 10,
@@ -4959,6 +5089,7 @@
             "operation": "Convert",
             "intent": "ReuseIfFresh",
             "output_target": "Replace",
+            "overwrite": "FollowSettings",
             "state": {
               "Running": {
                 "claim_id": 10,
@@ -5098,6 +5229,7 @@
             "operation": "Convert",
             "intent": "ReuseIfFresh",
             "output_target": "Replace",
+            "overwrite": "FollowSettings",
             "state": {
               "Running": {
                 "claim_id": 10,
@@ -5237,6 +5369,7 @@
             "operation": "Convert",
             "intent": "ReuseIfFresh",
             "output_target": "Replace",
+            "overwrite": "FollowSettings",
             "state": {
               "Running": {
                 "claim_id": 10,
@@ -5373,6 +5506,7 @@
             "operation": "Convert",
             "intent": "ReuseIfFresh",
             "output_target": "Replace",
+            "overwrite": "FollowSettings",
             "state": {
               "Running": {
                 "claim_id": 10,
@@ -5525,6 +5659,7 @@
             "operation": "Convert",
             "intent": "ReuseIfFresh",
             "output_target": "Replace",
+            "overwrite": "FollowSettings",
             "state": {
               "Running": {
                 "claim_id": 10,
@@ -5661,6 +5796,7 @@
             "operation": "Convert",
             "intent": "ReuseIfFresh",
             "output_target": "Replace",
+            "overwrite": "FollowSettings",
             "state": {
               "Running": {
                 "claim_id": 10,
@@ -5807,6 +5943,7 @@
             "operation": "Convert",
             "intent": "ReuseIfFresh",
             "output_target": "Replace",
+            "overwrite": "FollowSettings",
             "state": {
               "Running": {
                 "claim_id": 10,
@@ -5930,6 +6067,7 @@
             "operation": "Convert",
             "intent": "ReuseIfFresh",
             "output_target": "Replace",
+            "overwrite": "FollowSettings",
             "state": {
               "Running": {
                 "claim_id": 10,
@@ -6061,6 +6199,7 @@
             "operation": "Convert",
             "intent": "ReuseIfFresh",
             "output_target": "Replace",
+            "overwrite": "FollowSettings",
             "state": {
               "Running": {
                 "claim_id": 10,

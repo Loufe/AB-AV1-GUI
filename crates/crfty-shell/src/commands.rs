@@ -1,8 +1,8 @@
 use std::path::PathBuf;
 
 use crfty_core::{
-    AnalysisIntent, CorruptionSignature, Operation, OutputTarget, QueueCommand, QueueItemId,
-    SessionCommand, Settings, VendorCommand,
+    AnalysisIntent, CorruptionSignature, Operation, OutputTarget, OverwriteDecision,
+    QueueAddRequest, QueueCommand, QueueItemId, SessionCommand, Settings, VendorCommand,
 };
 use serde::Serialize;
 use tauri::{State, ipc::Channel};
@@ -40,12 +40,20 @@ fn queue_add(
     output_target: OutputTarget,
 ) -> Result<(), CommandError> {
     let item_id = bridge.allocate_item_id();
-    bridge.submit_queue(QueueCommand::Add {
-        item_id,
-        input,
-        operation,
-        intent,
-        output_target,
+    // No enqueue facts yet: absent facts fail open in the reducer, so
+    // enqueue-time filtering stays inert until the scanner boundary lands
+    // (#41 commit 4) and supplies real path hashes and stamps.
+    bridge.submit_queue(QueueCommand::AddMany {
+        requests: vec![QueueAddRequest {
+            item_id,
+            input,
+            path_hash: None,
+            stamp: None,
+            operation,
+            intent,
+            output_target,
+            overwrite: OverwriteDecision::FollowSettings,
+        }],
     })
 }
 
