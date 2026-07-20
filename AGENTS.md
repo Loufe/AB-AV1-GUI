@@ -46,7 +46,9 @@ src/
 ├── video_metadata.py          # Video metadata extraction from ffprobe
 ├── vendor_manager.py          # ab-av1/FFmpeg download and update management
 ├── ab_av1/                    # ab-av1 wrapper package
-│   ├── wrapper.py             # Subprocess management, VMAF fallback
+│   ├── wrapper.py             # High-level encode/crf-search orchestration, VMAF fallback
+│   ├── runner.py              # Subprocess lifecycle: spawn, stream output, cancel, reap
+│   ├── stats.py               # EncodeStats / CrfSearchResult dataclasses
 │   ├── parser.py              # Regex parsing of ab-av1/ffmpeg output
 │   ├── exceptions.py          # Custom exception hierarchy
 │   ├── checker.py             # ab-av1 availability check
@@ -185,7 +187,7 @@ The queue supports two operation types via `OperationType` enum:
 **Worker branching** (`sequential_conversion_worker`):
 - CONVERT: Calls `process_video()` (existing flow)
 - ANALYZE: Calls `wrapper.crf_search()`, updates history with Layer 2 data
-- Both: before processing, a duplicate short-circuit skips files already decided under another path (ADR-001), resolved at read time with nothing persisted (ADR-002) — catches duplicates queued without a prior Basic Scan
+- Both: no duplicate detection runs before processing — path-spelling duplicates are unrepresentable after hash-time normalization (ADR-001), and true content copies wait on the partial-hash tier (#28)
 
 **Queue tree updates** (`gui/queue_tree.py`): status/value changes, operation changes, adds, removes, and drag reorders update rows in place (folder expand state, selection, and scroll survive). Full rebuild via `refresh_queue_tree()` is reserved for structural bulk ops (startup load, clear queue, clear completed, conflict replace) and restores expand state. See `docs/ARCHITECTURE.md` § Queue Tree Updates.
 
@@ -233,7 +235,7 @@ When refactoring:
 ### Conventions
 - **Thread safety**: Never update GUI from worker thread directly. Use `update_ui_safely()`. The worker uses a single-writer model: `queue_item.*` is mutated directly by the one worker thread (UI only reads), `gui.session.*` is mutated via `update_ui_safely` (main thread). See `worker.py:34-44` for details. This is safe—don't add locks.
 - **Callbacks**: Events dispatch via `handle_*` functions in `gui/callback_handlers.py`.
-- **Exceptions**: Custom hierarchy in `ab_av1/exceptions.py` (InputFileError, OutputFileError, VMAFError, etc.)
+- **Exceptions**: Custom hierarchy in `ab_av1/exceptions.py` (InputFileError, OutputFileError, AbAv1CancelledError, ConversionNotWorthwhileError)
 - **Persistence**: JSON with atomic writes using `os.replace()`.
 - **Process management**: Track PID for graceful/force stop. Use `taskkill /T` on Windows.
 - **Error handling**: `except Exception:` + `logger.exception()` is correct for non-critical ops (UI updates, cache writes, metadata extraction). Conversions can run for hours—never abort due to a progress bar glitch. Log everything, continue with safe fallbacks.
@@ -255,7 +257,7 @@ ab-av1 output has two phases with different formats:
 - **Quality Detection**: Structured ab-av1 output, reliable progress
 - **Encoding**: FFmpeg output, subject to buffering, multiple regex patterns needed
 
-See `ab_av1/wrapper.py` for environment variables that maximize verbosity.
+`RUST_LOG` (set in `ab_av1/wrapper.py`) is the only environment variable ab-av1 reads. Encode operations use `debug,ab_av1=trace,ffmpeg=trace` (ffmpeg trace is needed to parse encoding progress); crf-search uses `debug,ab_av1=trace` (ffmpeg trace would just flood the sample runs).
 
 ## Data Files
 

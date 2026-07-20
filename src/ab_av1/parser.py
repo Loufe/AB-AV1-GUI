@@ -15,6 +15,8 @@ from src.models import ProgressEvent
 from src.privacy import anonymize_filename
 from src.utils import format_crf
 
+from .stats import EncodeStats
+
 logger = logging.getLogger(__name__)
 
 
@@ -73,12 +75,12 @@ class AbAv1Parser:
         self._re_final_crf = re.compile(r"Best\s+CRF:\s+(\d+\.?\d*)", re.IGNORECASE)
 
     def _build_encoding_callback_data(
-        self, stats: dict[str, Any], progress_encoding: float, message: str, eta_text: str | None = None
+        self, stats: EncodeStats, progress_encoding: float, message: str, eta_text: str | None = None
     ) -> ProgressEvent:
         """Build ProgressEvent for encoding progress updates.
 
         Args:
-            stats: Current stats dictionary with vmaf, crf, size_reduction, etc.
+            stats: Current parse state with vmaf, crf, size_reduction, etc.
             progress_encoding: Current encoding progress percentage (0-100).
             message: Human-readable progress message.
             eta_text: Optional ETA text to include.
@@ -91,54 +93,48 @@ class AbAv1Parser:
             progress_encoding=progress_encoding,
             message=message,
             phase="encoding",
-            original_size=stats.get("original_size"),
-            vmaf=stats.get("vmaf"),
-            crf=stats.get("crf"),
-            size_reduction=stats.get("size_reduction"),
-            vmaf_target_used=stats.get("vmaf_target_used"),
+            original_size=stats.original_size,
+            vmaf=stats.vmaf,
+            crf=stats.crf,
+            size_reduction=stats.size_reduction,
+            vmaf_target_used=stats.vmaf_target_used,
             eta_text=eta_text,
-            output_size=stats.get("estimated_output_size") if stats.get("estimated_output_size") else None,
-            is_estimate=True if stats.get("estimated_output_size") else None,
         )
 
-    def parse_line(self, line: str, stats: dict) -> dict:
+    def parse_line(self, line: str, stats: EncodeStats) -> EncodeStats:
         """
         Parses a single line of output known to come from ab-av1's stdout/stderr,
-        updates the stats dictionary, and potentially triggers the file_info_callback.
+        updates the stats state, and potentially triggers the file_info_callback.
 
         Args:
             line: The line of text from stdout/stderr.
-            stats: The current statistics dictionary for the ongoing process.
+            stats: The current statistics state for the ongoing process.
 
         Returns:
-            The updated statistics dictionary.
+            The updated statistics state.
         """
         line = line.strip()
         if not line:
             return stats  # Skip empty lines
 
         try:
-            input_basename = os.path.basename(stats.get("input_path", "unknown_file"))
-            current_phase = stats.get("phase", "crf-search")
+            input_basename = os.path.basename(stats.input_path or "unknown_file")
+            current_phase = stats.phase
             processed_line = False  # Flag if line yielded useful info
 
             # --- Phase Transition Detection ---
             if current_phase == "crf-search" and self._re_phase_encode_start.search(line):
-                logger.info(
-                    f"Phase transition to Encoding detected for {anonymize_filename(stats.get('input_path', ''))}"
-                )
-                stats["phase"] = "encoding"
-                stats["progress_quality"] = 100.0
-                stats["progress_encoding"] = 0.0
-                stats["last_reported_encoding_progress"] = 0.0
+                logger.info(f"Phase transition to Encoding detected for {anonymize_filename(stats.input_path)}")
+                stats.phase = "encoding"
+                stats.progress_quality = 100.0
+                stats.progress_encoding = 0.0
                 processed_line = True
 
                 # Log extra information about this transition
                 logger.info(
-                    f"Starting encoding phase with CRF: {format_crf(stats.get('crf'))}, "
-                    f"VMAF Target: {stats.get('vmaf_target_used', '?')}"
+                    f"Starting encoding phase with CRF: {format_crf(stats.crf)}, VMAF Target: {stats.vmaf_target_used}"
                 )
-                logger.info(f"Duration in seconds: {stats.get('total_duration_seconds', '?')}")
+                logger.info(f"Duration in seconds: {stats.total_duration_seconds}")
                 logger.info("Looking for ffmpeg progress output lines in the form 'frame=XXX fps=XXX time=XX:XX:XX'")
 
                 if self.file_info_callback:
@@ -146,29 +142,29 @@ class AbAv1Parser:
                         progress_quality=100.0,
                         progress_encoding=0.0,
                         message="Encoding started",
-                        phase=stats["phase"],
-                        vmaf=stats.get("vmaf"),
-                        crf=stats.get("crf"),
-                        size_reduction=stats.get("size_reduction"),  # Use predicted if available
-                        original_size=stats.get("original_size"),
-                        vmaf_target_used=stats.get("vmaf_target_used"),
+                        phase=stats.phase,
+                        vmaf=stats.vmaf,
+                        crf=stats.crf,
+                        size_reduction=stats.size_reduction,  # Use predicted if available
+                        original_size=stats.original_size,
+                        vmaf_target_used=stats.vmaf_target_used,
                     )
                     self.file_info_callback(input_basename, "progress", callback_info)
                 return stats  # Return early
 
             # --- CRF Search Phase Parsing ---
             if current_phase == "crf-search":
-                new_quality_progress = stats.get("progress_quality", 0)
+                new_quality_progress = stats.progress_quality
                 crf_vmaf_match = self._re_crf_vmaf.search(line)
                 if crf_vmaf_match:
                     processed_line = True
                     try:
                         crf_val = float(crf_vmaf_match.group(1))
                         vmaf_val = float(crf_vmaf_match.group(2))
-                        stats["crf"] = crf_val
-                        stats["vmaf"] = vmaf_val
-                        logger.info(f"CRF search update: CRF={format_crf(stats['crf'])}, VMAF={stats['vmaf']:.2f}")
-                        new_quality_progress = min(90.0, stats.get("progress_quality", 0) + 10.0)
+                        stats.crf = crf_val
+                        stats.vmaf = vmaf_val
+                        logger.info(f"CRF search update: CRF={format_crf(stats.crf)}, VMAF={stats.vmaf:.2f}")
+                        new_quality_progress = min(90.0, stats.progress_quality + 10.0)
                     except (ValueError, IndexError) as e:
                         logger.warning(f"Error parsing CRF/VMAF values from line '{line[:80]}...': {e}")
 
@@ -177,8 +173,8 @@ class AbAv1Parser:
                     processed_line = True
                     try:
                         crf_val = float(best_crf_match.group(1))
-                        stats["crf"] = crf_val
-                        logger.info(f"Best CRF determined: {format_crf(stats['crf'])}")
+                        stats.crf = crf_val
+                        logger.info(f"Best CRF determined: {format_crf(stats.crf)}")
                         new_quality_progress = 95.0
                     except (ValueError, IndexError) as e:
                         logger.warning(f"Error parsing Best CRF value from line '{line[:80]}...': {e}")
@@ -192,40 +188,38 @@ class AbAv1Parser:
                         # This is percentage *of original*, so reduction is 100 - this
                         new_size_reduction = 100.0 - size_percentage
                         # Only update if changed significantly
-                        # Using None check to prevent TypeError: unsupported operand type(s)
-                        # for -: 'NoneType' and 'float'
-                        current_reduction = stats.get("size_reduction")
+                        # (None check prevents TypeError on the first update)
+                        current_reduction = stats.size_reduction
                         reduction_changed = (
                             current_reduction is None
                             or abs(current_reduction - new_size_reduction) > SIZE_REDUCTION_CHANGE_THRESHOLD
                         )
                         if reduction_changed:
-                            stats["size_reduction"] = new_size_reduction
-                            logger.info(f"Parsed predicted size reduction: {stats['size_reduction']:.1f}%")
+                            stats.size_reduction = new_size_reduction
+                            logger.info(f"Parsed predicted size reduction: {stats.size_reduction:.1f}%")
                     except (ValueError, IndexError) as e:
                         logger.warning(f"Cannot parse predicted size reduction % from line '{line[:80]}...': {e}")
 
                 # Send callback if quality progress increased
-                if new_quality_progress > stats.get("progress_quality", 0):
-                    stats["progress_quality"] = new_quality_progress
+                if new_quality_progress > stats.progress_quality:
+                    stats.progress_quality = new_quality_progress
                     if self.file_info_callback:
                         vmaf_part = "?"
-                        current_vmaf = stats.get("vmaf")
-                        if current_vmaf is not None:
+                        if stats.vmaf is not None:
                             try:
-                                vmaf_part = f"{float(current_vmaf):.1f}"
+                                vmaf_part = f"{float(stats.vmaf):.1f}"
                             except (ValueError, TypeError):
-                                vmaf_part = str(current_vmaf)
+                                vmaf_part = str(stats.vmaf)
                         callback_info = ProgressEvent(
-                            progress_quality=stats["progress_quality"],
+                            progress_quality=stats.progress_quality,
                             progress_encoding=0,
-                            message=f"Detecting Quality (CRF:{format_crf(stats.get('crf'))}, VMAF:{vmaf_part})",
+                            message=f"Detecting Quality (CRF:{format_crf(stats.crf)}, VMAF:{vmaf_part})",
                             phase=current_phase,
-                            vmaf=stats.get("vmaf"),
-                            crf=stats.get("crf"),
-                            size_reduction=stats.get("size_reduction"),  # Include prediction
-                            original_size=stats.get("original_size"),
-                            vmaf_target_used=stats.get("vmaf_target_used"),
+                            vmaf=stats.vmaf,
+                            crf=stats.crf,
+                            size_reduction=stats.size_reduction,  # Include prediction
+                            original_size=stats.original_size,
+                            vmaf_target_used=stats.vmaf_target_used,
                         )
                         self.file_info_callback(input_basename, "progress", callback_info)
 
@@ -241,9 +235,9 @@ class AbAv1Parser:
                     logger.info(f"Sample encoding progress detected: {progress_pct}%, {fps} fps, ETA: {eta_text}")
 
                     # Update stats
-                    stats["progress_encoding"] = progress_pct
-                    stats["last_ffmpeg_fps"] = fps
-                    stats["eta_text"] = eta_text
+                    stats.progress_encoding = progress_pct
+                    stats.last_ffmpeg_fps = fps
+                    stats.eta_text = eta_text
 
                     # Send progress update
                     if self.file_info_callback:
@@ -266,9 +260,9 @@ class AbAv1Parser:
                     logger.info(f"Main encoding progress: {progress_pct}%, {fps} fps, ETA: {eta_text}")
 
                     # Update stats
-                    stats["progress_encoding"] = progress_pct
-                    stats["last_ffmpeg_fps"] = fps
-                    stats["eta_text"] = eta_text
+                    stats.progress_encoding = progress_pct
+                    stats.last_ffmpeg_fps = fps
+                    stats.eta_text = eta_text
 
                     # Send progress update
                     if self.file_info_callback:
@@ -282,13 +276,13 @@ class AbAv1Parser:
                 # Parse raw ffmpeg progress output (time=HH:MM:SS.ss format)
                 # This is more frequent than ab-av1's summary lines for large files
                 ffmpeg_time_match = self._re_ffmpeg_time.search(line)
-                if ffmpeg_time_match and stats.get("total_duration_seconds"):
+                if ffmpeg_time_match and stats.total_duration_seconds:
                     try:
                         hours = int(ffmpeg_time_match.group(1))
                         minutes = int(ffmpeg_time_match.group(2))
                         seconds = float(ffmpeg_time_match.group(3))
                         current_seconds = hours * 3600 + minutes * 60 + seconds
-                        total_seconds = stats["total_duration_seconds"]
+                        total_seconds = stats.total_duration_seconds
 
                         if total_seconds > 0:
                             progress_pct = min(99.9, (current_seconds / total_seconds) * 100)
@@ -299,15 +293,15 @@ class AbAv1Parser:
                             fps_match = self._re_ffmpeg_fps.search(line)
                             if fps_match:
                                 fps = float(fps_match.group(1))
-                                stats["last_ffmpeg_fps"] = fps
+                                stats.last_ffmpeg_fps = fps
                             speed_match = self._re_ffmpeg_speed.search(line)
                             if speed_match:
                                 speed = float(speed_match.group(1))
 
                             # Only update if progress increased by at least 0.1%
-                            last_progress = stats.get("progress_encoding", 0.0)
+                            last_progress = stats.progress_encoding
                             if progress_pct >= last_progress + 0.1:
-                                stats["progress_encoding"] = progress_pct
+                                stats.progress_encoding = progress_pct
 
                                 # Build message
                                 if fps and speed:
@@ -334,12 +328,12 @@ class AbAv1Parser:
                     # Only update if progress increased by at least 0.1% (same guard as the
                     # ffmpeg time= path): a stray low percentage in unrelated output must
                     # never drag the progress bar backwards
-                    last_progress = stats.get("progress_encoding", 0.0)
+                    last_progress = stats.progress_encoding
                     if progress_pct >= last_progress + 0.1:
                         logger.info(f"Percentage detected in line: {progress_pct}% in '{line}'")
 
                         # Basic progress update (no FPS or ETA)
-                        stats["progress_encoding"] = progress_pct
+                        stats.progress_encoding = progress_pct
 
                         # Send progress update
                         if self.file_info_callback:
@@ -357,13 +351,13 @@ class AbAv1Parser:
                         phase_text = summary_match.group(2)
                         eta_text = summary_match.group(3).strip()
                         # Only update ETA if it changed to avoid spamming logs/UI
-                        if stats.get("eta_text") != eta_text:
-                            stats["eta_text"] = eta_text
+                        if stats.eta_text != eta_text:
+                            stats.eta_text = eta_text
                             logger.info(f"Parsed ab-av1 summary: Phase='{phase_text}', ETA='{eta_text}'")
 
                             # Send progress update using existing percentage, new ETA
                             if self.file_info_callback:
-                                current_progress = stats.get("progress_encoding", 0.0)
+                                current_progress = stats.progress_encoding
                                 message = f"Encoding: {current_progress:.1f}% (ETA: {eta_text})"
                                 callback_data = self._build_encoding_callback_data(
                                     stats, current_progress, message, eta_text
@@ -384,28 +378,28 @@ class AbAv1Parser:
             if processed_line:
                 # Log key stats that are expected to be updated by this parser
                 logger.debug(
-                    f"Post-Parse Stats: Phase={stats.get('phase')}, "
-                    f"Qual={stats.get('progress_quality', 0):.1f}%, VMAF={stats.get('vmaf')}, "
-                    f"CRF={format_crf(stats.get('crf'))}, ETA={stats.get('eta_text')}, "
-                    f"SizeReduc={stats.get('size_reduction')}"
+                    f"Post-Parse Stats: Phase={stats.phase}, "
+                    f"Qual={stats.progress_quality:.1f}%, VMAF={stats.vmaf}, "
+                    f"CRF={format_crf(stats.crf)}, ETA={stats.eta_text}, "
+                    f"SizeReduc={stats.size_reduction}"
                 )
 
         except Exception:
             logger.exception(f"General error processing output line: '{line[:80]}...'")
 
-        return stats  # Always return the potentially modified stats dictionary
+        return stats  # Always return the potentially modified stats state
 
-    def parse_final_output(self, output_text: str, stats: dict) -> dict:
+    def parse_final_output(self, output_text: str, stats: EncodeStats) -> EncodeStats:
         """
         Extract final statistics from the complete output text (main pipe) as a fallback
-        or verification step, updating the provided stats dictionary.
+        or verification step, updating the provided stats state.
 
         Args:
             output_text: The complete console output text from ab-av1's stdout/stderr.
-            stats: The statistics dictionary to update.
+            stats: The statistics state to update.
 
         Returns:
-            The updated statistics dictionary.
+            The updated statistics state.
         """
         logger.debug("Running final output parsing on main pipe text as fallback/verification.")
 
@@ -414,10 +408,10 @@ class AbAv1Parser:
             vmaf_matches = self._re_final_vmaf.findall(output_text)
             if vmaf_matches:
                 final_vmaf = float(vmaf_matches[-1])
-                if stats.get("vmaf") is None or abs(stats.get("vmaf", -1.0) - final_vmaf) > VMAF_CHANGE_THRESHOLD:
-                    logger.info(f"[Final Parse] VMAF verified/updated: {final_vmaf:.2f} (from {stats.get('vmaf')})")
-                    stats["vmaf"] = final_vmaf
-            elif stats.get("vmaf") is None:
+                if stats.vmaf is None or abs(stats.vmaf - final_vmaf) > VMAF_CHANGE_THRESHOLD:
+                    logger.info(f"[Final Parse] VMAF verified/updated: {final_vmaf:.2f} (from {stats.vmaf})")
+                    stats.vmaf = final_vmaf
+            elif stats.vmaf is None:
                 logger.warning("[Final Parse] Could not find VMAF score in main pipe output.")
         except (ValueError, IndexError, TypeError) as e:
             logger.warning(f"[Final Parse] Error parsing final VMAF score: {e}")
@@ -427,20 +421,18 @@ class AbAv1Parser:
             crf_matches = self._re_final_crf.findall(output_text)
             if crf_matches:
                 final_crf = float(crf_matches[-1])
-                if stats.get("crf") != final_crf:
-                    logger.info(
-                        f"[Final Parse] CRF verified/updated: {format_crf(final_crf)} (from {stats.get('crf')})"
-                    )
-                    stats["crf"] = final_crf
-            elif stats.get("crf") is None:
+                if stats.crf != final_crf:
+                    logger.info(f"[Final Parse] CRF verified/updated: {format_crf(final_crf)} (from {stats.crf})")
+                    stats.crf = final_crf
+            elif stats.crf is None:
                 logger.warning("[Final Parse] Could not find Best CRF in main pipe output.")
         except (ValueError, IndexError, TypeError) as e:
             logger.warning(f"[Final Parse] Error parsing final CRF score: {e}")
 
         # --- Final Size Reduction ---
         # Use the value potentially parsed earlier from predicted size line
-        if stats.get("size_reduction") is not None:
-            logger.info(f"[Final Parse] Using previously parsed size reduction: {stats['size_reduction']:.2f}%")
+        if stats.size_reduction is not None:
+            logger.info(f"[Final Parse] Using previously parsed size reduction: {stats.size_reduction:.2f}%")
         else:
             # Try parsing the predicted size line again from the full text as a last resort
             size_match = self._re_size_reduction_percent.search(output_text)
@@ -448,9 +440,9 @@ class AbAv1Parser:
                 try:
                     size_percentage = float(size_match.group(1))
                     final_size_reduction = 100.0 - size_percentage
-                    stats["size_reduction"] = final_size_reduction
+                    stats.size_reduction = final_size_reduction
                     logger.info(
-                        f"[Final Parse] Found predicted size reduction in final text: {stats['size_reduction']:.1f}%"
+                        f"[Final Parse] Found predicted size reduction in final text: {stats.size_reduction:.1f}%"
                     )
                 except (ValueError, IndexError) as e:
                     logger.warning(f"[Final Parse] Cannot parse final predicted size reduction %: {e}")

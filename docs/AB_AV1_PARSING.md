@@ -154,4 +154,4 @@ FFmpeg's progress output is subject to buffering, which can cause:
 - Multiple progress lines arriving at once
 - Gaps in progress reporting
 
-The environment variables in `wrapper.py` attempt to minimize buffering, but it's not fully controllable.
+Line-buffered pipe reads (`bufsize=1` in `runner.py`) minimize the effect, but FFmpeg's own buffering is not fully controllable.

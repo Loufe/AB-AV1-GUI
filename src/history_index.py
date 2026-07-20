@@ -14,16 +14,9 @@ import os
 import threading
 import time
 
-from src.config import (
-    DURATION_TOLERANCE_SEC,
-    HISTORY_FILE,
-    HISTORY_SCHEMA_VERSION,
-    MAX_CRF_VALUE,
-    MAX_VMAF_VALUE,
-    RESOLUTION_TOLERANCE_PERCENT,
-)
+from src.config import HISTORY_FILE, HISTORY_SCHEMA_VERSION, MAX_CRF_VALUE, MAX_VMAF_VALUE, RESOLUTION_TOLERANCE_PERCENT
 from src.logging_setup import get_script_directory
-from src.models import AudioStreamInfo, FileRecord, FileStatus, OperationType
+from src.models import AudioStreamInfo, FileRecord, FileStatus
 from src.privacy import compute_hash, normalize_path
 
 logger = logging.getLogger(__name__)
@@ -92,9 +85,10 @@ def compute_path_hash(file_path: str) -> str:
 
 
 def compute_filename_hash(file_path: str) -> str:
-    """Compute hash of filename (basename with extension) for duplicate detection.
+    """Compute hash of filename (basename with extension).
 
-    Used by duplicate detection to match files across different paths.
+    Stored on records so anonymized histories keep a filename identity; a
+    future content-identity tier (issue #28) may consume it.
     The hash includes the extension (e.g., "movie.mp4" -> hash).
 
     Args:
@@ -137,24 +131,26 @@ class HistoryIndex:
     def __init__(self):
         """Initialize an empty index."""
         self._records: dict[str, FileRecord] = {}
-        self._size_index: dict[int, set[str]] = {}  # file_size -> {path_hash, ...} for duplicate detection
         self._lock = threading.RLock()
         self._loaded = False
         self._dirty = False
         self._last_save_time = float("-inf")  # monotonic timestamp of the last disk write
         self._converted_cache: list[FileRecord] | None = None
-        self._percentiles_cache: dict[OperationType | None, dict] | None = None
+        # Bumped whenever the converted-record set changes; consumers (the
+        # estimation percentile cache) use it to detect staleness without the
+        # index owning their derived data.
+        self._converted_revision = 0
 
     @contextlib.contextmanager
     def transaction(self):
         """Hold the index lock across a multi-step read-decide-write sequence.
 
-        Individual methods are already thread-safe, but a lookup -> find_better_duplicate
-        -> upsert sequence spanning several calls is not atomic on its own: two parallel
-        scan workers processing two copies of the same physical file can both pass
-        find_better_duplicate before either upserts (issue #22). Wrapping the sequence
-        in ``with index.transaction():`` serializes it. The lock is reentrant, so index
-        methods called inside the block keep working.
+        Individual methods are already thread-safe, but a lookup -> decide -> upsert
+        sequence spanning several calls is not atomic on its own: two parallel scan
+        workers touching the same path could interleave a stale re-read with each
+        other's writes. Wrapping the sequence in ``with index.transaction():``
+        serializes it. The lock is reentrant, so index methods called inside the
+        block keep working.
         """
         with self._lock:
             self._ensure_loaded()
@@ -203,31 +199,10 @@ class HistoryIndex:
             # Invalidate caches if this affects converted records
             if record.status == FileStatus.CONVERTED or (old_record and old_record.status == FileStatus.CONVERTED):
                 self._converted_cache = None
-                self._percentiles_cache = None
-
-            # Maintain size index: re-home this path_hash. Removing the OLD record (by
-            # its own size) handles an in-place replacement at the same size, which a
-            # size-change-only check would leave as a stale entry.
-            if old_record is not None:
-                self._remove_from_size_index(old_record)
-            self._add_to_size_index(record)
+                self._converted_revision += 1
 
             self._records[record.path_hash] = record
             self._dirty = True
-
-    def _add_to_size_index(self, record: FileRecord) -> None:
-        """Register a record in the size index for duplicate detection. Caller holds self._lock."""
-        self._size_index.setdefault(record.file_size_bytes, set()).add(record.path_hash)
-
-    def _remove_from_size_index(self, record: FileRecord) -> None:
-        """Remove a record's path_hash from its size bucket; no-op if absent. Caller holds self._lock.
-
-        Takes the record whose slot is being vacated (in upsert, the *old* record) so the
-        signature mirrors _add_to_size_index and the call sites can't transpose loose args.
-        """
-        bucket = self._size_index.get(record.file_size_bytes)
-        if bucket is not None:
-            bucket.discard(record.path_hash)
 
     def get_by_status(self, status: FileStatus) -> list[FileRecord]:
         """Get all records with a given status.
@@ -257,31 +232,15 @@ class HistoryIndex:
                 self._converted_cache = [r for r in self._records.values() if r.status == FileStatus.CONVERTED]
             return self._converted_cache
 
-    def get_cached_percentiles(self, operation_type: OperationType | None) -> dict | None:
-        """Get cached percentiles for an operation type.
+    @property
+    def converted_revision(self) -> int:
+        """Monotonic counter bumped whenever the converted-record set changes.
 
-        Args:
-            operation_type: ANALYZE, CONVERT, or None for default.
-
-        Returns:
-            Cached percentiles dict, or None if not cached.
+        Lets derived caches (estimation percentiles) detect staleness without
+        this index owning their data.
         """
         with self._lock:
-            if self._percentiles_cache is None:
-                return None
-            return self._percentiles_cache.get(operation_type)
-
-    def cache_percentiles(self, operation_type: OperationType | None, percentiles: dict) -> None:
-        """Store computed percentiles in cache.
-
-        Args:
-            operation_type: ANALYZE, CONVERT, or None for default.
-            percentiles: The computed percentiles dict to cache.
-        """
-        with self._lock:
-            if self._percentiles_cache is None:
-                self._percentiles_cache = {}
-            self._percentiles_cache[operation_type] = percentiles
+            return self._converted_revision
 
     def get_all_records(self) -> list[FileRecord]:
         """Get all records in the index.
@@ -319,162 +278,6 @@ class HistoryIndex:
             if width_diff <= resolution_tolerance:
                 similar.append(record)
         return similar
-
-    def find_by_size(self, file_size_bytes: int) -> list[FileRecord]:
-        """Find all records with a given file size.
-
-        O(1) lookup using the size index. Used by duplicate detection.
-
-        Args:
-            file_size_bytes: Exact file size to match.
-
-        Returns:
-            List of FileRecords with the specified size.
-        """
-        with self._lock:
-            self._ensure_loaded()
-            hashes = self._size_index.get(file_size_bytes, set())
-            return [self._records[h] for h in hashes if h in self._records]
-
-    def find_better_duplicate(self, file_path: str, file_size: int, duration_sec: float | None) -> FileRecord | None:
-        """Find an equal-or-higher-status record representing the same physical file.
-
-        The queried path's own record is excluded - a file is never its own duplicate.
-        Nothing is persisted for the queried path: duplicates resolve at read/decision
-        time (ADR-002), so callers use the returned verdict directly.
-
-        Implements duplicate detection using a 3-step metadata cascade:
-        1. Size + duration + filename literal (when original_path available)
-        2. Size + duration + filename_hash (for anonymized records)
-        3. Size + duration uniqueness (if globally unique)
-
-        Background/rationale: docs/adr/001-use-metadata-for-duplicate-detection.md
-
-        Args:
-            file_path: Path to the file being checked.
-            file_size: File size in bytes.
-            duration_sec: Video duration (for matching).
-
-        Returns:
-            A FileRecord with higher status priority if duplicate found, else None.
-        """
-        # Status priority: higher number = better status
-        status_priority = {
-            FileStatus.SCANNED: 1,
-            FileStatus.ANALYZED: 2,
-            FileStatus.NOT_WORTHWHILE: 3,
-            FileStatus.CONVERTED: 4,
-        }
-
-        # Pre-filter: candidates sharing this size, excluding this path's own record - a
-        # file is never its own duplicate (a decided record re-entering detection after an
-        # mtime-only change would otherwise match itself and become a self-alias).
-        own_hash = compute_path_hash(file_path)
-        candidates = [c for c in self.find_by_size(file_size) if c.path_hash != own_hash]
-        if not candidates:
-            return None
-
-        # Filter by duration (within tolerance)
-        if duration_sec is not None:
-            candidates = [
-                c
-                for c in candidates
-                if c.duration_sec is not None and abs(c.duration_sec - duration_sec) <= DURATION_TOLERANCE_SEC
-            ]
-
-        if not candidates:
-            return None
-
-        # Sort by priority descending, then most-recently-updated, then path_hash: a total
-        # order, so the winner among equal-priority candidates is determined by the data
-        # rather than per-process set iteration order. last_updated is ISO "YYYY-MM-DD
-        # HH:MM:SS" everywhere, so lexicographic == chronological; None sorts last.
-        candidates.sort(
-            key=lambda c: (status_priority.get(c.status, 0), c.last_updated or "", c.path_hash), reverse=True
-        )
-
-        # Compute filename info for matching
-        filename_lower = os.path.basename(file_path).lower()
-        file_hash = compute_filename_hash(file_path)
-
-        best_record: FileRecord | None = None
-        best_priority = 0
-        uncertain_candidates: list[FileRecord] = []
-
-        for candidate in candidates:
-            priority = status_priority.get(candidate.status, 0)
-            if priority <= best_priority:
-                continue  # Already found better or equal
-
-            # Step 1: Filename literal match (requires original_path)
-            if candidate.original_path:
-                candidate_filename = os.path.basename(candidate.original_path).lower()
-                if filename_lower == candidate_filename:
-                    best_record = candidate
-                    best_priority = priority
-                    continue
-
-            # Step 2: Filename hash match (for anonymized records)
-            if candidate.filename_hash and file_hash == candidate.filename_hash:
-                best_record = candidate
-                best_priority = priority
-                continue
-
-            # Couldn't confirm via filename - mark as uncertain for step 3
-            uncertain_candidates.append(candidate)
-
-        # If we found a match via steps 1-2, return it
-        if best_record:
-            return best_record
-
-        # Step 3: Uniqueness fallback
-        # If exactly one uncertain candidate AND size+duration is globally unique
-        if len(uncertain_candidates) == 1:
-            # Check if this size+duration combo is unique in the entire index
-            all_with_size = self.find_by_size(file_size)
-            matching_duration = [
-                c
-                for c in all_with_size
-                if c.path_hash != own_hash
-                and duration_sec is not None
-                and c.duration_sec is not None
-                and abs(c.duration_sec - duration_sec) <= DURATION_TOLERANCE_SEC
-            ]
-            if len(matching_duration) == 1:
-                return uncertain_candidates[0]
-
-        return None
-
-    def delete(self, path_hash: str) -> bool:
-        """Delete a record by path_hash.
-
-        Removes the record from the main index and size index.
-        Changes are not persisted until save() is called.
-
-        Args:
-            path_hash: The hash of the record to delete.
-
-        Returns:
-            True if the record was deleted, False if not found.
-        """
-        with self._lock:
-            self._ensure_loaded()
-            if path_hash not in self._records:
-                return False
-
-            record = self._records[path_hash]
-
-            # Remove from size index
-            self._remove_from_size_index(record)
-
-            # Invalidate converted cache if needed
-            if record.status == FileStatus.CONVERTED:
-                self._converted_cache = None
-
-            # Remove from records
-            del self._records[path_hash]
-            self._dirty = True
-            return True
 
     def save(self) -> None:
         """Persist changes to disk.
@@ -570,11 +373,6 @@ class HistoryIndex:
                     continue
 
             logger.info(f"Loaded {len(self._records)} records from {history_path}")
-
-            # Rebuild the size index; aliases are excluded by _add_to_size_index.
-            self._size_index = {}
-            for record in self._records.values():
-                self._add_to_size_index(record)
 
         except json.JSONDecodeError:
             logger.exception(f"Failed to parse history file: {history_path}")

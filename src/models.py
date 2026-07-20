@@ -136,11 +136,6 @@ class FileStatus(str, Enum):
     CONVERTED = "converted"  # Successfully converted
 
 
-# Statuses whose record carries a decided, reusable result (terminal outcome or completed
-# Layer-2 CRF analysis), preserved/mirrored rather than overwritten on re-scan.
-DECIDED_STATUSES = frozenset({FileStatus.CONVERTED, FileStatus.NOT_WORTHWHILE, FileStatus.ANALYZED})
-
-
 class AnalysisLevel(int, Enum):
     """Analysis level of a file, representing how much processing has been done.
 
@@ -198,6 +193,7 @@ class QueueFileItem:
     status: QueueItemStatus = QueueItemStatus.PENDING
     size_bytes: int = 0
     error_message: str | None = None
+    skip_reason: str | None = None  # Why the file was skipped (distinguishes skips from successes)
 
 
 @dataclass
@@ -245,7 +241,13 @@ class QueueItem:
             "files_failed": self.files_failed,
             "last_error": self.last_error,
             "files": [
-                {"path": f.path, "status": f.status.value, "size_bytes": f.size_bytes, "error_message": f.error_message}
+                {
+                    "path": f.path,
+                    "status": f.status.value,
+                    "size_bytes": f.size_bytes,
+                    "error_message": f.error_message,
+                    "skip_reason": f.skip_reason,
+                }
                 for f in self.files
             ],
             "current_file_index": self.current_file_index,
@@ -261,6 +263,7 @@ class QueueItem:
                 status=QueueItemStatus(f.get("status", "pending")),
                 size_bytes=f.get("size_bytes", 0),
                 error_message=f.get("error_message"),
+                skip_reason=f.get("skip_reason"),
             )
             for f in files_data
         ]
@@ -401,7 +404,9 @@ class FileRecord:
         """
         if self.status == FileStatus.CONVERTED:
             return AnalysisLevel.CONVERTED
-        if self.status == FileStatus.ANALYZED:
+        if self.status in (FileStatus.ANALYZED, FileStatus.NOT_WORTHWHILE):
+            # NOT_WORTHWHILE is a completed CRF search whose result is the negative
+            # verdict, so it reports level 2 like any other finished analysis (ADR-002)
             return AnalysisLevel.ANALYZED
         if self.video_codec is not None or self.duration_sec is not None:
             return AnalysisLevel.SCANNED

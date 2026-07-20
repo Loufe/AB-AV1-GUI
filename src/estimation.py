@@ -11,15 +11,24 @@ See docs/TIME_ESTIMATION.md for full explanation.
 import logging
 import os
 import statistics
+import threading
 import time
 from collections import defaultdict
 from typing import Any
 
+from src.cache_helpers import is_file_unchanged
 from src.config import MIN_SAMPLES_FOR_ESTIMATE, MIN_SAMPLES_HIGH_CONFIDENCE
 from src.history_index import get_history_index
 from src.models import OperationType, TimeEstimate
 
 logger = logging.getLogger(__name__)
+
+# Percentile cache, keyed by operation type and tagged with the HistoryIndex
+# converted-record revision it was computed at; a revision mismatch means a
+# CONVERTED record changed and the entry is stale. Owned here (not by the
+# index) so persistence stays decoupled from estimation (issue #22).
+_percentiles_cache: dict[OperationType | None, tuple[int, dict]] = {}
+_percentiles_cache_lock = threading.Lock()
 
 
 # =============================================================================
@@ -85,8 +94,9 @@ def compute_grouped_encoding_rates(
             # ANALYZE only does CRF search, not full encoding
             conv_time = record.crf_search_time_sec or 0
         else:
-            # CONVERT does full encoding - prefer encoding_time_sec, fall back to total_time_sec
-            conv_time = record.encoding_time_sec if record.encoding_time_sec else (record.total_time_sec or 0)
+            # CONVERT does full encoding; legacy combined times were folded into
+            # encoding_time_sec by the schema-v2 rewrite (ADR-002)
+            conv_time = record.encoding_time_sec or 0
 
         if duration > 0 and conv_time > 0:
             rate = conv_time / duration
@@ -105,20 +115,22 @@ def compute_grouped_encoding_rates(
 def compute_grouped_percentiles(operation_type: OperationType | None = None) -> dict:
     """Compute percentiles for all rate groups. Cached until converted records change.
 
-    Results are cached in HistoryIndex and automatically invalidated when
-    a CONVERTED record is added or modified.
+    The cache entry is tagged with the index's converted-record revision read
+    *before* computing, so a record landing mid-computation makes the entry
+    stale (revision mismatch) rather than silently current.
     """
     index = get_history_index()
+    revision = index.converted_revision
 
-    # Check cache first
-    cached = index.get_cached_percentiles(operation_type)
-    if cached is not None:
-        return cached
+    with _percentiles_cache_lock:
+        cached = _percentiles_cache.get(operation_type)
+        if cached is not None and cached[0] == revision:
+            return cached[1]
 
-    # Compute and cache
     grouped_rates = compute_grouped_encoding_rates(operation_type)
     result = {key: compute_percentiles(rates) for key, rates in grouped_rates.items()}
-    index.cache_percentiles(operation_type, result)
+    with _percentiles_cache_lock:
+        _percentiles_cache[operation_type] = (revision, result)
     return result
 
 
@@ -235,6 +247,39 @@ def estimate_file_time(
 
     # Tier 4: Insufficient data
     return TimeEstimate(0, 0, 0, "none", "insufficient_data")
+
+
+def estimate_fresh_file_time(
+    file_path: str, *, operation_type: OperationType | None = None, grouped_percentiles: dict | None = None
+) -> TimeEstimate:
+    """Estimate processing time from history, but only while the record is fresh.
+
+    Shared display rule for the Analysis and Queue tabs: a time estimate is shown
+    only when a history record exists AND still describes the file on disk
+    (size + mtime match). A stale record's metadata may no longer be accurate,
+    so both tabs show "—" instead of a confident-looking number.
+
+    Args:
+        file_path: Path to the file.
+        operation_type: If ANALYZE, estimates CRF search time only (no encoding).
+        grouped_percentiles: Pre-computed percentiles from compute_grouped_percentiles().
+
+    Returns:
+        TimeEstimate from the record's metadata, or "none" confidence when the
+        record is missing or stale.
+    """
+    record = get_history_index().lookup_file(file_path)
+    if record is None or not is_file_unchanged(record, file_path):
+        return TimeEstimate(0, 0, 0, "none", "no_fresh_record")
+
+    return estimate_file_time(
+        codec=record.video_codec,
+        duration=record.duration_sec,
+        width=record.width,
+        height=record.height,
+        operation_type=operation_type,
+        grouped_percentiles=grouped_percentiles,
+    )
 
 
 def estimate_current_file_eta(

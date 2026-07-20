@@ -283,7 +283,7 @@ The history index is a **singleton** with **lazy loading**:
 2. For folder items: scan for video files matching extensions
 3. For each file in item:
    - Check resolution, codec, output existence
-   - Duplicate short-circuit: a file already CONVERTED/NOT_WORTHWHILE under another path (ADR-001) is skipped; the verdict resolves at read time and nothing is persisted for the duplicate path (ADR-002). A CONVERTED record at the file's own path suppresses this only while the verdict still applies (`converted_verdict_applies`); genuinely changed content is checked against other paths' verdicts like any new file
+   - No duplicate short-circuit: path-spelling duplicates are unrepresentable after hash-time normalization (ADR-001); true content copies wait on the partial-hash tier (#28). A CONVERTED record at the file's own path is honored only while the verdict still applies (`converted_verdict_applies`)
    - Call `video_conversion.process_video()` (CONVERT) or `wrapper.crf_search()` (ANALYZE)
    - Dispatch progress via callbacks
    - Update history on completion
@@ -315,15 +315,15 @@ process = subprocess.Popen(
 ```
 
 ### Environment Variables
-Set for maximum output verbosity:
-- `RUST_LOG=trace,ab_av1=trace,ffmpeg=trace`
-- `AV1_PRINT_FFMPEG=1`
-- `SVT_VERBOSE=1`
+`RUST_LOG` (the only variable ab-av1 reads):
+- Encode operations: `debug,ab_av1=trace,ffmpeg=trace` (ffmpeg trace needed for encoding progress)
+- crf-search: `debug,ab_av1=trace` (ffmpeg trace would flood the sample runs)
 
 ### Process Termination
-- **Graceful stop**: Set `stop_event`, wait for current file to finish
-- **Force stop**: `taskkill /T /F /PID` (Windows) or `SIGKILL` (Unix)
+- **Graceful stop**: Set `stop_event`, wait for current file to finish (CONVERT); aborts mid-run for ANALYZE
+- **Force stop**: Sets `cancel_event` (the runner's read loop terminates and reaps the process tree), with `taskkill /T /F /PID` (Windows) or SIGTERM/SIGKILL (Unix) on the tracked PID as backstop
 - PID tracked via `pid_callback` mechanism
+- Hung-silent processes are terminated after `AB_AV1_SILENCE_TIMEOUT_SEC` (see `ab_av1/runner.py`)
 
 ## Output Parsing
 

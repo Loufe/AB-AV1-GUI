@@ -14,21 +14,13 @@ import time
 from collections.abc import Callable  # Import Callable
 
 # Project imports
-from src.ab_av1.exceptions import ConversionNotWorthwhileError
+from src.ab_av1.exceptions import AbAv1CancelledError, ConversionNotWorthwhileError
 from src.ab_av1.wrapper import AbAv1Wrapper
 from src.cache_helpers import converted_verdict_applies, is_file_unchanged
 from src.config import DEFAULT_ENCODING_PRESET, DEFAULT_VMAF_TARGET, HISTORY_SAVE_INTERVAL_SEC, MIN_VMAF_FALLBACK_TARGET
 from src.hardware_accel import get_hw_decoder_for_codec, get_video_codec_from_info
-from src.history_index import HistoryIndex, compute_filename_hash, compute_path_hash, get_history_index
-from src.models import (
-    DECIDED_STATUSES,
-    FileRecord,
-    FileStatus,
-    OperationType,
-    ProgressEvent,
-    QueueConversionConfig,
-    QueueItemStatus,
-)
+from src.history_index import compute_filename_hash, compute_path_hash, get_history_index
+from src.models import FileRecord, FileStatus, OperationType, ProgressEvent, QueueConversionConfig, QueueItemStatus
 from src.privacy import anonymize_filename
 from src.utils import format_crf, get_video_info, update_ui_safely
 from src.video_conversion import calculate_output_path, process_video
@@ -52,12 +44,23 @@ logger = logging.getLogger(__name__)
 # DO NOT use update_ui_safely() for every mutation - 100+ callbacks per file would tank performance.
 
 
-def _update_file_status(queue_item, file_index: int, status: QueueItemStatus, error_msg: str | None = None) -> None:
+def _update_file_status(
+    queue_item, file_index: int, status: QueueItemStatus, error_msg: str | None = None, skip_reason: str | None = None
+) -> None:
     """Update the status of a file within a folder queue item."""
     if queue_item.is_folder and file_index < len(queue_item.files):
-        queue_item.files[file_index].status = status
+        file_item = queue_item.files[file_index]
+        file_item.status = status
+        if status == QueueItemStatus.CONVERTING:
+            # Fresh processing attempt - stale outcome fields from a prior pass
+            # would mislabel the new result (e.g. a successful conversion
+            # rendered as "Skipped: ...")
+            file_item.skip_reason = None
+            file_item.error_message = None
         if error_msg:
-            queue_item.files[file_index].error_message = error_msg
+            file_item.error_message = error_msg
+        if skip_reason:
+            file_item.skip_reason = skip_reason
     elif queue_item.is_folder:
         logger.warning(f"File index {file_index} out of range for queue item with {len(queue_item.files)} files")
 
@@ -119,7 +122,7 @@ def _create_file_record(
         path_hash=path_hash,
         original_path=original_path_for_record,
         status=status,
-        filename_hash=compute_filename_hash(file_path),  # for duplicate detection
+        filename_hash=compute_filename_hash(file_path),  # filename identity for anonymized histories
         file_size_bytes=original_size,
         file_mtime=file_mtime,
         duration_sec=round(input_duration, 1) if input_duration else None,
@@ -172,43 +175,11 @@ def _save_file_record(record: FileRecord) -> None:
     index.save_if_stale(HISTORY_SAVE_INTERVAL_SEC)
 
 
-def _find_duplicate_verdict(
-    index: HistoryIndex, file_path: str, file_size: int, duration_sec: float | None
-) -> FileRecord | None:
-    """Return the decided record another path holds for this same physical file, or None.
-
-    Files added to the queue without a prior Basic Scan bypass the Analysis-tab duplicate
-    detection (ADR-001), so the worker re-checks here with fresh duplicate detection.
-    Nothing is persisted for this path (ADR-002): the verdict is read-time state.
-
-    Decided records for this path itself are deliberately NOT returned - those are the
-    existing own-record checks' territory (queue filter, reconciliation, scanner output/codec
-    checks, the ANALYZE-branch cache checks).
-    """
-    cached = index.lookup_file(file_path)
-    if cached is not None:
-        if cached.status == FileStatus.CONVERTED and converted_verdict_applies(cached, file_path):
-            # Canonical conversion at this path; changed stamps in replace mode are
-            # the steady state, never grounds to re-derive it as someone else's
-            # duplicate. Genuinely changed content falls through instead: the new
-            # file may be a copy of another path's decided verdict.
-            return None
-        if cached.status in DECIDED_STATUSES and is_file_unchanged(cached, file_path):
-            return None  # Own valid verdict - existing checks handle it
-    if not file_size or not duration_sec:
-        # Without duration the metadata cascade can only match on size+filename;
-        # too low-confidence to skip an encode over (same policy as _analyze_file).
-        return None
-    duplicate = index.find_better_duplicate(file_path, file_size, duration_sec)
-    if duplicate is not None and duplicate.status in DECIDED_STATUSES:
-        return duplicate
-    return None
-
-
 def sequential_conversion_worker(
     gui,
     config: QueueConversionConfig,
     stop_event,
+    cancel_event,
     file_event_callback: Callable,
     queue_status_callback: Callable,
     reset_ui_callback: Callable,
@@ -225,7 +196,8 @@ def sequential_conversion_worker(
     Args:
         gui: The main GUI instance (passed for accessing settings, state, and root window).
         config: QueueConversionConfig containing queue items and conversion settings.
-        stop_event: Threading event to signal stopping.
+        stop_event: Threading event for graceful stop (finish current file, then stop).
+        cancel_event: Threading event set by force-stop; aborts the current ab-av1 run mid-process.
         file_event_callback: Callback for file conversion events (progress, errors, completion).
         queue_status_callback: Callback for updating queue tree (queue_item_id, status, processed, total).
         reset_ui_callback: Callback to reset UI details for a new file.
@@ -497,7 +469,9 @@ def sequential_conversion_worker(
 
                     queue_item.processed_files += 1
                     queue_item.files_skipped += 1
-                    _update_file_status(queue_item, file_index, QueueItemStatus.COMPLETED)
+                    _update_file_status(
+                        queue_item, file_index, QueueItemStatus.COMPLETED, skip_reason=reason or "Skipped"
+                    )
                     queue_status_callback(
                         queue_item.id, QueueItemStatus.CONVERTING, queue_item.processed_files, queue_item.total_files
                     )
@@ -545,36 +519,6 @@ def sequential_conversion_worker(
                     update_ui_safely(gui.root, lambda: setattr(gui.session, "last_input_size", None))
                     input_duration = 0.0
 
-                # --- Duplicate Short-Circuit (ADR-001) ---
-                # A physical file already decided under another path must not be re-processed:
-                # skip on CONVERTED / NOT_WORTHWHILE (and on ANALYZED for ANALYZE operations).
-                # An ANALYZED verdict on a CONVERT operation falls through instead and re-runs
-                # the CRF search; nothing is persisted for this path (ADR-002).
-                index = get_history_index()
-                verdict = _find_duplicate_verdict(index, file_path, original_size, input_duration)
-                if verdict is not None and (
-                    verdict.status in (FileStatus.CONVERTED, FileStatus.NOT_WORTHWHILE)
-                    or (verdict.status == FileStatus.ANALYZED and queue_item.operation_type == OperationType.ANALYZE)
-                ):
-                    if verdict.status == FileStatus.CONVERTED:
-                        reason, tree_status = "Already converted (duplicate of another path)", "done"
-                    elif verdict.status == FileStatus.NOT_WORTHWHILE:
-                        reason, tree_status = "Not worth converting (duplicate of another path)", "skip"
-                    else:
-                        reason, tree_status = "Already analyzed (duplicate of another path)", "done"
-                    logger.info(f"Skipping {anonymized_name} - {reason}")
-                    file_event_callback(filename, "skipped", reason)
-                    queue_item.processed_files += 1
-                    queue_item.files_skipped += 1
-                    _update_file_status(queue_item, file_index, QueueItemStatus.COMPLETED)
-                    queue_status_callback(
-                        queue_item.id, QueueItemStatus.CONVERTING, queue_item.processed_files, queue_item.total_files
-                    )
-                    update_ui_safely(
-                        gui.root, lambda fp=file_path, s=tree_status: gui.update_analysis_tree_for_completed_file(fp, s)
-                    )
-                    continue
-
                 current_time = time.time()
                 update_ui_safely(gui.root, lambda t=current_time: setattr(gui.session, "current_file_start_time", t))
                 update_ui_safely(gui.root, lambda: setattr(gui.session, "current_file_encoding_start_time", None))
@@ -596,6 +540,14 @@ def sequential_conversion_worker(
 
                 # --- Process Video ---
                 process_successful = False
+                file_stopped = False  # Set when the current file's run is cancelled mid-process
+                file_decided = False  # Set when a verdict was already recorded (don't overwrite with STOPPED)
+
+                # Clear skip state left over from the previous file: it is set via
+                # root.after, so it can land after that file's post-processing already
+                # ran (synchronous clear is safe per the THREAD SAFETY NOTE above)
+                gui.session.last_skip_reason = None
+                gui.session.last_min_vmaf_attempted = None
                 output_file_path = None
                 elapsed_time_file = 0
                 output_size = 0
@@ -616,10 +568,13 @@ def sequential_conversion_worker(
                             # output at the input path, which would otherwise be CRF-searched)
                             if cached_record.status == FileStatus.CONVERTED:
                                 if converted_verdict_applies(cached_record, file_path):
-                                    logger.info(f"Skipping {anonymized_name} - already converted")
-                                    file_event_callback(filename, "skipped", "Already converted")
+                                    reason = "Already converted"
+                                    logger.info(f"Skipping {anonymized_name} - {reason}")
+                                    file_event_callback(filename, "skipped", reason)
                                     queue_item.files_skipped += 1
-                                    _update_file_status(queue_item, file_index, QueueItemStatus.COMPLETED)
+                                    _update_file_status(
+                                        queue_item, file_index, QueueItemStatus.COMPLETED, skip_reason=reason
+                                    )
                                     queue_item.processed_files += 1
                                     queue_status_callback(
                                         queue_item.id,
@@ -634,14 +589,13 @@ def sequential_conversion_worker(
                             # Skip NOT_WORTHWHILE files - already determined conversion isn't beneficial
                             elif cached_record.status == FileStatus.NOT_WORTHWHILE:
                                 if is_file_unchanged(cached_record, file_path):
+                                    reason = cached_record.skip_reason or "Previously marked not worthwhile"
                                     logger.info(f"Skipping {anonymized_name} - previously marked not worthwhile")
-                                    file_event_callback(
-                                        filename,
-                                        "skipped",
-                                        cached_record.skip_reason or "Previously marked not worthwhile",
-                                    )
+                                    file_event_callback(filename, "skipped", reason)
                                     queue_item.files_skipped += 1
-                                    _update_file_status(queue_item, file_index, QueueItemStatus.COMPLETED)
+                                    _update_file_status(
+                                        queue_item, file_index, QueueItemStatus.COMPLETED, skip_reason=reason
+                                    )
                                     queue_item.processed_files += 1
                                     queue_status_callback(
                                         queue_item.id,
@@ -657,10 +611,13 @@ def sequential_conversion_worker(
                             # Skip ANALYZED files - already have Layer 2 data (CRF search complete)
                             elif cached_record.status == FileStatus.ANALYZED:
                                 if is_file_unchanged(cached_record, file_path):
-                                    logger.info(f"Skipping {anonymized_name} - already analyzed")
-                                    file_event_callback(filename, "skipped", "Already analyzed")
+                                    reason = "Already analyzed"
+                                    logger.info(f"Skipping {anonymized_name} - {reason}")
+                                    file_event_callback(filename, "skipped", reason)
                                     queue_item.files_skipped += 1
-                                    _update_file_status(queue_item, file_index, QueueItemStatus.COMPLETED)
+                                    _update_file_status(
+                                        queue_item, file_index, QueueItemStatus.COMPLETED, skip_reason=reason
+                                    )
                                     queue_item.processed_files += 1
                                     queue_status_callback(
                                         queue_item.id,
@@ -693,15 +650,16 @@ def sequential_conversion_worker(
                                 progress_callback=progress_cb,
                                 stop_event=stop_event,
                                 hw_decoder=hw_decoder,
+                                pid_callback=lambda pid, path=file_path: pid_storage_callback(gui, pid, path),
                             )
 
                             # Extract results from crf_search
-                            final_crf = crf_result.get("best_crf")
-                            final_vmaf = crf_result.get("best_vmaf")
-                            final_vmaf_target = crf_result.get("vmaf_target_used")
-                            predicted_output_size = crf_result.get("predicted_output_size")
-                            predicted_size_reduction = crf_result.get("predicted_size_reduction")
-                            crf_search_time = crf_result.get("crf_search_time_sec")
+                            final_crf = crf_result.best_crf
+                            final_vmaf = crf_result.best_vmaf
+                            final_vmaf_target = crf_result.vmaf_target_used
+                            predicted_output_size = crf_result.predicted_output_size
+                            predicted_size_reduction = crf_result.predicted_size_reduction
+                            crf_search_time = crf_result.crf_search_time_sec
 
                             # Update history index with Layer 2 data
                             record = _create_file_record(
@@ -750,6 +708,13 @@ def sequential_conversion_worker(
                                 gui.root, lambda fp=file_path: gui.update_analysis_tree_for_completed_file(fp, "done")
                             )
 
+                        except AbAv1CancelledError:
+                            # Stop request aborted the CRF search mid-run: the shared
+                            # stopped branch below records STOPPED and the count
+                            logger.info(f"Analysis cancelled for {anonymized_name}")
+                            file_stopped = True
+                            process_successful = False
+
                         except ConversionNotWorthwhileError as e:
                             # CRF search failed at all VMAF targets - record as NOT_WORTHWHILE
                             crf_search_elapsed = time.time() - crf_search_start
@@ -784,7 +749,7 @@ def sequential_conversion_worker(
                                 },
                             )
                             queue_item.files_skipped += 1
-                            _update_file_status(queue_item, file_index, QueueItemStatus.COMPLETED)
+                            _update_file_status(queue_item, file_index, QueueItemStatus.COMPLETED, skip_reason=str(e))
 
                             # Update analysis tree now that history is saved
                             update_ui_safely(
@@ -792,6 +757,7 @@ def sequential_conversion_worker(
                             )
 
                             process_successful = False
+                            file_decided = True
 
                     elif output_path is not None:
                         # CONVERT operation: Full conversion with process_video
@@ -806,6 +772,7 @@ def sequential_conversion_worker(
                             pid_callback=lambda pid, path=file_path: pid_storage_callback(gui, pid, path),
                             total_duration_seconds=input_duration,
                             hw_decoder=hw_decoder,
+                            cancel_event=cancel_event,
                         )
                         if result_tuple:
                             # Unpack tuple including timing breakdown
@@ -843,6 +810,7 @@ def sequential_conversion_worker(
                     error_msg = f"Internal processing error: {e!s}"
                     file_event_callback(filename, "failed", {"message": error_msg, "type": "processing_crash"})
                     process_successful = False
+                    file_decided = True  # ERROR recorded here; don't re-count in the post-processing chain
                     queue_item.files_failed += 1
                     queue_item.last_error = error_msg
                     _update_file_status(queue_item, file_index, QueueItemStatus.ERROR, error_msg)
@@ -916,10 +884,18 @@ def sequential_conversion_worker(
                             )
                         except Exception:
                             logger.exception(f"Failed to record history for {anonymized_name}")
-                # Check if this was a NOT_WORTHWHILE skip and record to history
+                elif file_decided:
+                    # Verdict (e.g. ANALYZE NOT_WORTHWHILE) already recorded in the
+                    # operation branch - don't overwrite it with STOPPED or ERROR
+                    pass
+                # Check if this was a NOT_WORTHWHILE skip and record to history.
+                # A decided verdict outranks a concurrent force-stop: checked before
+                # the stopped branch so the history record isn't dropped.
                 elif gui.session.last_skip_reason:
                     queue_item.files_skipped += 1
-                    _update_file_status(queue_item, file_index, QueueItemStatus.COMPLETED)
+                    _update_file_status(
+                        queue_item, file_index, QueueItemStatus.COMPLETED, skip_reason=gui.session.last_skip_reason
+                    )
 
                     # Capture skip data and timing before clearing
                     skip_reason = gui.session.last_skip_reason
@@ -957,6 +933,14 @@ def sequential_conversion_worker(
                         )
                     except Exception:
                         logger.exception(f"Failed to record NOT_WORTHWHILE history for {anonymized_name}")
+                elif file_stopped or cancel_event.is_set():
+                    # Force-stop (or ANALYZE stop) cancelled this file mid-run: stopped, not failed
+                    _update_file_status(queue_item, file_index, QueueItemStatus.STOPPED)
+
+                    def increment_stopped():
+                        gui.session.stopped_count += 1
+
+                    update_ui_safely(gui.root, increment_stopped)
                 else:
                     # process_video returned None due to error (not a NOT_WORTHWHILE skip)
                     # The error was already reported via callback, but we need to track it in queue item

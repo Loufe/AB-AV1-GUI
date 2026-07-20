@@ -4,19 +4,23 @@
 Transforms the legacy unversioned JSON array into the versioned container
 ``{"schema_version": 2, "records": [...]}``:
 
-- drops alias records (``duplicate_of`` set) and the field itself
-- folds the legacy combined ``conversion_time_sec`` into ``encoding_time_sec``
+- drops alias records (``duplicate_of`` set) and the field itself (ADR-001)
+- folds the legacy combined time: ``encoding_time_sec = conversion_time_sec -
+  (crf_search_time_sec or 0)``, then drops ``conversion_time_sec``
 - normalizes pre-ANALYZED-era records (status ``scanned`` with Layer-2 results)
   to status ``analyzed``
 - re-keys records with a stored ``original_path`` under the current path hasher,
-  which resolves mapped network drives to their UNC spelling
+  which resolves mapped network drives to their UNC spelling (ADR-001)
 - merges records that collide on the same new key (highest status wins,
   ties broken by last_updated; earliest first_seen preserved)
+- drops anonymized records (no ``original_path``): they cannot be re-keyed and
+  self-heal on the next scan (ADR-001)
+- scrubs non-finite floats field-by-field with a warning
 - drops keys that are no longer FileRecord fields
 
 Run this on the machine that produced the history file: path hashing is
 platform-dependent (Windows lowercasing, live drive mappings). The original
-file is preserved as ``<file>.v1.bak``. Idempotent: an already-migrated file is
+file is preserved as ``<file>.bak``. Idempotent: an already-migrated file is
 left untouched.
 
 Usage:
@@ -29,6 +33,7 @@ from the history contents.
 import argparse
 import dataclasses
 import json
+import math
 import os
 import sys
 from collections.abc import Callable
@@ -44,6 +49,26 @@ from src.platform_utils import resolve_mapped_drive_path
 _STATUS_PRIORITY = {"converted": 4, "not_worthwhile": 3, "analyzed": 2, "scanned": 1}
 
 _KNOWN_FIELDS = {f.name for f in dataclasses.fields(FileRecord)}
+
+
+def _scrub_nonfinite(value: dict | list) -> int:
+    """Replace non-finite floats (NaN/Infinity) with None, recursively.
+
+    serde_json in the Rust port rejects non-finite JSON, so v2 guarantees clean
+    data (ADR-002; the production audit found zero occurrences).
+
+    Returns:
+        Number of values scrubbed.
+    """
+    scrubbed = 0
+    items = value.items() if isinstance(value, dict) else enumerate(value)
+    for key, item in items:
+        if isinstance(item, float) and not math.isfinite(item):
+            value[key] = None
+            scrubbed += 1
+        elif isinstance(item, dict | list):
+            scrubbed += _scrub_nonfinite(item)
+    return scrubbed
 
 
 def _default_rekey(original_path: str) -> tuple[str, str]:
@@ -75,10 +100,12 @@ def migrate_records(
     stats = {
         "total_in": len(records),
         "dropped_aliases": 0,
+        "dropped_anonymized": 0,
         "folded_times": 0,
         "normalized_statuses": 0,
         "rekeyed": 0,
         "merged": 0,
+        "scrubbed_nonfinite": 0,
         "dropped_unknown_keys": 0,
         "total_out": 0,
     }
@@ -90,14 +117,23 @@ def migrate_records(
         if original.get("duplicate_of"):
             stats["dropped_aliases"] += 1
             continue
+        if not original.get("original_path"):
+            # Anonymized records cannot be re-keyed under the normalized hasher;
+            # they are dropped and self-heal on the next scan (ADR-001)
+            stats["dropped_anonymized"] += 1
+            continue
 
         record = {k: v for k, v in original.items() if k in _KNOWN_FIELDS or k == "conversion_time_sec"}
         dropped = len(original) - len(record) - ("duplicate_of" in original)
         stats["dropped_unknown_keys"] += max(0, dropped)
 
+        stats["scrubbed_nonfinite"] += _scrub_nonfinite(record)
+
         legacy_time = record.pop("conversion_time_sec", None)
         if legacy_time is not None and record.get("encoding_time_sec") is None:
-            record["encoding_time_sec"] = legacy_time
+            # The legacy field held search + encode combined; recover the encode
+            # share where the search time was recorded separately (ADR-002)
+            record["encoding_time_sec"] = max(0.0, legacy_time - (record.get("crf_search_time_sec") or 0))
             stats["folded_times"] += 1
 
         if (
@@ -108,15 +144,13 @@ def migrate_records(
             record["status"] = "analyzed"
             stats["normalized_statuses"] += 1
 
-        original_path = record.get("original_path")
-        if original_path:
-            new_hash, new_path = rekey(original_path)
-            if new_hash != record.get("path_hash") or new_path != original_path:
-                stats["rekeyed"] += 1
-            record["path_hash"] = new_hash
-            record["original_path"] = new_path
+        new_hash, new_path = rekey(record["original_path"])
+        if new_hash != record.get("path_hash") or new_path != record["original_path"]:
+            stats["rekeyed"] += 1
+        record["path_hash"] = new_hash
+        record["original_path"] = new_path
 
-        key = record.get("path_hash")
+        key = record["path_hash"]
         existing = by_hash.get(key)
         if existing is None:
             by_hash[key] = record
@@ -167,7 +201,7 @@ def main() -> int:
 
     migrated, stats = migrate_records(data)
 
-    backup_path = history_path + ".v1.bak"
+    backup_path = history_path + ".bak"
     if os.path.exists(backup_path):
         print(f"Backup already exists, refusing to overwrite it: {backup_path}")
         return 1
@@ -175,7 +209,8 @@ def main() -> int:
 
     temp_path = history_path + ".tmp"
     with open(temp_path, "w", encoding="utf-8") as f:
-        json.dump({"schema_version": HISTORY_SCHEMA_VERSION, "records": migrated}, f, indent=2)
+        # allow_nan=False backstops the scrub: v2 must never contain non-finite JSON
+        json.dump({"schema_version": HISTORY_SCHEMA_VERSION, "records": migrated}, f, indent=2, allow_nan=False)
     os.replace(temp_path, history_path)
 
     print(f"Migrated {history_path} to schema v{HISTORY_SCHEMA_VERSION} (backup: {backup_path})")

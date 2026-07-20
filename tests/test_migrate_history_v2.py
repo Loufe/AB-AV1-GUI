@@ -39,15 +39,19 @@ def test_conversion_time_folds_into_encoding_time():
     records = [
         make_record("/a.mkv", status="converted", conversion_time_sec=300.0),
         make_record("/b.mkv", status="converted", conversion_time_sec=300.0, encoding_time_sec=200.0),
+        make_record("/c.mkv", status="converted", conversion_time_sec=300.0, crf_search_time_sec=60.0),
     ]
 
     migrated, stats = migrate_records(records, rekey=identity_rekey)
 
     by_path = {r["original_path"]: r for r in migrated}
-    # Folded where encoding_time_sec was absent; existing split timing wins otherwise
+    # Folded where encoding_time_sec was absent; existing split timing wins otherwise.
+    # The legacy field held search + encode combined, so a recorded search time is
+    # subtracted out (ADR-002)
     assert by_path["/a.mkv"]["encoding_time_sec"] == 300.0
     assert by_path["/b.mkv"]["encoding_time_sec"] == 200.0
-    assert stats["folded_times"] == 1
+    assert by_path["/c.mkv"]["encoding_time_sec"] == 240.0
+    assert stats["folded_times"] == 2
     assert all("conversion_time_sec" not in r for r in migrated)
 
 
@@ -119,14 +123,34 @@ def test_merge_tie_broken_by_last_updated():
     assert migrated[0]["best_crf"] == 30.0  # Most recently updated wins the tie
 
 
-def test_anonymized_records_keep_stored_hash():
-    records = [make_record("/a.mkv", original_path=None, path_hash="anon-hash-1234")]
+def test_anonymized_records_are_dropped():
+    """Records without original_path cannot be re-keyed under the normalized
+    hasher; they are dropped and self-heal on the next scan (ADR-001)."""
+    records = [make_record("/a.mkv", original_path=None, path_hash="anon-hash-1234"), make_record("/b.mkv")]
 
     migrated, stats = migrate_records(records, rekey=identity_rekey)
 
-    assert stats["rekeyed"] == 0
-    assert migrated[0]["path_hash"] == "anon-hash-1234"
-    assert migrated[0]["original_path"] is None
+    assert stats["dropped_anonymized"] == 1
+    assert len(migrated) == 1
+    assert migrated[0]["original_path"] == "/b.mkv"
+
+
+def test_nonfinite_floats_are_scrubbed():
+    records = [
+        make_record(
+            "/a.mkv",
+            best_vmaf_achieved=float("nan"),
+            bitrate_kbps=float("inf"),
+            audio_streams=[{"codec": "aac", "bitrate_kbps": float("-inf")}],
+        )
+    ]
+
+    migrated, stats = migrate_records(records, rekey=identity_rekey)
+
+    assert stats["scrubbed_nonfinite"] == 3
+    assert migrated[0]["best_vmaf_achieved"] is None
+    assert migrated[0]["bitrate_kbps"] is None
+    assert migrated[0]["audio_streams"][0]["bitrate_kbps"] is None
 
 
 def test_unknown_keys_are_dropped():

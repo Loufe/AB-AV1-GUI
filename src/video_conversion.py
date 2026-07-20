@@ -13,15 +13,12 @@ from pathlib import Path
 from typing import Any
 
 from src.ab_av1.exceptions import (
+    AbAv1CancelledError,
     AbAv1Error,
     ConversionNotWorthwhileError,
-    EncodingError,
     InputFileError,
     OutputFileError,
-    VMAFError,
 )
-
-# Corrected import path: Use src.ab_av1 instead of src.ab_av1_wrapper
 from src.ab_av1.wrapper import AbAv1Wrapper
 
 # Import constants from config
@@ -128,7 +125,8 @@ def process_video(
     pid_callback: Callable[..., Any] | None = None,
     total_duration_seconds: float = 0.0,
     hw_decoder: str | None = None,
-) -> tuple[str, float, int, int, int | None, float | None, int | None, float, float] | None:
+    cancel_event: Any | None = None,
+) -> tuple[str, float, int, int, float | None, float | None, int | None, float, float] | None:
     """
     Process a single video file using ab-av1 with hardcoded quality settings.
 
@@ -143,6 +141,7 @@ def process_video(
         pid_callback: Optional callback for receiving process ID
         total_duration_seconds: Total duration of the input video in seconds (for progress calc)
         hw_decoder: Optional hardware decoder name (e.g., "h264_cuvid", "hevc_qsv")
+        cancel_event: Optional threading.Event; set by force-stop to abort mid-encode
 
     Returns:
         tuple: (output_path, elapsed_time, input_size, output_size, final_crf, final_vmaf,
@@ -265,6 +264,7 @@ def process_video(
                 pid_callback=pid_callback,
                 total_duration_seconds=total_duration_seconds,
                 hw_decoder=hw_decoder,
+                cancel_event=cancel_event,
             )
         else:
             # No cache - run full auto-encode with CRF search
@@ -276,6 +276,7 @@ def process_video(
                 pid_callback=pid_callback,
                 total_duration_seconds=total_duration_seconds,
                 hw_decoder=hw_decoder,
+                cancel_event=cancel_event,
             )
 
         conversion_elapsed_time = time.time() - conversion_start_time
@@ -298,12 +299,12 @@ def process_video(
 
         log_conversion_result(str(input_path), str(output_path_obj), conversion_elapsed_time)
 
-        final_vmaf = result_stats.get("vmaf") if result_stats else None
-        final_crf = result_stats.get("crf") if result_stats else None
+        final_vmaf = result_stats.vmaf
+        final_crf = result_stats.crf
         if use_cached_crf and record and record.vmaf_target_when_analyzed is not None:
             final_vmaf_target = record.vmaf_target_when_analyzed
         else:
-            final_vmaf_target = result_stats.get("vmaf_target_used") if result_stats else DEFAULT_VMAF_TARGET
+            final_vmaf_target = result_stats.vmaf_target_used
         logger.info(
             f"Conversion successful - Final VMAF: {final_vmaf if final_vmaf else 'N/A'}, "
             f"Final CRF: {format_crf(final_crf) if final_crf is not None else 'N/A'} "
@@ -331,8 +332,8 @@ def process_video(
                 # Don't fail the conversion if we can't delete the original
 
         # Extract timing breakdown from result_stats
-        crf_search_time = result_stats.get("crf_search_time_sec", 0) if result_stats else 0
-        encoding_time = result_stats.get("encoding_time_sec", 0) if result_stats else conversion_elapsed_time
+        crf_search_time = result_stats.crf_search_time_sec
+        encoding_time = result_stats.encoding_time_sec
 
         # Return success tuple including stats for history
         return (
@@ -347,12 +348,16 @@ def process_video(
             encoding_time,
         )
 
+    except AbAv1CancelledError:
+        # Force-stop cancelled the run mid-encode; the worker marks the file STOPPED
+        logger.info(f"Conversion cancelled for {anonymized_input_name}")
+        return None
     except ConversionNotWorthwhileError as e:
         # Note: The wrapper already called the file_info_callback with "skipped_not_worth"
         # before raising this exception, so we don't call it again here to avoid double-counting
         logger.info(f"Conversion not worthwhile for {anonymized_input_name}: {e}")
         return None  # Return None like other skipped files, not an error
-    except (InputFileError, OutputFileError, VMAFError, EncodingError, AbAv1Error):
+    except (InputFileError, OutputFileError, AbAv1Error):
         # Note: The wrapper already called the file_info_callback with "failed" status
         # before raising these exceptions, so we don't call it again here to avoid double-counting
         logger.exception(f"Conversion failed for {anonymized_input_name}")

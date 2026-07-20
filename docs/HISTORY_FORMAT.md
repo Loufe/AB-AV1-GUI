@@ -52,18 +52,16 @@ The loader accepts only `schema_version` 2 and raises on the legacy unversioned 
 
 Cache is valid if both size AND mtime match the current file (mtime has 1-second tolerance due to JSON precision loss).
 
-### Duplicate Detection (ADR-001, ADR-002)
-
-Used to recognize the same physical file accessed via different paths.
-See [ADR-001](adr/001-use-metadata-for-duplicate-detection.md) for the metadata cascade and
-[ADR-002](adr/002-adopt-versioned-history-schema-v2.md) for the read-time resolution model.
+### Filename Identity
 
 | Field | Type | Description |
 |-------|------|-------------|
-| `filename_hash` | string\|null | BLAKE2b hash of the basename (includes extension); enables matching when `original_path` is null (anonymized) |
+| `filename_hash` | string\|null | BLAKE2b hash of the basename (includes extension); retained so anonymized histories keep a filename identity (a future content-identity tier, issue #28, may consume it) |
 
-Duplicates are never persisted: every record is canonical for its own path. When display or
-the worker needs a verdict, `find_better_duplicate()` resolves it at read time.
+There is no duplicate detection: path-spelling duplicates (mapped drive vs UNC) are
+unrepresentable because `normalize_path()` resolves mapped drives before hashing
+([ADR-001](adr/001-replace-alias-records-with-path-normalization.md)), and true content
+copies wait on the partial-hash tier (issue #28).
 
 ### Video Metadata (Layer 1 - ffprobe)
 
@@ -163,7 +161,7 @@ The `FileRecord.get_analysis_level()` method maps status to analysis level:
 |-------|------|----------|
 | 0 | DISCOVERED | No record exists |
 | 1 | SCANNED | Has video_codec or duration_sec |
-| 2 | ANALYZED | Status is "analyzed" |
+| 2 | ANALYZED | Status is "analyzed" or "not_worthwhile" (a completed CRF search whose result is the negative verdict, ADR-002) |
 | 3 | CONVERTED | Status is "converted" |
 
 ## Fields by Status
@@ -178,14 +176,18 @@ All records have identity fields (`path_hash`, `status`) and cache fields (`file
 | **Skip reason fields** | — | — | ✓ | — |
 | **Layer 3** (conversion results) | — | — | — | ✓ |
 
-**Duplicate paths** (same physical file recorded under two paths, ADR-001/ADR-002): each path keeps its own canonical record (usually SCANNED, holding that path's probe results and cache stamps). The decided verdict is resolved at read time — the Analysis display and the worker's pre-processing short-circuit call `find_better_duplicate()` and use the source's verdict directly without persisting anything for the duplicate path, so deleting or re-deriving the source takes effect on the next read.
+Every record is canonical for its own path; the alias mechanism was removed by
+[ADR-001](adr/001-replace-alias-records-with-path-normalization.md). Until the partial-hash
+tier (issue #28) lands, a true content copy of a decided file is re-analyzed once (~1 minute);
+a redundant encode remains impossible because converted content is caught by the already-AV1
+check.
 
 ANALYZED / NOT_WORTHWHILE verdicts are discarded with stale content on re-scan (cache stamps no longer match).
 
 Canonical CONVERTED records survive a stamp mismatch only while the file is plausibly the conversion's own output (in replace mode the AV1 output sits at the input path, so changed stamps are the expected steady state there). Two checks recognize this, depending on what data is available:
 
 - **Basic Scan** (`folder_analysis._analyze_file`): ffprobe has run, so the probed codec decides — AV1 (or an unreadable file) preserves the record with refreshed metadata; anything else cannot be our output, and the record is demoted like the other verdicts (removing that conversion from statistics, since its input no longer exists at the path).
-- **Stat-only paths** (queue filter, queue reconciliation, worker duplicate short-circuit — no ffprobe allowed): `cache_helpers.converted_verdict_applies()` keeps the verdict if the stamps still match, or if the path is `.mkv` and the current size equals the recorded `output_size_bytes` (replace mode always outputs `input.with_suffix(".mkv")`, so only a `.mkv` path can hold our output). Legacy records without `output_size_bytes` are kept conservatively. Any other mismatch means the content changed and the file is re-queueable.
+- **Stat-only paths** (queue filter, queue reconciliation — no ffprobe allowed): `cache_helpers.converted_verdict_applies()` keeps the verdict if the stamps still match, or if the path is `.mkv` and the current size equals the recorded `output_size_bytes` (replace mode always outputs `input.with_suffix(".mkv")`, so only a `.mkv` path can hold our output). Legacy records without `output_size_bytes` are kept conservatively. Any other mismatch means the content changed and the file is re-queueable.
 
 ## Implementation
 

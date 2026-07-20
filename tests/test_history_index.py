@@ -76,8 +76,6 @@ def test_save_load_roundtrip(history_file, index):
     reloaded = HistoryIndex()
     loaded = reloaded.get(record.path_hash)
     assert loaded == record
-    # Size index is rebuilt on load (duplicate detection depends on it)
-    assert reloaded.find_by_size(SIZE_BYTES) == [record]
 
 
 def test_save_load_roundtrip_preserves_fractional_crf(history_file, index):
@@ -128,29 +126,13 @@ def test_load_rejects_unknown_schema_version(history_file):
 
 
 # ---------------------------------------------------------------------------
-# delete
+# No duplicate detection (ADR-001): every path is canonical
 # ---------------------------------------------------------------------------
 
 
-def test_delete_removes_record_and_size_index_entry(index):
-    record = make_record("/videos/movie.mkv")
-    index.upsert(record)
-
-    assert index.delete(record.path_hash) is True
-    assert index.get(record.path_hash) is None
-    assert index.find_by_size(SIZE_BYTES) == []
-    # Second delete is a no-op
-    assert index.delete(record.path_hash) is False
-
-
-# ---------------------------------------------------------------------------
-# Read-time duplicate resolution (ADR-002): nothing persisted for the copy
-# ---------------------------------------------------------------------------
-
-
-def test_scan_of_duplicate_resolves_verdict_without_persisting_it(tmp_path, index, monkeypatch):
-    """Scanning a copy of a decided file surfaces the verdict but persists only
-    a plain SCANNED record for the copy's own path (ADR-002)."""
+def test_scan_of_content_copy_creates_independent_record(tmp_path, index, monkeypatch):
+    """A content copy of a decided file gets its own SCANNED record - no alias,
+    no verdict mirroring (ADR-001; content identity waits on the #28 tier)."""
     root = tmp_path / "videos"
     (root / "dir1").mkdir(parents=True)
     out = tmp_path / "out"  # deliberately nonexistent: no output-exists short-circuit
@@ -158,7 +140,7 @@ def test_scan_of_duplicate_resolves_verdict_without_persisting_it(tmp_path, inde
     copy_path = str(root / "dir1" / "movie.mkv")
     (root / "dir1" / "movie.mkv").write_bytes(b"video-bytes")
 
-    # Decided source record under another path (same filename, size, duration)
+    # Decided record under another path (same filename, size, duration)
     source = make_record(
         "/videos/original/movie.mkv",
         status=FileStatus.ANALYZED,
@@ -172,48 +154,32 @@ def test_scan_of_duplicate_resolves_verdict_without_persisting_it(tmp_path, inde
 
     result = _analyze_file(copy_path, root, out, index, anonymize=False)
 
-    # The displayed result carries the source's Layer-2 verdict
+    # The copy is analyzed on its own merits: fresh SCANNED record, no mirrored verdict
     assert result.status == "needs_conversion"
-    assert result.estimated_reduction_percent == 40.0
-    assert "CRF" in (result.status_detail or "")
-
-    # The copy's own record is a canonical SCANNED record, not a mirrored verdict
     copy_record = index.get(compute_path_hash(copy_path))
     assert copy_record is not None
     assert copy_record.status == FileStatus.SCANNED
     assert copy_record.best_crf is None
-
-    # The source remains the only decided record
     assert index.get_by_status(FileStatus.ANALYZED) == [source]
 
 
-def test_cache_hit_on_duplicate_path_still_resolves_verdict(tmp_path, index, monkeypatch):
-    """A second scan (cache hit on the copy's SCANNED record) resolves the same
-    verdict at read time - deleting the source takes effect on the next read."""
-    root = tmp_path / "videos"
-    (root / "dir1").mkdir(parents=True)
-    out = tmp_path / "out"
+# ---------------------------------------------------------------------------
+# converted_revision: staleness signal for the estimation percentile cache
+# ---------------------------------------------------------------------------
 
-    copy_path = str(root / "dir1" / "movie.mkv")
-    (root / "dir1" / "movie.mkv").write_bytes(b"video-bytes")
 
-    source = make_record(
-        "/videos/original/movie.mkv", status=FileStatus.NOT_WORTHWHILE, skip_reason="VMAF target not achievable"
-    )
-    index.upsert(source)
-    monkeypatch.setattr("src.folder_analysis.get_video_info", lambda _path: make_ffprobe_info())
+def test_converted_revision_bumps_only_on_converted_changes(index):
+    revision = index.converted_revision
 
-    first = _analyze_file(copy_path, root, out, index, anonymize=False)
-    assert first.status == "not_worthwhile"
+    index.upsert(make_record("/videos/a.mkv"))  # SCANNED: no bump
+    assert index.converted_revision == revision
 
-    # Second scan is a cache hit on the copy's own SCANNED record
-    second = _analyze_file(copy_path, root, out, index, anonymize=False)
-    assert second.status == "not_worthwhile"
+    index.upsert(make_record("/videos/b.mkv", status=FileStatus.CONVERTED))
+    assert index.converted_revision == revision + 1
 
-    # Removing the source verdict changes the resolution immediately (no stale alias)
-    index.delete(source.path_hash)
-    third = _analyze_file(copy_path, root, out, index, anonymize=False)
-    assert third.status == "needs_conversion"
+    # Overwriting a CONVERTED record bumps again (its data may have changed)
+    index.upsert(make_record("/videos/b.mkv", status=FileStatus.CONVERTED))
+    assert index.converted_revision == revision + 2
 
 
 # ---------------------------------------------------------------------------

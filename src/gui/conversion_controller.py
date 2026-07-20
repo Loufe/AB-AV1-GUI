@@ -7,7 +7,6 @@ and GUI interaction layer for the conversion process.
 # Standard library imports
 import logging
 import os
-import signal
 import statistics
 import subprocess
 import sys
@@ -52,10 +51,16 @@ from src.gui.gui_updates import (
     update_total_elapsed_time,
     update_total_remaining_time,
 )
+from src.gui.tree_display import QUEUE_STATUS_TAGS, format_queue_file_status
 from src.models import OutputMode, QueueConversionConfig, QueueItemStatus
 
 # Import from utils and other modules
-from src.platform_utils import allow_sleep_mode, get_windows_subprocess_startupinfo, prevent_sleep_mode
+from src.platform_utils import (
+    allow_sleep_mode,
+    get_windows_subprocess_startupinfo,
+    prevent_sleep_mode,
+    terminate_process_tree,
+)
 from src.privacy import anonymize_filename
 from src.utils import format_crf, format_file_size, format_time, update_ui_safely
 
@@ -123,14 +128,6 @@ def create_queue_status_callback(gui):
     Returns:
         A callback function that updates queue tree rows
     """
-    # Status tag mapping for file rows
-    file_status_tags = {
-        QueueItemStatus.PENDING: "file_pending",
-        QueueItemStatus.CONVERTING: "file_converting",
-        QueueItemStatus.COMPLETED: "file_done",
-        QueueItemStatus.STOPPED: "file_skipped",
-        QueueItemStatus.ERROR: "file_error",
-    }
 
     def queue_status_callback(queue_item_id: str, status: QueueItemStatus, processed: int, total: int):
         """Update queue tree with item status.
@@ -159,7 +156,7 @@ def create_queue_status_callback(gui):
                     gui.queue_tree.set(tree_id, "status", status_display)
 
                     # Update root queue item tags to match status
-                    tag = file_status_tags.get(status, "file_pending")
+                    tag = QUEUE_STATUS_TAGS.get(status, "file_pending")
                     gui.queue_tree.item(tree_id, tags=(tag,))
                 except Exception:
                     logger.debug(f"Could not update tree row for {queue_item_id}")
@@ -170,22 +167,13 @@ def create_queue_status_callback(gui):
                     file_tree_id = gui.get_file_tree_id(file_item.path)
                     if file_tree_id:
                         try:
-                            # Format file status text
-                            if file_item.status == QueueItemStatus.COMPLETED:
-                                file_status = "Done"
-                            elif file_item.status == QueueItemStatus.CONVERTING:
-                                file_status = "Converting..."
-                            elif file_item.status == QueueItemStatus.ERROR:
-                                file_status = file_item.error_message or "Error"
-                            elif file_item.status == QueueItemStatus.STOPPED:
-                                file_status = "Stopped"
-                            else:
-                                file_status = ""
-
-                            gui.queue_tree.set(file_tree_id, "status", file_status)
-                            gui.queue_tree.item(
-                                file_tree_id, tags=(file_status_tags.get(file_item.status, "file_pending"),)
+                            file_status, file_tag = format_queue_file_status(
+                                file_item.status,
+                                error_message=file_item.error_message,
+                                skip_reason=file_item.skip_reason,
                             )
+                            gui.queue_tree.set(file_tree_id, "status", file_status)
+                            gui.queue_tree.item(file_tree_id, tags=(file_tag,))
                         except Exception:
                             logger.debug(f"Could not update file tree row for {file_item.path}")
 
@@ -362,6 +350,7 @@ def start_conversion(gui) -> None:
     gui.session.pending_files = []
     gui.session.current_file_path = None
     gui.stop_event = threading.Event()
+    gui.cancel_event = threading.Event()
 
     # Start timers
     def start_total_timer():
@@ -402,6 +391,7 @@ def start_conversion(gui) -> None:
             gui,
             config,
             gui.stop_event,
+            gui.cancel_event,
             file_callback,
             queue_callback,
             reset_ui_callback,
@@ -438,7 +428,7 @@ def stop_conversion(gui) -> None:
 
 
 def terminate_process(pid: int) -> bool:
-    """Terminate a process by PID, using platform-specific methods.
+    """Terminate a process tree by PID, with a kill-ffmpeg-by-name fallback.
 
     Args:
         pid: Process ID to terminate
@@ -451,54 +441,25 @@ def terminate_process(pid: int) -> bool:
         return False
 
     logger.info(f"Attempting to terminate process PID {pid}...")
-    try:
-        if sys.platform == "win32":
+    if terminate_process_tree(pid):
+        return True
+
+    # Fallback: try killing ffmpeg directly if the tree kill failed
+    if sys.platform == "win32":
+        try:
             startupinfo, _ = get_windows_subprocess_startupinfo()
-            result = subprocess.run(
-                ["taskkill", "/F", "/T", "/PID", str(pid)],
+            subprocess.run(
+                ["taskkill", "/F", "/IM", "ffmpeg.exe"],
                 capture_output=True,
                 text=True,
                 check=False,
                 startupinfo=startupinfo,
             )
-            if result.returncode == 0:
-                logger.info(f"Successfully terminated PID {pid} and its child processes via taskkill.")
-                return True
-            logger.warning(f"taskkill failed for PID {pid} (rc={result.returncode}): {result.stderr.strip()}")
-            # Fallback: try killing ffmpeg directly if taskkill failed
-            try:
-                subprocess.run(
-                    ["taskkill", "/F", "/IM", "ffmpeg.exe"],
-                    capture_output=True,
-                    text=True,
-                    check=False,
-                    startupinfo=startupinfo,
-                )
-                logger.info("Attempted fallback kill of ffmpeg.exe processes.")
-                return True
-            except Exception:
-                logger.exception("Failed fallback kill of ffmpeg processes")
-                return False
-        else:  # Linux/macOS
-            # Try SIGTERM first, then SIGKILL
-            os.kill(pid, signal.SIGTERM)
-            time.sleep(0.5)
-            try:
-                os.kill(pid, 0)  # Check if process still exists
-                # If it exists, SIGTERM failed, use SIGKILL
-                logger.warning(f"Process {pid} still alive after SIGTERM, sending SIGKILL.")
-                os.kill(pid, signal.SIGKILL)
-                logger.info(f"Sent SIGKILL to PID {pid}.")
-                return True
-            except ProcessLookupError:
-                logger.info(f"Process {pid} terminated successfully with SIGTERM.")
-                return True
-    except ProcessLookupError:
-        logger.warning(f"Process PID {pid} not found during termination attempt.")
-        return True  # Process already gone
-    except Exception:
-        logger.exception(f"Failed to terminate process PID {pid}")
-        return False
+            logger.info("Attempted fallback kill of ffmpeg.exe processes.")
+            return True
+        except Exception:
+            logger.exception("Failed fallback kill of ffmpeg processes")
+    return False
 
 
 def cleanup_temp_file(input_path: str, output_folder: str, input_folder: str) -> None:
@@ -588,6 +549,10 @@ def force_stop_conversion(gui, confirm: bool = True) -> None:
     gui.status_label.config(text="Force stopping...")
     if gui.stop_event:
         gui.stop_event.set()
+    if gui.cancel_event:
+        # In-band cancellation: the runner's read loop terminates the ab-av1
+        # process tree itself; the PID kill below remains as a backstop.
+        gui.cancel_event.set()
 
     # Get process information
     pid_to_kill = None
@@ -838,6 +803,7 @@ def conversion_complete(gui, final_message="Queue complete"):
     s.running = False
     gui.conversion_thread = None
     gui.stop_event = None
+    gui.cancel_event = None
     s.current_process_info = None
     s.current_file_path = None
     if s.elapsed_timer_id:  # Ensure timer is stopped if still running

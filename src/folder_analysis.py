@@ -25,7 +25,7 @@ from statistics import mean
 from src.cache_helpers import mtimes_match
 from src.config import DEFAULT_REDUCTION_ESTIMATE_PERCENT
 from src.history_index import HistoryIndex, compute_filename_hash, compute_path_hash
-from src.models import DECIDED_STATUSES, FileRecord, FileStatus, VideoMetadata
+from src.models import FileRecord, FileStatus, VideoMetadata
 from src.utils import format_crf, get_video_info
 from src.video_metadata import extract_video_metadata
 
@@ -252,10 +252,8 @@ def _analyze_file(
     video_info = get_video_info(file_path)
     meta = extract_video_metadata(video_info)
 
-    # The remaining lookup -> duplicate-check -> upsert sequence must be atomic: two
-    # parallel scan workers processing two copies of the same physical file could
-    # otherwise both pass find_better_duplicate before either upserts, producing two
-    # canonical records instead of one canonical plus one alias (issue #22). The
+    # The remaining lookup -> upsert sequence stays atomic so two parallel scan
+    # workers cannot interleave a stale re-read with each other's writes. The
     # ffprobe above deliberately stays outside the lock - probes can take seconds
     # and must not serialize the other workers.
     with index.transaction():
@@ -278,19 +276,10 @@ def _analyze_file(
                 return _record_to_result(file_path, record, index)
             logger.info("Converted file replaced with non-AV1 content, re-deriving record: %s", filename)
 
-        # Duplicate detection (ADR-002): does another path hold a decided verdict for the
-        # same physical file? The verdict is used directly and never persisted for this
-        # path - read-time resolution cannot go stale. This path still gets its own
-        # SCANNED record so its probe results are cached; a SCANNED duplicate has nothing
-        # decided to mirror and falls through like a new file.
-        duplicate = index.find_better_duplicate(file_path, file_size, meta.duration_sec)
-        if duplicate is not None and duplicate.status in DECIDED_STATUSES:
-            record = _create_scanned_record(file_path, path_hash, file_size, file_mtime, video_info, anonymize)
-            index.upsert(record)
-            logger.debug("Resolved %s verdict from another path for %s (duplicate)", duplicate.status, filename)
-            return _record_to_result(file_path, duplicate, index)
-
-        # New file or previously SCANNED - create new SCANNED record
+        # New file or previously SCANNED - create new SCANNED record. Same-file-other-path
+        # duplicates are not detected here: path-spelling duplicates are unrepresentable
+        # after hash-time normalization (ADR-001), and true content copies wait on the
+        # partial-hash tier (issue #28).
         record = _create_scanned_record(file_path, path_hash, file_size, file_mtime, video_info, anonymize)
 
         # Check for skip conditions
@@ -488,14 +477,6 @@ def _record_to_result(file_path: str, record: FileRecord, index: HistoryIndex) -
     Returns:
         FileAnalysisResult based on cached data.
     """
-    # Read-time duplicate resolution (ADR-002): an undecided record defers to a decided
-    # verdict for the same physical file under another path. Never persisted, so it can
-    # never go stale - deleting or re-deriving the source takes effect on the next read.
-    if record.status in (FileStatus.SCANNED, FileStatus.ANALYZED):
-        better = index.find_better_duplicate(file_path, record.file_size_bytes, record.duration_sec)
-        if better is not None and better.status in DECIDED_STATUSES:
-            record = better
-
     # Determine status
     if record.status == FileStatus.CONVERTED:
         status = "already_done"
