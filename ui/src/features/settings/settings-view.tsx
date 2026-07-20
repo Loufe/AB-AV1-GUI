@@ -15,6 +15,7 @@ import { Switch } from "@/components/ui/switch";
 import type { DefaultOutputMode, Settings, VideoExtension } from "@/lib/bindings";
 import { saveSettings } from "@/lib/ipc";
 
+import { HistoryImport } from "./history-import";
 import { SettingContainer, SettingsGroup } from "./settings-primitives";
 import { useSettings } from "./use-settings";
 
@@ -280,6 +281,8 @@ export function SettingsView() {
           />
         </SettingContainer>
       </SettingsGroup>
+
+      <HistoryImport />
 
       <div className="flex items-center justify-end gap-3">
         {validation !== null && <p className="mr-auto text-xs text-destructive">{validation}</p>}

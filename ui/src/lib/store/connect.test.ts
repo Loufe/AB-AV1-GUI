@@ -59,7 +59,14 @@ function corruptionReport(): CorruptionReport {
 function snapshot(item: QueueItem): StreamPayload_Deserialize {
   return {
     Snapshot: {
-      durable: { queue: [item], paths: {}, records: {}, outputs: {}, conversion_runs: {} },
+      durable: {
+        queue: [item],
+        paths: {},
+        records: {},
+        outputs: {},
+        conversion_runs: {},
+        parked: {},
+      },
       settings: settings(),
     },
   };

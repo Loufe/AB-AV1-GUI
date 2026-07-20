@@ -10,17 +10,18 @@ use crate::{
     ClaimId, Command, CompletionEvidence, ConflictKind, ContentKey, Crf, DecodeMode,
     DecodePreference, DefaultOutputMode, DestructiveIdentity, DestructiveObservation, DurableDelta,
     DurationMs, Effect, Eligibility, EphemeralDelta, ExecutionSettings, FailureFacts, FailureKind,
-    FileRecord, FileStamp, FileSystemFacts, FileSystemId, FileTimeNs, ItemOutcome,
-    JOURNAL_SCHEMA_VERSION, JobAction, JobPhase, JobProgress, JournalEnvelope, JournalSequence,
-    MediaContainer, MediaObservation, Operation, OutputDelta, OutputRecoveryAction, OutputState,
-    OutputTarget, OutputTransaction, PathBinding, PathHash, PhaseSpan, QueueCommand, QueueItemId,
+    FileRecord, FileStamp, FileSystemFacts, FileSystemId, FileTimeNs, HistoryCommand, ImportPath,
+    ItemOutcome, JOURNAL_SCHEMA_VERSION, JobAction, JobPhase, JobProgress, JournalEnvelope,
+    JournalSequence, MediaContainer, MediaObservation, Operation, OutputDelta,
+    OutputRecoveryAction, OutputState, OutputTarget, OutputTransaction, ParkedRecord,
+    ParkedResolution, ParkedStatus, PathBinding, PathHash, PhaseSpan, QueueCommand, QueueItemId,
     QueueItemState, Replacement, Reply, RunId, SearchMeasurement, SessionCommand, SessionState,
     Settings, SettingsCommand, SkipReason, StreamByteSizes, SystemCommand, Telemetry,
     ToolAvailability, ToolRevisions, ToolSource, ToolsState, UnixMillis, VendorActivity,
     VendorCommand, VideoCodec, VideoMeta, VmafScore, VmafTarget, WorkerCommand, apply,
     compaction_due, compaction_quiescent, corruption_signature, encode_record, encode_snapshot,
-    evaluate_eligibility, permitted_profiles, recover_output, replay, select_analysis,
-    select_job_action,
+    evaluate_eligibility, permitted_profiles, recover_output, replay, resolve_parked,
+    select_analysis, select_job_action,
 };
 
 fn revisions() -> ToolRevisions {
@@ -626,6 +627,7 @@ fn durable_analysis_is_selected_for_the_same_content_and_profile() {
             claim_id: ClaimId(2),
             run_id: RunId(3),
             observation: Some(Box::new(moved_observation)),
+            import_paths: Vec::new(),
             execution: execution(),
         }),
     );
@@ -672,6 +674,7 @@ fn durable_analysis_is_selected_for_the_same_content_and_profile() {
             claim_id: ClaimId(5),
             run_id: RunId(6),
             observation: Some(Box::new(media_observation("same-content"))),
+            import_paths: Vec::new(),
             execution: execution(),
         }),
     );
@@ -992,6 +995,7 @@ fn media_record_and_analysis_checkpoint_replay_as_one_state() {
             claim_id: ClaimId(2),
             run_id: RunId(3),
             observation: Some(Box::new(media_observation("durable-content"))),
+            import_paths: Vec::new(),
             execution: execution(),
         }),
     );
@@ -1160,6 +1164,7 @@ fn remuxed_requires_a_remux_action_and_committed_output() {
             claim_id: ClaimId(2),
             run_id: RunId(3),
             observation: Some(Box::new(observation)),
+            import_paths: Vec::new(),
             execution: execution(),
         }),
     );
@@ -1364,6 +1369,7 @@ fn failed_terminal_invariants_check_conflict_state_and_diagnostic_bound() {
             claim_id: ClaimId(2),
             run_id: RunId(3),
             observation: Some(Box::new(media_observation("failed-content"))),
+            import_paths: Vec::new(),
             execution: execution(),
         }),
     );
@@ -1429,6 +1435,7 @@ fn preparation_rejects_invalid_execution_settings() {
             claim_id: ClaimId(2),
             run_id: RunId(3),
             observation: None,
+            import_paths: Vec::new(),
             execution: invalid,
         }),
     );
@@ -2108,6 +2115,7 @@ fn reserve_and_prepare(
             claim_id,
             run_id,
             observation: None,
+            import_paths: Vec::new(),
             execution,
         }),
     )
@@ -2218,9 +2226,15 @@ fn decisive_outcomes_upsert_the_record_verdict() {
         record_verdict(&state),
         Some(crate::Verdict {
             kind: crate::VerdictKind::Converted {
-                output_content_key: ContentKey("ck-out".to_owned()),
+                output_content_key: Some(ContentKey("ck-out".to_owned())),
+                input_size: None,
+                output_size: None,
+                encoding_time: None,
+                crf: None,
+                vmaf: None,
+                target: None,
             },
-            source_run: RunId(3),
+            source_run: Some(RunId(3)),
             decided_at: UnixMillis(5_000),
         })
     );
@@ -2252,7 +2266,7 @@ fn decisive_outcomes_upsert_the_record_verdict() {
                 requested: execution().requested_target,
                 floor: execution().fallback_floor,
             },
-            source_run: RunId(3),
+            source_run: Some(RunId(3)),
             decided_at: UnixMillis(6_000),
         })
     );
@@ -2338,7 +2352,7 @@ fn latest_decisive_run_wins_the_verdict() {
         .verdict
         .clone()
         .expect("standing verdict");
-    assert_eq!(verdict.source_run, RunId(9));
+    assert_eq!(verdict.source_run, Some(RunId(9)));
     assert!(matches!(
         verdict.kind,
         crate::VerdictKind::NotWorthwhile { .. }
@@ -2349,9 +2363,15 @@ fn latest_decisive_run_wins_the_verdict() {
 fn verdict_freshness_is_a_stamp_match_against_the_settled_output() {
     let converted = crate::Verdict {
         kind: crate::VerdictKind::Converted {
-            output_content_key: ContentKey("ck-out".to_owned()),
+            output_content_key: Some(ContentKey("ck-out".to_owned())),
+            input_size: None,
+            output_size: None,
+            encoding_time: None,
+            crf: None,
+            vmaf: None,
+            target: None,
         },
-        source_run: RunId(3),
+        source_run: Some(RunId(3)),
         decided_at: UnixMillis(5_000),
     };
     let settled = destructive("out", 42);
@@ -2413,7 +2433,7 @@ fn verdict_freshness_is_a_stamp_match_against_the_settled_output() {
             requested: VmafTarget(95),
             floor: VmafTarget(90),
         },
-        source_run: RunId(3),
+        source_run: Some(RunId(3)),
         decided_at: UnixMillis(5_000),
     };
     assert!(crate::verdict_applies(&not_worthwhile, None, None));
@@ -2478,6 +2498,7 @@ fn refresh_intent_forces_a_new_search_over_a_qualifying_cached_analysis() {
             claim_id: ClaimId(2),
             run_id: RunId(3),
             observation: Some(Box::new(media_observation("refresh-content"))),
+            import_paths: Vec::new(),
             execution: execution(),
         }),
     );
@@ -2536,6 +2557,7 @@ fn refresh_intent_forces_a_new_search_over_a_qualifying_cached_analysis() {
             claim_id: ClaimId(5),
             run_id: RunId(6),
             observation: Some(Box::new(media_observation("refresh-content"))),
+            import_paths: Vec::new(),
             execution: execution(),
         }),
     );
@@ -2602,6 +2624,7 @@ fn software_fallback_analysis_is_permitted_under_a_hardware_spec() {
             claim_id: ClaimId(2),
             run_id: RunId(3),
             observation: Some(Box::new(media_observation("ladder-content"))),
+            import_paths: Vec::new(),
             execution: hardware.clone(),
         }),
     );
@@ -2776,6 +2799,7 @@ fn restage_moves_the_staging_pin_and_is_refused_after_abandonment() {
             claim_id: ClaimId(2),
             run_id: RunId(3),
             observation: None,
+            import_paths: Vec::new(),
             execution: execution(),
         }),
         Command::Worker(WorkerCommand::Started {
@@ -2918,8 +2942,10 @@ fn file_record_round_trips_through_json() {
     record.verdict = Some(crate::Verdict {
         kind: crate::VerdictKind::Remuxed {
             output_content_key: ContentKey("ck-out".to_owned()),
+            input_size: Some(10_000),
+            output_size: Some(9_500),
         },
-        source_run: RunId(11),
+        source_run: Some(RunId(11)),
         decided_at: UnixMillis(4_000),
     });
     // serde_json rejects non-string map keys, so the profile-keyed index must
@@ -2927,4 +2953,590 @@ fn file_record_round_trips_through_json() {
     let encoded = serde_json::to_string(&record).expect("serialize file record");
     let decoded: FileRecord = serde_json::from_str(&encoded).expect("deserialize file record");
     assert_eq!(decoded, record);
+}
+
+/// A parked record whose stamp matches `media_observation` (size 10_000,
+/// mtime 1 ns) with a full summary.
+fn parked_record(status: ParkedStatus) -> ParkedRecord {
+    ParkedRecord {
+        status,
+        size: Some(10_000),
+        modified_ns: Some(FileTimeNs(1)),
+        video_codec: Some(VideoCodec::H264),
+        width: Some(1_280),
+        height: Some(720),
+        duration_ms: Some(60_000),
+        output_size: Some(4_000),
+        encoding_time: Some(DurationMs(120_000)),
+        crf: Some(Crf(30_000)),
+        vmaf: Some(VmafScore(9_512)),
+        target: Some(VmafTarget(95)),
+        requested_target: Some(VmafTarget(94)),
+        floor_target: Some(VmafTarget(91)),
+        decided_at: UnixMillis(1_000),
+    }
+}
+
+#[test]
+fn resolve_parked_adopts_on_stamp_match_by_status() {
+    let observation = media_observation("adopt-content");
+
+    // Decisive statuses adopt their verdict with an import-shaped summary.
+    let converted = resolve_parked(&parked_record(ParkedStatus::Converted), &observation);
+    let ParkedResolution::Adopt {
+        verdict: Some(verdict),
+    } = converted
+    else {
+        panic!("converted stamp match must adopt a verdict");
+    };
+    assert_eq!(verdict.source_run, None);
+    assert_eq!(verdict.decided_at, UnixMillis(1_000));
+    assert_eq!(
+        verdict.kind,
+        crate::VerdictKind::Converted {
+            output_content_key: None,
+            input_size: Some(10_000),
+            output_size: Some(4_000),
+            encoding_time: Some(DurationMs(120_000)),
+            crf: Some(Crf(30_000)),
+            vmaf: Some(VmafScore(9_512)),
+            target: Some(VmafTarget(95)),
+        }
+    );
+
+    let not_worthwhile = resolve_parked(&parked_record(ParkedStatus::NotWorthwhile), &observation);
+    let ParkedResolution::Adopt {
+        verdict: Some(verdict),
+    } = not_worthwhile
+    else {
+        panic!("not-worthwhile stamp match must adopt a verdict");
+    };
+    assert_eq!(
+        verdict.kind,
+        crate::VerdictKind::NotWorthwhile {
+            requested: VmafTarget(94),
+            floor: VmafTarget(91),
+        }
+    );
+
+    // Indecisive statuses adopt provenance only.
+    for status in [ParkedStatus::Scanned, ParkedStatus::Analyzed] {
+        assert_eq!(
+            resolve_parked(&parked_record(status), &observation),
+            ParkedResolution::Adopt { verdict: None }
+        );
+    }
+
+    // Missing targets fall back to the default target constants.
+    let mut bare = parked_record(ParkedStatus::NotWorthwhile);
+    bare.requested_target = None;
+    bare.floor_target = None;
+    let ParkedResolution::Adopt {
+        verdict: Some(verdict),
+    } = resolve_parked(&bare, &observation)
+    else {
+        panic!("missing targets still adopt");
+    };
+    assert_eq!(
+        verdict.kind,
+        crate::VerdictKind::NotWorthwhile {
+            requested: crate::DEFAULT_VMAF_TARGET,
+            floor: crate::MIN_VMAF_FALLBACK_TARGET,
+        }
+    );
+}
+
+#[test]
+fn resolve_parked_stamp_tolerance_and_retirement() {
+    let observation = media_observation("adopt-content");
+
+    // Modification time within one second still matches.
+    let mut drifted = parked_record(ParkedStatus::Scanned);
+    drifted.modified_ns = Some(FileTimeNs(1 + crate::IMPORT_MTIME_TOLERANCE_NS));
+    assert_eq!(
+        resolve_parked(&drifted, &observation),
+        ParkedResolution::Adopt { verdict: None }
+    );
+    let mut beyond = parked_record(ParkedStatus::Scanned);
+    beyond.modified_ns = Some(FileTimeNs(2 + crate::IMPORT_MTIME_TOLERANCE_NS));
+    assert_eq!(
+        resolve_parked(&beyond, &observation),
+        ParkedResolution::Retire
+    );
+
+    // A record missing either stamp half never matches.
+    let mut sizeless = parked_record(ParkedStatus::Scanned);
+    sizeless.size = None;
+    assert_eq!(
+        resolve_parked(&sizeless, &observation),
+        ParkedResolution::Retire
+    );
+    let mut timeless = parked_record(ParkedStatus::Scanned);
+    timeless.modified_ns = None;
+    assert_eq!(
+        resolve_parked(&timeless, &observation),
+        ParkedResolution::Retire
+    );
+
+    // Replace-mode: a converted record whose stamp mismatches still adopts
+    // when the file now at the path is AV1 — it IS the conversion's output.
+    let mut replaced = parked_record(ParkedStatus::Converted);
+    replaced.size = Some(99_999);
+    let mut av1_observation = media_observation("adopt-content");
+    av1_observation.metadata.codec = VideoCodec::Av1;
+    let ParkedResolution::Adopt {
+        verdict: Some(verdict),
+    } = resolve_parked(&replaced, &av1_observation)
+    else {
+        panic!("replace-mode output must adopt the converted verdict");
+    };
+    assert!(matches!(verdict.kind, crate::VerdictKind::Converted { .. }));
+    // The same mismatch against a non-AV1 file retires the claim.
+    assert_eq!(
+        resolve_parked(&replaced, &observation),
+        ParkedResolution::Retire
+    );
+}
+
+#[test]
+fn history_deltas_fold_park_adopt_and_retire() {
+    let mut state = crate::DurableState::default();
+    let key_a = ImportPath("c:/videos/a.mkv".to_owned());
+    let key_b = ImportPath("c:/videos/b.mkv".to_owned());
+    crate::fold(
+        &mut state,
+        &DurableDelta::HistoryImported {
+            records: vec![
+                (key_a.clone(), parked_record(ParkedStatus::Converted)),
+                (key_b.clone(), parked_record(ParkedStatus::Scanned)),
+            ],
+        },
+    );
+    assert_eq!(state.parked.len(), 2);
+
+    let observation = media_observation("adopt-content");
+    crate::fold(
+        &mut state,
+        &DurableDelta::MediaObserved {
+            observation: Box::new(observation.clone()),
+        },
+    );
+    let adopted_verdict = crate::Verdict {
+        kind: crate::VerdictKind::NotWorthwhile {
+            requested: VmafTarget(95),
+            floor: VmafTarget(90),
+        },
+        source_run: None,
+        decided_at: UnixMillis(1_000),
+    };
+    crate::fold(
+        &mut state,
+        &DurableDelta::ParkedAdopted {
+            import_path: key_a.clone(),
+            content_key: observation.binding.content_key.clone(),
+            verdict: Some(adopted_verdict.clone()),
+        },
+    );
+    let record = state
+        .records
+        .get(&observation.binding.content_key)
+        .expect("content record");
+    assert_eq!(record.imported, Some(key_a.clone()));
+    assert_eq!(record.verdict, Some(adopted_verdict.clone()));
+    assert!(!state.parked.contains_key(&key_a));
+
+    // Adoption without a verdict keeps the standing one.
+    crate::fold(
+        &mut state,
+        &DurableDelta::ParkedAdopted {
+            import_path: key_b.clone(),
+            content_key: observation.binding.content_key.clone(),
+            verdict: None,
+        },
+    );
+    let record = state
+        .records
+        .get(&observation.binding.content_key)
+        .expect("content record");
+    assert_eq!(record.imported, Some(key_b.clone()));
+    assert_eq!(record.verdict, Some(adopted_verdict));
+    assert!(state.parked.is_empty());
+
+    // Retirement just drops the parked entry.
+    crate::fold(
+        &mut state,
+        &DurableDelta::HistoryImported {
+            records: vec![(key_a.clone(), parked_record(ParkedStatus::Scanned))],
+        },
+    );
+    crate::fold(
+        &mut state,
+        &DurableDelta::ParkedRetired { import_path: key_a },
+    );
+    assert!(state.parked.is_empty());
+}
+
+#[test]
+fn import_parks_fresh_records_and_skips_known_keys() {
+    let mut state = AppState::default();
+    let key_a = ImportPath("c:/videos/a.mkv".to_owned());
+    let key_b = ImportPath("c:/videos/b.mkv".to_owned());
+    let batch = vec![
+        (key_a.clone(), parked_record(ParkedStatus::Converted)),
+        (key_b.clone(), parked_record(ParkedStatus::Scanned)),
+        // A duplicate inside one batch is skipped, not double-parked.
+        (key_a.clone(), parked_record(ParkedStatus::Scanned)),
+    ];
+    let imported = apply(
+        &mut state,
+        Command::History(HistoryCommand::Import {
+            records: batch.clone(),
+        }),
+    );
+    assert_eq!(
+        imported.reply,
+        Reply::Imported {
+            parked: 2,
+            skipped: 1
+        }
+    );
+    assert_eq!(imported.durable.len(), 1);
+    assert_eq!(state.durable.parked.len(), 2);
+
+    // A full re-import is a counted no-op with no durable write.
+    let again = apply(
+        &mut state,
+        Command::History(HistoryCommand::Import { records: batch }),
+    );
+    assert_eq!(
+        again.reply,
+        Reply::Imported {
+            parked: 0,
+            skipped: 3
+        }
+    );
+    assert!(again.durable.is_empty());
+
+    // An adopted key stays skipped even after its parked entry is gone.
+    let observation = media_observation("adopt-content");
+    crate::fold(
+        &mut state.durable,
+        &DurableDelta::MediaObserved {
+            observation: Box::new(observation.clone()),
+        },
+    );
+    crate::fold(
+        &mut state.durable,
+        &DurableDelta::ParkedAdopted {
+            import_path: key_a.clone(),
+            content_key: observation.binding.content_key,
+            verdict: None,
+        },
+    );
+    let after_adoption = apply(
+        &mut state,
+        Command::History(HistoryCommand::Import {
+            records: vec![(key_a, parked_record(ParkedStatus::Converted))],
+        }),
+    );
+    assert_eq!(
+        after_adoption.reply,
+        Reply::Imported {
+            parked: 0,
+            skipped: 1
+        }
+    );
+}
+
+#[test]
+fn prepare_resolves_parked_records_after_the_observation() {
+    let mut state = AppState::default();
+    let matching = ImportPath("c:/videos/match.mkv".to_owned());
+    let stale = ImportPath("c:/videos/stale.mkv".to_owned());
+    let mut stale_record = parked_record(ParkedStatus::Scanned);
+    stale_record.size = Some(99_999);
+    let imported = apply(
+        &mut state,
+        Command::History(HistoryCommand::Import {
+            records: vec![
+                (matching.clone(), parked_record(ParkedStatus::Converted)),
+                (stale.clone(), stale_record),
+            ],
+        }),
+    );
+    assert!(matches!(imported.reply, Reply::Imported { parked: 2, .. }));
+
+    apply(&mut state, add_command(QueueItemId(1), "video.mkv"));
+    start_session(&mut state);
+    let reserved = apply(
+        &mut state,
+        Command::Worker(WorkerCommand::ReserveNext {
+            claim_id: ClaimId(2),
+            run_id: RunId(3),
+        }),
+    );
+    assert!(matches!(reserved.reply, Reply::Reserved(Some(_))));
+    let observation = media_observation("adopt-content");
+    let prepared = apply(
+        &mut state,
+        Command::Worker(WorkerCommand::PrepareReserved {
+            item_id: QueueItemId(1),
+            claim_id: ClaimId(2),
+            run_id: RunId(3),
+            observation: Some(Box::new(observation.clone())),
+            import_paths: vec![matching.clone(), stale.clone()],
+            execution: execution(),
+        }),
+    );
+    assert!(matches!(prepared.reply, Reply::Claimed(Some(_))));
+    // The observation folds before any adoption delta.
+    let observed_at = prepared
+        .durable
+        .iter()
+        .position(|delta| matches!(delta, DurableDelta::MediaObserved { .. }))
+        .expect("media observed");
+    let adopted_at = prepared
+        .durable
+        .iter()
+        .position(|delta| matches!(delta, DurableDelta::ParkedAdopted { .. }))
+        .expect("parked adopted");
+    assert!(observed_at < adopted_at);
+    assert!(
+        prepared
+            .durable
+            .iter()
+            .any(|delta| matches!(delta, DurableDelta::ParkedRetired { .. }))
+    );
+
+    assert!(state.durable.parked.is_empty());
+    let record = state
+        .durable
+        .records
+        .get(&observation.binding.content_key)
+        .expect("content record");
+    assert_eq!(record.imported, Some(matching));
+    let verdict = record.verdict.clone().expect("adopted verdict");
+    assert_eq!(verdict.source_run, None);
+    assert!(matches!(
+        verdict.kind,
+        crate::VerdictKind::Converted {
+            output_content_key: None,
+            ..
+        }
+    ));
+}
+
+#[test]
+fn adoption_never_overwrites_a_native_verdict() {
+    let mut state = AppState::default();
+    let key = ImportPath("c:/videos/native.mkv".to_owned());
+    apply(
+        &mut state,
+        Command::History(HistoryCommand::Import {
+            records: vec![(key.clone(), parked_record(ParkedStatus::Converted))],
+        }),
+    );
+    // The content is already natively decided.
+    let observation = media_observation("adopt-content");
+    crate::fold(
+        &mut state.durable,
+        &DurableDelta::MediaObserved {
+            observation: Box::new(observation.clone()),
+        },
+    );
+    let native = crate::Verdict {
+        kind: crate::VerdictKind::NotWorthwhile {
+            requested: VmafTarget(95),
+            floor: VmafTarget(90),
+        },
+        source_run: Some(RunId(7)),
+        decided_at: UnixMillis(9_000),
+    };
+    state
+        .durable
+        .records
+        .get_mut(&observation.binding.content_key)
+        .expect("content record")
+        .verdict = Some(native.clone());
+
+    apply(&mut state, add_command(QueueItemId(1), "video.mkv"));
+    start_session(&mut state);
+    apply(
+        &mut state,
+        Command::Worker(WorkerCommand::ReserveNext {
+            claim_id: ClaimId(2),
+            run_id: RunId(3),
+        }),
+    );
+    let prepared = apply(
+        &mut state,
+        Command::Worker(WorkerCommand::PrepareReserved {
+            item_id: QueueItemId(1),
+            claim_id: ClaimId(2),
+            run_id: RunId(3),
+            observation: Some(Box::new(observation.clone())),
+            import_paths: vec![key.clone()],
+            execution: execution(),
+        }),
+    );
+    assert!(matches!(prepared.reply, Reply::Claimed(Some(_))));
+    let record = state
+        .durable
+        .records
+        .get(&observation.binding.content_key)
+        .expect("content record");
+    // Provenance lands, the native verdict stands, the inbox empties.
+    assert_eq!(record.imported, Some(key));
+    assert_eq!(record.verdict, Some(native));
+    assert!(state.durable.parked.is_empty());
+}
+
+#[test]
+fn finished_verdict_absorbs_the_measured_summary() {
+    let key = "verdict-content";
+    let mut state = verdict_fixture(
+        3,
+        Some(key),
+        Some(OutputState::Committed {
+            final_identity: identity("ck-out", 20),
+        }),
+    );
+    crate::fold(
+        &mut state,
+        &DurableDelta::AnalysisRecorded {
+            run_id: RunId(3),
+            result: Box::new(analysis()),
+        },
+    );
+    crate::fold(
+        &mut state,
+        &DurableDelta::ItemFinished {
+            item_id: QueueItemId(1),
+            claim_id: ClaimId(2),
+            run_id: RunId(3),
+            outcome: ItemOutcome::Converted(CompletionEvidence::LiveEncode {
+                input_size: 10_000,
+                output_size: 4_000,
+                stream_sizes: StreamByteSizes {
+                    video: 3_000,
+                    audio: 900,
+                    subtitle: 50,
+                    other: 50,
+                },
+                encode_decode: DecodeMode::Software,
+            }),
+            at: UnixMillis(5_000),
+            phase_spans: vec![
+                PhaseSpan {
+                    phase: JobPhase::Analyzing,
+                    duration: DurationMs(30_000),
+                },
+                PhaseSpan {
+                    phase: JobPhase::Encoding,
+                    duration: DurationMs(100_000),
+                },
+                PhaseSpan {
+                    phase: JobPhase::Encoding,
+                    duration: DurationMs(20_000),
+                },
+                PhaseSpan {
+                    phase: JobPhase::Verifying,
+                    duration: DurationMs(5_000),
+                },
+            ],
+        },
+    );
+    let verdict = state
+        .records
+        .get(&ContentKey(key.to_owned()))
+        .expect("content record")
+        .verdict
+        .clone()
+        .expect("standing verdict");
+    assert_eq!(
+        verdict.kind,
+        crate::VerdictKind::Converted {
+            output_content_key: Some(ContentKey("ck-out".to_owned())),
+            input_size: Some(10_000),
+            output_size: Some(4_000),
+            encoding_time: Some(DurationMs(120_000)),
+            crf: Some(Crf(30_000)),
+            vmaf: Some(VmafScore(9_500)),
+            target: Some(VmafTarget(95)),
+        }
+    );
+
+    // A remux carries its sizes and nothing analysis-shaped.
+    let mut remuxed = verdict_fixture(
+        3,
+        Some(key),
+        Some(OutputState::Committed {
+            final_identity: identity("ck-out", 20),
+        }),
+    );
+    crate::fold(
+        &mut remuxed,
+        &DurableDelta::ItemFinished {
+            item_id: QueueItemId(1),
+            claim_id: ClaimId(2),
+            run_id: RunId(3),
+            outcome: ItemOutcome::Remuxed(CompletionEvidence::LiveRemux {
+                input_size: 10_000,
+                output_size: 9_800,
+            }),
+            at: UnixMillis(5_000),
+            phase_spans: Vec::new(),
+        },
+    );
+    let verdict = remuxed
+        .records
+        .get(&ContentKey(key.to_owned()))
+        .expect("content record")
+        .verdict
+        .clone()
+        .expect("standing verdict");
+    assert_eq!(
+        verdict.kind,
+        crate::VerdictKind::Remuxed {
+            output_content_key: ContentKey("ck-out".to_owned()),
+            input_size: Some(10_000),
+            output_size: Some(9_800),
+        }
+    );
+}
+
+#[test]
+fn adopted_verdicts_apply_only_by_content_identity() {
+    let adopted_converted = crate::Verdict {
+        kind: crate::VerdictKind::Converted {
+            output_content_key: None,
+            input_size: Some(10_000),
+            output_size: Some(4_000),
+            encoding_time: None,
+            crf: None,
+            vmaf: None,
+            target: None,
+        },
+        source_run: None,
+        decided_at: UnixMillis(1_000),
+    };
+    // No transaction can ever be resolved for an adopted conversion, so it
+    // never vouches for the file at a path.
+    assert!(!crate::verdict_applies(
+        &adopted_converted,
+        None,
+        Some(&FileStamp {
+            size: 4_000,
+            modified_ns: Some(FileTimeNs(1)),
+        })
+    ));
+    let adopted_not_worthwhile = crate::Verdict {
+        kind: crate::VerdictKind::NotWorthwhile {
+            requested: VmafTarget(95),
+            floor: VmafTarget(90),
+        },
+        source_run: None,
+        decided_at: UnixMillis(1_000),
+    };
+    assert!(crate::verdict_applies(&adopted_not_worthwhile, None, None));
 }

@@ -1,9 +1,10 @@
 use serde::{Deserialize, Serialize};
 
 use crate::{
-    AnalysisIntent, AnalysisProfile, AnalysisResult, DecodeMode, DestructiveIdentity,
-    ExecutionSettings, FileRecord, FileStamp, JobAction, MediaContainer, Operation, Verdict,
-    VerdictKind, VideoCodec, VideoMeta,
+    AnalysisIntent, AnalysisProfile, AnalysisResult, DEFAULT_VMAF_TARGET, DecodeMode,
+    DestructiveIdentity, ExecutionSettings, FileRecord, FileStamp, IMPORT_MTIME_TOLERANCE_NS,
+    JobAction, MIN_VMAF_FALLBACK_TARGET, MediaContainer, MediaObservation, Operation, ParkedRecord,
+    ParkedStatus, Verdict, VerdictKind, VideoCodec, VideoMeta,
 };
 
 pub const MIN_VIDEO_PIXELS: u64 = 921_600;
@@ -92,6 +93,12 @@ pub fn select_analysis(
 ///   record by `ContentKey`, so content match is already established; the
 ///   verdict applies regardless of path state. Whether its targets satisfy a
 ///   NEW request is `select_analysis`/target policy, not freshness.
+///
+/// An adopted verdict (`source_run: None`) has no transaction to resolve, so
+/// callers pass `settled_output: None`: its Converted form never applies
+/// (the imported output was never content-hashed, so the file on disk cannot
+/// be proven to be it), while NotWorthwhile applies by content identity as
+/// usual.
 #[must_use]
 pub fn verdict_applies(
     verdict: &Verdict,
@@ -106,6 +113,90 @@ pub fn verdict_applies(
             identity.size == stamp.size && identity.modified_ns == stamp.modified_ns
         }
         VerdictKind::NotWorthwhile { .. } => true,
+    }
+}
+
+/// What becomes of a parked import record once its file is actually
+/// observed.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ParkedResolution {
+    /// The record describes this content. `verdict: None` for records that
+    /// decided nothing (scanned/analyzed) — the file still gains import
+    /// provenance and the parked entry retires.
+    Adopt { verdict: Option<Verdict> },
+    /// The record no longer describes the file at its path.
+    Retire,
+}
+
+/// Decide a parked import record against a fresh observation of the file at
+/// the path the record was keyed under:
+///
+/// - Stamp match (equal size, mtime within [`IMPORT_MTIME_TOLERANCE_NS`];
+///   a record missing either stamp half never matches): the record describes
+///   the observed content — decisive statuses adopt their verdict, scanned/
+///   analyzed adopt provenance only.
+/// - Stamp mismatch, status Converted, observed codec AV1: the replace-mode
+///   case — the file now at the path IS the conversion's output, so the
+///   Converted verdict adopts onto the observed (output) content.
+/// - Anything else: the content changed; the imported claim retires.
+///
+/// Adopted verdicts carry `source_run: None` and whatever summary fields the
+/// imported record supplied. Missing NotWorthwhile targets fall back to
+/// [`DEFAULT_VMAF_TARGET`] / [`MIN_VMAF_FALLBACK_TARGET`].
+#[must_use]
+pub fn resolve_parked(parked: &ParkedRecord, observation: &MediaObservation) -> ParkedResolution {
+    if parked_stamp_matches(parked, &observation.binding.stamp) {
+        let verdict = match parked.status {
+            ParkedStatus::Converted => Some(converted_verdict(parked)),
+            ParkedStatus::NotWorthwhile => Some(not_worthwhile_verdict(parked)),
+            ParkedStatus::Scanned | ParkedStatus::Analyzed => None,
+        };
+        return ParkedResolution::Adopt { verdict };
+    }
+    if parked.status == ParkedStatus::Converted && observation.metadata.codec == VideoCodec::Av1 {
+        return ParkedResolution::Adopt {
+            verdict: Some(converted_verdict(parked)),
+        };
+    }
+    ParkedResolution::Retire
+}
+
+fn parked_stamp_matches(parked: &ParkedRecord, current: &FileStamp) -> bool {
+    let (Some(size), Some(modified)) = (parked.size, parked.modified_ns) else {
+        return false;
+    };
+    if size != current.size {
+        return false;
+    }
+    current
+        .modified_ns
+        .is_some_and(|now| now.0.abs_diff(modified.0) <= IMPORT_MTIME_TOLERANCE_NS)
+}
+
+fn converted_verdict(parked: &ParkedRecord) -> Verdict {
+    Verdict {
+        kind: VerdictKind::Converted {
+            output_content_key: None,
+            input_size: parked.size,
+            output_size: parked.output_size,
+            encoding_time: parked.encoding_time,
+            crf: parked.crf,
+            vmaf: parked.vmaf,
+            target: parked.target,
+        },
+        source_run: None,
+        decided_at: parked.decided_at,
+    }
+}
+
+fn not_worthwhile_verdict(parked: &ParkedRecord) -> Verdict {
+    Verdict {
+        kind: VerdictKind::NotWorthwhile {
+            requested: parked.requested_target.unwrap_or(DEFAULT_VMAF_TARGET),
+            floor: parked.floor_target.unwrap_or(MIN_VMAF_FALLBACK_TARGET),
+        },
+        source_run: None,
+        decided_at: parked.decided_at,
     }
 }
 

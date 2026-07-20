@@ -6,7 +6,7 @@ use crate::{
     UnixMillis, fold, output::validate_output_delta, reducer::validate_terminal,
 };
 
-pub const JOURNAL_SCHEMA_VERSION: u32 = 12;
+pub const JOURNAL_SCHEMA_VERSION: u32 = 13;
 
 /// Compaction fires at an idle writer barrier when the journal is both large
 /// in absolute terms and dominated by dead upserts (#33 §10). The floor keeps
@@ -493,6 +493,43 @@ fn validate_replayed_delta(state: &DurableState, delta: &DurableDelta) -> Result
         }
         DurableDelta::Output(output) => {
             validate_output_delta(state, output)?;
+        }
+        DurableDelta::HistoryImported { records } => {
+            if records.is_empty() {
+                return Err("history import batch is empty");
+            }
+            let mut batch = std::collections::BTreeSet::new();
+            for (import_path, _) in records {
+                if import_path.0.is_empty() {
+                    return Err("history import key is empty");
+                }
+                let known = !batch.insert(import_path)
+                    || state.parked.contains_key(import_path)
+                    || state
+                        .records
+                        .values()
+                        .any(|record| record.imported.as_ref() == Some(import_path));
+                if known {
+                    return Err("history import repeats a known key");
+                }
+            }
+        }
+        DurableDelta::ParkedAdopted {
+            import_path,
+            content_key,
+            ..
+        } => {
+            if !state.parked.contains_key(import_path) {
+                return Err("adoption references a record that is not parked");
+            }
+            if !state.records.contains_key(content_key) {
+                return Err("adoption references a missing content record");
+            }
+        }
+        DurableDelta::ParkedRetired { import_path } => {
+            if !state.parked.contains_key(import_path) {
+                return Err("retirement references a record that is not parked");
+            }
         }
     }
     Ok(())
