@@ -1632,7 +1632,10 @@ fn wait_for_report<T>(
     );
     let mut last_progress = None;
     loop {
-        match handle.try_report().map_err(|error| error.to_string())? {
+        match handle
+            .recv_report(ADAPTER_REPORT_POLL_INTERVAL)
+            .map_err(|error| error.to_string())?
+        {
             Some(report) => {
                 return Ok(report);
             }
@@ -1649,7 +1652,6 @@ fn wait_for_report<T>(
                         last_progress = Some(progress);
                     }
                 }
-                thread::sleep(ADAPTER_REPORT_POLL_INTERVAL);
             }
         }
     }
@@ -1669,7 +1671,10 @@ fn wait_for_remux_report(
     );
     let mut last_progress = None;
     loop {
-        match handle.try_report().map_err(|error| error.to_string())? {
+        match handle
+            .recv_report(ADAPTER_REPORT_POLL_INTERVAL)
+            .map_err(|error| error.to_string())?
+        {
             Some(report) => return Ok(report),
             None => {
                 if let Some(update) = handle.latest_telemetry() {
@@ -1684,7 +1689,6 @@ fn wait_for_remux_report(
                         last_progress = Some(progress);
                     }
                 }
-                thread::sleep(ADAPTER_REPORT_POLL_INTERVAL);
             }
         }
     }

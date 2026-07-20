@@ -98,14 +98,19 @@ impl RemuxHandle {
         }
     }
 
-    pub fn try_report(&mut self) -> Result<Option<RemuxReport>, StartRemuxError> {
-        match self.result.try_recv() {
+    /// Blocks up to `timeout` for the report; `Ok(None)` means the remux is
+    /// still running when the timeout elapses.
+    pub fn recv_report(
+        &mut self,
+        timeout: Duration,
+    ) -> Result<Option<RemuxReport>, StartRemuxError> {
+        match self.result.recv_timeout(timeout) {
             Ok(report) => {
                 self.cancel_on_drop = false;
                 Ok(Some(report))
             }
-            Err(mpsc::TryRecvError::Empty) => Ok(None),
-            Err(mpsc::TryRecvError::Disconnected) => Err(StartRemuxError(
+            Err(mpsc::RecvTimeoutError::Timeout) => Ok(None),
+            Err(mpsc::RecvTimeoutError::Disconnected) => Err(StartRemuxError(
                 "remux worker dropped the result channel".to_owned(),
             )),
         }
