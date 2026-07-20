@@ -151,16 +151,19 @@ impl Applied {
     }
 
     fn rejected(reason: impl Into<String>) -> Self {
+        let mut applied = Self::accepted();
+        applied.reject(reason);
+        applied
+    }
+
+    /// Every rejection surfaces the same two ways: the caller's `Reply` and a
+    /// `CommandRejected` ephemeral on the stream. Keep them in lockstep here.
+    fn reject(&mut self, reason: impl Into<String>) {
         let reason = reason.into();
-        Self {
-            durable: Vec::new(),
-            config: Vec::new(),
-            ephemeral: vec![EphemeralDelta::CommandRejected {
-                reason: reason.clone(),
-            }],
-            effects: Vec::new(),
-            reply: Reply::Rejected { reason },
-        }
+        self.ephemeral.push(EphemeralDelta::CommandRejected {
+            reason: reason.clone(),
+        });
+        self.reply = Reply::Rejected { reason };
     }
 }
 
@@ -532,21 +535,15 @@ fn apply_worker(state: &AppState, command: WorkerCommand) -> Applied {
             result,
         } => transition_active(state, item_id, claim_id, run_id, |applied| {
             let Some(run) = state.durable.conversion_runs.get(&run_id) else {
-                applied.reply = Reply::Rejected {
-                    reason: "conversion run does not exist".to_owned(),
-                };
+                applied.reject("conversion run does not exist");
                 return;
             };
             if run.analysis.is_some() {
-                applied.reply = Reply::Rejected {
-                    reason: "analysis is already recorded".to_owned(),
-                };
+                applied.reject("analysis is already recorded");
                 return;
             }
             if let Err(reason) = result.validate_for(&run.spec.execution) {
-                applied.reply = Reply::Rejected {
-                    reason: reason.to_owned(),
-                };
+                applied.reject(reason);
                 return;
             }
             applied
@@ -568,26 +565,17 @@ fn apply_worker(state: &AppState, command: WorkerCommand) -> Applied {
                 .get(&run_id)
                 .is_some_and(|transaction| !transaction.is_settled());
             if unsettled {
-                applied.reply = Reply::Rejected {
-                    reason: "output transaction is not settled".to_owned(),
-                };
-                applied.ephemeral.push(EphemeralDelta::CommandRejected {
-                    reason: "output transaction is not settled".to_owned(),
-                });
+                applied.reject("output transaction is not settled");
                 return;
             }
             let Some(run) = state.durable.conversion_runs.get(&run_id) else {
-                applied.reply = Reply::Rejected {
-                    reason: "conversion run does not exist".to_owned(),
-                };
+                applied.reject("conversion run does not exist");
                 return;
             };
             if let Err(reason) =
                 validate_terminal(run, state.durable.outputs.get(&run_id), &outcome)
             {
-                applied.reply = Reply::Rejected {
-                    reason: reason.to_owned(),
-                };
+                applied.reject(reason);
                 return;
             }
             if let Some(telemetry) = final_telemetry {
