@@ -14,8 +14,9 @@ Gate — every commit green, mirrored by `.github/workflows/ui.yml`:
 - `src/lib/store/fold.ts` is a pure mirror of `crfty_core::fold`, verified against
   the golden fixtures. Change fold semantics in Rust first, then port.
 - Zustand stores are containers only — reduce logic never lives in a store action.
-- `src/lib/format/` is ported from the Python app; parity enforced by fixtures from
-  `scripts/generate-parity-fixtures.py`.
+- `src/lib/format/` semantics are frozen from the V2 app in `parity-fixtures.json`.
+  The fixtures are hand-maintained spec data — edit them only as a deliberate,
+  reviewed change; there is no regeneration path.
 - `src/dev/` is dev-gated and never ships in release bundles.
 - Before touching the drag, statistics, or queue views, read issue #36 comments
   D6, D7, and D11 (recorded design verdicts).

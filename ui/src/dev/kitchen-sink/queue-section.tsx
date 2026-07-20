@@ -46,7 +46,7 @@ import { Section } from "./theme-pair";
  * recorded on #36 like the D6/D7 verdicts.
  *
  * Design decisions under review:
- * - Column set carries over from the Python tab (Name, Format, Size, Time,
+ * - Column set carries over from the V2 tab (Name, Format, Size, Time,
  *   Operation, Output, Status) at medium density.
  * - Status column per D11: colored text + at most one small icon, no chips;
  *   skip/error reasons inline on the row; the converting row gets an in-cell
