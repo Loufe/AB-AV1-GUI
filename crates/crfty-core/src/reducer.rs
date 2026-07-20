@@ -251,18 +251,35 @@ fn apply_queue(state: &AppState, command: QueueCommand) -> Applied {
             if !matches!(item.state, QueueItemState::Queued) {
                 return Applied::rejected("only queued items can be reordered");
             }
-            if let Some(before_id) = before {
-                let Some(before_item) = find_item(state, before_id) else {
-                    return Applied::rejected("queue destination does not exist");
-                };
-                if !matches!(before_item.state, QueueItemState::Queued) {
-                    return Applied::rejected("queue destination is active or finished");
+            // The journal records where the item actually lands, so the fold
+            // stays positional: a destination above the frozen finished/active
+            // prefix resolves to the first pending slot before it is written.
+            let resolved = match before {
+                None => None,
+                Some(before_id) => {
+                    let Some(before_item) = find_item(state, before_id) else {
+                        return Applied::rejected("queue destination does not exist");
+                    };
+                    if matches!(before_item.state, QueueItemState::Queued) {
+                        Some(before_id)
+                    } else {
+                        state
+                            .durable
+                            .queue
+                            .iter()
+                            .find(|entry| matches!(entry.state, QueueItemState::Queued))
+                            .map(|entry| entry.id)
+                    }
                 }
+            };
+            if resolved == Some(item_id) {
+                return Applied::accepted();
             }
             let mut applied = Applied::accepted();
-            applied
-                .durable
-                .push(DurableDelta::QueueMoved { item_id, before });
+            applied.durable.push(DurableDelta::QueueMoved {
+                item_id,
+                before: resolved,
+            });
             applied
         }
     }

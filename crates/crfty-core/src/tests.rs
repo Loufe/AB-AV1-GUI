@@ -345,6 +345,210 @@ fn durable_analysis_is_selected_for_the_same_content_and_profile() {
     assert_eq!(job.spec.action.selected_analysis(), Some(&analysis()));
 }
 
+/// Builds `[1 Finished, 2 Claimed (active), 3 Queued, 4 Queued, 5 Queued]`.
+fn reorder_fixture() -> AppState {
+    let mut state = AppState::default();
+    for id in 1..=5 {
+        let added = apply(&mut state, add_command(QueueItemId(id), "video.mkv"));
+        assert_eq!(added.reply, Reply::Accepted);
+    }
+    let start = apply(&mut state, Command::Session(SessionCommand::Start));
+    assert_eq!(start.reply, Reply::Accepted);
+    let first = reserve_and_prepare(&mut state, ClaimId(20), RunId(21), execution());
+    assert!(matches!(first.reply, Reply::Claimed(Some(_))));
+    let finished = apply(
+        &mut state,
+        Command::Worker(WorkerCommand::Terminal {
+            item_id: QueueItemId(1),
+            claim_id: ClaimId(20),
+            run_id: RunId(21),
+            outcome: ItemOutcome::Failed {
+                message: "fixture".to_owned(),
+            },
+            final_telemetry: None,
+        }),
+    );
+    assert_eq!(finished.reply, Reply::Accepted);
+    let second = reserve_and_prepare(&mut state, ClaimId(22), RunId(23), execution());
+    assert!(matches!(second.reply, Reply::Claimed(Some(_))));
+    assert_queue_shape(&state, &[1, 2, 3, 4, 5]);
+    state
+}
+
+fn queue_order(state: &AppState) -> Vec<u64> {
+    state.durable.queue.iter().map(|item| item.id.0).collect()
+}
+
+/// Asserts the id order and the frozen-prefix invariant: every finished item
+/// precedes the active item, which precedes every queued item.
+fn assert_queue_shape(state: &AppState, expected: &[u64]) {
+    assert_eq!(queue_order(state), expected);
+    let mut frontier = 0;
+    for item in &state.durable.queue {
+        let class = match item.state {
+            QueueItemState::Finished(_) => 0,
+            QueueItemState::Reserved { .. }
+            | QueueItemState::Claimed { .. }
+            | QueueItemState::Running { .. } => 1,
+            QueueItemState::Queued => 2,
+        };
+        assert!(class >= frontier, "queue prefix invariant violated");
+        frontier = class;
+    }
+}
+
+fn move_command(item_id: u64, before: Option<u64>) -> Command {
+    Command::Queue(QueueCommand::Move {
+        item_id: QueueItemId(item_id),
+        before: before.map(QueueItemId),
+    })
+}
+
+#[test]
+fn reorder_destinations_around_active_pending_and_finished_items() {
+    struct Case {
+        name: &'static str,
+        item: u64,
+        before: Option<u64>,
+        expected_delta: Option<(u64, Option<u64>)>,
+        expected_order: [u64; 5],
+    }
+    let accepted = [
+        Case {
+            name: "queued before queued",
+            item: 4,
+            before: Some(3),
+            expected_delta: Some((4, Some(3))),
+            expected_order: [1, 2, 4, 3, 5],
+        },
+        Case {
+            name: "drop above active clamps to first pending",
+            item: 4,
+            before: Some(2),
+            expected_delta: Some((4, Some(3))),
+            expected_order: [1, 2, 4, 3, 5],
+        },
+        Case {
+            name: "drop above finished clamps to first pending",
+            item: 4,
+            before: Some(1),
+            expected_delta: Some((4, Some(3))),
+            expected_order: [1, 2, 4, 3, 5],
+        },
+        Case {
+            name: "first pending above active is an identity no-op",
+            item: 3,
+            before: Some(2),
+            expected_delta: None,
+            expected_order: [1, 2, 3, 4, 5],
+        },
+        Case {
+            name: "first pending above finished is an identity no-op",
+            item: 3,
+            before: Some(1),
+            expected_delta: None,
+            expected_order: [1, 2, 3, 4, 5],
+        },
+        Case {
+            name: "move to end",
+            item: 4,
+            before: None,
+            expected_delta: Some((4, None)),
+            expected_order: [1, 2, 3, 5, 4],
+        },
+        Case {
+            name: "self destination is an identity no-op",
+            item: 4,
+            before: Some(4),
+            expected_delta: None,
+            expected_order: [1, 2, 3, 4, 5],
+        },
+    ];
+    for case in accepted {
+        let mut state = reorder_fixture();
+        let applied = apply(&mut state, move_command(case.item, case.before));
+        assert_eq!(applied.reply, Reply::Accepted, "{}", case.name);
+        let expected_durable = case
+            .expected_delta
+            .map(|(item_id, before)| DurableDelta::QueueMoved {
+                item_id: QueueItemId(item_id),
+                before: before.map(QueueItemId),
+            })
+            .into_iter()
+            .collect::<Vec<_>>();
+        assert_eq!(applied.durable, expected_durable, "{}", case.name);
+        assert_queue_shape(&state, &case.expected_order);
+    }
+
+    let rejected = [
+        (
+            "missing destination",
+            4,
+            Some(99),
+            "queue destination does not exist",
+        ),
+        (
+            "active item cannot move",
+            2,
+            Some(5),
+            "only queued items can be reordered",
+        ),
+        (
+            "finished item cannot move",
+            1,
+            None,
+            "only queued items can be reordered",
+        ),
+        ("missing item", 99, Some(3), "queue item does not exist"),
+    ];
+    for (name, item, before, reason) in rejected {
+        let mut state = reorder_fixture();
+        let applied = apply(&mut state, move_command(item, before));
+        assert_eq!(
+            applied.reply,
+            Reply::Rejected {
+                reason: reason.to_owned(),
+            },
+            "{name}",
+        );
+        assert!(applied.durable.is_empty(), "{name}");
+        assert_queue_shape(&state, &[1, 2, 3, 4, 5]);
+    }
+}
+
+#[test]
+fn reorder_of_the_only_pending_item_above_active_is_a_no_op() {
+    let mut state = AppState::default();
+    for id in 1..=3 {
+        let added = apply(&mut state, add_command(QueueItemId(id), "video.mkv"));
+        assert_eq!(added.reply, Reply::Accepted);
+    }
+    let start = apply(&mut state, Command::Session(SessionCommand::Start));
+    assert_eq!(start.reply, Reply::Accepted);
+    let first = reserve_and_prepare(&mut state, ClaimId(20), RunId(21), execution());
+    assert!(matches!(first.reply, Reply::Claimed(Some(_))));
+    let finished = apply(
+        &mut state,
+        Command::Worker(WorkerCommand::Terminal {
+            item_id: QueueItemId(1),
+            claim_id: ClaimId(20),
+            run_id: RunId(21),
+            outcome: ItemOutcome::Failed {
+                message: "fixture".to_owned(),
+            },
+            final_telemetry: None,
+        }),
+    );
+    assert_eq!(finished.reply, Reply::Accepted);
+    let second = reserve_and_prepare(&mut state, ClaimId(22), RunId(23), execution());
+    assert!(matches!(second.reply, Reply::Claimed(Some(_))));
+
+    let applied = apply(&mut state, move_command(3, Some(2)));
+    assert_eq!(applied.reply, Reply::Accepted);
+    assert!(applied.durable.is_empty());
+    assert_queue_shape(&state, &[1, 2, 3]);
+}
+
 #[test]
 fn policy_uses_post_rotation_pixel_floor_and_typed_av1_decisions() {
     let mut metadata = media_observation("policy").metadata;
