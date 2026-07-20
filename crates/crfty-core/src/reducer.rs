@@ -5,10 +5,11 @@ use serde::Serialize;
 use crate::state::ConversionRun;
 use crate::{
     AnalysisIntent, AnalysisResult, AppState, ClaimId, ClaimedJob, CompletionEvidence, ConfigDelta,
-    DecodeMode, DecodePreference, DurableDelta, ExecutionSettings, ItemOutcome, JobAction, JobSpec,
-    MediaObservation, Operation, OutputDelta, OutputTarget, PhaseSpan, QueueItem, QueueItemId,
-    QueueItemState, ReservedJob, RunId, SessionState, Settings, Telemetry, ToolAvailability,
-    ToolsState, UnixMillis, VendorActivity, fold, fold_config, select_job_action,
+    CorruptionSignature, DecodeMode, DecodePreference, DurableDelta, ExecutionSettings,
+    ItemOutcome, JobAction, JobSpec, MediaObservation, Operation, OutputDelta, OutputTarget,
+    PhaseSpan, QueueItem, QueueItemId, QueueItemState, ReservedJob, RunId, SessionState, Settings,
+    Telemetry, ToolAvailability, ToolsState, UnixMillis, VendorActivity, fold, fold_config,
+    select_job_action,
 };
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -123,6 +124,13 @@ pub enum SystemCommand {
     VendorProgress {
         activity: VendorActivity,
     },
+    /// Operator consent to discard a corrupt journal tail whose identity is
+    /// `signature`. The driver intercepts this before `apply` — degraded
+    /// state deliberately lives outside `AppState` — so the reducer only ever
+    /// sees it on a routing bug and rejects it.
+    AcknowledgeCorruption {
+        signature: CorruptionSignature,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, specta::Type)]
@@ -221,6 +229,9 @@ pub fn apply(state: &mut AppState, command: Command) -> Applied {
                 ..state.tools.clone()
             },
         ),
+        Command::System(SystemCommand::AcknowledgeCorruption { .. }) => {
+            Applied::rejected("corruption acknowledgement is handled by the driver")
+        }
     };
     for delta in &applied.durable {
         fold(&mut state.durable, delta);

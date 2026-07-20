@@ -1,6 +1,6 @@
 import { Channel } from "@tauri-apps/api/core";
 
-import { commands, type Settings, type ShellEvent } from "@/lib/bindings";
+import { commands, type CorruptionSignature, type Settings, type ShellEvent } from "@/lib/bindings";
 
 /** True inside the Tauri webview; false in plain browser dev. */
 export function isTauri(): boolean {
@@ -31,5 +31,20 @@ export async function saveSettings(settings: Settings): Promise<void> {
   const result = await commands.setSettings(settings);
   if (result.status === "error") {
     throw new Error(`settings save failed (${result.error.code}): ${result.error.message}`);
+  }
+}
+
+/**
+ * Consents to discarding a corrupt journal tail. The signature must be the
+ * one observed on the `Degraded` payload, echoed back verbatim — the engine
+ * rejects anything else, so a stale acknowledgement can never discard bytes
+ * the operator was not shown.
+ */
+export async function acknowledgeCorruption(signature: CorruptionSignature): Promise<void> {
+  const result = await commands.acknowledgeCorruption(signature);
+  if (result.status === "error") {
+    throw new Error(
+      `corruption acknowledgement failed (${result.error.code}): ${result.error.message}`,
+    );
   }
 }

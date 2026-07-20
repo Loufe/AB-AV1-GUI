@@ -37,8 +37,9 @@ pub use job::{
 };
 pub use journal::{
     COMPACTION_HARD_LIMIT_BYTES, COMPACTION_IDLE_MIN_JOURNAL_BYTES, COMPACTION_IDLE_MIN_RATIO,
-    JOURNAL_SCHEMA_VERSION, JournalCorruption, JournalEnvelope, JournalReplay, JournalSnapshot,
-    compaction_due, compaction_quiescent, encode_record, encode_snapshot, replay,
+    CorruptionReport, CorruptionSignature, JOURNAL_SCHEMA_VERSION, JournalCorruption,
+    JournalEnvelope, JournalReplay, JournalSnapshot, compaction_due, compaction_quiescent,
+    corruption_signature, encode_record, encode_snapshot, replay,
 };
 pub use media::{
     AudioCodec, AudioStreamMeta, FileRecord, FileStamp, MediaContainer, MediaObservation,

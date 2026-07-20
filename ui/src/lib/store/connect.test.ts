@@ -1,6 +1,12 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-import type { QueueItem, Settings, StreamPayload_Deserialize, Telemetry } from "@/lib/bindings";
+import type {
+  CorruptionReport,
+  QueueItem,
+  Settings,
+  StreamPayload_Deserialize,
+  Telemetry,
+} from "@/lib/bindings";
 
 import { appStore, initialAppState } from "./app-store";
 import { applyPayload, hasSequenceGap } from "./connect";
@@ -43,6 +49,13 @@ function telemetry(runId: number): Telemetry {
   return { run_id: runId, sequence: 1, phase: "Encoding", progress: "Phase" };
 }
 
+function corruptionReport(): CorruptionReport {
+  return {
+    reason: "journal is corrupt at byte 120: invalid journal record",
+    signature: { tail_len: 24, digest: "ab12" },
+  };
+}
+
 function snapshot(item: QueueItem): StreamPayload_Deserialize {
   return {
     Snapshot: {
@@ -62,7 +75,12 @@ describe("applyPayload", () => {
   it("replaces durable state and settings from a snapshot and clears health and telemetry", () => {
     appStore.setState((state) => ({
       ...state,
-      health: { degraded: "stale", fatal: "stale", secondInstance: "stale" },
+      health: {
+        degraded: corruptionReport(),
+        unavailable: "stale",
+        fatal: "stale",
+        secondInstance: "stale",
+      },
     }));
     progressStore.setState({ telemetry: { 9: telemetry(9) } });
 
@@ -71,7 +89,12 @@ describe("applyPayload", () => {
     const state = appStore.getState();
     expect(state.durable.queue).toEqual([queueItem(1)]);
     expect(state.settings).toEqual(settings());
-    expect(state.health).toEqual({ degraded: null, fatal: null, secondInstance: null });
+    expect(state.health).toEqual({
+      degraded: null,
+      unavailable: null,
+      fatal: null,
+      secondInstance: null,
+    });
     expect(progressStore.getState().telemetry).toEqual({});
   });
 
@@ -148,11 +171,13 @@ describe("applyPayload", () => {
   });
 
   it("records standing health until the next snapshot", () => {
-    applyPayload({ Degraded: { reason: "journal corruption" } });
+    applyPayload({ Degraded: corruptionReport() });
+    applyPayload({ EngineUnavailable: { reason: "no data directory" } });
     applyPayload({ EngineFatal: { message: "driver exited" } });
     applyPayload({ SecondInstance: { lock_path: "/data/crfty.lock" } });
     expect(appStore.getState().health).toEqual({
-      degraded: "journal corruption",
+      degraded: corruptionReport(),
+      unavailable: "no data directory",
       fatal: "driver exited",
       secondInstance: "/data/crfty.lock",
     });
@@ -160,9 +185,22 @@ describe("applyPayload", () => {
     applyPayload(snapshot(queueItem(1)));
     expect(appStore.getState().health).toEqual({
       degraded: null,
+      unavailable: null,
       fatal: null,
       secondInstance: null,
     });
+  });
+
+  it("stores the full corruption report and clears only it on recovery", () => {
+    applyPayload({ Degraded: corruptionReport() });
+    applyPayload({ EngineFatal: { message: "driver exited" } });
+    expect(appStore.getState().health.degraded).toEqual(corruptionReport());
+
+    applyPayload("Recovered");
+    const health = appStore.getState().health;
+    expect(health.degraded).toBeNull();
+    // Recovery clears the corruption report and nothing else.
+    expect(health.fatal).toBe("driver exited");
   });
 });
 

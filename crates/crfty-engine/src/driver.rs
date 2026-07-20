@@ -8,9 +8,10 @@ use std::{
 };
 
 use crfty_core::{
-    AppSnapshot, AppState, COMPACTION_IDLE_MIN_JOURNAL_BYTES, Command, ConfigDelta, DurableDelta,
-    Effect, EphemeralDelta, QueueItemState, Reply, RunId, Settings, SystemCommand, Telemetry,
-    apply, compaction_due, compaction_quiescent,
+    AppSnapshot, AppState, COMPACTION_IDLE_MIN_JOURNAL_BYTES, Command, ConfigDelta,
+    CorruptionReport, CorruptionSignature, DurableDelta, DurableState, Effect, EphemeralDelta,
+    QueueItemState, Reply, RunId, Settings, SystemCommand, Telemetry, apply, compaction_due,
+    compaction_quiescent,
 };
 
 use crate::{
@@ -33,8 +34,13 @@ pub enum DriverEvent {
     Config(ConfigDelta),
     Ephemeral(EphemeralDelta),
     Effect(Effect),
-    Degraded { reason: String },
-    Fatal { message: String },
+    Degraded(CorruptionReport),
+    /// An acknowledged corruption was archived and compacted away; the
+    /// journal is a fresh healthy generation and mutation is accepted again.
+    Recovered,
+    Fatal {
+        message: String,
+    },
 }
 
 #[derive(Debug)]
@@ -170,12 +176,16 @@ impl DriverHandle {
         let (writer, replay) = JournalWriter::open(journal_path).map_err(|error| {
             DriverStartError::Failed(format!("failed to start driver: {error}"))
         })?;
-        let degraded = replay.corruption.as_ref().map(|corruption| {
-            format!(
-                "journal is corrupt at byte {}: {}",
-                corruption.offset, corruption.reason
-            )
-        });
+        let degraded = replay
+            .corruption
+            .as_ref()
+            .map(|corruption| CorruptionReport {
+                reason: format!(
+                    "journal is corrupt at byte {}: {}",
+                    corruption.offset, corruption.reason
+                ),
+                signature: corruption.signature.clone(),
+            });
         let state = AppState {
             durable: replay.state,
             settings: loaded.settings,
@@ -254,7 +264,7 @@ impl Drop for DriverHandle {
 fn run_driver(
     mut state: AppState,
     mut persistence: DriverPersistence,
-    degraded: Option<String>,
+    mut degraded: Option<CorruptionReport>,
     receiver: mpsc::Receiver<Envelope>,
     events: mpsc::Sender<DriverEvent>,
     telemetry: Arc<Mutex<BTreeMap<RunId, Telemetry>>>,
@@ -264,10 +274,8 @@ fn run_driver(
         durable: state.durable.clone(),
         settings: state.settings.clone(),
     }));
-    if let Some(reason) = &degraded {
-        let _result = events.send(DriverEvent::Degraded {
-            reason: reason.clone(),
-        });
+    if let Some(report) = &degraded {
+        let _result = events.send(DriverEvent::Degraded(report.clone()));
     }
     let mut compaction_backoff: u32 = 0;
     loop {
@@ -277,7 +285,7 @@ fn run_driver(
                 emit_latest_telemetry(&state, &events, &telemetry);
                 if compaction_backoff > 0 {
                     compaction_backoff = compaction_backoff.saturating_sub(1);
-                } else if !maybe_compact(&state, &mut persistence, degraded.as_deref(), false) {
+                } else if !maybe_compact(&state, &mut persistence, degraded.is_some(), false) {
                     compaction_backoff = COMPACTION_RETRY_TICKS;
                 }
                 continue;
@@ -292,7 +300,7 @@ fn run_driver(
                 &mut state,
                 &mut persistence.journal,
                 &mut persistence.config,
-                degraded.as_deref(),
+                &mut degraded,
                 batch,
                 &events,
                 effect_sink.as_ref(),
@@ -316,10 +324,10 @@ fn run_driver(
 fn maybe_compact(
     state: &AppState,
     persistence: &mut DriverPersistence,
-    degraded: Option<&str>,
+    degraded: bool,
     force: bool,
 ) -> bool {
-    if degraded.is_some() || !compaction_quiescent(state) {
+    if degraded || !compaction_quiescent(state) {
         return true;
     }
     if !force {
@@ -377,7 +385,7 @@ fn process_batch(
     state: &mut AppState,
     writer: &mut impl JournalSink,
     config: &mut impl ConfigSink,
-    degraded: Option<&str>,
+    degraded: &mut Option<CorruptionReport>,
     batch: Vec<Envelope>,
     events: &mpsc::Sender<DriverEvent>,
     effect_sink: Option<&mpsc::Sender<Effect>>,
@@ -385,24 +393,26 @@ fn process_batch(
     let settings_before = state.settings.clone();
     let mut durable = Vec::new();
     let mut applied_batch = Vec::with_capacity(batch.len());
+    let mut recovered = false;
     for envelope in batch {
-        let applied = if let Some(reason) = degraded {
+        // Acknowledgement is intercepted ahead of the reducer: degraded state
+        // deliberately lives outside `AppState`, so only the driver can
+        // verify the signature and rewrite the journal.
+        if let Command::System(SystemCommand::AcknowledgeCorruption { signature }) =
+            &envelope.command
+        {
+            let applied = acknowledge_corruption(signature, degraded, writer, &state.durable);
+            recovered = recovered || matches!(applied.reply, Reply::Accepted);
+            applied_batch.push((envelope.reply, applied));
+            continue;
+        }
+        let applied = if let Some(report) = degraded.as_ref() {
             // System commands (shutdown, tool availability) emit no durable
             // deltas, so they stay usable over a corrupt journal.
             if matches!(envelope.command, Command::System(_)) {
                 apply(state, envelope.command)
             } else {
-                crfty_core::Applied {
-                    durable: Vec::new(),
-                    config: Vec::new(),
-                    ephemeral: vec![EphemeralDelta::CommandRejected {
-                        reason: reason.to_owned(),
-                    }],
-                    effects: Vec::new(),
-                    reply: Reply::Rejected {
-                        reason: reason.to_owned(),
-                    },
-                }
+                rejected_applied(report.reason.clone())
             }
         } else {
             apply(state, envelope.command)
@@ -423,7 +433,63 @@ fn process_batch(
         }
     };
     persist_settings(state, config, &settings_before, &mut applied_batch);
-    emit_batch(durability, applied_batch, state, events, effect_sink)
+    let should_stop = emit_batch(durability, applied_batch, state, events, effect_sink);
+    // Sent after the batch's own events so a rejection issued while still
+    // degraded is never observed after the recovery notice.
+    if recovered {
+        let _result = events.send(DriverEvent::Recovered);
+    }
+    should_stop
+}
+
+/// Recovery is consent to discard the corrupt tail — but only the tail the
+/// operator actually saw. The submitted signature must match the standing
+/// report; on any mismatch or rewrite failure the journal is left untouched
+/// and the acknowledgement stays retryable.
+fn acknowledge_corruption(
+    signature: &CorruptionSignature,
+    degraded: &mut Option<CorruptionReport>,
+    writer: &mut impl JournalSink,
+    durable: &DurableState,
+) -> crfty_core::Applied {
+    let Some(report) = degraded.as_ref() else {
+        return rejected_applied("journal is not degraded; nothing to acknowledge".to_owned());
+    };
+    if report.signature != *signature {
+        return rejected_applied(
+            "corruption signature does not match the journal on disk".to_owned(),
+        );
+    }
+    match writer.recover(durable) {
+        Ok(()) => {
+            *degraded = None;
+            crfty_core::Applied {
+                durable: Vec::new(),
+                config: Vec::new(),
+                ephemeral: Vec::new(),
+                effects: Vec::new(),
+                reply: Reply::Accepted,
+            }
+        }
+        Err(error) => {
+            eprintln!("journal recovery failed; corrupt journal left in place: {error}");
+            rejected_applied(format!("journal recovery failed: {error}"))
+        }
+    }
+}
+
+/// Mirrors the reducer's rejection convention: the caller's `Reply` and a
+/// `CommandRejected` ephemeral on the stream, in lockstep.
+fn rejected_applied(reason: String) -> crfty_core::Applied {
+    crfty_core::Applied {
+        durable: Vec::new(),
+        config: Vec::new(),
+        ephemeral: vec![EphemeralDelta::CommandRejected {
+            reason: reason.clone(),
+        }],
+        effects: Vec::new(),
+        reply: Reply::Rejected { reason },
+    }
 }
 
 trait ConfigSink {
@@ -506,11 +572,22 @@ fn persist_settings(
 
 trait JournalSink {
     fn append(&mut self, deltas: &[DurableDelta]) -> Result<DurabilityToken, JournalError>;
+    /// Archive the corrupt journal and replace it with a snapshot of `state`.
+    fn recover(&mut self, state: &DurableState) -> Result<(), JournalError>;
 }
 
 impl JournalSink for JournalWriter {
     fn append(&mut self, deltas: &[DurableDelta]) -> Result<DurabilityToken, JournalError> {
         self.append_batch(deltas).map(|(_records, token)| token)
+    }
+
+    fn recover(&mut self, state: &DurableState) -> Result<(), JournalError> {
+        self.recover_corrupt(
+            state,
+            env!("CARGO_PKG_VERSION"),
+            crate::coordinator::now_millis(),
+        )
+        .map(|_archive| ())
     }
 }
 
@@ -679,6 +756,10 @@ mod tests {
         ) -> Result<DurabilityToken, JournalError> {
             Err(JournalError::injected(io::Error::other("sync failed")))
         }
+
+        fn recover(&mut self, _state: &crfty_core::DurableState) -> Result<(), JournalError> {
+            Err(JournalError::injected(io::Error::other("recover failed")))
+        }
     }
 
     #[test]
@@ -700,7 +781,7 @@ mod tests {
             &mut state,
             &mut FailingJournal,
             &mut AcceptingConfig,
-            None,
+            &mut None,
             vec![envelope],
             &event_tx,
             None,
@@ -725,6 +806,10 @@ mod tests {
             _deltas: &[crfty_core::DurableDelta],
         ) -> Result<DurabilityToken, JournalError> {
             Ok(DurabilityToken::new())
+        }
+
+        fn recover(&mut self, _state: &crfty_core::DurableState) -> Result<(), JournalError> {
+            Ok(())
         }
     }
 
@@ -800,7 +885,7 @@ mod tests {
             &mut state,
             &mut NoopJournal,
             &mut AcceptingConfig,
-            None,
+            &mut None,
             vec![envelope],
             &event_tx,
             None,
@@ -862,7 +947,7 @@ mod tests {
             &mut state,
             &mut NoopJournal,
             &mut config,
-            None,
+            &mut None,
             batch,
             &event_tx,
             None,
@@ -902,7 +987,7 @@ mod tests {
             &mut state,
             &mut NoopJournal,
             &mut config,
-            None,
+            &mut None,
             vec![envelope],
             &event_tx,
             None,
@@ -960,24 +1045,19 @@ mod tests {
 
         // Degraded skips compaction even when forced; the corrupt journal is
         // evidence and must stay byte-identical.
-        assert!(maybe_compact(
-            &state,
-            &mut persistence,
-            Some("corrupt"),
-            true
-        ));
+        assert!(maybe_compact(&state, &mut persistence, true, true));
         assert_eq!(std::fs::read(&journal_path).expect("journal bytes"), before);
         // A non-quiescent state (active session) also skips a forced request.
         state.session = SessionState::Running;
-        assert!(maybe_compact(&state, &mut persistence, None, true));
+        assert!(maybe_compact(&state, &mut persistence, false, true));
         assert_eq!(std::fs::read(&journal_path).expect("journal bytes"), before);
         // Below the size floor, an unforced idle tick leaves the journal alone.
         state.session = SessionState::Idle;
-        assert!(maybe_compact(&state, &mut persistence, None, false));
+        assert!(maybe_compact(&state, &mut persistence, false, false));
         assert_eq!(std::fs::read(&journal_path).expect("journal bytes"), before);
 
         // Quiescent + forced compacts to a single snapshot head line.
-        assert!(maybe_compact(&state, &mut persistence, None, true));
+        assert!(maybe_compact(&state, &mut persistence, false, true));
         let bytes = std::fs::read(&journal_path).expect("compacted journal");
         assert_eq!(bytes.iter().filter(|byte| **byte == b'\n').count(), 1);
         let replayed = crfty_core::replay(&bytes);
@@ -995,6 +1075,144 @@ mod tests {
         assert!(replayed.corruption.is_none());
         assert_eq!(replayed.state.queue.len(), 2);
         assert_eq!(replayed.next_sequence.0, 2);
+    }
+
+    #[test]
+    fn acknowledgement_requires_the_matching_signature_and_recovers_in_place() {
+        let directory = tempfile::tempdir().expect("temporary directory");
+        let journal_path = directory.path().join("state.jsonl");
+        let mut healthy_state = AppState::default();
+        let durable = add_item(&mut healthy_state, 1);
+        {
+            let (mut journal, _replay) =
+                JournalWriter::open(&journal_path).expect("journal writer");
+            journal.append_batch(&durable).expect("journal append");
+        }
+        let mut corrupt_bytes = std::fs::read(&journal_path).expect("journal bytes");
+        corrupt_bytes.extend(b"not-json\n");
+        std::fs::write(&journal_path, &corrupt_bytes).expect("corrupt journal");
+
+        let (mut journal, replay) = JournalWriter::open(&journal_path).expect("corrupt open");
+        let corruption = replay.corruption.expect("corruption report");
+        let mut degraded = Some(crfty_core::CorruptionReport {
+            reason: corruption.reason.clone(),
+            signature: corruption.signature.clone(),
+        });
+        let mut state = AppState {
+            durable: replay.state,
+            ..AppState::default()
+        };
+        let envelope = |signature| {
+            let (reply_tx, reply_rx) = mpsc::sync_channel(1);
+            (
+                Envelope {
+                    command: Command::System(SystemCommand::AcknowledgeCorruption { signature }),
+                    reply: reply_tx,
+                },
+                reply_rx,
+            )
+        };
+
+        // A stale signature never touches the file: the operator consented to
+        // discarding different bytes than the ones on disk.
+        let (wrong, wrong_reply) = envelope(crfty_core::corruption_signature(b"different tail"));
+        let (event_tx, event_rx) = mpsc::channel();
+        assert!(!process_batch(
+            &mut state,
+            &mut journal,
+            &mut AcceptingConfig,
+            &mut degraded,
+            vec![wrong],
+            &event_tx,
+            None,
+        ));
+        assert!(matches!(
+            wrong_reply.recv().expect("wrong-signature reply"),
+            Reply::Rejected { .. }
+        ));
+        assert!(degraded.is_some());
+        assert_eq!(
+            std::fs::read(&journal_path).expect("journal bytes"),
+            corrupt_bytes
+        );
+
+        // The matching signature archives the corrupt file, compacts the
+        // valid prefix, clears degraded, and announces recovery last.
+        let (matching, matching_reply) = envelope(corruption.signature);
+        assert!(!process_batch(
+            &mut state,
+            &mut journal,
+            &mut AcceptingConfig,
+            &mut degraded,
+            vec![matching],
+            &event_tx,
+            None,
+        ));
+        assert_eq!(
+            matching_reply.recv().expect("matching reply"),
+            Reply::Accepted
+        );
+        assert!(degraded.is_none());
+        let events: Vec<DriverEvent> = event_rx.try_iter().collect();
+        assert!(matches!(events.last(), Some(DriverEvent::Recovered)));
+        let recovered = std::fs::read(&journal_path).expect("recovered journal");
+        let replayed = crfty_core::replay(&recovered);
+        assert!(replayed.corruption.is_none());
+        assert_eq!(replayed.state, state.durable);
+        let archived: Vec<_> = std::fs::read_dir(directory.path())
+            .expect("data directory")
+            .filter_map(Result::ok)
+            .filter(|entry| entry.file_name().to_string_lossy().contains(".corrupt-"))
+            .collect();
+        assert_eq!(archived.len(), 1);
+        assert_eq!(
+            std::fs::read(archived[0].path()).expect("archive bytes"),
+            corrupt_bytes
+        );
+
+        // Mutation is accepted again on the fresh generation.
+        let durable = add_item(&mut state, 2);
+        journal
+            .append_batch(&durable)
+            .expect("append after recovery");
+        let replayed = crfty_core::replay(&std::fs::read(&journal_path).expect("appended journal"));
+        assert!(replayed.corruption.is_none());
+        assert_eq!(replayed.state.queue.len(), 2);
+    }
+
+    #[test]
+    fn acknowledgement_is_rejected_while_healthy() {
+        let (reply_tx, reply_rx) = mpsc::sync_channel(1);
+        let envelope = Envelope {
+            command: Command::System(SystemCommand::AcknowledgeCorruption {
+                signature: crfty_core::corruption_signature(b"anything"),
+            }),
+            reply: reply_tx,
+        };
+        let (event_tx, event_rx) = mpsc::channel();
+        let mut state = AppState::default();
+        assert!(!process_batch(
+            &mut state,
+            &mut NoopJournal,
+            &mut AcceptingConfig,
+            &mut None,
+            vec![envelope],
+            &event_tx,
+            None,
+        ));
+        assert!(matches!(
+            reply_rx.recv().expect("healthy-ack reply"),
+            Reply::Rejected { .. }
+        ));
+        assert!(matches!(
+            event_rx.recv().expect("rejection event"),
+            DriverEvent::Ephemeral(EphemeralDelta::CommandRejected { .. })
+        ));
+        assert!(
+            !event_rx
+                .try_iter()
+                .any(|event| matches!(event, DriverEvent::Recovered))
+        );
     }
 
     #[test]

@@ -19,13 +19,18 @@ export function hasSequenceGap(last: number | null, next: number): boolean {
 }
 
 export function applyPayload(payload: StreamPayload_Deserialize): void {
+  // String variants first: the `in` checks below would throw on a primitive.
+  if (payload === "Recovered") {
+    appStore.setState((state) => ({ ...state, health: { ...state.health, degraded: null } }));
+    return;
+  }
   if ("Snapshot" in payload && payload.Snapshot !== undefined) {
     const { durable, settings } = payload.Snapshot;
     appStore.setState((state) => ({
       ...state,
       durable,
       settings,
-      health: { degraded: null, fatal: null, secondInstance: null },
+      health: { degraded: null, unavailable: null, fatal: null, secondInstance: null },
       tools: null,
     }));
     // Telemetry for pre-snapshot runs never gets a TelemetryCleared on this
@@ -68,8 +73,13 @@ export function applyPayload(payload: StreamPayload_Deserialize): void {
     return;
   }
   if ("Degraded" in payload && payload.Degraded !== undefined) {
-    const { reason } = payload.Degraded;
-    appStore.setState((state) => ({ ...state, health: { ...state.health, degraded: reason } }));
+    const report = payload.Degraded;
+    appStore.setState((state) => ({ ...state, health: { ...state.health, degraded: report } }));
+    return;
+  }
+  if ("EngineUnavailable" in payload && payload.EngineUnavailable !== undefined) {
+    const { reason } = payload.EngineUnavailable;
+    appStore.setState((state) => ({ ...state, health: { ...state.health, unavailable: reason } }));
     return;
   }
   if ("EngineFatal" in payload && payload.EngineFatal !== undefined) {

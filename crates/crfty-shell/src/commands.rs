@@ -1,8 +1,8 @@
 use std::path::PathBuf;
 
 use crfty_core::{
-    AnalysisIntent, Operation, OutputTarget, QueueCommand, QueueItemId, SessionCommand, Settings,
-    VendorCommand,
+    AnalysisIntent, CorruptionSignature, Operation, OutputTarget, QueueCommand, QueueItemId,
+    SessionCommand, Settings, VendorCommand,
 };
 use serde::Serialize;
 use tauri::{State, ipc::Channel};
@@ -101,6 +101,18 @@ fn vendor_check(bridge: State<'_, Bridge>) -> Result<(), CommandError> {
     bridge.submit_vendor(VendorCommand::Check)
 }
 
+/// Consent to discard a corrupt journal tail. The signature must echo the
+/// one delivered on the `Degraded` payload — the driver rejects anything
+/// else, so a stale acknowledgement can never discard fresher bytes.
+#[tauri::command]
+#[specta::specta]
+fn acknowledge_corruption(
+    bridge: State<'_, Bridge>,
+    signature: CorruptionSignature,
+) -> Result<(), CommandError> {
+    bridge.acknowledge_corruption(signature)
+}
+
 /// The complete command/event surface, shared by the running app and the
 /// bindings-export test so the two can never drift.
 #[must_use]
@@ -117,5 +129,6 @@ pub fn specta_builder() -> Builder<tauri::Wry> {
         set_settings,
         vendor_install,
         vendor_check,
+        acknowledge_corruption,
     ])
 }

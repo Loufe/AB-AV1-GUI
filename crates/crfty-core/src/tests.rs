@@ -18,8 +18,9 @@ use crate::{
     Settings, SettingsCommand, SkipReason, StreamByteSizes, SystemCommand, Telemetry,
     ToolAvailability, ToolRevisions, ToolSource, ToolsState, UnixMillis, VendorActivity,
     VendorCommand, VideoCodec, VideoMeta, VmafScore, VmafTarget, WorkerCommand, apply,
-    compaction_due, compaction_quiescent, encode_record, encode_snapshot, evaluate_eligibility,
-    permitted_profiles, recover_output, replay, select_analysis, select_job_action,
+    compaction_due, compaction_quiescent, corruption_signature, encode_record, encode_snapshot,
+    evaluate_eligibility, permitted_profiles, recover_output, replay, select_analysis,
+    select_job_action,
 };
 
 fn revisions() -> ToolRevisions {
@@ -1608,6 +1609,94 @@ fn journal_degrades_on_nonfinal_corruption() {
     assert!(!replayed.ignored_torn_tail);
     assert_eq!(replayed.state.queue.len(), 1);
     assert_eq!(replayed.valid_prefix_len, intact_len);
+}
+
+#[test]
+fn acknowledge_corruption_never_applies_through_the_reducer() {
+    let mut state = AppState::default();
+    let applied = apply(
+        &mut state,
+        Command::System(SystemCommand::AcknowledgeCorruption {
+            signature: corruption_signature(b"unreadable"),
+        }),
+    );
+    assert!(matches!(applied.reply, Reply::Rejected { .. }));
+    assert!(applied.durable.is_empty());
+    assert!(applied.config.is_empty());
+    assert!(applied.effects.is_empty());
+    assert_eq!(state, AppState::default());
+}
+
+#[test]
+fn corruption_signature_covers_the_whole_unreadable_suffix() {
+    let mut bytes = encode_record(&JournalEnvelope {
+        sequence: JournalSequence(0),
+        deltas: vec![queue_added_delta(1, "one.mkv")],
+    })
+    .expect("head record");
+    let intact_len = bytes.len();
+    // Corrupt record followed by a torn fragment: the signature must span
+    // both, because acknowledgement discards everything past the valid prefix.
+    let suffix: &[u8] = b"not-json\n{\"torn";
+    bytes.extend(suffix);
+    let replayed = replay(&bytes);
+    let corruption = replayed.corruption.expect("corrupt journal");
+    assert_eq!(corruption.offset, intact_len);
+    assert_eq!(corruption.signature, corruption_signature(suffix));
+    assert_eq!(corruption.signature.tail_len, suffix.len() as u64);
+    assert_eq!(corruption.signature.digest.len(), 128);
+    assert!(
+        corruption
+            .signature
+            .digest
+            .bytes()
+            .all(|c| c.is_ascii_hexdigit())
+    );
+}
+
+#[test]
+fn different_corrupt_tails_yield_different_signatures() {
+    let head = encode_record(&JournalEnvelope {
+        sequence: JournalSequence(0),
+        deltas: vec![queue_added_delta(1, "one.mkv")],
+    })
+    .expect("head record");
+    let mut first = head.clone();
+    first.extend(b"garbage-one\n");
+    let mut second = head;
+    second.extend(b"garbage-two\n");
+    let first_signature = replay(&first).corruption.expect("first corrupt").signature;
+    let second_signature = replay(&second)
+        .corruption
+        .expect("second corrupt")
+        .signature;
+    assert_ne!(first_signature, second_signature);
+}
+
+#[test]
+fn the_same_corrupt_tail_at_different_offsets_shares_a_signature() {
+    let suffix: &[u8] = b"not-json\n";
+    let mut short = encode_record(&JournalEnvelope {
+        sequence: JournalSequence(0),
+        deltas: vec![queue_added_delta(1, "one.mkv")],
+    })
+    .expect("head record");
+    let mut long = short.clone();
+    long.extend(
+        encode_record(&JournalEnvelope {
+            sequence: JournalSequence(1),
+            deltas: vec![queue_added_delta(2, "two.mkv")],
+        })
+        .expect("second record"),
+    );
+    short.extend(suffix);
+    long.extend(suffix);
+    let short_corruption = replay(&short).corruption.expect("short corrupt");
+    let long_corruption = replay(&long).corruption.expect("long corrupt");
+    // Identity is content-based: the same unreadable bytes sign identically
+    // wherever they sit, while the reports remain distinct via the offset.
+    assert_eq!(short_corruption.signature, long_corruption.signature);
+    assert_ne!(short_corruption, long_corruption);
 }
 
 fn queue_added_delta(id: u64, name: &str) -> DurableDelta {

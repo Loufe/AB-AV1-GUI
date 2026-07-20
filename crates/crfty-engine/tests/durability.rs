@@ -17,7 +17,8 @@ use crfty_core::{
     FailureFacts, FailureKind, ItemOutcome, JobPhase, JobProgress, Operation, OutputDelta,
     OutputTarget, QueueCommand, QueueItemId, Replacement, Reply, RunId, SearchMeasurement,
     SessionCommand, Settings, SettingsCommand, SystemCommand, Telemetry, ToolAvailability,
-    ToolRevisions, ToolSource, UnixMillis, VmafScore, WorkerCommand, apply, fold, replay,
+    ToolRevisions, ToolSource, UnixMillis, VmafScore, WorkerCommand, apply, corruption_signature,
+    fold, replay,
 };
 use crfty_engine::{
     coordinator::{EngineConfig, EngineRuntime, ToolsConfig},
@@ -457,6 +458,159 @@ fn corrupted_journal_starts_degraded_and_rejects_mutation() {
         .expect("rejection reply");
     assert!(matches!(reply, Reply::Rejected { .. }));
     driver.shutdown().expect("degraded shutdown");
+}
+
+fn corrupt_archives(directory: &Path) -> Vec<PathBuf> {
+    fs::read_dir(directory)
+        .expect("data directory")
+        .filter_map(Result::ok)
+        .filter(|entry| entry.file_name().to_string_lossy().contains(".corrupt-"))
+        .map(|entry| entry.path())
+        .collect()
+}
+
+/// Writes a journal holding one valid record followed by an unparseable line —
+/// the canonical acknowledgeable corruption fixture.
+fn corrupt_journal_fixture(path: &Path) -> Vec<u8> {
+    {
+        let (mut writer, _initial) = JournalWriter::open(path).expect("journal writer");
+        writer
+            .append_batch(&[queue_added(QueueItemId(1))])
+            .expect("journal append");
+    }
+    let mut bytes = fs::read(path).expect("journal bytes");
+    bytes.extend(b"garbage-tail\n");
+    fs::write(path, &bytes).expect("corrupt journal fixture");
+    bytes
+}
+
+/// The full recovery arc (#39 phase 3): a matching acknowledgement archives
+/// the corrupt journal byte-identically, compacts the valid prefix into a
+/// fresh generation, announces recovery, accepts mutation again, and a
+/// restart comes up healthy with everything intact.
+#[test]
+fn acknowledged_corruption_archives_compacts_and_restarts_healthy() {
+    let directory = TestDirectory::new("ack-recovery");
+    let path = directory.path().join("state.jsonl");
+    let config_path = directory.path().join("config.json");
+    let before = corrupt_journal_fixture(&path);
+
+    let driver = DriverHandle::start(&path, &config_path).expect("degraded driver");
+    let events = driver.events().expect("event receiver");
+    assert!(matches!(
+        events.recv().expect("snapshot"),
+        DriverEvent::Snapshot(_)
+    ));
+    let DriverEvent::Degraded(report) = events.recv().expect("degraded event") else {
+        panic!("expected degraded event");
+    };
+    assert_eq!(report.signature, corruption_signature(b"garbage-tail\n"));
+
+    let reply = driver
+        .commands
+        .submit(Command::System(SystemCommand::AcknowledgeCorruption {
+            signature: report.signature,
+        }))
+        .expect("acknowledgement reply");
+    assert_eq!(reply, Reply::Accepted);
+    assert!(matches!(
+        events.recv().expect("recovered event"),
+        DriverEvent::Recovered
+    ));
+
+    // The corrupt generation is archived byte-identically beside the journal.
+    let archives = corrupt_archives(directory.path());
+    assert_eq!(archives.len(), 1);
+    assert_eq!(fs::read(&archives[0]).expect("archive bytes"), before);
+    // The journal itself is one healthy snapshot line of the valid prefix.
+    let recovered = fs::read(&path).expect("recovered journal");
+    assert_eq!(recovered.iter().filter(|byte| **byte == b'\n').count(), 1);
+    let replayed = replay(&recovered);
+    assert!(replayed.corruption.is_none());
+    assert_eq!(replayed.state.queue.len(), 1);
+
+    // Mutation is accepted again and lands on the fresh generation.
+    assert_eq!(
+        driver
+            .commands
+            .submit(add(QueueItemId(2)))
+            .expect("post-recovery add"),
+        Reply::Accepted
+    );
+    driver.shutdown().expect("recovered shutdown");
+
+    // A restart replays the recovered journal with no degradation.
+    let restarted = DriverHandle::start(&path, &config_path).expect("healthy restart");
+    let events = restarted.events().expect("event receiver");
+    let DriverEvent::Snapshot(snapshot) = events.recv().expect("restart snapshot") else {
+        panic!("expected restart snapshot");
+    };
+    assert_eq!(snapshot.durable.queue.len(), 2);
+    assert!(!matches!(
+        events.try_recv(),
+        Ok(DriverEvent::Degraded { .. })
+    ));
+    assert_eq!(
+        restarted
+            .commands
+            .submit(add(QueueItemId(3)))
+            .expect("restart add"),
+        Reply::Accepted
+    );
+    restarted.shutdown().expect("restart shutdown");
+}
+
+/// A signature that does not match the journal on disk is consent to discard
+/// different bytes than the ones present — it must be rejected with the file
+/// untouched and the driver still degraded.
+#[test]
+fn wrong_signature_acknowledgement_is_rejected_and_stays_degraded() {
+    let directory = TestDirectory::new("ack-wrong-signature");
+    let path = directory.path().join("state.jsonl");
+    let before = corrupt_journal_fixture(&path);
+
+    let driver =
+        DriverHandle::start(&path, directory.path().join("config.json")).expect("degraded driver");
+    let events = driver.events().expect("event receiver");
+    let _snapshot = events.recv().expect("snapshot");
+    let _degraded = events.recv().expect("degraded event");
+
+    let reply = driver
+        .commands
+        .submit(Command::System(SystemCommand::AcknowledgeCorruption {
+            signature: corruption_signature(b"fabricated tail"),
+        }))
+        .expect("wrong-signature reply");
+    assert!(matches!(reply, Reply::Rejected { .. }));
+    assert_eq!(fs::read(&path).expect("journal bytes"), before);
+    assert!(corrupt_archives(directory.path()).is_empty());
+    // Still degraded: ordinary mutation stays rejected.
+    let reply = driver
+        .commands
+        .submit(add(QueueItemId(2)))
+        .expect("still-degraded add");
+    assert!(matches!(reply, Reply::Rejected { .. }));
+    driver.shutdown().expect("degraded shutdown");
+}
+
+/// Over a healthy journal there is nothing to acknowledge; the command is
+/// rejected and no archive or rewrite happens.
+#[test]
+fn acknowledgement_over_a_healthy_journal_is_rejected() {
+    let directory = TestDirectory::new("ack-healthy");
+    let path = directory.path().join("state.jsonl");
+    let driver =
+        DriverHandle::start(&path, directory.path().join("config.json")).expect("healthy driver");
+    let _snapshot = driver.events().expect("event receiver").recv();
+    let reply = driver
+        .commands
+        .submit(Command::System(SystemCommand::AcknowledgeCorruption {
+            signature: corruption_signature(b"anything"),
+        }))
+        .expect("healthy-ack reply");
+    assert!(matches!(reply, Reply::Rejected { .. }));
+    assert!(corrupt_archives(directory.path()).is_empty());
+    driver.shutdown().expect("healthy shutdown");
 }
 
 #[test]
