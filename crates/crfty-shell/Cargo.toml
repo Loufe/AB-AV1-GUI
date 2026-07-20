@@ -16,8 +16,8 @@ tauri-build = { version = "=2.6.3", features = [] }
 [dependencies]
 crfty-core = { path = "../crfty-core", version = "=3.0.0-alpha.0" }
 crfty-engine = { path = "../crfty-engine", version = "=3.0.0-alpha.0" }
-serde = { version = "=1.0.229", features = ["derive"] }
-specta = { version = "=2.0.0-rc.25", features = ["derive"] }
+serde = { workspace = true }
+specta = { workspace = true }
 # default-features re-listed minus common-controls-v6: ComCtl32 v6 linkage
 # needs a manifest that test binaries lack, so `cargo test` executables die at
 # load on Windows with STATUS_ENTRYPOINT_NOT_FOUND (tauri-apps/tauri#13419).

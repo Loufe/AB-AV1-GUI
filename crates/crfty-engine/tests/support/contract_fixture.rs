@@ -26,10 +26,11 @@ const CONTRACT_EXPECTED_FINISHED_ITEMS: u8 = 4;
 const CONTRACT_EVENT_TIMEOUT: Duration = Duration::from_secs(10);
 const NOISY_STDERR_BYTES: usize = 32 * 1024;
 use crfty_engine::ab_av1::{
-    AbAv1Runtime, EncodeOutcome, EncodeRequest, FaultInjection, JobHandle, JobTerminal, MediaTools,
+    AbAv1Runtime, EncodeOutcome, EncodeRequest, FaultInjection, JobHandle, JobTerminal,
     SearchRequest, StartJobError,
 };
 use crfty_engine::coordinator::{EngineConfig, EngineRuntime};
+use crfty_engine::tools::MediaTools;
 
 fn main() {
     if let Err(error) = dispatch() {

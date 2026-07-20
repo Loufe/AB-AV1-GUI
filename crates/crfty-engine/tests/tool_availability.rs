@@ -22,12 +22,11 @@ use crfty_core::{
     UnixMillis, VmafScore, WorkerCommand, apply,
 };
 use crfty_engine::{
-    ab_av1::MediaTools,
     coordinator::{EngineConfig, EngineRuntime},
     driver::{DriverEvent, DriverHandle},
     journal::JournalWriter,
     output::{FixtureByteInspector, OutputManager},
-    tools::ToolDiscovery,
+    tools::{MediaTools, ToolDiscovery},
 };
 
 /// `AbAv1Runtime` is a process-wide singleton; engine-starting tests in this

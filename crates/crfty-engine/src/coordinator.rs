@@ -126,7 +126,7 @@ impl PhaseTracker {
 use crate::{
     ab_av1::{
         AbAv1Runtime, CancelMode, CancellationHandle, EncodeOutcome, EncodeRequest, JobFailureKind,
-        JobHandle, JobReport, JobTerminal, MediaTools, SearchOutcome, SearchRequest,
+        JobHandle, JobReport, JobTerminal, SearchOutcome, SearchRequest,
         Telemetry as AdapterTelemetry,
     },
     driver::{CommandSender, DriverEvent, DriverHandle, DriverStartError},
@@ -137,7 +137,7 @@ use crate::{
         self, RemuxCancellationHandle, RemuxHandle, RemuxReport, RemuxRequest, RemuxTelemetry,
         RemuxTerminal,
     },
-    tools::ToolDiscovery,
+    tools::{MediaTools, ToolDiscovery},
 };
 
 #[derive(Debug, Clone)]
@@ -177,6 +177,9 @@ impl EngineRuntime {
             AbAv1Runtime::start()
                 .map_err(|error| EngineStartError(format!("failed to start encoder: {error}")))?,
         );
+        // Unbounded by design for now: the supervisor loop feeds effects back
+        // into itself, so a bound risks deadlock. Capping belongs to the
+        // backpressure semantics owned by #41.
         let (effect_tx, effect_rx) = mpsc::channel();
         let mut driver =
             DriverHandle::start_with_effects(&config.journal_path, &config.config_path, effect_tx)
@@ -220,6 +223,8 @@ impl EngineRuntime {
             initial.durable,
         );
         let next_runtime_id = next_runtime_id(&recovered)?;
+        // Unbounded by design for now; capping consumer lag is part of the
+        // backpressure semantics owned by #41.
         let (public_event_tx, public_event_rx) = mpsc::channel();
         public_event_tx
             .send(DriverEvent::Snapshot(AppSnapshot {
@@ -620,11 +625,18 @@ fn supervise(
     while let Ok(effect) = effects.recv() {
         match effect {
             Effect::StartWorker => {
-                if let Some(previous) = worker.take()
-                    && previous.join().is_err()
-                {
-                    report_worker_crash(&commands, "previous session worker panicked");
-                    break;
+                if let Some(previous) = worker.take() {
+                    // A previous worker that is still winding down (e.g. the
+                    // session was force-stopped and restarted immediately)
+                    // would otherwise block this join for as long as its
+                    // current job keeps running. Force-cancel it first, the
+                    // same way StopDriver does; reset() below clears the
+                    // latch before the new worker starts.
+                    cancellation.force(None);
+                    if previous.join().is_err() {
+                        report_worker_crash(&commands, "previous session worker panicked");
+                        break;
+                    }
                 }
                 cancellation.reset();
                 let worker_commands = commands.clone();
@@ -1162,7 +1174,7 @@ fn run_remux(
             map_progress(
                 job.spec.run_id,
                 tracker,
-                JobPhase::Encoding,
+                JobPhase::Remuxing,
                 final_telemetry.map(remux_progress),
             ),
             tracker,
@@ -1190,7 +1202,7 @@ fn run_remux(
                 map_progress(
                     job.spec.run_id,
                     tracker,
-                    JobPhase::Encoding,
+                    JobPhase::Remuxing,
                     final_telemetry.map(remux_progress),
                 ),
                 tracker,
@@ -1620,7 +1632,10 @@ fn wait_for_report<T>(
     );
     let mut last_progress = None;
     loop {
-        match handle.try_report().map_err(|error| error.to_string())? {
+        match handle
+            .recv_report(ADAPTER_REPORT_POLL_INTERVAL)
+            .map_err(|error| error.to_string())?
+        {
             Some(report) => {
                 return Ok(report);
             }
@@ -1637,7 +1652,6 @@ fn wait_for_report<T>(
                         last_progress = Some(progress);
                     }
                 }
-                thread::sleep(ADAPTER_REPORT_POLL_INTERVAL);
             }
         }
     }
@@ -1650,14 +1664,17 @@ fn wait_for_remux_report(
     cancellation: &ActiveCancellation,
     tracker: &mut PhaseTracker,
 ) -> Result<RemuxReport, String> {
-    tracker.enter(JobPhase::Encoding);
+    tracker.enter(JobPhase::Remuxing);
     let _registration = cancellation.register(
         run_id,
         ActiveJobCancellation::Remux(handle.cancellation_handle()),
     );
     let mut last_progress = None;
     loop {
-        match handle.try_report().map_err(|error| error.to_string())? {
+        match handle
+            .recv_report(ADAPTER_REPORT_POLL_INTERVAL)
+            .map_err(|error| error.to_string())?
+        {
             Some(report) => return Ok(report),
             None => {
                 if let Some(update) = handle.latest_telemetry() {
@@ -1666,13 +1683,12 @@ fn wait_for_remux_report(
                         commands.publish_telemetry(Telemetry {
                             run_id,
                             sequence: tracker.next_sequence(),
-                            phase: JobPhase::Encoding,
+                            phase: JobPhase::Remuxing,
                             progress: progress.clone(),
                         });
                         last_progress = Some(progress);
                     }
                 }
-                thread::sleep(ADAPTER_REPORT_POLL_INTERVAL);
             }
         }
     }

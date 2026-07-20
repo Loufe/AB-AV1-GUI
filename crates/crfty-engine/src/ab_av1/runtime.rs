@@ -6,16 +6,17 @@ use std::{
         mpsc::{self, Receiver, SyncSender, TrySendError},
     },
     thread,
+    time::Duration,
 };
 
 use super::{
     operation,
     types::{
-        CancelMode, EncodeOutcome, EncodeRequest, JobReport, JobTerminal, MediaTools,
-        RuntimeStartError, SearchOutcome, SearchRequest, ShutdownError, StartJobError, Telemetry,
-        WaitError,
+        CancelMode, EncodeOutcome, EncodeRequest, JobReport, JobTerminal, RuntimeStartError,
+        SearchOutcome, SearchRequest, ShutdownError, StartJobError, Telemetry, WaitError,
     },
 };
+use crate::tools::MediaTools;
 
 static RUNTIME_ACTIVE: AtomicBool = AtomicBool::new(false);
 const RUNTIME_COMMAND_CAPACITY: usize = 1;
@@ -340,14 +341,16 @@ impl<T> JobHandle<T> {
         Ok(report)
     }
 
-    pub fn try_report(&mut self) -> Result<Option<JobReport<T>>, WaitError> {
-        match self.result.try_recv() {
+    /// Blocks up to `timeout` for the report; `Ok(None)` means the job is
+    /// still running when the timeout elapses.
+    pub fn recv_report(&mut self, timeout: Duration) -> Result<Option<JobReport<T>>, WaitError> {
+        match self.result.recv_timeout(timeout) {
             Ok(report) => {
                 self.cancel_on_drop = false;
                 Ok(Some(report))
             }
-            Err(mpsc::TryRecvError::Empty) => Ok(None),
-            Err(mpsc::TryRecvError::Disconnected) => Err(WaitError(
+            Err(mpsc::RecvTimeoutError::Timeout) => Ok(None),
+            Err(mpsc::RecvTimeoutError::Disconnected) => Err(WaitError(
                 "ab-av1 runtime dropped the result channel".to_owned(),
             )),
         }

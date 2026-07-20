@@ -2154,6 +2154,68 @@ fn software_fallback_analysis_is_permitted_under_a_hardware_spec() {
         }),
     );
     assert!(matches!(rejected.reply, Reply::Rejected { .. }));
+    assert!(matches!(
+        rejected.ephemeral.as_slice(),
+        [EphemeralDelta::CommandRejected { .. }]
+    ));
+}
+
+#[test]
+fn worker_rejections_pair_the_reply_with_a_command_rejected_delta() {
+    // Every rejection surfaces both ways: the worker's `Reply` and a
+    // `CommandRejected` ephemeral for the stream. The in-closure rejection
+    // paths must uphold the same contract as `Applied::rejected`.
+    let mut state = AppState::default();
+    let _added = apply(&mut state, add_command(QueueItemId(1), "video.mkv"));
+    let _started = start_session(&mut state);
+    let _claimed = reserve_and_prepare(&mut state, ClaimId(2), RunId(3), execution());
+    let record = |run_id| {
+        Command::Worker(WorkerCommand::RecordAnalysis {
+            item_id: QueueItemId(1),
+            claim_id: ClaimId(2),
+            run_id,
+            result: Box::new(analysis()),
+        })
+    };
+    let recorded = apply(&mut state, record(RunId(3)));
+    assert_eq!(recorded.reply, Reply::Accepted);
+
+    let duplicate = apply(&mut state, record(RunId(3)));
+    let reason = "analysis is already recorded".to_owned();
+    assert_eq!(
+        duplicate.reply,
+        Reply::Rejected {
+            reason: reason.clone(),
+        }
+    );
+    assert_eq!(
+        duplicate.ephemeral,
+        vec![EphemeralDelta::CommandRejected { reason }]
+    );
+
+    let terminal = apply(
+        &mut state,
+        Command::Worker(WorkerCommand::Terminal {
+            item_id: QueueItemId(1),
+            claim_id: ClaimId(2),
+            run_id: RunId(3),
+            outcome: ItemOutcome::Analyzed,
+            at: UnixMillis(1_000),
+            phase_spans: Vec::new(),
+            final_telemetry: None,
+        }),
+    );
+    let reason = "analyzed outcome is incompatible with the run state".to_owned();
+    assert_eq!(
+        terminal.reply,
+        Reply::Rejected {
+            reason: reason.clone(),
+        }
+    );
+    assert_eq!(
+        terminal.ephemeral,
+        vec![EphemeralDelta::CommandRejected { reason }]
+    );
 }
 
 #[test]

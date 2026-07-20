@@ -62,6 +62,16 @@ describe("deriveRowStatus", () => {
     expect(status).toEqual({ kind: "working", phase: "Encoding", percent: 25 });
   });
 
+  it("derives remux percent from position over duration", () => {
+    const status = deriveRowStatus(
+      RUNNING,
+      telemetry({ OutputPositionMs: 30_000 }, "Remuxing"),
+      120_000,
+      null,
+    );
+    expect(status).toEqual({ kind: "working", phase: "Remuxing", percent: 25 });
+  });
+
   it("leaves encode percent unknown without a duration", () => {
     const status = deriveRowStatus(
       RUNNING,
