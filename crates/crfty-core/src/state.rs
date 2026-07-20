@@ -115,6 +115,12 @@ pub struct ConversionRun {
     pub spec: JobSpec,
     pub analysis: Option<AnalysisResult>,
     pub output_content_key: Option<ContentKey>,
+    /// Mirrors the owning queue item's `QueueItemState::Finished(outcome)`;
+    /// both are written by the single `DurableDelta::ItemFinished` fold arm.
+    /// The run keeps its own copy because it outlives the queue item (items
+    /// can be removed once finished) and because journal replay uses
+    /// `outcome.is_some()` as its "run already terminal" guard. Projections
+    /// must not let the two diverge.
     pub outcome: Option<ItemOutcome>,
     pub started_at: Option<UnixMillis>,
     pub finished_at: Option<UnixMillis>,

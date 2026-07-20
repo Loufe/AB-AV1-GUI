@@ -50,14 +50,10 @@ pub fn replay(bytes: &[u8]) -> JournalReplay {
         }
         let line = segment.strip_suffix(b"\n").unwrap_or(segment);
         if line.is_empty() {
-            if complete {
-                corruption = Some(JournalCorruption {
-                    offset,
-                    reason: "empty journal record".to_owned(),
-                });
-            } else {
-                ignored_torn_tail = true;
-            }
+            corruption = Some(JournalCorruption {
+                offset,
+                reason: "empty journal record".to_owned(),
+            });
             break;
         }
         let envelope = match serde_json::from_slice::<JournalEnvelope>(line) {
