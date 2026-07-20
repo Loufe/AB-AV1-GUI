@@ -334,6 +334,169 @@ fn telemetry_pressure_coalesces_and_terminal_value_wins() {
 }
 
 #[test]
+fn terminal_publishes_final_telemetry_and_clear_before_item_finished() {
+    let directory = TestDirectory::new("terminal-order");
+    let driver = DriverHandle::start(
+        directory.path().join("state.jsonl"),
+        directory.path().join("config.json"),
+    )
+    .expect("driver");
+    for command in [
+        add(QueueItemId(1)),
+        Command::Session(SessionCommand::Start),
+        Command::Worker(WorkerCommand::ReserveNext {
+            claim_id: ClaimId(2),
+            run_id: RunId(3),
+        }),
+        Command::Worker(WorkerCommand::PrepareReserved {
+            item_id: QueueItemId(1),
+            claim_id: ClaimId(2),
+            run_id: RunId(3),
+            observation: None,
+            execution: execution(),
+        }),
+    ] {
+        let reply = driver.commands.submit(command).expect("setup reply");
+        assert!(!matches!(reply, Reply::Rejected { .. }));
+    }
+    while driver.events().expect("event receiver").try_recv().is_ok() {}
+
+    let final_sequence = 42;
+    assert_eq!(
+        driver
+            .commands
+            .submit(Command::Worker(WorkerCommand::Terminal {
+                item_id: QueueItemId(1),
+                claim_id: ClaimId(2),
+                run_id: RunId(3),
+                outcome: ItemOutcome::Failed {
+                    message: "fixture".to_owned(),
+                },
+                final_telemetry: Some(Telemetry {
+                    run_id: RunId(3),
+                    sequence: final_sequence,
+                    phase: JobPhase::Finalizing,
+                    progress: JobProgress::OutputPositionMs(100),
+                }),
+            }))
+            .expect("terminal reply"),
+        Reply::Accepted
+    );
+    let events: Vec<DriverEvent> = driver
+        .events()
+        .expect("event receiver")
+        .try_iter()
+        .collect();
+    let telemetry = events.iter().position(|event| {
+        matches!(
+            event,
+            DriverEvent::Ephemeral(EphemeralDelta::Telemetry(update))
+                if update.sequence == final_sequence
+        )
+    });
+    let cleared = events.iter().position(|event| {
+        matches!(
+            event,
+            DriverEvent::Ephemeral(EphemeralDelta::TelemetryCleared { run_id: RunId(3) })
+        )
+    });
+    let finished = events.iter().position(|event| {
+        matches!(
+            event,
+            DriverEvent::Durable(DurableDelta::ItemFinished { .. })
+        )
+    });
+    let telemetry = telemetry.expect("final telemetry event");
+    let cleared = cleared.expect("telemetry cleared event");
+    let finished = finished.expect("item finished event");
+    assert!(
+        telemetry < cleared && cleared < finished,
+        "observed order telemetry={telemetry} cleared={cleared} finished={finished}"
+    );
+    driver.shutdown().expect("driver shutdown");
+}
+
+#[test]
+fn restart_after_fsynced_terminal_folds_to_finished_snapshot() {
+    let directory = TestDirectory::new("fsynced-terminal");
+    let journal_path = directory.path().join("state.jsonl");
+    let mut state = AppState::default();
+    let mut durable = Vec::new();
+    for command in [
+        add(QueueItemId(1)),
+        Command::Session(SessionCommand::Start),
+        Command::Worker(WorkerCommand::ReserveNext {
+            claim_id: ClaimId(2),
+            run_id: RunId(3),
+        }),
+        Command::Worker(WorkerCommand::PrepareReserved {
+            item_id: QueueItemId(1),
+            claim_id: ClaimId(2),
+            run_id: RunId(3),
+            observation: None,
+            execution: execution(),
+        }),
+        Command::Worker(WorkerCommand::Started {
+            item_id: QueueItemId(1),
+            claim_id: ClaimId(2),
+            run_id: RunId(3),
+        }),
+        Command::Worker(WorkerCommand::Terminal {
+            item_id: QueueItemId(1),
+            claim_id: ClaimId(2),
+            run_id: RunId(3),
+            outcome: ItemOutcome::Failed {
+                message: "fixture".to_owned(),
+            },
+            final_telemetry: Some(Telemetry {
+                run_id: RunId(3),
+                sequence: 9,
+                phase: JobPhase::Finalizing,
+                progress: JobProgress::OutputPositionMs(100),
+            }),
+        }),
+    ] {
+        let applied = apply(&mut state, command);
+        assert!(!matches!(applied.reply, Reply::Rejected { .. }));
+        durable.extend(applied.durable);
+    }
+    let (mut writer, _replay) = JournalWriter::open(&journal_path).expect("journal writer");
+    writer.append_batch(&durable).expect("terminal batch");
+    drop(writer);
+
+    // The journal holds the fsynced terminal but no subscriber ever observed
+    // its publication — the crash-between-fsync-and-publish state. A restart
+    // must fold straight to the finished snapshot with no telemetry.
+    let driver =
+        DriverHandle::start(&journal_path, directory.path().join("config.json")).expect("driver");
+    let DriverEvent::Snapshot(snapshot) = driver
+        .events()
+        .expect("event receiver")
+        .recv()
+        .expect("replayed snapshot")
+    else {
+        panic!("expected replayed snapshot");
+    };
+    assert!(matches!(
+        snapshot.durable.queue.first().expect("queue item").state,
+        crfty_core::QueueItemState::Finished(ItemOutcome::Failed { .. })
+    ));
+    let run = snapshot
+        .durable
+        .conversion_runs
+        .get(&RunId(3))
+        .expect("conversion run");
+    assert!(run.outcome.is_some());
+    for event in driver.events().expect("event receiver").try_iter() {
+        assert!(
+            !matches!(event, DriverEvent::Ephemeral(EphemeralDelta::Telemetry(_))),
+            "telemetry must not follow a recovered terminal: {event:?}"
+        );
+    }
+    driver.shutdown().expect("driver shutdown");
+}
+
+#[test]
 fn output_recovery_promotes_and_retires_original() {
     let directory = TestDirectory::new("replace");
     let input = directory.path().join("input.mp4");
@@ -512,6 +675,14 @@ fn engine_startup_recovers_an_active_partial_staging_transaction() {
         "unexpected recovered snapshot: {snapshot:?}"
     );
     assert!(!transaction.staging.exists());
+    // Recovery may forward an idempotent TelemetryCleared after the snapshot,
+    // but live telemetry must never follow a recovered terminal.
+    while let Ok(event) = engine.events.try_recv() {
+        assert!(
+            !matches!(event, DriverEvent::Ephemeral(EphemeralDelta::Telemetry(_))),
+            "telemetry after recovered terminal: {event:?}"
+        );
+    }
     engine.shutdown().expect("engine shutdown");
 }
 

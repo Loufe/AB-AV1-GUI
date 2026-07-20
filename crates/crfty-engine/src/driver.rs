@@ -417,6 +417,13 @@ impl JournalSink for JournalWriter {
     }
 }
 
+/// Publishes each applied command in fold order as config, then ephemeral,
+/// then durable deltas, followed by its reply. Ephemerals precede durables so
+/// terminal state is never followed by stale progress: a finishing item is
+/// observed as final telemetry, telemetry-cleared, then `ItemFinished`. A
+/// future ephemeral that needs post-durable semantics would force revisiting
+/// this contract. Durable publication still requires the token minted by the
+/// journal fsync, so nothing observable can outrun durability.
 fn emit_batch(
     durability: Option<DurabilityToken>,
     applied_batch: Vec<(mpsc::SyncSender<Reply>, crfty_core::Applied)>,
@@ -424,9 +431,6 @@ fn emit_batch(
     events: &mpsc::Sender<DriverEvent>,
     effect_sink: Option<&mpsc::Sender<Effect>>,
 ) -> bool {
-    if let Some(token) = durability {
-        emit_durable(token, &applied_batch, events);
-    }
     let mut effects = Vec::new();
     for (reply, applied) in applied_batch {
         for delta in applied.config {
@@ -434,6 +438,9 @@ fn emit_batch(
         }
         for delta in applied.ephemeral {
             let _result = events.send(DriverEvent::Ephemeral(delta));
+        }
+        if let Some(token) = &durability {
+            emit_durable(token, &applied.durable, events);
         }
         effects.extend(applied.effects);
         let _result = reply.send(applied.reply);
@@ -460,14 +467,12 @@ fn emit_batch(
 }
 
 fn emit_durable(
-    _token: DurabilityToken,
-    applied_batch: &[(mpsc::SyncSender<Reply>, crfty_core::Applied)],
+    _token: &DurabilityToken,
+    deltas: &[DurableDelta],
     events: &mpsc::Sender<DriverEvent>,
 ) {
-    for (_reply, applied) in applied_batch {
-        for delta in &applied.durable {
-            let _result = events.send(DriverEvent::Durable(delta.clone()));
-        }
+    for delta in deltas {
+        let _result = events.send(DriverEvent::Durable(delta.clone()));
     }
 }
 
@@ -541,8 +546,10 @@ mod tests {
     use std::{io, path::PathBuf, sync::mpsc};
 
     use crfty_core::{
-        Command, ConfigDelta, Effect, Operation, OutputTarget, QueueCommand, QueueItemId, Reply,
-        SessionState, Settings, SettingsCommand,
+        AnalysisProfile, ClaimId, Command, ConfigDelta, DurableDelta, Effect, EphemeralDelta,
+        ExecutionSettings, ItemOutcome, JobPhase, JobProgress, Operation, OutputTarget,
+        QueueCommand, QueueItemId, Reply, RunId, SessionCommand, SessionState, Settings,
+        SettingsCommand, Telemetry, ToolRevisions, WorkerCommand, apply,
     };
 
     use super::{
@@ -613,6 +620,82 @@ mod tests {
         ) -> Result<DurabilityToken, JournalError> {
             Ok(DurabilityToken::new())
         }
+    }
+
+    #[test]
+    fn terminal_publishes_ephemerals_before_the_durable_finish() {
+        let execution = ExecutionSettings::production(
+            AnalysisProfile::production(ToolRevisions {
+                ab_av1: "fixture".to_owned(),
+                ffmpeg: "fixture".to_owned(),
+                encoder: "fixture".to_owned(),
+            }),
+            false,
+        );
+        let mut state = AppState::default();
+        for command in [
+            Command::Queue(QueueCommand::Add {
+                item_id: QueueItemId(1),
+                input: PathBuf::from("video.mkv"),
+                operation: Operation::Convert,
+                output_target: OutputTarget::Replace,
+            }),
+            Command::Session(SessionCommand::Start),
+            Command::Worker(WorkerCommand::ReserveNext {
+                claim_id: ClaimId(2),
+                run_id: RunId(3),
+            }),
+            Command::Worker(WorkerCommand::PrepareReserved {
+                item_id: QueueItemId(1),
+                claim_id: ClaimId(2),
+                run_id: RunId(3),
+                observation: None,
+                execution,
+            }),
+        ] {
+            let applied = apply(&mut state, command);
+            assert!(!matches!(applied.reply, Reply::Rejected { .. }));
+        }
+
+        let (reply_tx, reply_rx) = mpsc::sync_channel(1);
+        let envelope = Envelope {
+            command: Command::Worker(WorkerCommand::Terminal {
+                item_id: QueueItemId(1),
+                claim_id: ClaimId(2),
+                run_id: RunId(3),
+                outcome: ItemOutcome::Failed {
+                    message: "fixture".to_owned(),
+                },
+                final_telemetry: Some(Telemetry {
+                    run_id: RunId(3),
+                    sequence: 7,
+                    phase: JobPhase::Finalizing,
+                    progress: JobProgress::OutputPositionMs(100),
+                }),
+            }),
+            reply: reply_tx,
+        };
+        let (event_tx, event_rx) = mpsc::channel();
+        assert!(!process_batch(
+            &mut state,
+            &mut NoopJournal,
+            &mut AcceptingConfig,
+            None,
+            vec![envelope],
+            &event_tx,
+            None,
+        ));
+        assert_eq!(reply_rx.recv().expect("terminal reply"), Reply::Accepted);
+        let observed: Vec<&'static str> = event_rx
+            .try_iter()
+            .map(|event| match event {
+                DriverEvent::Ephemeral(EphemeralDelta::Telemetry(_)) => "telemetry",
+                DriverEvent::Ephemeral(EphemeralDelta::TelemetryCleared { .. }) => "cleared",
+                DriverEvent::Durable(DurableDelta::ItemFinished { .. }) => "finished",
+                _ => "other",
+            })
+            .collect();
+        assert_eq!(observed, ["telemetry", "cleared", "finished"]);
     }
 
     struct RecordingConfig {
