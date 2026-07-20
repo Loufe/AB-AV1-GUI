@@ -66,8 +66,8 @@ pub use projection::{
     local_epoch_day, statistics,
 };
 pub use reducer::{
-    Applied, Command, Effect, EphemeralDelta, QueueCommand, Reply, SessionCommand, SettingsCommand,
-    SystemCommand, VendorCommand, WorkerCommand, apply,
+    Applied, Command, Effect, EphemeralDelta, ProjectionCommand, QueueCommand, Reply,
+    SessionCommand, SettingsCommand, SystemCommand, VendorCommand, WorkerCommand, apply,
 };
 pub use settings::{
     DEFAULT_OUTPUT_SUFFIX, DefaultOutputMode, OutputSettings, PrivacySettings, Settings,

@@ -16,6 +16,12 @@ export const commands = {
 	vendorInstall: () => typedError<null, CommandError>(__TAURI_INVOKE("vendor_install")),
 	vendorCheck: () => typedError<null, CommandError>(__TAURI_INVOKE("vendor_check")),
 	/**
+	 *  Ask for a fresh Statistics computation. The ack only confirms acceptance;
+	 *  the payload arrives as a sequenced `Statistics` ephemeral on the stream
+	 *  and is never replayed — re-request after (re)subscribing.
+	 */
+	requestStatistics: (utcOffsetMinutes: number) => typedError<null, CommandError>(__TAURI_INVOKE("request_statistics", { utcOffsetMinutes })),
+	/**
 	 *  Consent to discard a corrupt journal tail. The signature must echo the
 	 *  one delivered on the `Degraded` payload — the driver rejects anything
 	 *  else, so a stale acknowledgement can never discard fresher bytes.
@@ -110,6 +116,11 @@ export type AudioStreamMeta = {
 
 export type ClaimId = number;
 
+export type CodecCount = {
+	codec: VideoCodec,
+	count: number,
+};
+
 export type CommandError = {
 	code: string,
 	message: string,
@@ -190,6 +201,16 @@ export type CorruptionSignature = {
 };
 
 export type Crf = number;
+
+/**
+ *  One point of the cumulative savings series: a local calendar day (days
+ *  since the Unix epoch in the requester's timezone) and the running total
+ *  through that day. The series can dip when an output grew.
+ */
+export type CumulativeSavingsPoint = {
+	epoch_day: number,
+	cumulative_saved_bytes: number,
+};
 
 export type DecodeMode = "Software" | { Hardware: HardwareDecoder };
 
@@ -304,13 +325,18 @@ export type DurableState_Serialize = {
 /**  A duration in milliseconds, measured engine-side with a monotonic clock. */
 export type DurationMs = number;
 
-export type EphemeralDelta = ({ SessionChanged: SessionState }) & { CommandRejected?: never; Telemetry?: never; TelemetryCleared?: never; ToolsChanged?: never; WorkerCrashed?: never } | ({ Telemetry: Telemetry }) & { CommandRejected?: never; SessionChanged?: never; TelemetryCleared?: never; ToolsChanged?: never; WorkerCrashed?: never } | ({ TelemetryCleared: {
+export type EphemeralDelta = ({ SessionChanged: SessionState }) & { CommandRejected?: never; Statistics?: never; Telemetry?: never; TelemetryCleared?: never; ToolsChanged?: never; WorkerCrashed?: never } | ({ Telemetry: Telemetry }) & { CommandRejected?: never; SessionChanged?: never; Statistics?: never; TelemetryCleared?: never; ToolsChanged?: never; WorkerCrashed?: never } | ({ TelemetryCleared: {
 	run_id: RunId,
-} }) & { CommandRejected?: never; SessionChanged?: never; Telemetry?: never; ToolsChanged?: never; WorkerCrashed?: never } | ({ ToolsChanged: ToolsState }) & { CommandRejected?: never; SessionChanged?: never; Telemetry?: never; TelemetryCleared?: never; WorkerCrashed?: never } | ({ WorkerCrashed: {
+} }) & { CommandRejected?: never; SessionChanged?: never; Statistics?: never; Telemetry?: never; ToolsChanged?: never; WorkerCrashed?: never } | ({ ToolsChanged: ToolsState }) & { CommandRejected?: never; SessionChanged?: never; Statistics?: never; Telemetry?: never; TelemetryCleared?: never; WorkerCrashed?: never } | 
+/**
+ *  Answer to [`ProjectionCommand::RequestStatistics`]. Fire-and-forget:
+ *  not part of the read model and never replayed on subscribe.
+ */
+({ Statistics: StatisticsPayload }) & { CommandRejected?: never; SessionChanged?: never; Telemetry?: never; TelemetryCleared?: never; ToolsChanged?: never; WorkerCrashed?: never } | ({ WorkerCrashed: {
 	message: string,
-} }) & { CommandRejected?: never; SessionChanged?: never; Telemetry?: never; TelemetryCleared?: never; ToolsChanged?: never } | ({ CommandRejected: {
+} }) & { CommandRejected?: never; SessionChanged?: never; Statistics?: never; Telemetry?: never; TelemetryCleared?: never; ToolsChanged?: never } | ({ CommandRejected: {
 	reason: string,
-} }) & { SessionChanged?: never; Telemetry?: never; TelemetryCleared?: never; ToolsChanged?: never; WorkerCrashed?: never };
+} }) & { SessionChanged?: never; Statistics?: never; Telemetry?: never; TelemetryCleared?: never; ToolsChanged?: never; WorkerCrashed?: never };
 
 export type ExecutionSettings = {
 	requested_target: VmafTarget,
@@ -639,6 +665,20 @@ export type ReservedJob = {
 
 export type RunId = number;
 
+/**
+ *  Terminal run outcomes counted across every conversion run, independent of
+ *  the per-content current verdicts.
+ */
+export type RunTotals = {
+	analyzed: number,
+	converted: number,
+	remuxed: number,
+	not_worthwhile: number,
+	stopped: number,
+	skipped: number,
+	failed: number,
+};
+
 export type SearchMeasurement = {
 	crf: Crf,
 	score: VmafScore,
@@ -675,6 +715,55 @@ export type SkipReason = { LowResolution: {
 	pixels: number,
 	minimum: number,
 } } | "AlreadyAv1Matroska" | "OutputExists";
+
+/**
+ *  The exhaustive Statistics answer. Conversion savings, VMAF, CRF, and time
+ *  aggregates cover converted verdicts only; remux facts are counted and
+ *  summed separately and never blend into conversion aggregates.
+ */
+export type StatisticsPayload = {
+	/**  The requester-supplied offset the calendar bucketing used. */
+	utc_offset_minutes: number,
+	converted_files: number,
+	/**
+	 *  Converted facts that carried both sizes and therefore contribute to
+	 *  savings totals, bins, and the cumulative series.
+	 */
+	sized_converted_files: number,
+	remuxed_files: number,
+	not_worthwhile_files: number,
+	total_input_bytes: number,
+	total_output_bytes: number,
+	/**  Negative when outputs grew past their inputs overall. */
+	total_saved_bytes: number,
+	remux_saved_bytes: number,
+	/**  Analyzing plus encoding time across converted facts. */
+	total_time_ms: number,
+	/**  Input gigabytes processed per hour of conversion time. */
+	gigabytes_per_hour: number | null,
+	reduction_percent: ValueSpread | null,
+	vmaf: ValueSpread | null,
+	crf: ValueSpread | null,
+	/**
+	 *  Ten 10%-wide bins over `[0, 100)`; a reduction of exactly 100% (an
+	 *  empty output) lands in the last bin.
+	 */
+	reduction_bins: number[],
+	/**
+	 *  Converted facts whose output grew — represented here, never clamped
+	 *  into the first bin.
+	 */
+	grew_count: number,
+	/**
+	 *  Source codecs of converted facts, most frequent first; ties keep the
+	 *  deterministic content-key iteration order.
+	 */
+	codecs: CodecCount[],
+	cumulative_savings: CumulativeSavingsPoint[],
+	first_epoch_day: number | null,
+	last_epoch_day: number | null,
+	runs: RunTotals,
+};
 
 /**  Core-owned mirror of the adapter's per-stream output byte accounting. */
 export type StreamByteSizes = {
@@ -792,6 +881,14 @@ export type ToolsState = {
  *  engine (core has no clock) and delivered inside command payloads.
  */
 export type UnixMillis = number;
+
+/**  Average and range of one aggregated value; absent when no samples exist. */
+export type ValueSpread = {
+	average: number | null,
+	minimum: number | null,
+	maximum: number | null,
+	count: number,
+};
 
 /**
  *  What the vendor subsystem is doing right now. `Downloading` progress is

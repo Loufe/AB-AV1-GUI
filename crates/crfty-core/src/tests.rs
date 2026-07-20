@@ -13,14 +13,14 @@ use crate::{
     FileRecord, FileStamp, FileSystemFacts, FileSystemId, FileTimeNs, ItemOutcome,
     JOURNAL_SCHEMA_VERSION, JobAction, JobPhase, JobProgress, JournalEnvelope, JournalSequence,
     MediaContainer, MediaObservation, Operation, OutputDelta, OutputRecoveryAction, OutputState,
-    OutputTarget, OutputTransaction, PathBinding, PathHash, PhaseSpan, QueueCommand, QueueItemId,
-    QueueItemState, Replacement, Reply, RunId, SearchMeasurement, SessionCommand, SessionState,
-    Settings, SettingsCommand, SkipReason, StreamByteSizes, SystemCommand, Telemetry,
-    ToolAvailability, ToolRevisions, ToolSource, ToolsState, UnixMillis, VendorActivity,
-    VendorCommand, VideoCodec, VideoMeta, VmafScore, VmafTarget, WorkerCommand, apply,
-    compaction_due, compaction_quiescent, corruption_signature, encode_record, encode_snapshot,
-    evaluate_eligibility, permitted_profiles, recover_output, replay, select_analysis,
-    select_job_action,
+    OutputTarget, OutputTransaction, PathBinding, PathHash, PhaseSpan, ProjectionCommand,
+    QueueCommand, QueueItemId, QueueItemState, Replacement, Reply, RunId, SearchMeasurement,
+    SessionCommand, SessionState, Settings, SettingsCommand, SkipReason, StreamByteSizes,
+    SystemCommand, Telemetry, ToolAvailability, ToolRevisions, ToolSource, ToolsState, UnixMillis,
+    VendorActivity, VendorCommand, VideoCodec, VideoMeta, VmafScore, VmafTarget, WorkerCommand,
+    apply, compaction_due, compaction_quiescent, corruption_signature, encode_record,
+    encode_snapshot, evaluate_eligibility, permitted_profiles, recover_output, replay,
+    select_analysis, select_job_action,
 };
 
 fn revisions() -> ToolRevisions {
@@ -2927,4 +2927,43 @@ fn file_record_round_trips_through_json() {
     let encoded = serde_json::to_string(&record).expect("serialize file record");
     let decoded: FileRecord = serde_json::from_str(&encoded).expect("deserialize file record");
     assert_eq!(decoded, record);
+}
+
+#[test]
+fn statistics_request_answers_on_the_stream_without_touching_state() {
+    let mut state = AppState::default();
+    let applied = apply(
+        &mut state,
+        Command::Projection(ProjectionCommand::RequestStatistics {
+            utc_offset_minutes: 60,
+        }),
+    );
+    assert_eq!(applied.reply, Reply::Accepted);
+    assert!(applied.durable.is_empty());
+    assert!(applied.config.is_empty());
+    assert!(applied.effects.is_empty());
+    let [EphemeralDelta::Statistics(payload)] = applied.ephemeral.as_slice() else {
+        panic!("expected exactly one statistics delta");
+    };
+    assert_eq!(payload.utc_offset_minutes, 60);
+    assert_eq!(payload.converted_files, 0);
+    assert_eq!(state, AppState::default());
+}
+
+#[test]
+fn statistics_request_rejects_an_implausible_offset() {
+    let mut state = AppState::default();
+    for offset in [1_441, -1_441] {
+        let applied = apply(
+            &mut state,
+            Command::Projection(ProjectionCommand::RequestStatistics {
+                utc_offset_minutes: offset,
+            }),
+        );
+        assert!(matches!(applied.reply, Reply::Rejected { .. }));
+        assert!(matches!(
+            applied.ephemeral.as_slice(),
+            [EphemeralDelta::CommandRejected { .. }]
+        ));
+    }
 }

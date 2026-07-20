@@ -8,9 +8,13 @@ use crate::{
     CorruptionSignature, DecodeMode, DecodePreference, DurableDelta, ExecutionSettings,
     ItemOutcome, JobAction, JobSpec, MediaObservation, Operation, OutputDelta, OutputTarget,
     PhaseSpan, QueueItem, QueueItemId, QueueItemState, ReservedJob, RunId, SessionState, Settings,
-    Telemetry, ToolAvailability, ToolsState, UnixMillis, VendorActivity, fold, fold_config,
-    select_job_action,
+    StatisticsPayload, Telemetry, ToolAvailability, ToolsState, UnixMillis, VendorActivity, fold,
+    fold_config, select_job_action, statistics,
 };
+
+/// Sanity bound for a requester-supplied UTC offset: one day in minutes.
+/// Real offsets stay within ±14 hours; anything past a day is a caller bug.
+const MAX_UTC_OFFSET_MINUTES: i32 = 1_440;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Command {
@@ -19,6 +23,7 @@ pub enum Command {
     Settings(SettingsCommand),
     Worker(WorkerCommand),
     Vendor(VendorCommand),
+    Projection(ProjectionCommand),
     System(SystemCommand),
 }
 
@@ -60,6 +65,15 @@ pub enum SessionCommand {
 pub enum VendorCommand {
     Install,
     Check,
+}
+
+/// Read-model requests answered synchronously from durable state. The reply
+/// is a plain `Accepted`; the computed payload travels as a sequenced
+/// ephemeral delta on the one stream (ADR-006), never journaled and never
+/// replayed to late subscribers — a stale-aware UI simply re-requests.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ProjectionCommand {
+    RequestStatistics { utc_offset_minutes: i32 },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -133,14 +147,23 @@ pub enum SystemCommand {
     },
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, specta::Type)]
+#[derive(Debug, Clone, PartialEq, Serialize, specta::Type)]
 pub enum EphemeralDelta {
     SessionChanged(SessionState),
     Telemetry(Telemetry),
-    TelemetryCleared { run_id: RunId },
+    TelemetryCleared {
+        run_id: RunId,
+    },
     ToolsChanged(ToolsState),
-    WorkerCrashed { message: String },
-    CommandRejected { reason: String },
+    /// Answer to [`ProjectionCommand::RequestStatistics`]. Fire-and-forget:
+    /// not part of the read model and never replayed on subscribe.
+    Statistics(Box<StatisticsPayload>),
+    WorkerCrashed {
+        message: String,
+    },
+    CommandRejected {
+        reason: String,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -162,7 +185,7 @@ pub enum Reply {
     DurabilityUnknown { reason: String },
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct Applied {
     pub durable: Vec<DurableDelta>,
     pub config: Vec<ConfigDelta>,
@@ -206,6 +229,19 @@ pub fn apply(state: &mut AppState, command: Command) -> Applied {
         Command::Settings(command) => apply_settings(state, command),
         Command::Worker(command) => apply_worker(state, command),
         Command::Vendor(command) => apply_vendor(state, command),
+        Command::Projection(ProjectionCommand::RequestStatistics { utc_offset_minutes }) => {
+            if utc_offset_minutes.abs() > MAX_UTC_OFFSET_MINUTES {
+                return Applied::rejected("UTC offset is outside a plausible range");
+            }
+            let mut applied = Applied::accepted();
+            applied
+                .ephemeral
+                .push(EphemeralDelta::Statistics(Box::new(statistics(
+                    &state.durable,
+                    utc_offset_minutes,
+                ))));
+            applied
+        }
         Command::System(SystemCommand::Shutdown) => {
             let mut applied = Applied::accepted();
             applied.effects.push(Effect::StopDriver);
@@ -249,7 +285,9 @@ pub fn apply(state: &mut AppState, command: Command) -> Applied {
                 state.telemetry.remove(run_id);
             }
             EphemeralDelta::ToolsChanged(tools) => state.tools = tools.clone(),
-            EphemeralDelta::WorkerCrashed { .. } | EphemeralDelta::CommandRejected { .. } => {}
+            EphemeralDelta::Statistics(_)
+            | EphemeralDelta::WorkerCrashed { .. }
+            | EphemeralDelta::CommandRejected { .. } => {}
         }
     }
     applied

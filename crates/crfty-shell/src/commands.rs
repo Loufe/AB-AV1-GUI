@@ -1,8 +1,8 @@
 use std::path::PathBuf;
 
 use crfty_core::{
-    AnalysisIntent, CorruptionSignature, Operation, OutputTarget, QueueCommand, QueueItemId,
-    SessionCommand, Settings, VendorCommand,
+    AnalysisIntent, CorruptionSignature, Operation, OutputTarget, ProjectionCommand, QueueCommand,
+    QueueItemId, SessionCommand, Settings, VendorCommand,
 };
 use serde::Serialize;
 use tauri::{State, ipc::Channel};
@@ -101,6 +101,18 @@ fn vendor_check(bridge: State<'_, Bridge>) -> Result<(), CommandError> {
     bridge.submit_vendor(VendorCommand::Check)
 }
 
+/// Ask for a fresh Statistics computation. The ack only confirms acceptance;
+/// the payload arrives as a sequenced `Statistics` ephemeral on the stream
+/// and is never replayed — re-request after (re)subscribing.
+#[tauri::command]
+#[specta::specta]
+fn request_statistics(
+    bridge: State<'_, Bridge>,
+    utc_offset_minutes: i32,
+) -> Result<(), CommandError> {
+    bridge.submit_projection(ProjectionCommand::RequestStatistics { utc_offset_minutes })
+}
+
 /// Consent to discard a corrupt journal tail. The signature must echo the
 /// one delivered on the `Degraded` payload — the driver rejects anything
 /// else, so a stale acknowledgement can never discard fresher bytes.
@@ -129,6 +141,7 @@ pub fn specta_builder() -> Builder<tauri::Wry> {
         set_settings,
         vendor_install,
         vendor_check,
+        request_statistics,
         acknowledge_corruption,
     ])
 }
