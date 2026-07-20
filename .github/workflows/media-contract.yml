@@ -6,16 +6,18 @@ on:
     branches: [rewrite]
     paths:
       - Cargo.lock
+      - crates/crfty-core/src/**
       - crates/crfty-engine/Cargo.toml
-      - crates/crfty-engine/src/ab_av1/**
+      - crates/crfty-engine/src/**
       - crates/crfty-engine/tests/**
       - .github/workflows/media-contract.yml
   pull_request:
     branches: [rewrite]
     paths:
       - Cargo.lock
+      - crates/crfty-core/src/**
       - crates/crfty-engine/Cargo.toml
-      - crates/crfty-engine/src/ab_av1/**
+      - crates/crfty-engine/src/**
       - crates/crfty-engine/tests/**
       - .github/workflows/media-contract.yml
 
