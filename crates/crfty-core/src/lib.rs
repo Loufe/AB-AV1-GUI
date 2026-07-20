@@ -36,8 +36,9 @@ pub use job::{
     OutputTarget, ReservedJob, SearchMeasurement, ToolRevisions, VmafScore, VmafTarget,
 };
 pub use journal::{
-    JOURNAL_SCHEMA_VERSION, JournalCorruption, JournalEnvelope, JournalReplay, encode_record,
-    replay,
+    COMPACTION_HARD_LIMIT_BYTES, COMPACTION_IDLE_MIN_JOURNAL_BYTES, COMPACTION_IDLE_MIN_RATIO,
+    JOURNAL_SCHEMA_VERSION, JournalCorruption, JournalEnvelope, JournalReplay, JournalSnapshot,
+    compaction_due, compaction_quiescent, encode_record, encode_snapshot, replay,
 };
 pub use media::{
     AudioCodec, AudioStreamMeta, FileRecord, FileStamp, MediaContainer, MediaObservation,

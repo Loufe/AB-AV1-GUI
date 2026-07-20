@@ -60,7 +60,7 @@ enum SuccessfulJob {
 
 /// Wall-clock instant for durable command payloads; core has no clock. A
 /// pre-epoch system clock degrades to zero rather than failing the run.
-fn now_millis() -> UnixMillis {
+pub(crate) fn now_millis() -> UnixMillis {
     UnixMillis(
         SystemTime::now()
             .duration_since(UNIX_EPOCH)

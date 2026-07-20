@@ -8,8 +8,9 @@ use std::{
 };
 
 use crfty_core::{
-    AppSnapshot, AppState, Command, ConfigDelta, DurableDelta, Effect, EphemeralDelta,
-    QueueItemState, Reply, RunId, Settings, SystemCommand, Telemetry, apply,
+    AppSnapshot, AppState, COMPACTION_IDLE_MIN_JOURNAL_BYTES, Command, ConfigDelta, DurableDelta,
+    Effect, EphemeralDelta, QueueItemState, Reply, RunId, Settings, SystemCommand, Telemetry,
+    apply, compaction_due, compaction_quiescent,
 };
 
 use crate::{
@@ -21,6 +22,9 @@ use crate::{
 const DRIVER_CHANNEL_CAPACITY: usize = 64;
 const COMMAND_REPLY_CHANNEL_CAPACITY: usize = 0;
 const DRIVER_TICK: Duration = Duration::from_millis(20);
+/// Idle ticks to wait before re-attempting a failed compaction (~10 s at the
+/// 20 ms tick), so a persistent failure never becomes a tight retry loop.
+const COMPACTION_RETRY_TICKS: u32 = 500;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum DriverEvent {
@@ -265,11 +269,17 @@ fn run_driver(
             reason: reason.clone(),
         });
     }
+    let mut compaction_backoff: u32 = 0;
     loop {
         let first = match receiver.recv_timeout(DRIVER_TICK) {
             Ok(envelope) => envelope,
             Err(mpsc::RecvTimeoutError::Timeout) => {
                 emit_latest_telemetry(&state, &events, &telemetry);
+                if compaction_backoff > 0 {
+                    compaction_backoff = compaction_backoff.saturating_sub(1);
+                } else if !maybe_compact(&state, &mut persistence, degraded.as_deref(), false) {
+                    compaction_backoff = COMPACTION_RETRY_TICKS;
+                }
                 continue;
             }
             Err(mpsc::RecvTimeoutError::Disconnected) => break,
@@ -290,6 +300,55 @@ fn run_driver(
             if should_stop {
                 return;
             }
+        }
+    }
+}
+
+/// Compact the journal at the driver's idle tick (#33 §10). The writer
+/// barrier is implicit: the driver thread is the only journal writer and it
+/// sits between batches here. `force` bypasses the size policy (but never the
+/// quiescence or degraded checks) for the durable transforms that require a
+/// fresh generation — scrub, corruption acknowledgment, adoption.
+///
+/// Returns `false` only when a due compaction was attempted and failed, so
+/// the caller backs off instead of retrying every tick; the old journal
+/// generation remains authoritative in that case.
+fn maybe_compact(
+    state: &AppState,
+    persistence: &mut DriverPersistence,
+    degraded: Option<&str>,
+    force: bool,
+) -> bool {
+    if degraded.is_some() || !compaction_quiescent(state) {
+        return true;
+    }
+    if !force {
+        let journal_bytes = persistence.journal.journal_bytes();
+        // Floor check first: measuring live state serializes all of it, which
+        // is not free on every idle tick.
+        if journal_bytes < COMPACTION_IDLE_MIN_JOURNAL_BYTES {
+            return true;
+        }
+        let live_bytes = match serde_json::to_vec(&state.durable) {
+            Ok(encoded) => u64::try_from(encoded.len()).unwrap_or(u64::MAX),
+            Err(error) => {
+                eprintln!("skipping compaction; failed to measure live state: {error}");
+                return false;
+            }
+        };
+        if !compaction_due(journal_bytes, live_bytes) {
+            return true;
+        }
+    }
+    match persistence.journal.compact(
+        &state.durable,
+        env!("CARGO_PKG_VERSION"),
+        crate::coordinator::now_millis(),
+    ) {
+        Ok(()) => true,
+        Err(error) => {
+            eprintln!("journal compaction failed; old journal remains authoritative: {error}");
+            false
         }
     }
 }
@@ -590,10 +649,14 @@ mod tests {
     };
 
     use super::{
-        AppState, ConfigSink, DriverEvent, Envelope, JournalError, JournalSink, process_batch,
-        reconcile_effects, split_batch_at_settings,
+        AppState, ConfigSink, DriverEvent, DriverPersistence, Envelope, JournalError, JournalSink,
+        maybe_compact, process_batch, reconcile_effects, split_batch_at_settings,
     };
-    use crate::journal::DurabilityToken;
+    use crate::{
+        config::ConfigStore,
+        journal::{DurabilityToken, JournalWriter},
+        lock::DataLock,
+    };
 
     struct FailingJournal;
     struct AcceptingConfig;
@@ -851,6 +914,75 @@ mod tests {
             ..AppState::default()
         };
         assert!(reconcile_effects(vec![Effect::StartWorker], &state).is_empty());
+    }
+
+    fn add_item(state: &mut AppState, id: u64) -> Vec<DurableDelta> {
+        let applied = apply(
+            state,
+            Command::Queue(QueueCommand::Add {
+                item_id: QueueItemId(id),
+                input: PathBuf::from(format!("video-{id}.mkv")),
+                operation: Operation::Convert,
+                intent: AnalysisIntent::ReuseIfFresh,
+                output_target: OutputTarget::Replace,
+            }),
+        );
+        assert_eq!(applied.reply, Reply::Accepted);
+        applied.durable
+    }
+
+    #[test]
+    fn forced_compaction_rewrites_only_when_quiescent_and_not_degraded() {
+        let directory = tempfile::tempdir().expect("temporary directory");
+        let journal_path = directory.path().join("state.jsonl");
+        let (mut journal, _replay) = JournalWriter::open(&journal_path).expect("journal writer");
+        let mut state = AppState::default();
+        let durable = add_item(&mut state, 1);
+        journal.append_batch(&durable).expect("journal append");
+        let mut persistence = DriverPersistence {
+            journal,
+            config: ConfigStore::new(directory.path().join("config.json")),
+            _lock: DataLock::acquire(directory.path()).expect("data lock"),
+        };
+        let before = std::fs::read(&journal_path).expect("journal bytes");
+
+        // Degraded skips compaction even when forced; the corrupt journal is
+        // evidence and must stay byte-identical.
+        assert!(maybe_compact(
+            &state,
+            &mut persistence,
+            Some("corrupt"),
+            true
+        ));
+        assert_eq!(std::fs::read(&journal_path).expect("journal bytes"), before);
+        // A non-quiescent state (active session) also skips a forced request.
+        state.session = SessionState::Running;
+        assert!(maybe_compact(&state, &mut persistence, None, true));
+        assert_eq!(std::fs::read(&journal_path).expect("journal bytes"), before);
+        // Below the size floor, an unforced idle tick leaves the journal alone.
+        state.session = SessionState::Idle;
+        assert!(maybe_compact(&state, &mut persistence, None, false));
+        assert_eq!(std::fs::read(&journal_path).expect("journal bytes"), before);
+
+        // Quiescent + forced compacts to a single snapshot head line.
+        assert!(maybe_compact(&state, &mut persistence, None, true));
+        let bytes = std::fs::read(&journal_path).expect("compacted journal");
+        assert_eq!(bytes.iter().filter(|byte| **byte == b'\n').count(), 1);
+        let replayed = crfty_core::replay(&bytes);
+        assert!(replayed.corruption.is_none());
+        assert_eq!(replayed.state, state.durable);
+        assert_eq!(replayed.next_sequence.0, 1);
+
+        // Appends continue on the new generation with unbroken numbering.
+        let durable = add_item(&mut state, 2);
+        persistence
+            .journal
+            .append_batch(&durable)
+            .expect("append after compaction");
+        let replayed = crfty_core::replay(&std::fs::read(&journal_path).expect("appended journal"));
+        assert!(replayed.corruption.is_none());
+        assert_eq!(replayed.state.queue.len(), 2);
+        assert_eq!(replayed.next_sequence.0, 2);
     }
 
     #[test]
