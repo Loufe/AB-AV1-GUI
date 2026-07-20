@@ -37,8 +37,8 @@ jobs:
         run: cargo clippy --workspace --all-targets --all-features --locked -- -D warnings
       - name: Run tests
         run: cargo test --workspace --all-features --locked
-      - name: Check bindings freshness
-        run: git diff --exit-code -- ui/src/lib/bindings.ts
+      - name: Check generated artifact freshness
+        run: git diff --exit-code -- ui/src/lib/bindings.ts ui/src/lib/store/fold-fixtures.json
 
   supply-chain:
     name: Supply chain

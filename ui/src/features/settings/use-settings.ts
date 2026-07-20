@@ -1,7 +1,7 @@
-import { useContext } from "react";
+import type { Settings } from "@/lib/bindings";
+import { useAppStore } from "@/lib/store/app-store";
 
-import { SettingsContext } from "./settings-context";
-
-export function useSettings() {
-  return useContext(SettingsContext);
+/** The acknowledged settings from the stream; null until the first snapshot. */
+export function useSettings(): Settings | null {
+  return useAppStore((state) => state.settings);
 }

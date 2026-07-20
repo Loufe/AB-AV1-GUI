@@ -1,0 +1,145 @@
+import { beforeEach, describe, expect, it, vi } from "vitest";
+
+import type { QueueItem, Settings, StreamPayload_Deserialize, Telemetry } from "@/lib/bindings";
+
+import { appStore, initialAppState } from "./app-store";
+import { applyPayload, hasSequenceGap } from "./connect";
+import { progressStore } from "./progress-store";
+
+vi.mock("sonner", () => ({ toast: { error: vi.fn() } }));
+vi.mock("@/lib/ipc", () => ({ subscribeStream: vi.fn() }));
+
+function settings(): Settings {
+  return {
+    last_input_folder: null,
+    scan_extensions: ["mp4", "mkv", "avi", "wmv"],
+    output: {
+      default_mode: "replace",
+      suffix: "_av1",
+      separate_folder: null,
+      overwrite_existing: false,
+    },
+    hardware_decode: true,
+    privacy: {
+      anonymize_logs: false,
+      anonymize_history: false,
+    },
+    log_folder: null,
+  };
+}
+
+function queueItem(id: number): QueueItem {
+  return {
+    id,
+    input: `videos/input-${id}.mp4`,
+    operation: "Convert",
+    output_target: "Replace",
+    state: "Queued",
+  };
+}
+
+function telemetry(runId: number): Telemetry {
+  return { run_id: runId, sequence: 1, phase: "Encoding", progress: "Phase" };
+}
+
+function snapshot(item: QueueItem): StreamPayload_Deserialize {
+  return {
+    Snapshot: {
+      durable: { queue: [item], paths: {}, records: {}, outputs: {}, conversion_runs: {} },
+      settings: settings(),
+    },
+  };
+}
+
+beforeEach(() => {
+  appStore.setState(initialAppState(), true);
+  progressStore.setState({ telemetry: {} }, true);
+  vi.clearAllMocks();
+});
+
+describe("applyPayload", () => {
+  it("replaces durable state and settings from a snapshot and clears health and telemetry", () => {
+    appStore.setState((state) => ({ ...state, health: { degraded: "stale", fatal: "stale" } }));
+    progressStore.setState({ telemetry: { 9: telemetry(9) } });
+
+    applyPayload(snapshot(queueItem(1)));
+
+    const state = appStore.getState();
+    expect(state.durable.queue).toEqual([queueItem(1)]);
+    expect(state.settings).toEqual(settings());
+    expect(state.health).toEqual({ degraded: null, fatal: null });
+    expect(progressStore.getState().telemetry).toEqual({});
+  });
+
+  it("folds durable deltas into the app store", () => {
+    applyPayload({ Durable: { QueueAdded: { item: queueItem(1) } } });
+    applyPayload({ Durable: { QueueAdded: { item: queueItem(2) } } });
+    expect(appStore.getState().durable.queue.map((item) => item.id)).toEqual([1, 2]);
+  });
+
+  it("applies config deltas to settings", () => {
+    applyPayload({ Config: { SettingsChanged: { settings: settings() } } });
+    expect(appStore.getState().settings).toEqual(settings());
+  });
+
+  it("routes session changes to the app store", () => {
+    applyPayload({ Ephemeral: { SessionChanged: "Running" } });
+    expect(appStore.getState().session).toBe("Running");
+    expect(progressStore.getState().telemetry).toEqual({});
+  });
+
+  it("routes telemetry to the progress store without touching the app store", () => {
+    const before = appStore.getState();
+    applyPayload({ Ephemeral: { Telemetry: telemetry(1) } });
+    expect(progressStore.getState().telemetry).toEqual({ 1: telemetry(1) });
+    applyPayload({ Ephemeral: { TelemetryCleared: { run_id: 1 } } });
+    expect(progressStore.getState().telemetry).toEqual({});
+    expect(appStore.getState()).toBe(before);
+  });
+
+  it("surfaces a worker crash as a toast, not state", async () => {
+    const { toast } = await import("sonner");
+    const before = appStore.getState();
+    applyPayload({ Ephemeral: { WorkerCrashed: { message: "boom" } } });
+    expect(toast.error).toHaveBeenCalledWith("Worker crashed: boom");
+    expect(appStore.getState()).toBe(before);
+  });
+
+  it("logs command rejections without state changes", () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    const before = appStore.getState();
+    applyPayload({ Ephemeral: { CommandRejected: { reason: "queue is running" } } });
+    expect(warn).toHaveBeenCalledWith("command rejected by the engine", "queue is running");
+    expect(appStore.getState()).toBe(before);
+    warn.mockRestore();
+  });
+
+  it("records standing health until the next snapshot", () => {
+    applyPayload({ Degraded: { reason: "journal corruption" } });
+    applyPayload({ EngineFatal: { message: "driver exited" } });
+    expect(appStore.getState().health).toEqual({
+      degraded: "journal corruption",
+      fatal: "driver exited",
+    });
+
+    applyPayload(snapshot(queueItem(1)));
+    expect(appStore.getState().health).toEqual({ degraded: null, fatal: null });
+  });
+});
+
+describe("hasSequenceGap", () => {
+  it("accepts a fresh connection's zero and contiguous sequences", () => {
+    expect(hasSequenceGap(null, 0)).toBe(false);
+    expect(hasSequenceGap(0, 1)).toBe(false);
+    expect(hasSequenceGap(41, 42)).toBe(false);
+    // A replayed subscription restarts numbering at zero.
+    expect(hasSequenceGap(41, 0)).toBe(false);
+  });
+
+  it("flags anything else as a gap", () => {
+    expect(hasSequenceGap(null, 3)).toBe(true);
+    expect(hasSequenceGap(0, 2)).toBe(true);
+    expect(hasSequenceGap(41, 43)).toBe(true);
+    expect(hasSequenceGap(41, 41)).toBe(true);
+  });
+});
