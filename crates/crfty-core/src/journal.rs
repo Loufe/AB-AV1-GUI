@@ -26,6 +26,11 @@ pub struct JournalReplay {
     pub next_sequence: JournalSequence,
     pub corruption: Option<JournalCorruption>,
     pub ignored_torn_tail: bool,
+    /// Byte length of the journal prefix that folded into `state`. On a torn
+    /// tail this is where the writer must truncate before appending again;
+    /// otherwise the partial record and the next append would merge into one
+    /// unparseable line and load as corruption on the following start.
+    pub valid_prefix_len: usize,
 }
 
 pub fn encode_record(envelope: &JournalEnvelope) -> Result<Vec<u8>, serde_json::Error> {
@@ -123,6 +128,7 @@ pub fn replay(bytes: &[u8]) -> JournalReplay {
         next_sequence: JournalSequence(expected),
         corruption,
         ignored_torn_tail,
+        valid_prefix_len: offset,
     }
 }
 

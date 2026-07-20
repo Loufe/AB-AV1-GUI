@@ -1319,6 +1319,7 @@ fn journal_ignores_only_an_unterminated_final_record() {
         deltas: vec![delta],
     };
     let mut bytes = encode_record(&first).expect("first record");
+    let intact_len = bytes.len();
     let mut torn = encode_record(&second).expect("second record");
     assert_eq!(torn.pop(), Some(b'\n'));
     bytes.extend(torn);
@@ -1327,6 +1328,7 @@ fn journal_ignores_only_an_unterminated_final_record() {
     assert!(replayed.corruption.is_none());
     assert_eq!(replayed.state.queue.len(), 1);
     assert_eq!(replayed.next_sequence, JournalSequence(1));
+    assert_eq!(replayed.valid_prefix_len, intact_len);
 }
 
 #[test]
@@ -1346,12 +1348,14 @@ fn journal_degrades_on_nonfinal_corruption() {
         }],
     };
     let mut bytes = encode_record(&first).expect("first record");
+    let intact_len = bytes.len();
     bytes.extend(b"not-json\n");
     bytes.extend(encode_record(&first).expect("following record"));
     let replayed = replay(&bytes);
     assert!(replayed.corruption.is_some());
     assert!(!replayed.ignored_torn_tail);
     assert_eq!(replayed.state.queue.len(), 1);
+    assert_eq!(replayed.valid_prefix_len, intact_len);
 }
 
 #[test]
