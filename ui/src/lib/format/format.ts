@@ -77,13 +77,57 @@ export function formatStreamDisplay(
   audioCodecs: readonly string[],
 ): string {
   const video = (videoCodec ?? "?").toUpperCase();
-  let audio: string;
-  if (audioCodecs.length === 0) {
-    audio = "no audio";
-  } else if (audioCodecs.length <= MAX_AUDIO_STREAMS_TO_LIST) {
-    audio = audioCodecs.map((c) => c.toUpperCase()).join(", ");
-  } else {
-    audio = `${audioCodecs.length} audio`;
-  }
+  const audio = audioCodecs.length === 0 ? "no audio" : formatAudioCodecs(audioCodecs);
   return `${video} / ${audio}`;
+}
+
+/** History audio column: "AAC, AC3", "5 audio", or "—" for a file with none. */
+export function formatAudioCodecs(audioCodecs: readonly string[]): string {
+  if (audioCodecs.length === 0) return EM_DASH;
+  if (audioCodecs.length <= MAX_AUDIO_STREAMS_TO_LIST) {
+    return audioCodecs.map((c) => c.toUpperCase()).join(", ");
+  }
+  return `${audioCodecs.length} audio`;
+}
+
+/**
+ * Wall-clock date "YYYY-MM-DD" in local time from epoch milliseconds (the
+ * engine stamps instants as wall-clock ms). Fixed format per #36 D8; the
+ * Python column sliced an ISO string, so parity here is by-construction
+ * rather than fixture-generated.
+ */
+export function formatDate(epochMs: number): string {
+  if (!Number.isFinite(epochMs)) return EM_DASH;
+  const d = new Date(epochMs);
+  const month = String(d.getMonth() + 1).padStart(2, "0");
+  const day = String(d.getDate()).padStart(2, "0");
+  return `${d.getFullYear()}-${month}-${day}`;
+}
+
+/** "1920x1080", or "—" when either dimension is missing or zero. */
+export function formatResolution(width: number | null, height: number | null): string {
+  if (!width || !height) return EM_DASH;
+  return `${width}x${height}`;
+}
+
+/**
+ * Source bitrate: "4.2 Mbps" at or above 1000 kbps, "850 kbps" below.
+ * Deliberate divergence: negative or non-finite input renders "—".
+ */
+export function formatBitrate(kbps: number | null): string {
+  if (kbps === null || !Number.isFinite(kbps) || kbps <= 0) return EM_DASH;
+  if (kbps >= 1000) return `${(kbps / 1000).toFixed(1)} Mbps`;
+  return `${kbps.toFixed(0)} kbps`;
+}
+
+/** Size reduction with one decimal: "45.3%" (0 is a real value, "0.0%"). */
+export function formatReductionPercent(percent: number | null): string {
+  if (percent === null || !Number.isFinite(percent)) return EM_DASH;
+  return `${percent.toFixed(1)}%`;
+}
+
+/** VMAF score with one decimal: "95.1". */
+export function formatVmaf(score: number | null): string {
+  if (score === null || !Number.isFinite(score)) return EM_DASH;
+  return score.toFixed(1);
 }
