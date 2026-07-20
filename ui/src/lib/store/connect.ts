@@ -26,6 +26,7 @@ export function applyPayload(payload: StreamPayload_Deserialize): void {
       durable,
       settings,
       health: { degraded: null, fatal: null },
+      tools: null,
     }));
     // Telemetry for pre-snapshot runs never gets a TelemetryCleared on this
     // connection; the snapshot is the fresh baseline.
@@ -56,6 +57,11 @@ export function applyPayload(payload: StreamPayload_Deserialize): void {
       // Command results already surface rejections at the call site; this is
       // the observability backstop, not a user-facing notification (#33 §11).
       console.warn("command rejected by the engine", delta.CommandRejected.reason);
+      return;
+    }
+    if ("ToolsChanged" in delta && delta.ToolsChanged !== undefined) {
+      const tools = delta.ToolsChanged;
+      appStore.setState((state) => ({ ...state, tools }));
       return;
     }
     progressStore.setState((state) => ({ telemetry: foldTelemetry(state.telemetry, delta) }));
