@@ -29,10 +29,24 @@ pub enum FaultInjection {
     PanicAfterFirstProgress,
 }
 
+/// State of the single cancellation slot, scoped to one job's acquisition window.
+///
+/// A job acquires by flipping `RuntimeState::active` to `true` and only then
+/// installs its `CancellationHandle`. A shutdown/force-stop racing into that
+/// window would otherwise snapshot an empty slot and silently lose the cancel.
+/// `CancelPending` records that intent so the handle is cancelled the instant it
+/// is installed. `finish_job` resets the slot to `Idle` at the job boundary, so a
+/// pending cancel can never leak into a later, unrelated job.
+enum CancellationSlot {
+    Idle,
+    Installed(CancellationHandle),
+    CancelPending,
+}
+
 struct RuntimeState {
     accepting: AtomicBool,
     active: AtomicBool,
-    cancellation: Mutex<Option<CancellationHandle>>,
+    cancellation: Mutex<CancellationSlot>,
 }
 
 impl RuntimeState {
@@ -40,25 +54,46 @@ impl RuntimeState {
         Self {
             accepting: AtomicBool::new(true),
             active: AtomicBool::new(false),
-            cancellation: Mutex::new(None),
+            cancellation: Mutex::new(CancellationSlot::Idle),
+        }
+    }
+
+    fn lock_slot(&self) -> std::sync::MutexGuard<'_, CancellationSlot> {
+        match self.cancellation.lock() {
+            Ok(slot) => slot,
+            Err(poisoned) => poisoned.into_inner(),
         }
     }
 
     fn finish_job(&self) {
-        match self.cancellation.lock() {
-            Ok(mut cancellation) => *cancellation = None,
-            Err(poisoned) => *poisoned.into_inner() = None,
-        }
+        *self.lock_slot() = CancellationSlot::Idle;
         self.active.store(false, Ordering::Release);
     }
 
-    fn cancel_active(&self) {
-        let cancellation = match self.cancellation.lock() {
-            Ok(cancellation) => cancellation.clone(),
-            Err(poisoned) => poisoned.into_inner().clone(),
-        };
-        if let Some(cancellation) = cancellation {
+    /// Install the acquiring job's handle. If a cancel raced in ahead of the
+    /// install (`CancelPending`), the freshly installed handle is cancelled at
+    /// once so the intent is not lost.
+    fn install_cancellation(&self, cancellation: &CancellationHandle) {
+        let mut slot = self.lock_slot();
+        if matches!(&*slot, CancellationSlot::CancelPending) {
             cancellation.cancel(CancelMode::Force);
+        }
+        *slot = CancellationSlot::Installed(cancellation.clone());
+    }
+
+    fn cancel_active(&self) {
+        let mut slot = self.lock_slot();
+        match &*slot {
+            CancellationSlot::Installed(cancellation) => cancellation.cancel(CancelMode::Force),
+            // No handle installed yet: only record the intent while a job is
+            // genuinely occupying its acquisition window (`active` is set before
+            // the handle is installed and cleared with the slot in `finish_job`).
+            // Without an active job there is nothing to cancel, and arming here
+            // could otherwise cancel the next job that installs its handle.
+            CancellationSlot::Idle if self.active.load(Ordering::Acquire) => {
+                *slot = CancellationSlot::CancelPending;
+            }
+            CancellationSlot::Idle | CancellationSlot::CancelPending => {}
         }
     }
 }
@@ -123,7 +158,7 @@ impl AbAv1Runtime {
         validate_search_request(&request)?;
         self.validate_and_acquire(&tools)?;
         let (handle, cancellation, telemetry, result) = JobHandle::channels();
-        self.install_cancellation(&handle.cancellation);
+        self.state.install_cancellation(&handle.cancellation);
         self.send_job(RuntimeCommand::Search {
             tools,
             request,
@@ -166,7 +201,7 @@ impl AbAv1Runtime {
         validate_encode_request(&request)?;
         self.validate_and_acquire(&tools)?;
         let (handle, cancellation, telemetry, result) = JobHandle::channels();
-        self.install_cancellation(&handle.cancellation);
+        self.state.install_cancellation(&handle.cancellation);
         self.send_job(RuntimeCommand::Encode {
             tools,
             request,
@@ -194,13 +229,6 @@ impl AbAv1Runtime {
             .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
             .map(|_| ())
             .map_err(|_| StartJobError::Busy)
-    }
-
-    fn install_cancellation(&self, cancellation: &CancellationHandle) {
-        match self.state.cancellation.lock() {
-            Ok(mut slot) => *slot = Some(cancellation.clone()),
-            Err(poisoned) => *poisoned.into_inner() = Some(cancellation.clone()),
-        }
     }
 
     fn send_job(&self, command: RuntimeCommand) -> Result<(), StartJobError> {
@@ -502,12 +530,63 @@ use std::future::Future;
 
 #[cfg(test)]
 mod tests {
-    use std::{path::PathBuf, time::Duration};
+    use std::{path::PathBuf, sync::atomic::Ordering, time::Duration};
 
     use crfty_core::DecodeMode;
 
-    use super::{validate_encode_request, validate_search_request};
-    use crate::ab_av1::{EncodeRequest, SearchRequest};
+    use super::{
+        CancellationHandle, RuntimeState, validate_encode_request, validate_search_request,
+    };
+    use crate::ab_av1::{CancelMode, EncodeRequest, SearchRequest};
+
+    #[test]
+    fn cancel_during_acquisition_window_cancels_the_installed_handle() {
+        let state = RuntimeState::new();
+        // Acquisition flips `active` before the handle is installed.
+        state.active.store(true, Ordering::Release);
+        // Shutdown races into the window: no handle to snapshot yet.
+        state.cancel_active();
+        let (handle, receiver) = CancellationHandle::fixture();
+        assert_eq!(*receiver.borrow(), None);
+        // Installing the handle observes the pending cancel and fires it at once.
+        state.install_cancellation(&handle);
+        assert_eq!(*receiver.borrow(), Some(CancelMode::Force));
+    }
+
+    #[test]
+    fn install_then_cancel_cancels_the_active_handle() {
+        let state = RuntimeState::new();
+        state.active.store(true, Ordering::Release);
+        let (handle, receiver) = CancellationHandle::fixture();
+        state.install_cancellation(&handle);
+        assert_eq!(*receiver.borrow(), None);
+        state.cancel_active();
+        assert_eq!(*receiver.borrow(), Some(CancelMode::Force));
+    }
+
+    #[test]
+    fn cancel_with_no_active_job_does_not_arm_a_pending_cancel() {
+        let state = RuntimeState::new();
+        // No job has acquired, so there is nothing to cancel.
+        state.cancel_active();
+        let (handle, receiver) = CancellationHandle::fixture();
+        state.install_cancellation(&handle);
+        assert_eq!(*receiver.borrow(), None);
+    }
+
+    #[test]
+    fn finish_job_clears_pending_cancel_so_it_cannot_leak() {
+        let state = RuntimeState::new();
+        state.active.store(true, Ordering::Release);
+        state.cancel_active();
+        // The job boundary must discard the pending cancel.
+        state.finish_job();
+        // A later acquisition installs its handle and must survive.
+        state.active.store(true, Ordering::Release);
+        let (handle, receiver) = CancellationHandle::fixture();
+        state.install_cancellation(&handle);
+        assert_eq!(*receiver.borrow(), None);
+    }
 
     #[test]
     fn rejects_non_finite_adapter_requests() {
