@@ -27,10 +27,6 @@ const DEV_COMPONENTS: Record<
         label: "kitchen sink",
         Component: lazy(() => import("./dev/kitchen-sink")),
       },
-      "spike-drag": {
-        label: "drag spike",
-        Component: lazy(() => import("./dev/spike-drag")),
-      },
     }
   : null;
 
@@ -45,7 +41,7 @@ const VIEW_COMPONENTS: Record<ViewId, { label: string; Component: () => React.Re
 };
 
 function isDevView(view: AppView): view is DevViewId {
-  return view === "kitchen-sink" || view === "spike-drag";
+  return view === "kitchen-sink";
 }
 
 export default function App() {

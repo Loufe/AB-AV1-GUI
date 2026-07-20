@@ -7,6 +7,7 @@ import {
   QueueToolbar,
   SelectionCard,
   deriveRowStatus,
+  moveRowBefore,
 } from "@/features/queue";
 import type { QueueRowData } from "@/features/queue";
 import { formatCompactTime, formatCrf, formatFileSize, formatTime } from "@/lib/format/format";
@@ -150,12 +151,20 @@ const ROWS: QueueRowData[] = [
 ];
 
 function QueuePanel() {
+  const [rows, setRows] = useState(ROWS);
   const [selectedId, setSelectedId] = useState<QueueItemId | null>(4 as QueueItemId);
-  const selected = ROWS.find((row) => row.item.id === selectedId) ?? null;
+  const selected = rows.find((row) => row.item.id === selectedId) ?? null;
   return (
     <div className="flex flex-col gap-3">
       <QueueToolbar session="Running" queueEmpty={false} hasSelection={selected !== null} />
-      <QueueTable rows={ROWS} selectedId={selectedId} onSelect={setSelectedId} />
+      <QueueTable
+        rows={rows}
+        selectedId={selectedId}
+        onSelect={setSelectedId}
+        onMove={(itemId, beforeId) =>
+          setRows((current) => moveRowBefore(current, itemId, beforeId))
+        }
+      />
       <div className="grid grid-cols-[2fr_1fr] gap-3">
         <NowProcessingCard
           name="s01e02.mkv"

@@ -52,14 +52,29 @@ export function QueueRow({
   row,
   selected,
   onSelect,
+  ref,
+  handleRef,
+  isDragSource = false,
+  isOverlay = false,
+  style,
 }: {
   row: QueueRowData;
   selected: boolean;
   onSelect: () => void;
+  ref?: React.Ref<HTMLDivElement>;
+  /** Drag handle target; the grip is inert when omitted. */
+  handleRef?: React.Ref<HTMLButtonElement>;
+  /** Source row still in the list while its copy rides the overlay. */
+  isDragSource?: boolean;
+  /** Rendered inside the drag overlay. */
+  isOverlay?: boolean;
+  style?: React.CSSProperties;
 }) {
   const active = row.status.kind === "working";
+  const name = basename(row.item.input);
   return (
     <div
+      ref={ref}
       role="row"
       tabIndex={0}
       onClick={onSelect}
@@ -69,17 +84,32 @@ export function QueueRow({
           onSelect();
         }
       }}
+      style={style}
       className={cn(
-        "cursor-default border-b border-border/40 py-1 text-sm",
+        "cursor-default border-b border-border/40 bg-background py-1 text-sm",
         QUEUE_COLS,
         active && "bg-primary/5",
         selected && "bg-accent",
+        isDragSource && "opacity-40",
+        isOverlay && "rounded-md border border-border bg-elevated shadow-lg",
       )}
     >
-      <GripVertical className="size-3.5 justify-self-center text-muted-foreground/50" />
+      <button
+        ref={handleRef}
+        type="button"
+        aria-label={`Reorder ${name}`}
+        className={cn(
+          "justify-self-center rounded p-0.5 text-muted-foreground/50",
+          handleRef
+            ? "cursor-grab hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none"
+            : "cursor-default",
+        )}
+      >
+        <GripVertical className="size-3.5" aria-hidden="true" />
+      </button>
       <span className="flex min-w-0 items-center gap-1.5">
         <FileVideo className="size-4 shrink-0 text-muted-foreground" aria-hidden="true" />
-        <span className="truncate">{basename(row.item.input)}</span>
+        <span className="truncate">{name}</span>
       </span>
       <span className="truncate text-muted-foreground">{row.streams ?? EM_DASH}</span>
       <span className="text-right tabular-nums">

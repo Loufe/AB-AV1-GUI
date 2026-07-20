@@ -9,6 +9,7 @@ export {
   type RowStatus,
 } from "./queue-status";
 export { QueueTable } from "./queue-table";
+export { dropToBeforeId, moveRowBefore } from "./reorder";
 export { QueueToolbar } from "./queue-toolbar";
 export { QueueView } from "./queue-view";
 export { SelectionCard } from "./selection-card";

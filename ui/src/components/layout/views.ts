@@ -2,7 +2,6 @@ import {
   ChartColumn,
   FlaskConical,
   FolderSearch,
-  GripVertical,
   History,
   ListVideo,
   Settings,
@@ -12,7 +11,7 @@ import {
 export type ViewId = "queue" | "analysis" | "history" | "statistics" | "settings";
 
 /** Dev-build-only workshop views (kitchen sink, spikes). */
-export type DevViewId = "kitchen-sink" | "spike-drag";
+export type DevViewId = "kitchen-sink";
 
 export interface ViewDefinition<Id extends string = ViewId> {
   id: Id;
@@ -30,5 +29,4 @@ export const VIEWS: readonly ViewDefinition[] = [
 
 export const DEV_VIEWS: readonly ViewDefinition<DevViewId>[] = [
   { id: "kitchen-sink", label: "Kitchen sink", icon: FlaskConical },
-  { id: "spike-drag", label: "Drag spike", icon: GripVertical },
 ];
