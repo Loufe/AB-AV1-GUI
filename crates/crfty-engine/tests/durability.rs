@@ -155,7 +155,7 @@ fn torn_tail_is_truncated_on_reopen_so_later_appends_stay_replayable() {
             .append(true)
             .open(&path)
             .expect("crash-simulation handle");
-        file.write_all(b"{\"schema_version\":11,\"sequence\":1,\"del")
+        file.write_all(b"{\"schema_version\":12,\"record\":{\"Deltas\":{\"seq")
             .expect("partial record");
     }
     let (mut writer, reopened) = JournalWriter::open(&path).expect("reopen after torn tail");
@@ -201,6 +201,91 @@ fn corrupt_journal_is_preserved_byte_identical_on_reopen() {
     assert_eq!(reopened.state.queue.len(), 1);
     drop(writer);
     assert_eq!(fs::read(&path).expect("journal bytes"), before);
+}
+
+/// Compaction replaces the journal with one snapshot head line; folded state,
+/// sequence numbering, later appends, and restarts are all unaffected
+/// (#33 §10).
+#[test]
+fn compaction_folds_journal_to_snapshot_head_and_restart_replays_it() {
+    let directory = TestDirectory::new("compaction");
+    let path = directory.path().join("state.jsonl");
+    let (mut writer, _initial) = JournalWriter::open(&path).expect("journal writer");
+    let mut folded = DurableState::default();
+    for id in 1..=3_u64 {
+        let delta = queue_added(QueueItemId(id));
+        fold(&mut folded, &delta);
+        writer.append_batch(&[delta]).expect("journal append");
+    }
+    writer
+        .compact(&folded, "test-app", UnixMillis(1_000))
+        .expect("compaction");
+    assert_eq!(
+        writer.journal_bytes(),
+        fs::metadata(&path).expect("journal metadata").len()
+    );
+    let bytes = fs::read(&path).expect("journal bytes");
+    assert_eq!(bytes.iter().filter(|byte| **byte == b'\n').count(), 1);
+    let replayed = replay(&bytes);
+    assert!(replayed.corruption.is_none());
+    assert_eq!(replayed.state, folded);
+    assert_eq!(replayed.next_sequence.0, 3);
+
+    writer
+        .append_batch(&[queue_added(QueueItemId(4))])
+        .expect("append after compaction");
+    drop(writer);
+    let (_writer, reopened) = JournalWriter::open(&path).expect("reopen after compaction");
+    assert!(reopened.corruption.is_none());
+    assert_eq!(reopened.state.queue.len(), 4);
+    assert_eq!(reopened.next_sequence.0, 4);
+}
+
+/// A stray temp file from a compaction that crashed before its atomic replace
+/// is inert: it was never the journal and reopening ignores it.
+#[test]
+fn stray_compaction_temp_file_does_not_affect_reopen() {
+    let directory = TestDirectory::new("stray-temp");
+    let path = directory.path().join("state.jsonl");
+    {
+        let (mut writer, _initial) = JournalWriter::open(&path).expect("journal writer");
+        writer
+            .append_batch(&[queue_added(QueueItemId(1))])
+            .expect("journal append");
+    }
+    fs::write(directory.path().join(".tmpAbC123"), b"{\"partial\":").expect("stray temp fixture");
+    let (_writer, reopened) = JournalWriter::open(&path).expect("reopen with stray temp");
+    assert!(reopened.corruption.is_none());
+    assert_eq!(reopened.state.queue.len(), 1);
+}
+
+/// A failed compaction must leave the old generation authoritative and the
+/// writer still able to append — never a data loss, never a fatal.
+#[cfg(unix)]
+#[test]
+fn failed_compaction_leaves_old_journal_authoritative_and_writer_usable() {
+    use std::os::unix::fs::PermissionsExt;
+    let directory = TestDirectory::new("compaction-failure");
+    let path = directory.path().join("state.jsonl");
+    let (mut writer, _initial) = JournalWriter::open(&path).expect("journal writer");
+    let mut folded = DurableState::default();
+    let delta = queue_added(QueueItemId(1));
+    fold(&mut folded, &delta);
+    writer.append_batch(&[delta]).expect("journal append");
+    let before = fs::read(&path).expect("journal bytes");
+    fs::set_permissions(directory.path(), fs::Permissions::from_mode(0o555))
+        .expect("read-only directory");
+    let failed = writer.compact(&folded, "test-app", UnixMillis(1_000));
+    fs::set_permissions(directory.path(), fs::Permissions::from_mode(0o755))
+        .expect("restore directory");
+    assert!(failed.is_err());
+    assert_eq!(fs::read(&path).expect("journal bytes"), before);
+    writer
+        .append_batch(&[queue_added(QueueItemId(2))])
+        .expect("append after failed compaction");
+    let replayed = replay(&fs::read(&path).expect("journal bytes"));
+    assert!(replayed.corruption.is_none());
+    assert_eq!(replayed.state.queue.len(), 2);
 }
 
 #[test]

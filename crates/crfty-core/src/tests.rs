@@ -5,19 +5,21 @@ use proptest::prelude::*;
 use crate::reducer::validate_terminal;
 
 use crate::{
-    AnalysisIntent, AnalysisProfile, AnalysisResult, AppState, ArtifactIdentity, ClaimId, Command,
-    CompletionEvidence, ConflictKind, ContentKey, Crf, DecodeMode, DecodePreference,
-    DefaultOutputMode, DestructiveIdentity, DestructiveObservation, DurableDelta, DurationMs,
-    Effect, Eligibility, EphemeralDelta, ExecutionSettings, FailureFacts, FailureKind, FileRecord,
-    FileStamp, FileSystemFacts, FileSystemId, FileTimeNs, ItemOutcome, JOURNAL_SCHEMA_VERSION,
-    JobAction, JobPhase, JobProgress, JournalEnvelope, JournalSequence, MediaContainer,
-    MediaObservation, Operation, OutputDelta, OutputRecoveryAction, OutputState, OutputTarget,
-    OutputTransaction, PathBinding, PathHash, PhaseSpan, QueueCommand, QueueItemId, QueueItemState,
-    Replacement, Reply, RunId, SearchMeasurement, SessionCommand, SessionState, Settings,
-    SettingsCommand, SkipReason, StreamByteSizes, SystemCommand, Telemetry, ToolAvailability,
-    ToolRevisions, UnixMillis, VideoCodec, VideoMeta, VmafScore, VmafTarget, WorkerCommand, apply,
-    encode_record, evaluate_eligibility, permitted_profiles, recover_output, replay,
-    select_analysis, select_job_action,
+    AnalysisIntent, AnalysisProfile, AnalysisResult, AppState, ArtifactIdentity,
+    COMPACTION_HARD_LIMIT_BYTES, COMPACTION_IDLE_MIN_JOURNAL_BYTES, COMPACTION_IDLE_MIN_RATIO,
+    ClaimId, Command, CompletionEvidence, ConflictKind, ContentKey, Crf, DecodeMode,
+    DecodePreference, DefaultOutputMode, DestructiveIdentity, DestructiveObservation, DurableDelta,
+    DurationMs, Effect, Eligibility, EphemeralDelta, ExecutionSettings, FailureFacts, FailureKind,
+    FileRecord, FileStamp, FileSystemFacts, FileSystemId, FileTimeNs, ItemOutcome,
+    JOURNAL_SCHEMA_VERSION, JobAction, JobPhase, JobProgress, JournalEnvelope, JournalSequence,
+    MediaContainer, MediaObservation, Operation, OutputDelta, OutputRecoveryAction, OutputState,
+    OutputTarget, OutputTransaction, PathBinding, PathHash, PhaseSpan, QueueCommand, QueueItemId,
+    QueueItemState, Replacement, Reply, RunId, SearchMeasurement, SessionCommand, SessionState,
+    Settings, SettingsCommand, SkipReason, StreamByteSizes, SystemCommand, Telemetry,
+    ToolAvailability, ToolRevisions, UnixMillis, VideoCodec, VideoMeta, VmafScore, VmafTarget,
+    WorkerCommand, apply, compaction_due, compaction_quiescent, encode_record, encode_snapshot,
+    evaluate_eligibility, permitted_profiles, recover_output, replay, select_analysis,
+    select_job_action,
 };
 
 fn execution() -> ExecutionSettings {
@@ -1211,7 +1213,6 @@ fn reserved_item_can_be_durably_stopped_before_preparation() {
     ));
 
     let envelope = JournalEnvelope {
-        schema_version: JOURNAL_SCHEMA_VERSION,
         sequence: JournalSequence(0),
         deltas: durable,
     };
@@ -1309,12 +1310,10 @@ fn journal_ignores_only_an_unterminated_final_record() {
         },
     };
     let first = JournalEnvelope {
-        schema_version: JOURNAL_SCHEMA_VERSION,
         sequence: JournalSequence(0),
         deltas: vec![delta.clone()],
     };
     let second = JournalEnvelope {
-        schema_version: JOURNAL_SCHEMA_VERSION,
         sequence: JournalSequence(1),
         deltas: vec![delta],
     };
@@ -1334,7 +1333,6 @@ fn journal_ignores_only_an_unterminated_final_record() {
 #[test]
 fn journal_degrades_on_nonfinal_corruption() {
     let first = JournalEnvelope {
-        schema_version: JOURNAL_SCHEMA_VERSION,
         sequence: JournalSequence(0),
         deltas: vec![DurableDelta::QueueAdded {
             item: crate::QueueItem {
@@ -1358,10 +1356,186 @@ fn journal_degrades_on_nonfinal_corruption() {
     assert_eq!(replayed.valid_prefix_len, intact_len);
 }
 
+fn queue_added_delta(id: u64, name: &str) -> DurableDelta {
+    DurableDelta::QueueAdded {
+        item: crate::QueueItem {
+            id: QueueItemId(id),
+            input: PathBuf::from(name),
+            operation: Operation::Convert,
+            intent: AnalysisIntent::ReuseIfFresh,
+            output_target: OutputTarget::Replace,
+            state: QueueItemState::Queued,
+        },
+    }
+}
+
+#[test]
+fn snapshot_head_seeds_state_and_continues_sequence_numbering() {
+    let mut compacted = crate::DurableState::default();
+    crate::fold(&mut compacted, &queue_added_delta(1, "one.mkv"));
+    let mut bytes = encode_snapshot("1.2.3", UnixMillis(1_000), JournalSequence(7), &compacted)
+        .expect("snapshot");
+    bytes.extend(
+        encode_record(&JournalEnvelope {
+            sequence: JournalSequence(7),
+            deltas: vec![queue_added_delta(2, "two.mkv")],
+        })
+        .expect("tail record"),
+    );
+    let replayed = replay(&bytes);
+    assert!(replayed.corruption.is_none());
+    assert!(!replayed.ignored_torn_tail);
+    assert_eq!(replayed.state.queue.len(), 2);
+    assert_eq!(replayed.next_sequence, JournalSequence(8));
+    assert_eq!(replayed.valid_prefix_len, bytes.len());
+}
+
+#[test]
+fn replay_rejects_a_snapshot_after_the_journal_head() {
+    let mut bytes = encode_record(&JournalEnvelope {
+        sequence: JournalSequence(0),
+        deltas: vec![queue_added_delta(1, "one.mkv")],
+    })
+    .expect("head record");
+    let intact_len = bytes.len();
+    bytes.extend(
+        encode_snapshot(
+            "1.2.3",
+            UnixMillis(1_000),
+            JournalSequence(1),
+            &crate::DurableState::default(),
+        )
+        .expect("snapshot"),
+    );
+    let replayed = replay(&bytes);
+    let corruption = replayed.corruption.expect("snapshot after head");
+    assert_eq!(corruption.offset, intact_len);
+    assert!(corruption.reason.contains("snapshot"));
+    assert_eq!(replayed.state.queue.len(), 1);
+    assert_eq!(replayed.valid_prefix_len, intact_len);
+}
+
+#[test]
+fn replay_rejects_a_mismatched_sequence_after_a_snapshot() {
+    let mut bytes = encode_snapshot(
+        "1.2.3",
+        UnixMillis(1_000),
+        JournalSequence(7),
+        &crate::DurableState::default(),
+    )
+    .expect("snapshot");
+    let intact_len = bytes.len();
+    bytes.extend(
+        encode_record(&JournalEnvelope {
+            sequence: JournalSequence(0),
+            deltas: vec![queue_added_delta(1, "one.mkv")],
+        })
+        .expect("stale record"),
+    );
+    let replayed = replay(&bytes);
+    assert!(replayed.corruption.is_some());
+    assert_eq!(replayed.next_sequence, JournalSequence(7));
+    assert_eq!(replayed.valid_prefix_len, intact_len);
+}
+
+#[test]
+fn replay_reports_an_unsupported_schema_version_not_a_parse_error() {
+    let future = JOURNAL_SCHEMA_VERSION + 1;
+    let line = format!("{{\"schema_version\":{future},\"record\":{{\"Unknown\":null}}}}\n");
+    let replayed = replay(line.as_bytes());
+    let corruption = replayed.corruption.expect("unsupported schema");
+    assert_eq!(
+        corruption.reason,
+        format!("unsupported journal schema {future}")
+    );
+}
+
+#[test]
+fn torn_tail_after_a_snapshot_still_seeds_the_snapshot_state() {
+    let mut state = crate::DurableState::default();
+    crate::fold(&mut state, &queue_added_delta(1, "one.mkv"));
+    let mut bytes =
+        encode_snapshot("1.2.3", UnixMillis(1_000), JournalSequence(3), &state).expect("snapshot");
+    let intact_len = bytes.len();
+    let mut torn = encode_record(&JournalEnvelope {
+        sequence: JournalSequence(3),
+        deltas: vec![queue_added_delta(2, "two.mkv")],
+    })
+    .expect("torn record");
+    assert_eq!(torn.pop(), Some(b'\n'));
+    bytes.extend(torn);
+    let replayed = replay(&bytes);
+    assert!(replayed.ignored_torn_tail);
+    assert!(replayed.corruption.is_none());
+    assert_eq!(replayed.state, state);
+    assert_eq!(replayed.next_sequence, JournalSequence(3));
+    assert_eq!(replayed.valid_prefix_len, intact_len);
+}
+
+#[test]
+fn compacting_a_replayed_journal_preserves_state_and_sequence() {
+    let mut bytes = Vec::new();
+    for sequence in 0..3_u64 {
+        bytes.extend(
+            encode_record(&JournalEnvelope {
+                sequence: JournalSequence(sequence),
+                deltas: vec![queue_added_delta(sequence + 1, &format!("{sequence}.mkv"))],
+            })
+            .expect("journal record"),
+        );
+    }
+    let original = replay(&bytes);
+    assert!(original.corruption.is_none());
+    let mut compacted = encode_snapshot(
+        "1.2.3",
+        UnixMillis(1_000),
+        original.next_sequence,
+        &original.state,
+    )
+    .expect("snapshot");
+    let tail = encode_record(&JournalEnvelope {
+        sequence: original.next_sequence,
+        deltas: vec![queue_added_delta(9, "after.mkv")],
+    })
+    .expect("tail record");
+    bytes.extend(tail.clone());
+    compacted.extend(tail);
+    let replayed_original = replay(&bytes);
+    let replayed_compacted = replay(&compacted);
+    assert!(replayed_original.corruption.is_none());
+    assert!(replayed_compacted.corruption.is_none());
+    assert_eq!(replayed_compacted.state, replayed_original.state);
+    assert_eq!(
+        replayed_compacted.next_sequence,
+        replayed_original.next_sequence
+    );
+}
+
+#[test]
+fn compaction_size_policy_requires_floor_and_ratio_or_hard_cap() {
+    assert!(!compaction_due(COMPACTION_IDLE_MIN_JOURNAL_BYTES - 1, 0));
+    assert!(compaction_due(
+        COMPACTION_IDLE_MIN_JOURNAL_BYTES,
+        COMPACTION_IDLE_MIN_JOURNAL_BYTES / COMPACTION_IDLE_MIN_RATIO
+    ));
+    assert!(!compaction_due(
+        COMPACTION_IDLE_MIN_JOURNAL_BYTES,
+        COMPACTION_IDLE_MIN_JOURNAL_BYTES
+    ));
+    assert!(compaction_due(COMPACTION_HARD_LIMIT_BYTES, u64::MAX));
+}
+
+#[test]
+fn compaction_waits_for_an_idle_session_and_settled_queue() {
+    let mut settled = AppState::default();
+    crate::fold(&mut settled.durable, &queue_added_delta(1, "one.mkv"));
+    assert!(compaction_quiescent(&settled));
+    assert!(!compaction_quiescent(&active_state()));
+}
+
 #[test]
 fn replay_rejects_semantically_impossible_durable_transition() {
     let envelope = JournalEnvelope {
-        schema_version: JOURNAL_SCHEMA_VERSION,
         sequence: JournalSequence(0),
         deltas: vec![DurableDelta::ItemRunning {
             item_id: QueueItemId(1),
@@ -1378,7 +1552,6 @@ fn replay_rejects_semantically_impossible_durable_transition() {
 #[test]
 fn replay_rejects_an_entire_semantically_invalid_batch() {
     let envelope = JournalEnvelope {
-        schema_version: JOURNAL_SCHEMA_VERSION,
         sequence: JournalSequence(0),
         deltas: vec![
             DurableDelta::QueueAdded {
@@ -1535,7 +1708,6 @@ proptest! {
         let mut bytes = Vec::new();
         for (sequence, delta) in emitted.into_iter().enumerate() {
             let envelope = JournalEnvelope {
-                schema_version: JOURNAL_SCHEMA_VERSION,
                 sequence: JournalSequence(u64::try_from(sequence).expect("small sequence")),
                 deltas: vec![delta],
             };
@@ -1607,7 +1779,6 @@ fn apply_and_journal(
     let applied = apply(state, command);
     if !applied.durable.is_empty() {
         let envelope = JournalEnvelope {
-            schema_version: JOURNAL_SCHEMA_VERSION,
             sequence: JournalSequence(*sequence),
             deltas: applied.durable.clone(),
         };
