@@ -18,6 +18,7 @@ pub mod lock;
 pub mod media;
 pub mod output;
 pub mod remux;
+pub mod scan;
 pub mod vendor;
 
 mod failure;

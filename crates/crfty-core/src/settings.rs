@@ -15,6 +15,20 @@ pub enum VideoExtension {
     Wmv,
 }
 
+impl VideoExtension {
+    /// The file extension this variant matches: lowercase, no dot. Matching
+    /// is the scanner's job and is case-insensitive.
+    #[must_use]
+    pub const fn as_extension(self) -> &'static str {
+        match self {
+            Self::Mp4 => "mp4",
+            Self::Mkv => "mkv",
+            Self::Avi => "avi",
+            Self::Wmv => "wmv",
+        }
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, specta::Type)]
 #[serde(rename_all = "snake_case")]
 pub enum DefaultOutputMode {

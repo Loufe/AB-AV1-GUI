@@ -329,7 +329,10 @@ fn codec_header(codec: &VideoCodec) -> &str {
     }
 }
 
-fn path_hash(path: &Path) -> io::Result<PathHash> {
+/// Hashes a path under the app's canonical normalization (canonicalized,
+/// forward slashes, lowercased on Windows). Every `PathHash` in the system
+/// must come from here so enqueue facts and claim-time observations agree.
+pub fn path_hash(path: &Path) -> io::Result<PathHash> {
     let canonical = std::fs::canonicalize(path)?;
     let mut normalized = canonical.to_string_lossy().replace('\\', "/");
     if cfg!(windows) {
@@ -369,6 +372,28 @@ fn hash_region(
     Ok(())
 }
 
+/// A cheap freshness stamp: one stat, no file-id lookup, no content
+/// sampling. This is the enqueue-time fact carried by `QueueAddRequest`;
+/// claim-time content identity remains authoritative.
+pub fn stamp(path: &Path) -> io::Result<FileStamp> {
+    let metadata = std::fs::metadata(path)?;
+    Ok(FileStamp {
+        size: metadata.len(),
+        modified_ns: modified_ns(&metadata),
+    })
+}
+
+fn modified_ns(metadata: &Metadata) -> Option<FileTimeNs> {
+    // Epoch-nanoseconds fit u64 until the year 2554; a clock past that (or
+    // before the epoch) degrades to "no modification time" rather than lying.
+    metadata
+        .modified()
+        .ok()
+        .and_then(|modified| modified.duration_since(UNIX_EPOCH).ok())
+        .and_then(|duration| u64::try_from(duration.as_nanos()).ok())
+        .map(FileTimeNs)
+}
+
 fn identity_from_metadata(path: &Path, metadata: &Metadata) -> io::Result<DestructiveIdentity> {
     let file_id = match file_id::get_file_id(path)? {
         file_id::FileId::Inode {
@@ -393,18 +418,10 @@ fn identity_from_metadata(path: &Path, metadata: &Metadata) -> io::Result<Destru
             file_id,
         },
     };
-    // Epoch-nanoseconds fit u64 until the year 2554; a clock past that (or
-    // before the epoch) degrades to "no modification time" rather than lying.
-    let modified_ns = metadata
-        .modified()
-        .ok()
-        .and_then(|modified| modified.duration_since(UNIX_EPOCH).ok())
-        .and_then(|duration| u64::try_from(duration.as_nanos()).ok())
-        .map(FileTimeNs);
     Ok(DestructiveIdentity {
         file_id,
         size: metadata.len(),
-        modified_ns,
+        modified_ns: modified_ns(metadata),
     })
 }
 

@@ -8,6 +8,7 @@
 
 use std::{
     collections::BTreeMap,
+    path::PathBuf,
     sync::{
         Arc, Mutex, MutexGuard,
         atomic::{AtomicU64, Ordering},
@@ -16,8 +17,9 @@ use std::{
 };
 
 use crfty_core::{
-    AnalysisProfile, AppSnapshot, ConfigDelta, CorruptionReport, CorruptionSignature, DurableDelta,
-    DurableState, EphemeralDelta, ExecutionSettings, QueueCommand, QueueItemId, Reply, RunId,
+    AnalysisIntent, AnalysisProfile, AppSnapshot, ConfigDelta, CorruptionReport,
+    CorruptionSignature, DurableDelta, DurableState, EphemeralDelta, ExecutionSettings, Operation,
+    OutputTarget, OverwriteDecision, QueueAddRequest, QueueCommand, QueueItemId, Reply, RunId,
     SessionCommand, SessionState, Settings, SettingsCommand, Telemetry, ToolsState, VendorCommand,
     fold, fold_config,
 };
@@ -270,6 +272,51 @@ impl Bridge {
     pub fn submit_queue(&self, command: QueueCommand) -> Result<(), CommandError> {
         let commands = self.commands()?;
         map_reply(commands.submit_queue(command))
+    }
+
+    /// Expands files and folders into one `AddMany` batch carrying real
+    /// enqueue facts (path hash + stamp, best-effort). The scan-extension
+    /// filter comes from the settings read model; for `SeparateFolder`
+    /// targets, each folder-discovered file gets its originating folder as
+    /// `source_root` so the output tree mirrors the source tree.
+    pub fn queue_add_paths(
+        &self,
+        inputs: Vec<PathBuf>,
+        operation: Operation,
+        intent: AnalysisIntent,
+        output_target: OutputTarget,
+    ) -> Result<(), CommandError> {
+        let commands = self.commands()?;
+        let extensions = lock_stream(&self.stream)
+            .model
+            .settings
+            .scan_extensions
+            .clone();
+        let requests = crfty_engine::scan::expand_inputs(&inputs, &extensions)
+            .into_iter()
+            .map(|file| {
+                let output_target = match (&output_target, file.source_root) {
+                    (OutputTarget::SeparateFolder { directory, .. }, Some(root)) => {
+                        OutputTarget::SeparateFolder {
+                            directory: directory.clone(),
+                            source_root: Some(root),
+                        }
+                    }
+                    _ => output_target.clone(),
+                };
+                QueueAddRequest {
+                    item_id: self.allocate_item_id(),
+                    input: file.path,
+                    path_hash: file.path_hash,
+                    stamp: file.stamp,
+                    operation,
+                    intent,
+                    output_target,
+                    overwrite: OverwriteDecision::FollowSettings,
+                }
+            })
+            .collect();
+        map_reply(commands.submit_queue(QueueCommand::AddMany { requests }))
     }
 
     pub fn submit_session(&self, command: SessionCommand) -> Result<(), CommandError> {

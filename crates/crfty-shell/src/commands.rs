@@ -1,8 +1,8 @@
 use std::path::PathBuf;
 
 use crfty_core::{
-    AnalysisIntent, CorruptionSignature, Operation, OutputTarget, OverwriteDecision,
-    QueueAddRequest, QueueCommand, QueueItemId, SessionCommand, Settings, VendorCommand,
+    AnalysisIntent, CorruptionSignature, Operation, OutputTarget, QueueCommand, QueueItemEdit,
+    QueueItemId, SessionCommand, Settings, VendorCommand,
 };
 use serde::Serialize;
 use tauri::{State, ipc::Channel};
@@ -30,31 +30,20 @@ fn subscribe(bridge: State<'_, Bridge>, channel: Channel<ShellEvent>) -> Result<
     Ok(())
 }
 
+/// Adds files and folders in one batch: folders expand through the engine
+/// scanner (filtered by the configured scan extensions), directly selected
+/// files pass through unfiltered. The outcome arrives as one
+/// `QueueAddSummary` on the stream.
 #[tauri::command]
 #[specta::specta]
-fn queue_add(
+fn queue_add_paths(
     bridge: State<'_, Bridge>,
-    input: PathBuf,
+    inputs: Vec<PathBuf>,
     operation: Operation,
     intent: AnalysisIntent,
     output_target: OutputTarget,
 ) -> Result<(), CommandError> {
-    let item_id = bridge.allocate_item_id();
-    // No enqueue facts yet: absent facts fail open in the reducer, so
-    // enqueue-time filtering stays inert until the scanner boundary lands
-    // (#41 commit 4) and supplies real path hashes and stamps.
-    bridge.submit_queue(QueueCommand::AddMany {
-        requests: vec![QueueAddRequest {
-            item_id,
-            input,
-            path_hash: None,
-            stamp: None,
-            operation,
-            intent,
-            output_target,
-            overwrite: OverwriteDecision::FollowSettings,
-        }],
-    })
+    bridge.queue_add_paths(inputs, operation, intent, output_target)
 }
 
 #[tauri::command]
@@ -71,6 +60,34 @@ fn queue_move(
     before: Option<QueueItemId>,
 ) -> Result<(), CommandError> {
     bridge.submit_queue(QueueCommand::Move { item_id, before })
+}
+
+#[tauri::command]
+#[specta::specta]
+fn queue_clear(bridge: State<'_, Bridge>) -> Result<(), CommandError> {
+    bridge.submit_queue(QueueCommand::Clear)
+}
+
+#[tauri::command]
+#[specta::specta]
+fn queue_clear_completed(bridge: State<'_, Bridge>) -> Result<(), CommandError> {
+    bridge.submit_queue(QueueCommand::ClearCompleted)
+}
+
+#[tauri::command]
+#[specta::specta]
+fn queue_retry(bridge: State<'_, Bridge>, item_id: QueueItemId) -> Result<(), CommandError> {
+    bridge.submit_queue(QueueCommand::Retry { item_id })
+}
+
+#[tauri::command]
+#[specta::specta]
+fn queue_edit(
+    bridge: State<'_, Bridge>,
+    item_id: QueueItemId,
+    patch: QueueItemEdit,
+) -> Result<(), CommandError> {
+    bridge.submit_queue(QueueCommand::Edit { item_id, patch })
 }
 
 #[tauri::command]
@@ -128,9 +145,13 @@ pub fn specta_builder() -> Builder<tauri::Wry> {
     Builder::<tauri::Wry>::new().commands(collect_commands![
         app_info,
         subscribe,
-        queue_add,
+        queue_add_paths,
         queue_remove,
         queue_move,
+        queue_clear,
+        queue_clear_completed,
+        queue_retry,
+        queue_edit,
         start,
         stop_after_current,
         force_stop,

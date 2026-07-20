@@ -6,9 +6,19 @@ import { invoke as __TAURI_INVOKE, Channel } from "@tauri-apps/api/core";
 export const commands = {
 	appInfo: () => __TAURI_INVOKE<AppInfo>("app_info"),
 	subscribe: (channel: Channel<ShellEvent_Deserialize>) => typedError<null, CommandError>(__TAURI_INVOKE("subscribe", { channel })),
-	queueAdd: (input: string, operation: Operation, intent: AnalysisIntent, outputTarget: OutputTarget) => typedError<null, CommandError>(__TAURI_INVOKE("queue_add", { input, operation, intent, outputTarget })),
+	/**
+	 *  Adds files and folders in one batch: folders expand through the engine
+	 *  scanner (filtered by the configured scan extensions), directly selected
+	 *  files pass through unfiltered. The outcome arrives as one
+	 *  `QueueAddSummary` on the stream.
+	 */
+	queueAddPaths: (inputs: string[], operation: Operation, intent: AnalysisIntent, outputTarget: OutputTarget) => typedError<null, CommandError>(__TAURI_INVOKE("queue_add_paths", { inputs, operation, intent, outputTarget })),
 	queueRemove: (itemId: QueueItemId) => typedError<null, CommandError>(__TAURI_INVOKE("queue_remove", { itemId })),
 	queueMove: (itemId: QueueItemId, before: number | null) => typedError<null, CommandError>(__TAURI_INVOKE("queue_move", { itemId, before })),
+	queueClear: () => typedError<null, CommandError>(__TAURI_INVOKE("queue_clear")),
+	queueClearCompleted: () => typedError<null, CommandError>(__TAURI_INVOKE("queue_clear_completed")),
+	queueRetry: (itemId: QueueItemId) => typedError<null, CommandError>(__TAURI_INVOKE("queue_retry", { itemId })),
+	queueEdit: (itemId: QueueItemId, patch: QueueItemEdit) => typedError<null, CommandError>(__TAURI_INVOKE("queue_edit", { itemId, patch })),
 	start: () => typedError<null, CommandError>(__TAURI_INVOKE("start")),
 	stopAfterCurrent: () => typedError<null, CommandError>(__TAURI_INVOKE("stop_after_current")),
 	forceStop: () => typedError<null, CommandError>(__TAURI_INVOKE("force_stop")),
@@ -669,6 +679,18 @@ export type QueueItem = {
 	output_target: OutputTarget,
 	overwrite: OverwriteDecision,
 	state: QueueItemState,
+};
+
+/**
+ *  A partial edit of a queued item; `None` keeps the current value. The
+ *  reducer resolves the full tuple before journaling, so the fold and replay
+ *  never see patch semantics.
+ */
+export type QueueItemEdit = {
+	operation: Operation | null,
+	intent: AnalysisIntent | null,
+	output_target: OutputTarget | null,
+	overwrite: OverwriteDecision | null,
 };
 
 export type QueueItemId = number;
