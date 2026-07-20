@@ -45,8 +45,17 @@ pub enum StreamPayload {
     Durable(DurableDelta),
     Config(ConfigDelta),
     Ephemeral(EphemeralDelta),
-    Degraded { reason: String },
-    EngineFatal { message: String },
+    Degraded {
+        reason: String,
+    },
+    EngineFatal {
+        message: String,
+    },
+    /// Another process holds the engine's data-directory lock: this is a
+    /// second instance and the engine refused to start (ADR-008).
+    SecondInstance {
+        lock_path: String,
+    },
 }
 
 #[derive(Debug, Clone, Serialize, specta::Type)]
@@ -73,6 +82,7 @@ enum Health {
     Ok,
     Degraded { reason: String },
     Fatal { message: String },
+    SecondInstance { lock_path: String },
 }
 
 struct StreamState {
@@ -131,10 +141,16 @@ impl Bridge {
     pub fn start(app: &tauri::AppHandle) -> Self {
         match Self::try_start(app) {
             Ok(bridge) => bridge,
-            Err(reason) => {
-                eprintln!("engine unavailable: {reason}");
+            Err(health) => {
+                match &health {
+                    Health::SecondInstance { lock_path } => {
+                        eprintln!("another instance holds the data lock at {lock_path}");
+                    }
+                    Health::Degraded { reason } => eprintln!("engine unavailable: {reason}"),
+                    Health::Ok | Health::Fatal { .. } => {}
+                }
                 Self {
-                    stream: Arc::new(Mutex::new(StreamState::new(Health::Degraded { reason }))),
+                    stream: Arc::new(Mutex::new(StreamState::new(health))),
                     commands: None,
                     next_item_id: Arc::new(AtomicU64::new(1)),
                     _engine: Mutex::new(None),
@@ -143,13 +159,17 @@ impl Bridge {
         }
     }
 
-    fn try_start(app: &tauri::AppHandle) -> Result<Self, String> {
+    fn try_start(app: &tauri::AppHandle) -> Result<Self, Health> {
+        let degraded = |reason: String| Health::Degraded { reason };
         let data_dir = app
             .path()
             .app_data_dir()
-            .map_err(|error| format!("no application data directory: {error}"))?;
-        std::fs::create_dir_all(&data_dir)
-            .map_err(|error| format!("failed to create application data directory: {error}"))?;
+            .map_err(|error| degraded(format!("no application data directory: {error}")))?;
+        std::fs::create_dir_all(&data_dir).map_err(|error| {
+            degraded(format!(
+                "failed to create application data directory: {error}"
+            ))
+        })?;
         // Discovery is infallible: missing tools become typed availability
         // state on the stream, never a startup failure that would hide the
         // queue, history, or settings.
@@ -165,7 +185,16 @@ impl Bridge {
             media_tools,
             execution: ExecutionSettings::production(AnalysisProfile::production(revisions), false),
         };
-        let mut runtime = EngineRuntime::start(config).map_err(|error| error.to_string())?;
+        let mut runtime = EngineRuntime::start(config).map_err(|error| match error {
+            crfty_engine::coordinator::EngineStartError::AlreadyRunning { lock_path } => {
+                Health::SecondInstance {
+                    lock_path: lock_path.display().to_string(),
+                }
+            }
+            other => Health::Degraded {
+                reason: other.to_string(),
+            },
+        })?;
         let events = std::mem::replace(&mut runtime.events, mpsc::channel().1);
         let stream = Arc::new(Mutex::new(StreamState::new(Health::Ok)));
         let next_item_id = Arc::new(AtomicU64::new(1));
@@ -174,7 +203,7 @@ impl Bridge {
         std::thread::Builder::new()
             .name("crfty-shell-forwarder".to_owned())
             .spawn(move || forward(events, &forwarder_stream, &forwarder_ids))
-            .map_err(|error| format!("failed to start stream forwarder: {error}"))?;
+            .map_err(|error| degraded(format!("failed to start stream forwarder: {error}")))?;
         Ok(Self {
             stream,
             commands: Some(runtime.commands.clone()),
@@ -210,6 +239,9 @@ impl Bridge {
             Health::Ok => {}
             Health::Degraded { reason } => stream.emit(StreamPayload::Degraded { reason }),
             Health::Fatal { message } => stream.emit(StreamPayload::EngineFatal { message }),
+            Health::SecondInstance { lock_path } => {
+                stream.emit(StreamPayload::SecondInstance { lock_path });
+            }
         }
     }
 
@@ -238,6 +270,10 @@ impl Bridge {
             match &stream.health {
                 Health::Degraded { reason } => CommandError::engine_unavailable(reason.clone()),
                 Health::Fatal { message } => CommandError::engine_unavailable(message.clone()),
+                Health::SecondInstance { lock_path } => CommandError::new(
+                    "second_instance",
+                    format!("another instance holds the data lock at {lock_path}"),
+                ),
                 Health::Ok => CommandError::engine_unavailable("engine is not running"),
             }
         })

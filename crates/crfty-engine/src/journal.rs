@@ -69,14 +69,29 @@ impl JournalWriter {
             .append(true)
             .open(&path)
             .map_err(|error| JournalError::new("failed to open journal", error))?;
-        file.try_lock()
-            .map_err(|error| JournalError::new("failed to lock journal", error.into()))?;
         file.seek(SeekFrom::Start(0))
             .map_err(|error| JournalError::new("failed to seek journal", error))?;
         let mut bytes = Vec::new();
         file.read_to_end(&mut bytes)
             .map_err(|error| JournalError::new("failed to read journal", error))?;
         let replay = replay(&bytes);
+        // A torn tail is the expected crash-during-append residue and must be
+        // truncated before the next append: appending after the partial record
+        // would merge both into one unparseable line, and the journal would
+        // load as corrupt on the following start. A corrupt journal is left
+        // byte-identical for archival and explicit acknowledgment.
+        if replay.corruption.is_none() && replay.ignored_torn_tail {
+            let prefix = u64::try_from(replay.valid_prefix_len).map_err(|_| {
+                JournalError::new(
+                    "torn tail offset exceeds file range",
+                    io::Error::from(io::ErrorKind::InvalidData),
+                )
+            })?;
+            file.set_len(prefix)
+                .map_err(|error| JournalError::new("failed to truncate torn tail", error))?;
+            file.sync_all()
+                .map_err(|error| JournalError::new("failed to synchronize truncation", error))?;
+        }
         let writer = Self {
             path,
             file,

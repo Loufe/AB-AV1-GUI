@@ -17,6 +17,8 @@ import { emptyDurableState } from "@/lib/store/fold";
 export interface Health {
   degraded: string | null;
   fatal: string | null;
+  /** Lock path held by the running instance when this one is a duplicate. */
+  secondInstance: string | null;
 }
 
 export interface AppStoreState {
@@ -38,7 +40,7 @@ export function initialAppState(): AppStoreState {
     durable: emptyDurableState(),
     settings: null,
     session: "Idle",
-    health: { degraded: null, fatal: null },
+    health: { degraded: null, fatal: null, secondInstance: null },
     tools: null,
   };
 }

@@ -15,6 +15,7 @@ use crfty_core::{
 use crate::{
     config::ConfigStore,
     journal::{DurabilityToken, JournalError, JournalWriter},
+    lock::{DataLock, DataLockError},
 };
 
 const DRIVER_CHANNEL_CAPACITY: usize = 64;
@@ -33,11 +34,24 @@ pub enum DriverEvent {
 }
 
 #[derive(Debug)]
-pub struct DriverStartError(String);
+pub enum DriverStartError {
+    /// The data-directory lock is held by another process: a second instance.
+    AlreadyRunning {
+        lock_path: std::path::PathBuf,
+    },
+    Failed(String),
+}
 
 impl fmt::Display for DriverStartError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        formatter.write_str(&self.0)
+        match self {
+            Self::AlreadyRunning { lock_path } => write!(
+                formatter,
+                "another instance holds the data lock at {}",
+                lock_path.display()
+            ),
+            Self::Failed(message) => formatter.write_str(message),
+        }
     }
 }
 
@@ -68,6 +82,9 @@ struct Envelope {
 struct DriverPersistence {
     journal: JournalWriter,
     config: ConfigStore,
+    /// Held for the driver's lifetime; releasing it is what allows the next
+    /// instance to start (ADR-008).
+    _lock: DataLock,
 }
 
 #[derive(Clone)]
@@ -129,12 +146,26 @@ impl DriverHandle {
         config_path: impl AsRef<Path>,
         effect_sink: Option<mpsc::Sender<Effect>>,
     ) -> Result<Self, DriverStartError> {
+        let journal_path = journal_path.as_ref();
+        // The data directory is the journal's directory; the lock is taken
+        // before settings load or journal fold so a second instance never
+        // reads (let alone writes) shared durable state (#33 §12).
+        let data_dir = journal_path.parent().unwrap_or(Path::new("."));
+        let lock = DataLock::acquire(data_dir).map_err(|error| match error {
+            DataLockError::AlreadyHeld { path } => {
+                DriverStartError::AlreadyRunning { lock_path: path }
+            }
+            DataLockError::Io { .. } => {
+                DriverStartError::Failed(format!("failed to lock data directory: {error}"))
+            }
+        })?;
         let config = ConfigStore::new(config_path.as_ref().to_path_buf());
-        let loaded = config
-            .load()
-            .map_err(|error| DriverStartError(format!("failed to load settings: {error}")))?;
-        let (writer, replay) = JournalWriter::open(journal_path)
-            .map_err(|error| DriverStartError(format!("failed to start driver: {error}")))?;
+        let loaded = config.load().map_err(|error| {
+            DriverStartError::Failed(format!("failed to load settings: {error}"))
+        })?;
+        let (writer, replay) = JournalWriter::open(journal_path).map_err(|error| {
+            DriverStartError::Failed(format!("failed to start driver: {error}"))
+        })?;
         let degraded = replay.corruption.as_ref().map(|corruption| {
             format!(
                 "journal is corrupt at byte {}: {}",
@@ -158,6 +189,7 @@ impl DriverHandle {
                     DriverPersistence {
                         journal: writer,
                         config,
+                        _lock: lock,
                     },
                     degraded,
                     command_rx,
@@ -166,7 +198,9 @@ impl DriverHandle {
                     effect_sink,
                 );
             })
-            .map_err(|error| DriverStartError(format!("failed to spawn driver: {error}")))?;
+            .map_err(|error| {
+                DriverStartError::Failed(format!("failed to spawn driver: {error}"))
+            })?;
         Ok(Self {
             commands: CommandSender {
                 sender: command_tx,
@@ -196,7 +230,7 @@ impl DriverHandle {
         if let Some(worker) = self.worker.take() {
             worker
                 .join()
-                .map_err(|_| DriverStartError("driver thread panicked".to_owned()))?;
+                .map_err(|_| DriverStartError::Failed("driver thread panicked".to_owned()))?;
         }
         Ok(())
     }

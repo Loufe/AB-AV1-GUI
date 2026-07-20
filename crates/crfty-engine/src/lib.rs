@@ -14,6 +14,7 @@ pub mod config;
 pub mod coordinator;
 pub mod driver;
 pub mod journal;
+pub mod lock;
 pub mod media;
 pub mod output;
 pub mod remux;
