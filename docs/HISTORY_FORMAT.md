@@ -17,16 +17,21 @@ Default: `conversion_history.json` in the application directory.
 
 ## Top-Level Structure
 
-The JSON file is an **array** of FileRecord objects:
+The JSON file is a **versioned container** (schema v2, ADR-002) holding an array of FileRecord objects:
 
 ```json
-[
-  { "path_hash": "a1b2c3d4e5f6...", "status": "scanned", ... },
-  { "path_hash": "f6e5d4c3b2a1...", "status": "converted", ... }
-]
+{
+  "schema_version": 2,
+  "records": [
+    { "path_hash": "a1b2c3d4e5f6...", "status": "scanned", ... },
+    { "path_hash": "f6e5d4c3b2a1...", "status": "converted", ... }
+  ]
+}
 ```
 
-**Note**: The file format is an array for simplicity. At runtime, `HistoryIndex` loads this into a dictionary keyed by `path_hash` for O(1) lookups.
+The loader accepts only `schema_version` 2 and raises on the legacy unversioned array with instructions to run `tools/migrate_history_v2.py` — no key sniffing. At runtime, `HistoryIndex` loads the records into a dictionary keyed by `path_hash` for O(1) lookups.
+
+`path_hash` is BLAKE2b (16-byte digest) of the normalized path, truncated to 16 hex characters. Normalization: absolute path, mapped network drives resolved to their UNC spelling, lowercased on Windows, backslashes to forward slashes.
 
 ## FileRecord Fields
 
@@ -47,15 +52,16 @@ The JSON file is an **array** of FileRecord objects:
 
 Cache is valid if both size AND mtime match the current file (mtime has 1-second tolerance due to JSON precision loss).
 
-### Duplicate Detection (ADR-001)
-
-Used to recognize the same physical file accessed via different paths.
-See [ADR-001](adr/001-use-metadata-for-duplicate-detection.md).
+### Filename Identity
 
 | Field | Type | Description |
 |-------|------|-------------|
-| `filename_hash` | string\|null | BLAKE2b hash of the basename (includes extension); enables matching when `original_path` is null (anonymized) |
-| `duplicate_of` | string\|null | If set, the `path_hash` of the source record this path *aliases*. The alias mirrors the source's status/metadata so per-path lookups (queue filter, Analysis display) succeed, but it is **excluded** from the size index used for duplicate detection (so it never becomes a false match candidate) **and** from `get_converted_records()` / `get_by_status()` (so one physical conversion reached via multiple paths is not double-counted). Normally null. |
+| `filename_hash` | string\|null | BLAKE2b hash of the basename (includes extension); retained so anonymized histories keep a filename identity (a future content-identity tier, issue #28, may consume it) |
+
+There is no duplicate detection: path-spelling duplicates (mapped drive vs UNC) are
+unrepresentable because `normalize_path()` resolves mapped drives before hashing
+([ADR-001](adr/001-replace-alias-records-with-path-normalization.md)), and true content
+copies wait on the partial-hash tier (issue #28).
 
 ### Video Metadata (Layer 1 - ffprobe)
 
@@ -131,12 +137,6 @@ Populated after successful encoding.
 | `vmaf_target_used` | int\|null | Target (may differ from requested due to fallback) |
 | `output_audio_codec` | string\|null | Audio codec in output |
 
-### Legacy Fields
-
-| Field | Type | Description |
-|-------|------|-------------|
-| `conversion_time_sec` | float\|null | Old combined time (pre-split) |
-
 ### Timestamps
 
 | Field | Type | Description |
@@ -161,7 +161,7 @@ The `FileRecord.get_analysis_level()` method maps status to analysis level:
 |-------|------|----------|
 | 0 | DISCOVERED | No record exists |
 | 1 | SCANNED | Has video_codec or duration_sec |
-| 2 | ANALYZED | Has best_crf AND best_vmaf_achieved |
+| 2 | ANALYZED | Status is "analyzed" or "not_worthwhile" (a completed CRF search whose result is the negative verdict, ADR-002) |
 | 3 | CONVERTED | Status is "converted" |
 
 ## Fields by Status
@@ -176,14 +176,18 @@ All records have identity fields (`path_hash`, `status`) and cache fields (`file
 | **Skip reason fields** | — | — | ✓ | — |
 | **Layer 3** (conversion results) | — | — | — | ✓ |
 
-**Alias records** (`duplicate_of` set): mirror another path's record for the same physical file (ADR-001). They carry the source's status and fields but are excluded from the size index used for duplicate detection (so an alias never becomes a false match candidate) and from `get_converted_records()` / `get_by_status()` (so statistics, time-estimation, and the History tab count each physical conversion once). They remain resolvable by exact `path_hash`, so per-path lookups still succeed. Aliases are written at two points: the Analysis-tab scan (`folder_analysis._analyze_file`) and the conversion worker's pre-processing duplicate check (`worker._find_duplicate_verdict`), which catches duplicates queued without a prior Basic Scan and short-circuits before the CRF search.
+Every record is canonical for its own path; the alias mechanism was removed by
+[ADR-001](adr/001-replace-alias-records-with-path-normalization.md). Until the partial-hash
+tier (issue #28) lands, a true content copy of a decided file is re-analyzed once (~1 minute);
+a redundant encode remains impossible because converted content is caught by the already-AV1
+check.
 
-An alias is only valid while its cache stamps (size + mtime) match the file on disk. On mismatch it is re-derived through duplicate detection — re-aliased if a decided source still matches, otherwise demoted to a fresh SCANNED record — never metadata-refreshed in place. ANALYZED / NOT_WORTHWHILE verdicts are likewise discarded with the stale content on re-scan.
+ANALYZED / NOT_WORTHWHILE verdicts are discarded with stale content on re-scan (cache stamps no longer match).
 
 Canonical CONVERTED records survive a stamp mismatch only while the file is plausibly the conversion's own output (in replace mode the AV1 output sits at the input path, so changed stamps are the expected steady state there). Two checks recognize this, depending on what data is available:
 
 - **Basic Scan** (`folder_analysis._analyze_file`): ffprobe has run, so the probed codec decides — AV1 (or an unreadable file) preserves the record with refreshed metadata; anything else cannot be our output, and the record is demoted like the other verdicts (removing that conversion from statistics, since its input no longer exists at the path).
-- **Stat-only paths** (queue filter, queue reconciliation, worker duplicate short-circuit — no ffprobe allowed): `cache_helpers.converted_verdict_applies()` keeps the verdict if the stamps still match, or if the path is `.mkv` and the current size equals the recorded `output_size_bytes` (replace mode always outputs `input.with_suffix(".mkv")`, so only a `.mkv` path can hold our output). Legacy records without `output_size_bytes` are kept conservatively. Any other mismatch means the content changed and the file is re-queueable.
+- **Stat-only paths** (queue filter, queue reconciliation — no ffprobe allowed): `cache_helpers.converted_verdict_applies()` keeps the verdict if the stamps still match, or if the path is `.mkv` and the current size equals the recorded `output_size_bytes` (replace mode always outputs `input.with_suffix(".mkv")`, so only a `.mkv` path can hold our output). Legacy records without `output_size_bytes` are kept conservatively. Any other mismatch means the content changed and the file is re-queueable.
 
 ## Implementation
 

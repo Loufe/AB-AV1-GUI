@@ -283,7 +283,7 @@ The history index is a **singleton** with **lazy loading**:
 2. For folder items: scan for video files matching extensions
 3. For each file in item:
    - Check resolution, codec, output existence
-   - Duplicate short-circuit: a file already CONVERTED/NOT_WORTHWHILE under another path (ADR-001) is skipped and recorded as a `duplicate_of` alias; an ANALYZED duplicate lets CONVERT reuse the cached CRF. A canonical CONVERTED record at the file's own path suppresses this only while the verdict still applies (`converted_verdict_applies`); genuinely changed content is checked against other paths' verdicts like any new file
+   - No duplicate short-circuit: path-spelling duplicates are unrepresentable after hash-time normalization (ADR-001); true content copies wait on the partial-hash tier (#28). A CONVERTED record at the file's own path is honored only while the verdict still applies (`converted_verdict_applies`)
    - Call `video_conversion.process_video()` (CONVERT) or `wrapper.crf_search()` (ANALYZE)
    - Dispatch progress via callbacks
    - Update history on completion

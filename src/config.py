@@ -78,6 +78,9 @@ MAX_VMAF_VALUE = 100  # Maximum valid VMAF score
 
 # --- History File ---
 HISTORY_FILE = "conversion_history.json"
+# Versioned container format (ADR-002): {"schema_version": 2, "records": [...]}.
+# Bump only with a one-time migration in tools/; the loader never sniffs keys.
+HISTORY_SCHEMA_VERSION = 2
 # Debounce for per-file history saves in the conversion worker: save() rewrites the whole
 # multi-MB JSON, so at most one save per interval; hard checkpoints still flush unconditionally.
 HISTORY_SAVE_INTERVAL_SEC = 30

@@ -24,8 +24,8 @@ from statistics import mean
 
 from src.cache_helpers import mtimes_match
 from src.config import DEFAULT_REDUCTION_ESTIMATE_PERCENT
-from src.history_index import HistoryIndex, compute_filename_hash, compute_path_hash, create_alias_record
-from src.models import DECIDED_STATUSES, FileRecord, FileStatus, VideoMetadata
+from src.history_index import HistoryIndex, compute_filename_hash, compute_path_hash
+from src.models import FileRecord, FileStatus, VideoMetadata
 from src.utils import format_crf, get_video_info
 from src.video_metadata import extract_video_metadata
 
@@ -252,24 +252,22 @@ def _analyze_file(
     video_info = get_video_info(file_path)
     meta = extract_video_metadata(video_info)
 
-    # The remaining lookup -> duplicate-check -> upsert sequence must be atomic: two
-    # parallel scan workers processing two copies of the same physical file could
-    # otherwise both pass find_better_duplicate before either upserts, producing two
-    # canonical records instead of one canonical plus one alias (issue #22). The
+    # The remaining lookup -> upsert sequence stays atomic so two parallel scan
+    # workers cannot interleave a stale re-read with each other's writes. The
     # ffprobe above deliberately stays outside the lock - probes can take seconds
     # and must not serialize the other workers.
     with index.transaction():
         # Re-read under the lock: another writer may have updated this path meanwhile.
         cached = index.get(path_hash)
 
-        # A canonical CONVERTED record survives a size/mtime mismatch only while the file is
+        # A CONVERTED record survives a size/mtime mismatch only while the file is
         # plausibly its own output: in replace mode the file at that path IS the AV1 output,
         # so changed stamps are the expected steady state (also preserved when the probe
         # failed and the codec is unknown). A non-AV1 file cannot be our output - the path
-        # was replaced with new content, so the verdict is stale. Aliases (any status) and
-        # ANALYZED/NOT_WORTHWHILE verdicts likewise described content that no longer exists;
-        # all of these fall through and re-derive from the fresh ffprobe.
-        if cached and cached.status == FileStatus.CONVERTED and cached.duplicate_of is None:
+        # was replaced with new content, so the verdict is stale. ANALYZED/NOT_WORTHWHILE
+        # verdicts likewise described content that no longer exists; those fall through
+        # and re-derive from the fresh ffprobe.
+        if cached and cached.status == FileStatus.CONVERTED:
             if meta.video_codec is None or meta.is_av1:
                 # Update metadata while preserving conversion data
                 record = _update_existing_record_metadata(cached, file_size, file_mtime, meta, anonymize, file_path)
@@ -278,33 +276,10 @@ def _analyze_file(
                 return _record_to_result(file_path, record, index)
             logger.info("Converted file replaced with non-AV1 content, re-deriving record: %s", filename)
 
-        # Duplicate detection: same physical file reached via a different path?
-        duplicate = index.find_better_duplicate(file_path, file_size, meta.duration_sec)
-        if duplicate is not None:
-            if meta.duration_sec is None:
-                # No duration -> find_better_duplicate could only match on filename+size (low
-                # confidence). Show the duplicate's status but don't persist a terminal one.
-                return _record_to_result(file_path, duplicate, index)
-            if duplicate.status in DECIDED_STATUSES:
-                # Source carries a decided result worth mirroring. Persist an alias keyed by THIS
-                # path so lookup_file(this_path) resolves to it and the copy isn't re-encoded.
-                record = create_alias_record(
-                    duplicate,
-                    cached.first_seen if cached else None,
-                    file_path,
-                    path_hash,
-                    file_size,
-                    file_mtime,
-                    meta,
-                    anonymize,
-                )
-                logger.debug("Aliased %s record to new path %s (duplicate detection)", duplicate.status, filename)
-                index.upsert(record)
-                return _record_to_result(file_path, record, index)
-            # Duplicate is only SCANNED - nothing decided to mirror; fall through and create a
-            # fresh SCANNED record for this path below.
-
-        # New file or previously SCANNED - create new SCANNED record
+        # New file or previously SCANNED - create new SCANNED record. Same-file-other-path
+        # duplicates are not detected here: path-spelling duplicates are unrepresentable
+        # after hash-time normalization (ADR-001), and true content copies wait on the
+        # partial-hash tier (issue #28).
         record = _create_scanned_record(file_path, path_hash, file_size, file_mtime, video_info, anonymize)
 
         # Check for skip conditions

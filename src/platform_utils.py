@@ -33,6 +33,71 @@ def get_windows_subprocess_startupinfo() -> tuple[Any, int]:
     return startupinfo, creationflags
 
 
+# --- Mapped Network Drive Resolution ---
+
+# Cache of drive letter ("b:") -> UNC root (r"\\server\share") or None if not a
+# mapped network drive. Mappings survive for the process lifetime; remapping a
+# drive mid-session is not supported (matches Windows Explorer behavior).
+_drive_unc_cache: dict[str, str | None] = {}
+
+_WNET_BUFFER_CHARS = 1024
+
+
+def _query_drive_unc(drive: str) -> str | None:
+    """Look up the UNC root for a drive letter via WNetGetConnectionW.
+
+    Reads the local drive-mapping table only - no network I/O, so it cannot
+    block on an offline share (the ADR-001 concern that rules out samefile()).
+
+    Args:
+        drive: Drive spec like "B:" (no trailing separator).
+
+    Returns:
+        UNC root like r"\\\\server\\share", or None if the drive is not a
+        mapped network drive or the lookup fails.
+    """
+    if sys.platform != "win32":  # Callers guard too; repeated so type-checkers narrow windll
+        return None
+    buffer = ctypes.create_unicode_buffer(_WNET_BUFFER_CHARS)
+    length = ctypes.c_ulong(_WNET_BUFFER_CHARS)
+    try:
+        result = ctypes.windll.mpr.WNetGetConnectionW(drive, buffer, ctypes.byref(length))
+    except OSError:
+        logger.exception(f"WNetGetConnectionW failed for drive {drive}")
+        return None
+    if result != 0:  # ERROR_NOT_CONNECTED, ERROR_BAD_DEVICE, etc. - a local drive
+        return None
+    return buffer.value or None
+
+
+def resolve_mapped_drive_path(path: str) -> str:
+    """Rewrite a mapped-network-drive path to its UNC spelling (ADR-002).
+
+    ``B:\\videos\\x.mp4`` becomes ``\\\\server\\share\\videos\\x.mp4`` when B: is a
+    mapped network drive, so both spellings of the same file hash to one history
+    key. Local drives, UNC paths, and all non-Windows paths pass through
+    unchanged.
+
+    Args:
+        path: Absolute or relative path.
+
+    Returns:
+        The path with its drive prefix replaced by the UNC root, or the input
+        unchanged.
+    """
+    if sys.platform != "win32":
+        return path
+    if len(path) < 2 or path[1] != ":" or not path[0].isalpha():  # noqa: PLR2004
+        return path
+    drive = path[:2].lower()
+    if drive not in _drive_unc_cache:
+        _drive_unc_cache[drive] = _query_drive_unc(drive.upper())
+    unc_root = _drive_unc_cache[drive]
+    if unc_root is None:
+        return path
+    return unc_root.rstrip("\\") + path[2:]
+
+
 def terminate_process_tree(pid: int) -> bool:
     """Forcefully terminate a process and its whole child tree.
 

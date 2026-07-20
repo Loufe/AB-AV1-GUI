@@ -136,11 +136,6 @@ class FileStatus(str, Enum):
     CONVERTED = "converted"  # Successfully converted
 
 
-# Statuses whose record carries a decided, reusable result (terminal outcome or completed
-# Layer-2 CRF analysis), preserved/mirrored rather than overwritten on re-scan.
-DECIDED_STATUSES = frozenset({FileStatus.CONVERTED, FileStatus.NOT_WORTHWHILE, FileStatus.ANALYZED})
-
-
 class AnalysisLevel(int, Enum):
     """Analysis level of a file, representing how much processing has been done.
 
@@ -356,7 +351,6 @@ class FileRecord:
 
     # === Duplicate Detection ===
     filename_hash: str | None = None  # BLAKE2b hash of basename (includes extension)
-    duplicate_of: str | None = None  # path_hash of aliased source; excluded from result accessors
 
     # === Video Metadata (from ffprobe, Layer 1) ===
     duration_sec: float | None = None
@@ -387,7 +381,6 @@ class FileRecord:
     output_path: str | None = None  # Path or hash depending on anonymization
     output_size_bytes: int | None = None
     reduction_percent: float | None = None  # Actual reduction (not estimated)
-    conversion_time_sec: float | None = None  # Legacy: combined time (for old records)
     crf_search_time_sec: float | None = None  # CRF search phase (ANALYZED, CONVERTED, NOT_WORTHWHILE)
     encoding_time_sec: float | None = None  # Encoding phase (CONVERTED only)
     final_crf: float | None = None
@@ -411,10 +404,9 @@ class FileRecord:
         """
         if self.status == FileStatus.CONVERTED:
             return AnalysisLevel.CONVERTED
-        if self.status == FileStatus.ANALYZED:
-            return AnalysisLevel.ANALYZED
-        # Fallback for old records: check best_crf field (before ANALYZED status existed)
-        if self.best_crf is not None and self.best_vmaf_achieved is not None:
+        if self.status in (FileStatus.ANALYZED, FileStatus.NOT_WORTHWHILE):
+            # NOT_WORTHWHILE is a completed CRF search whose result is the negative
+            # verdict, so it reports level 2 like any other finished analysis (ADR-002)
             return AnalysisLevel.ANALYZED
         if self.video_codec is not None or self.duration_sec is not None:
             return AnalysisLevel.SCANNED
@@ -422,10 +414,10 @@ class FileRecord:
 
     @property
     def total_time_sec(self) -> float | None:
-        """Total processing time. Uses new fields if available, falls back to legacy."""
+        """Total processing time across the CRF-search and encoding phases."""
         if self.crf_search_time_sec is not None or self.encoding_time_sec is not None:
             return (self.crf_search_time_sec or 0) + (self.encoding_time_sec or 0)
-        return self.conversion_time_sec  # Legacy fallback for old records
+        return None
 
 
 @dataclass(frozen=True)

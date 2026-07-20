@@ -11,6 +11,7 @@ See docs/TIME_ESTIMATION.md for full explanation.
 import logging
 import os
 import statistics
+import threading
 import time
 from collections import defaultdict
 from typing import Any
@@ -21,6 +22,13 @@ from src.history_index import get_history_index
 from src.models import OperationType, TimeEstimate
 
 logger = logging.getLogger(__name__)
+
+# Percentile cache, keyed by operation type and tagged with the HistoryIndex
+# converted-record revision it was computed at; a revision mismatch means a
+# CONVERTED record changed and the entry is stale. Owned here (not by the
+# index) so persistence stays decoupled from estimation (issue #22).
+_percentiles_cache: dict[OperationType | None, tuple[int, dict]] = {}
+_percentiles_cache_lock = threading.Lock()
 
 
 # =============================================================================
@@ -86,8 +94,9 @@ def compute_grouped_encoding_rates(
             # ANALYZE only does CRF search, not full encoding
             conv_time = record.crf_search_time_sec or 0
         else:
-            # CONVERT does full encoding - prefer encoding_time_sec, fall back to total_time_sec
-            conv_time = record.encoding_time_sec if record.encoding_time_sec else (record.total_time_sec or 0)
+            # CONVERT does full encoding; legacy combined times were folded into
+            # encoding_time_sec by the schema-v2 rewrite (ADR-002)
+            conv_time = record.encoding_time_sec or 0
 
         if duration > 0 and conv_time > 0:
             rate = conv_time / duration
@@ -106,20 +115,22 @@ def compute_grouped_encoding_rates(
 def compute_grouped_percentiles(operation_type: OperationType | None = None) -> dict:
     """Compute percentiles for all rate groups. Cached until converted records change.
 
-    Results are cached in HistoryIndex and automatically invalidated when
-    a CONVERTED record is added or modified.
+    The cache entry is tagged with the index's converted-record revision read
+    *before* computing, so a record landing mid-computation makes the entry
+    stale (revision mismatch) rather than silently current.
     """
     index = get_history_index()
+    revision = index.converted_revision
 
-    # Check cache first
-    cached = index.get_cached_percentiles(operation_type)
-    if cached is not None:
-        return cached
+    with _percentiles_cache_lock:
+        cached = _percentiles_cache.get(operation_type)
+        if cached is not None and cached[0] == revision:
+            return cached[1]
 
-    # Compute and cache
     grouped_rates = compute_grouped_encoding_rates(operation_type)
     result = {key: compute_percentiles(rates) for key, rates in grouped_rates.items()}
-    index.cache_percentiles(operation_type, result)
+    with _percentiles_cache_lock:
+        _percentiles_cache[operation_type] = (revision, result)
     return result
 
 
