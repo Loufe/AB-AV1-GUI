@@ -41,7 +41,7 @@ pub use journal::{
 };
 pub use media::{
     AudioCodec, AudioStreamMeta, FileRecord, FileStamp, MediaContainer, MediaObservation,
-    PathBinding, PathHash, VideoCodec, VideoMeta,
+    PathBinding, PathHash, Verdict, VerdictKind, VideoCodec, VideoMeta,
 };
 pub use output::{
     ArtifactIdentity, ConflictKind, ContentKey, DestructiveIdentity, DestructiveObservation,
@@ -50,7 +50,7 @@ pub use output::{
 };
 pub use policy::{
     Eligibility, MIN_VIDEO_PIXELS, SkipReason, evaluate_eligibility, select_analysis,
-    select_job_action,
+    select_job_action, verdict_applies,
 };
 pub use reducer::{
     Applied, Command, Effect, EphemeralDelta, QueueCommand, Reply, SessionCommand, SettingsCommand,

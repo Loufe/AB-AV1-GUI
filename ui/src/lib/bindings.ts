@@ -289,11 +289,13 @@ export type FileRecord = FileRecord_Serialize | FileRecord_Deserialize;
 export type FileRecord_Deserialize = {
 	metadata: VideoMeta,
 	analyses: ([AnalysisProfile, { [key in VmafTarget]: AnalysisResult }])[],
+	verdict: Verdict | null,
 };
 
 export type FileRecord_Serialize = {
 	metadata: VideoMeta,
 	analyses: ([AnalysisProfile, { [key in VmafTarget]: AnalysisResult }])[],
+	verdict: Verdict | null,
 };
 
 export type FileStamp = {
@@ -633,6 +635,38 @@ export type ToolAvailability = "Available" | { Missing: {
  *  engine (core has no clock) and delivered inside command payloads.
  */
 export type UnixMillis = number;
+
+/**
+ *  The record's standing judgment about this content: what the latest
+ *  decisive run concluded. Distinct from `ItemOutcome` (a run-level fact) —
+ *  only Converted, Remuxed, and NotWorthwhile outcomes decide anything about
+ *  the content itself. Analyzed results live in `analyses` (facts, not
+ *  verdicts); Stopped, Skipped, and Failed decide nothing.
+ * 
+ *  Lineage is derived, never stored: the runs that concern this content are
+ *  `conversion_runs` filtered by `spec.content_key`, ordered by the monotonic
+ *  `RunId`. `source_run` links the verdict into that chain.
+ */
+export type Verdict = {
+	kind: VerdictKind,
+	source_run: RunId,
+	decided_at: UnixMillis,
+};
+
+/**
+ *  Summary fields only: the full attempt list stays on the run outcome, and
+ *  the produced artifact's full identity stays on the settled output
+ *  transaction (`outputs[source_run]`). If settled-transaction pruning ever
+ *  lands, the verdict must absorb an output-stamp summary at that point.
+ */
+export type VerdictKind = ({ Converted: {
+	output_content_key: ContentKey,
+} }) & { NotWorthwhile?: never; Remuxed?: never } | ({ Remuxed: {
+	output_content_key: ContentKey,
+} }) & { Converted?: never; NotWorthwhile?: never } | ({ NotWorthwhile: {
+	requested: VmafTarget,
+	floor: VmafTarget,
+} }) & { Converted?: never; Remuxed?: never };
 
 export type VideoCodec = "Av1" | "H264" | "Hevc" | "Vp9" | { Other: string };
 

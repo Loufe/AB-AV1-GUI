@@ -506,7 +506,8 @@
               ],
               "subtitle_count": 1
             },
-            "analyses": []
+            "analyses": [],
+            "verdict": null
           }
         },
         "outputs": {},
@@ -552,7 +553,8 @@
               ],
               "subtitle_count": 1
             },
-            "analyses": []
+            "analyses": [],
+            "verdict": null
           }
         },
         "outputs": {},
@@ -642,7 +644,8 @@
               ],
               "subtitle_count": 1
             },
-            "analyses": []
+            "analyses": [],
+            "verdict": null
           }
         },
         "outputs": {},
@@ -1070,7 +1073,8 @@
               ],
               "subtitle_count": 1
             },
-            "analyses": []
+            "analyses": [],
+            "verdict": null
           }
         },
         "outputs": {},
@@ -1242,7 +1246,8 @@
                   }
                 }
               ]
-            ]
+            ],
+            "verdict": null
           }
         },
         "outputs": {},
@@ -1471,7 +1476,8 @@
                   }
                 }
               ]
-            ]
+            ],
+            "verdict": null
           }
         },
         "outputs": {},
@@ -1818,7 +1824,8 @@
                   }
                 }
               ]
-            ]
+            ],
+            "verdict": null
           }
         },
         "outputs": {},
@@ -2160,7 +2167,8 @@
               ],
               "subtitle_count": 1
             },
-            "analyses": []
+            "analyses": [],
+            "verdict": null
           }
         },
         "outputs": {
@@ -2349,7 +2357,16 @@
               ],
               "subtitle_count": 1
             },
-            "analyses": []
+            "analyses": [],
+            "verdict": {
+              "kind": {
+                "Converted": {
+                  "output_content_key": "ck-out"
+                }
+              },
+              "source_run": 100,
+              "decided_at": 1752000090000
+            }
           }
         },
         "outputs": {
@@ -2518,7 +2535,8 @@
               ],
               "subtitle_count": 1
             },
-            "analyses": []
+            "analyses": [],
+            "verdict": null
           }
         },
         "outputs": {
@@ -2693,7 +2711,16 @@
               ],
               "subtitle_count": 1
             },
-            "analyses": []
+            "analyses": [],
+            "verdict": {
+              "kind": {
+                "Remuxed": {
+                  "output_content_key": "ck-out"
+                }
+              },
+              "source_run": 100,
+              "decided_at": 1752000090000
+            }
           }
         },
         "outputs": {
@@ -2855,7 +2882,8 @@
               ],
               "subtitle_count": 1
             },
-            "analyses": []
+            "analyses": [],
+            "verdict": null
           }
         },
         "outputs": {
@@ -3044,7 +3072,8 @@
               ],
               "subtitle_count": 1
             },
-            "analyses": []
+            "analyses": [],
+            "verdict": null
           }
         },
         "outputs": {
@@ -3213,7 +3242,8 @@
               ],
               "subtitle_count": 1
             },
-            "analyses": []
+            "analyses": [],
+            "verdict": null
           }
         },
         "outputs": {
@@ -3378,7 +3408,16 @@
               ],
               "subtitle_count": 1
             },
-            "analyses": []
+            "analyses": [],
+            "verdict": {
+              "kind": {
+                "Converted": {
+                  "output_content_key": "ck-out"
+                }
+              },
+              "source_run": 100,
+              "decided_at": 1752000090000
+            }
           }
         },
         "outputs": {
@@ -3535,7 +3574,8 @@
               ],
               "subtitle_count": 1
             },
-            "analyses": []
+            "analyses": [],
+            "verdict": null
           }
         },
         "outputs": {},
@@ -3662,7 +3702,8 @@
               ],
               "subtitle_count": 1
             },
-            "analyses": []
+            "analyses": [],
+            "verdict": null
           }
         },
         "outputs": {},
@@ -3777,7 +3818,8 @@
               ],
               "subtitle_count": 1
             },
-            "analyses": []
+            "analyses": [],
+            "verdict": null
           }
         },
         "outputs": {},
@@ -3932,7 +3974,17 @@
               ],
               "subtitle_count": 1
             },
-            "analyses": []
+            "analyses": [],
+            "verdict": {
+              "kind": {
+                "NotWorthwhile": {
+                  "requested": 95,
+                  "floor": 90
+                }
+              },
+              "source_run": 100,
+              "decided_at": 1752000090000
+            }
           }
         },
         "outputs": {},
@@ -4061,7 +4113,8 @@
               ],
               "subtitle_count": 1
             },
-            "analyses": []
+            "analyses": [],
+            "verdict": null
           }
         },
         "outputs": {},
@@ -4194,7 +4247,8 @@
               ],
               "subtitle_count": 1
             },
-            "analyses": []
+            "analyses": [],
+            "verdict": null
           }
         },
         "outputs": {},
@@ -4312,7 +4366,8 @@
               ],
               "subtitle_count": 1
             },
-            "analyses": []
+            "analyses": [],
+            "verdict": null
           }
         },
         "outputs": {},
@@ -4427,7 +4482,8 @@
               ],
               "subtitle_count": 1
             },
-            "analyses": []
+            "analyses": [],
+            "verdict": null
           }
         },
         "outputs": {},
@@ -4536,7 +4592,8 @@
               ],
               "subtitle_count": 1
             },
-            "analyses": []
+            "analyses": [],
+            "verdict": null
           }
         },
         "outputs": {
@@ -4672,7 +4729,8 @@
               ],
               "subtitle_count": 1
             },
-            "analyses": []
+            "analyses": [],
+            "verdict": null
           }
         },
         "outputs": {
@@ -4802,7 +4860,8 @@
               ],
               "subtitle_count": 1
             },
-            "analyses": []
+            "analyses": [],
+            "verdict": null
           }
         },
         "outputs": {
@@ -4954,7 +5013,8 @@
               ],
               "subtitle_count": 1
             },
-            "analyses": []
+            "analyses": [],
+            "verdict": null
           }
         },
         "outputs": {
@@ -5100,7 +5160,8 @@
               ],
               "subtitle_count": 1
             },
-            "analyses": []
+            "analyses": [],
+            "verdict": null
           }
         },
         "outputs": {
@@ -5253,7 +5314,8 @@
               ],
               "subtitle_count": 1
             },
-            "analyses": []
+            "analyses": [],
+            "verdict": null
           }
         },
         "outputs": {
@@ -5383,7 +5445,8 @@
               ],
               "subtitle_count": 1
             },
-            "analyses": []
+            "analyses": [],
+            "verdict": null
           }
         },
         "outputs": {
@@ -5521,7 +5584,8 @@
               ],
               "subtitle_count": 1
             },
-            "analyses": []
+            "analyses": [],
+            "verdict": null
           }
         },
         "outputs": {

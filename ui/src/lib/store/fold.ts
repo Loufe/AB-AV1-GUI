@@ -14,6 +14,7 @@ import type {
   DurableDelta,
   DurableState_Deserialize,
   EphemeralDelta,
+  ExecutionSettings,
   FileRecord_Deserialize,
   ItemOutcome,
   JobAction,
@@ -30,6 +31,7 @@ import type {
   Settings,
   Telemetry,
   UnixMillis,
+  VerdictKind,
 } from "@/lib/bindings";
 
 export function emptyDurableState(): DurableState_Deserialize {
@@ -171,7 +173,7 @@ function foldMediaObserved(
   const { path_hash, binding, metadata } = observation;
   const existing = state.records[binding.content_key];
   const record: FileRecord_Deserialize =
-    existing === undefined ? { metadata, analyses: [] } : { ...existing, metadata };
+    existing === undefined ? { metadata, analyses: [], verdict: null } : { ...existing, metadata };
   return {
     ...state,
     paths: { ...state.paths, [path_hash]: binding },
@@ -230,9 +232,28 @@ function foldItemFinished(
       outputContentKey = committedContentKey(transaction.state);
     }
   }
+  // Decisive outcomes upsert the record's verdict; the latest run wins
+  // because deltas fold in order. A success with no settled output content
+  // key sets no verdict (mirrors the Rust fold).
+  let records = state.records;
+  const kind = verdictKind(outcome, outputContentKey, run.spec.execution);
+  const contentKey = run.spec.content_key;
+  if (kind !== null && contentKey !== null) {
+    const record = state.records[contentKey];
+    if (record !== undefined) {
+      records = {
+        ...state.records,
+        [contentKey]: {
+          ...record,
+          verdict: { kind, source_run: run_id, decided_at: at },
+        },
+      };
+    }
+  }
   return {
     ...state,
     queue,
+    records,
     conversion_runs: {
       ...state.conversion_runs,
       [run_id]: {
@@ -244,6 +265,33 @@ function foldItemFinished(
       },
     },
   };
+}
+
+function verdictKind(
+  outcome: ItemOutcome,
+  outputContentKey: string | null,
+  execution: ExecutionSettings,
+): VerdictKind | null {
+  if (typeof outcome !== "object") {
+    return null;
+  }
+  if ("Converted" in outcome && outcome.Converted !== undefined) {
+    return outputContentKey === null
+      ? null
+      : { Converted: { output_content_key: outputContentKey } };
+  }
+  if ("Remuxed" in outcome && outcome.Remuxed !== undefined) {
+    return outputContentKey === null ? null : { Remuxed: { output_content_key: outputContentKey } };
+  }
+  if ("NotWorthwhile" in outcome && outcome.NotWorthwhile !== undefined) {
+    return {
+      NotWorthwhile: {
+        requested: execution.requested_target,
+        floor: execution.fallback_floor,
+      },
+    };
+  }
+  return null;
 }
 
 function committedContentKey(state: OutputState): string | null {

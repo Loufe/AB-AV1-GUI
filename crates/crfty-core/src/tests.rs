@@ -1532,6 +1532,292 @@ fn apply_and_journal(
     applied
 }
 
+/// Fold-level verdict fixture: media observed, run prepared against the
+/// content, and an output transaction inserted directly in the given state
+/// (the structural fold does not validate transitions).
+fn verdict_fixture(
+    run: u64,
+    key: Option<&str>,
+    output: Option<OutputState>,
+) -> crate::DurableState {
+    let mut state = crate::DurableState::default();
+    let deltas = [
+        Some(DurableDelta::MediaObserved {
+            observation: Box::new(media_observation("verdict-content")),
+        }),
+        Some(DurableDelta::ItemPrepared {
+            spec: Box::new(crate::JobSpec {
+                item_id: QueueItemId(1),
+                claim_id: ClaimId(2),
+                run_id: RunId(run),
+                input: PathBuf::from("video.mkv"),
+                content_key: key.map(|key| ContentKey(key.to_owned())),
+                operation: Operation::Convert,
+                output_target: OutputTarget::Replace,
+                execution: execution(),
+                action: JobAction::Encode {
+                    selected_analysis: None,
+                },
+            }),
+        }),
+        output.map(|state| {
+            let mut transaction = transaction(state, Replacement::KeepOriginal);
+            transaction.run_id = RunId(run);
+            DurableDelta::Output(OutputDelta::OutputStarted {
+                transaction: Box::new(transaction),
+            })
+        }),
+    ];
+    for delta in deltas.into_iter().flatten() {
+        crate::fold(&mut state, &delta);
+    }
+    state
+}
+
+fn fold_finished(state: &mut crate::DurableState, run: u64, outcome: ItemOutcome, at: u64) {
+    crate::fold(
+        state,
+        &DurableDelta::ItemFinished {
+            item_id: QueueItemId(1),
+            claim_id: ClaimId(2),
+            run_id: RunId(run),
+            outcome,
+            at: UnixMillis(at),
+            phase_spans: Vec::new(),
+        },
+    );
+}
+
+#[test]
+fn decisive_outcomes_upsert_the_record_verdict() {
+    let key = "verdict-content";
+    let record_verdict = |state: &crate::DurableState| {
+        state
+            .records
+            .get(&ContentKey(key.to_owned()))
+            .expect("content record")
+            .verdict
+            .clone()
+    };
+
+    // A settled success names its output content and decides the record.
+    let mut state = verdict_fixture(
+        3,
+        Some(key),
+        Some(OutputState::Committed {
+            final_identity: identity("ck-out", 20),
+        }),
+    );
+    fold_finished(
+        &mut state,
+        3,
+        ItemOutcome::Converted(CompletionEvidence::RecoveredAtStartup),
+        5_000,
+    );
+    assert_eq!(
+        record_verdict(&state),
+        Some(crate::Verdict {
+            kind: crate::VerdictKind::Converted {
+                output_content_key: ContentKey("ck-out".to_owned()),
+            },
+            source_run: RunId(3),
+            decided_at: UnixMillis(5_000),
+        })
+    );
+
+    // An unsettled success cannot name its artifact: no verdict.
+    let mut unsettled = verdict_fixture(3, Some(key), Some(OutputState::Started));
+    fold_finished(
+        &mut unsettled,
+        3,
+        ItemOutcome::Converted(CompletionEvidence::RecoveredAtStartup),
+        5_000,
+    );
+    assert_eq!(record_verdict(&unsettled), None);
+
+    // Not-worthwhile records the summary targets from the run's execution.
+    let mut skipped = verdict_fixture(3, Some(key), None);
+    fold_finished(
+        &mut skipped,
+        3,
+        ItemOutcome::NotWorthwhile {
+            attempts: Vec::new(),
+        },
+        6_000,
+    );
+    assert_eq!(
+        record_verdict(&skipped),
+        Some(crate::Verdict {
+            kind: crate::VerdictKind::NotWorthwhile {
+                requested: execution().requested_target,
+                floor: execution().fallback_floor,
+            },
+            source_run: RunId(3),
+            decided_at: UnixMillis(6_000),
+        })
+    );
+
+    // Indecisive outcomes leave the standing verdict untouched.
+    fold_finished(
+        &mut skipped,
+        3,
+        ItemOutcome::Failed(FailureFacts::new(FailureKind::Internal, "fixture")),
+        7_000,
+    );
+    assert_eq!(
+        record_verdict(&skipped).map(|verdict| verdict.decided_at),
+        Some(UnixMillis(6_000))
+    );
+
+    // Without a content key there is nothing to decide about.
+    let mut keyless = verdict_fixture(3, None, None);
+    fold_finished(
+        &mut keyless,
+        3,
+        ItemOutcome::NotWorthwhile {
+            attempts: Vec::new(),
+        },
+        6_000,
+    );
+    assert_eq!(record_verdict(&keyless), None);
+}
+
+#[test]
+fn latest_decisive_run_wins_the_verdict() {
+    let key = "verdict-content";
+    let mut state = verdict_fixture(
+        3,
+        Some(key),
+        Some(OutputState::Committed {
+            final_identity: identity("ck-out", 20),
+        }),
+    );
+    fold_finished(
+        &mut state,
+        3,
+        ItemOutcome::Converted(CompletionEvidence::RecoveredAtStartup),
+        5_000,
+    );
+    // A later run against the same content re-decides it.
+    crate::fold(
+        &mut state,
+        &DurableDelta::ItemPrepared {
+            spec: Box::new(crate::JobSpec {
+                item_id: QueueItemId(2),
+                claim_id: ClaimId(8),
+                run_id: RunId(9),
+                input: PathBuf::from("video.mkv"),
+                content_key: Some(ContentKey(key.to_owned())),
+                operation: Operation::Convert,
+                output_target: OutputTarget::Replace,
+                execution: execution(),
+                action: JobAction::Encode {
+                    selected_analysis: None,
+                },
+            }),
+        },
+    );
+    crate::fold(
+        &mut state,
+        &DurableDelta::ItemFinished {
+            item_id: QueueItemId(2),
+            claim_id: ClaimId(8),
+            run_id: RunId(9),
+            outcome: ItemOutcome::NotWorthwhile {
+                attempts: Vec::new(),
+            },
+            at: UnixMillis(9_000),
+            phase_spans: Vec::new(),
+        },
+    );
+    let verdict = state
+        .records
+        .get(&ContentKey(key.to_owned()))
+        .expect("content record")
+        .verdict
+        .clone()
+        .expect("standing verdict");
+    assert_eq!(verdict.source_run, RunId(9));
+    assert!(matches!(
+        verdict.kind,
+        crate::VerdictKind::NotWorthwhile { .. }
+    ));
+}
+
+#[test]
+fn verdict_freshness_is_a_stamp_match_against_the_settled_output() {
+    let converted = crate::Verdict {
+        kind: crate::VerdictKind::Converted {
+            output_content_key: ContentKey("ck-out".to_owned()),
+        },
+        source_run: RunId(3),
+        decided_at: UnixMillis(5_000),
+    };
+    let settled = destructive("out", 42);
+    let matching = FileStamp {
+        size: 42,
+        modified_ns: settled.modified_ns,
+    };
+    assert!(crate::verdict_applies(
+        &converted,
+        Some(&settled),
+        Some(&matching)
+    ));
+    // Changed size or modification time: the file is no longer the output.
+    assert!(!crate::verdict_applies(
+        &converted,
+        Some(&settled),
+        Some(&FileStamp {
+            size: 43,
+            modified_ns: settled.modified_ns,
+        })
+    ));
+    assert!(!crate::verdict_applies(
+        &converted,
+        Some(&settled),
+        Some(&FileStamp {
+            size: 42,
+            modified_ns: Some(FileTimeNs(7)),
+        })
+    ));
+    // One side missing its modification time is not a match.
+    assert!(!crate::verdict_applies(
+        &converted,
+        Some(&settled),
+        Some(&FileStamp {
+            size: 42,
+            modified_ns: None,
+        })
+    ));
+    // Both sides unknown degrade to a size-only match.
+    let unstamped = DestructiveIdentity {
+        modified_ns: None,
+        ..destructive("out", 42)
+    };
+    assert!(crate::verdict_applies(
+        &converted,
+        Some(&unstamped),
+        Some(&FileStamp {
+            size: 42,
+            modified_ns: None,
+        })
+    ));
+    // Missing file or pruned/unsettled transaction: no answer, not fresh.
+    assert!(!crate::verdict_applies(&converted, Some(&settled), None));
+    assert!(!crate::verdict_applies(&converted, None, Some(&matching)));
+
+    // Not-worthwhile is content-keyed; path state is irrelevant.
+    let not_worthwhile = crate::Verdict {
+        kind: crate::VerdictKind::NotWorthwhile {
+            requested: VmafTarget(95),
+            floor: VmafTarget(90),
+        },
+        source_run: RunId(3),
+        decided_at: UnixMillis(5_000),
+    };
+    assert!(crate::verdict_applies(&not_worthwhile, None, None));
+}
+
 #[test]
 fn file_record_round_trips_through_json() {
     let mut record = FileRecord::new(VideoMeta {
@@ -1549,6 +1835,13 @@ fn file_record_round_trips_through_json() {
         subtitle_count: 2,
     });
     record.record_analysis(analysis());
+    record.verdict = Some(crate::Verdict {
+        kind: crate::VerdictKind::Remuxed {
+            output_content_key: ContentKey("ck-out".to_owned()),
+        },
+        source_run: RunId(11),
+        decided_at: UnixMillis(4_000),
+    });
     // serde_json rejects non-string map keys, so the profile-keyed index must
     // serialize as an entry list; this fails if that representation regresses.
     let encoded = serde_json::to_string(&record).expect("serialize file record");

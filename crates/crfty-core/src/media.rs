@@ -2,7 +2,7 @@ use std::collections::BTreeMap;
 
 use serde::{Deserialize, Serialize};
 
-use crate::{AnalysisProfile, AnalysisResult, ContentKey, VmafTarget};
+use crate::{AnalysisProfile, AnalysisResult, ContentKey, RunId, UnixMillis, VmafTarget};
 
 const HALF_ROTATION_DEGREES: i16 = 180;
 const QUARTER_ROTATION_DEGREES: i16 = 90;
@@ -103,6 +103,40 @@ pub struct MediaObservation {
     pub metadata: VideoMeta,
 }
 
+/// The record's standing judgment about this content: what the latest
+/// decisive run concluded. Distinct from `ItemOutcome` (a run-level fact) —
+/// only Converted, Remuxed, and NotWorthwhile outcomes decide anything about
+/// the content itself. Analyzed results live in `analyses` (facts, not
+/// verdicts); Stopped, Skipped, and Failed decide nothing.
+///
+/// Lineage is derived, never stored: the runs that concern this content are
+/// `conversion_runs` filtered by `spec.content_key`, ordered by the monotonic
+/// `RunId`. `source_run` links the verdict into that chain.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, specta::Type)]
+pub struct Verdict {
+    pub kind: VerdictKind,
+    pub source_run: RunId,
+    pub decided_at: UnixMillis,
+}
+
+/// Summary fields only: the full attempt list stays on the run outcome, and
+/// the produced artifact's full identity stays on the settled output
+/// transaction (`outputs[source_run]`). If settled-transaction pruning ever
+/// lands, the verdict must absorb an output-stamp summary at that point.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, specta::Type)]
+pub enum VerdictKind {
+    Converted {
+        output_content_key: ContentKey,
+    },
+    Remuxed {
+        output_content_key: ContentKey,
+    },
+    NotWorthwhile {
+        requested: VmafTarget,
+        floor: VmafTarget,
+    },
+}
+
 /// The profile-keyed index crosses serde as an entry list: JSON map keys must
 /// be strings, and `AnalysisProfile` is a multi-field struct.
 pub type AnalysisIndexEntries = Vec<(AnalysisProfile, BTreeMap<VmafTarget, AnalysisResult>)>;
@@ -113,6 +147,7 @@ pub struct FileRecord {
     #[serde(with = "analysis_index")]
     #[specta(type = AnalysisIndexEntries)]
     pub analyses: BTreeMap<AnalysisProfile, BTreeMap<VmafTarget, AnalysisResult>>,
+    pub verdict: Option<Verdict>,
 }
 
 mod analysis_index {
@@ -144,6 +179,7 @@ impl FileRecord {
         Self {
             metadata,
             analyses: BTreeMap::new(),
+            verdict: None,
         }
     }
 

@@ -5,7 +5,7 @@ use serde::{Deserialize, Serialize};
 use crate::{
     AnalysisAttempt, AnalysisResult, ContentKey, DecodeMode, DurationMs, FailureFacts, FileRecord,
     JobPhase, JobSpec, MediaObservation, Operation, OutputDelta, OutputTarget, PathBinding,
-    PathHash, ReservedJob, Settings, SkipReason, UnixMillis,
+    PathHash, ReservedJob, Settings, SkipReason, UnixMillis, Verdict, VerdictKind,
 };
 
 macro_rules! numeric_id {
@@ -355,6 +355,38 @@ pub fn fold(state: &mut DurableState, delta: &DurableDelta) {
                 run.outcome = Some(outcome.clone());
                 run.finished_at = Some(*at);
                 run.phase_spans = phase_spans.clone();
+                // Decisive outcomes upsert the record's verdict; the latest
+                // run wins because deltas fold in order. A success with no
+                // settled output content key (unsettled transaction) sets no
+                // verdict — the produced artifact cannot be named.
+                let kind = match outcome {
+                    ItemOutcome::Converted(_) => run
+                        .output_content_key
+                        .clone()
+                        .map(|output_content_key| VerdictKind::Converted { output_content_key }),
+                    ItemOutcome::Remuxed(_) => run
+                        .output_content_key
+                        .clone()
+                        .map(|output_content_key| VerdictKind::Remuxed { output_content_key }),
+                    ItemOutcome::NotWorthwhile { .. } => Some(VerdictKind::NotWorthwhile {
+                        requested: run.spec.execution.requested_target,
+                        floor: run.spec.execution.fallback_floor,
+                    }),
+                    ItemOutcome::Analyzed
+                    | ItemOutcome::Stopped
+                    | ItemOutcome::Skipped { .. }
+                    | ItemOutcome::Failed(_) => None,
+                };
+                if let Some(kind) = kind
+                    && let Some(content_key) = &run.spec.content_key
+                    && let Some(record) = state.records.get_mut(content_key)
+                {
+                    record.verdict = Some(Verdict {
+                        kind,
+                        source_run: *run_id,
+                        decided_at: *at,
+                    });
+                }
             }
         }
         DurableDelta::Output(delta) => delta.fold_into(&mut state.outputs),
