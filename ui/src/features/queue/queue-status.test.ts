@@ -73,10 +73,35 @@ describe("deriveRowStatus", () => {
   });
 
   it("maps finished outcomes", () => {
-    expect(deriveRowStatus({ Finished: "Converted" }, null, null, 512)).toEqual({
+    expect(
+      deriveRowStatus(
+        {
+          Finished: {
+            Converted: {
+              LiveEncode: {
+                input_size: 2048,
+                output_size: 1536,
+                stream_sizes: { video: 1200, audio: 300, subtitle: 6, other: 30 },
+                encode_decode: "Software",
+              },
+            },
+          },
+        },
+        null,
+        null,
+        512,
+      ),
+    ).toEqual({
       kind: "done",
       outcome: "Converted",
       savedBytes: 512,
+    });
+    expect(
+      deriveRowStatus({ Finished: { Remuxed: "RecoveredAtStartup" } }, null, null, null),
+    ).toEqual({
+      kind: "done",
+      outcome: "Remuxed",
+      savedBytes: null,
     });
     expect(deriveRowStatus({ Finished: "Analyzed" }, null, null, 512)).toEqual({
       kind: "done",

@@ -437,7 +437,7 @@
               "binding": {
                 "stamp": {
                   "size": 3000000,
-                  "modified_ns": 1000000
+                  "modified_ns": "1000000"
                 },
                 "content_key": "ck-1"
               },
@@ -461,7 +461,7 @@
           "path-1": {
             "stamp": {
               "size": 3000000,
-              "modified_ns": 1000000
+              "modified_ns": "1000000"
             },
             "content_key": "ck-1"
           }
@@ -493,7 +493,7 @@
           "path-1": {
             "stamp": {
               "size": 3000000,
-              "modified_ns": 1000000
+              "modified_ns": "1000000"
             },
             "content_key": "ck-1"
           }
@@ -524,7 +524,7 @@
               "binding": {
                 "stamp": {
                   "size": 3000000,
-                  "modified_ns": 1000000
+                  "modified_ns": "1000000"
                 },
                 "content_key": "ck-1"
               },
@@ -548,14 +548,14 @@
           "path-1": {
             "stamp": {
               "size": 3000000,
-              "modified_ns": 1000000
+              "modified_ns": "1000000"
             },
             "content_key": "ck-1"
           },
           "path-2": {
             "stamp": {
               "size": 3000000,
-              "modified_ns": 1000000
+              "modified_ns": "1000000"
             },
             "content_key": "ck-1"
           }
@@ -613,7 +613,8 @@
           "ItemRunning": {
             "item_id": 1,
             "claim_id": 10,
-            "run_id": 100
+            "run_id": 100,
+            "at": 1752000000000
           }
         }
       ],
@@ -747,7 +748,10 @@
             },
             "analysis": null,
             "output_content_key": null,
-            "outcome": null
+            "outcome": null,
+            "started_at": null,
+            "finished_at": null,
+            "phase_spans": []
           }
         }
       }
@@ -936,7 +940,10 @@
               }
             },
             "output_content_key": null,
-            "outcome": null
+            "outcome": null,
+            "started_at": null,
+            "finished_at": null,
+            "phase_spans": []
           }
         }
       }
@@ -962,7 +969,7 @@
           "path-1": {
             "stamp": {
               "size": 3000000,
-              "modified_ns": 1000000
+              "modified_ns": "1000000"
             },
             "content_key": "ck-1"
           }
@@ -1019,7 +1026,10 @@
             },
             "analysis": null,
             "output_content_key": null,
-            "outcome": null
+            "outcome": null,
+            "started_at": null,
+            "finished_at": null,
+            "phase_spans": []
           }
         }
       },
@@ -1075,7 +1085,7 @@
           "path-1": {
             "stamp": {
               "size": 3000000,
-              "modified_ns": 1000000
+              "modified_ns": "1000000"
             },
             "content_key": "ck-1"
           }
@@ -1199,7 +1209,10 @@
               }
             },
             "output_content_key": null,
-            "outcome": null
+            "outcome": null,
+            "started_at": null,
+            "finished_at": null,
+            "phase_spans": []
           }
         }
       }
@@ -1287,7 +1300,7 @@
           "path-1": {
             "stamp": {
               "size": 3000000,
-              "modified_ns": 1000000
+              "modified_ns": "1000000"
             },
             "content_key": "ck-1"
           }
@@ -1411,7 +1424,10 @@
               }
             },
             "output_content_key": null,
-            "outcome": null
+            "outcome": null,
+            "started_at": null,
+            "finished_at": null,
+            "phase_spans": []
           },
           "101": {
             "spec": {
@@ -1448,7 +1464,10 @@
             },
             "analysis": null,
             "output_content_key": null,
-            "outcome": null
+            "outcome": null,
+            "started_at": null,
+            "finished_at": null,
+            "phase_spans": []
           }
         }
       },
@@ -1547,7 +1566,7 @@
           "path-1": {
             "stamp": {
               "size": 3000000,
-              "modified_ns": 1000000
+              "modified_ns": "1000000"
             },
             "content_key": "ck-1"
           }
@@ -1738,7 +1757,10 @@
               }
             },
             "output_content_key": null,
-            "outcome": null
+            "outcome": null,
+            "started_at": null,
+            "finished_at": null,
+            "phase_spans": []
           },
           "101": {
             "spec": {
@@ -1800,7 +1822,10 @@
               }
             },
             "output_content_key": null,
-            "outcome": null
+            "outcome": null,
+            "started_at": null,
+            "finished_at": null,
+            "phase_spans": []
           }
         }
       }
@@ -1861,7 +1886,10 @@
             },
             "analysis": null,
             "output_content_key": null,
-            "outcome": null
+            "outcome": null,
+            "started_at": 1752000000000,
+            "finished_at": null,
+            "phase_spans": []
           }
         }
       },
@@ -1871,7 +1899,18 @@
             "item_id": 1,
             "claim_id": 10,
             "run_id": 100,
-            "outcome": "Analyzed"
+            "outcome": "Analyzed",
+            "at": 1752000090000,
+            "phase_spans": [
+              {
+                "phase": "Preparing",
+                "duration": 150
+              },
+              {
+                "phase": "Encoding",
+                "duration": 88000
+              }
+            ]
           }
         }
       ],
@@ -1926,7 +1965,19 @@
             },
             "analysis": null,
             "output_content_key": null,
-            "outcome": "Analyzed"
+            "outcome": "Analyzed",
+            "started_at": 1752000000000,
+            "finished_at": 1752000090000,
+            "phase_spans": [
+              {
+                "phase": "Preparing",
+                "duration": 150
+              },
+              {
+                "phase": "Encoding",
+                "duration": 88000
+              }
+            ]
           }
         }
       }
@@ -1952,7 +2003,7 @@
           "path-1": {
             "stamp": {
               "size": 3000000,
-              "modified_ns": 1000000
+              "modified_ns": "1000000"
             },
             "content_key": "ck-1"
           }
@@ -1984,7 +2035,7 @@
                 }
               },
               "size": 3000000,
-              "modified_ns": 2000000
+              "modified_ns": "2000000"
             },
             "staging": "videos/.input-1.crfty-staging.mkv",
             "initial_staging_identity": {
@@ -1995,7 +2046,7 @@
                 }
               },
               "size": 0,
-              "modified_ns": 2000000
+              "modified_ns": "2000000"
             },
             "final_path": "videos/input-1.mkv",
             "final_preimage": null,
@@ -2012,7 +2063,7 @@
                       }
                     },
                     "size": 1000000,
-                    "modified_ns": 2000000
+                    "modified_ns": "2000000"
                   }
                 }
               }
@@ -2055,7 +2106,10 @@
             },
             "analysis": null,
             "output_content_key": null,
-            "outcome": null
+            "outcome": null,
+            "started_at": 1752000000000,
+            "finished_at": null,
+            "phase_spans": []
           }
         }
       },
@@ -2065,7 +2119,32 @@
             "item_id": 1,
             "claim_id": 10,
             "run_id": 100,
-            "outcome": "Converted"
+            "outcome": {
+              "Converted": {
+                "LiveEncode": {
+                  "input_size": 3000000,
+                  "output_size": 1000000,
+                  "stream_sizes": {
+                    "video": 850000,
+                    "audio": 120000,
+                    "subtitle": 5000,
+                    "other": 25000
+                  },
+                  "encode_decode": "Software"
+                }
+              }
+            },
+            "at": 1752000090000,
+            "phase_spans": [
+              {
+                "phase": "Preparing",
+                "duration": 150
+              },
+              {
+                "phase": "Encoding",
+                "duration": 88000
+              }
+            ]
           }
         }
       ],
@@ -2077,7 +2156,21 @@
             "operation": "Convert",
             "output_target": "Replace",
             "state": {
-              "Finished": "Converted"
+              "Finished": {
+                "Converted": {
+                  "LiveEncode": {
+                    "input_size": 3000000,
+                    "output_size": 1000000,
+                    "stream_sizes": {
+                      "video": 850000,
+                      "audio": 120000,
+                      "subtitle": 5000,
+                      "other": 25000
+                    },
+                    "encode_decode": "Software"
+                  }
+                }
+              }
             }
           }
         ],
@@ -2085,7 +2178,7 @@
           "path-1": {
             "stamp": {
               "size": 3000000,
-              "modified_ns": 1000000
+              "modified_ns": "1000000"
             },
             "content_key": "ck-1"
           }
@@ -2117,7 +2210,7 @@
                 }
               },
               "size": 3000000,
-              "modified_ns": 2000000
+              "modified_ns": "2000000"
             },
             "staging": "videos/.input-1.crfty-staging.mkv",
             "initial_staging_identity": {
@@ -2128,7 +2221,7 @@
                 }
               },
               "size": 0,
-              "modified_ns": 2000000
+              "modified_ns": "2000000"
             },
             "final_path": "videos/input-1.mkv",
             "final_preimage": null,
@@ -2145,7 +2238,7 @@
                       }
                     },
                     "size": 1000000,
-                    "modified_ns": 2000000
+                    "modified_ns": "2000000"
                   }
                 }
               }
@@ -2188,7 +2281,33 @@
             },
             "analysis": null,
             "output_content_key": "ck-out",
-            "outcome": "Converted"
+            "outcome": {
+              "Converted": {
+                "LiveEncode": {
+                  "input_size": 3000000,
+                  "output_size": 1000000,
+                  "stream_sizes": {
+                    "video": 850000,
+                    "audio": 120000,
+                    "subtitle": 5000,
+                    "other": 25000
+                  },
+                  "encode_decode": "Software"
+                }
+              }
+            },
+            "started_at": 1752000000000,
+            "finished_at": 1752000090000,
+            "phase_spans": [
+              {
+                "phase": "Preparing",
+                "duration": 150
+              },
+              {
+                "phase": "Encoding",
+                "duration": 88000
+              }
+            ]
           }
         }
       }
@@ -2214,7 +2333,7 @@
           "path-1": {
             "stamp": {
               "size": 3000000,
-              "modified_ns": 1000000
+              "modified_ns": "1000000"
             },
             "content_key": "ck-1"
           }
@@ -2246,7 +2365,7 @@
                 }
               },
               "size": 3000000,
-              "modified_ns": 2000000
+              "modified_ns": "2000000"
             },
             "staging": "videos/.input-1.crfty-staging.mkv",
             "initial_staging_identity": {
@@ -2257,7 +2376,7 @@
                 }
               },
               "size": 0,
-              "modified_ns": 2000000
+              "modified_ns": "2000000"
             },
             "final_path": "videos/input-1.mkv",
             "final_preimage": null,
@@ -2274,7 +2393,7 @@
                       }
                     },
                     "size": 1000000,
-                    "modified_ns": 2000000
+                    "modified_ns": "2000000"
                   }
                 }
               }
@@ -2317,7 +2436,10 @@
             },
             "analysis": null,
             "output_content_key": null,
-            "outcome": null
+            "outcome": null,
+            "started_at": 1752000000000,
+            "finished_at": null,
+            "phase_spans": []
           }
         }
       },
@@ -2327,7 +2449,25 @@
             "item_id": 1,
             "claim_id": 10,
             "run_id": 100,
-            "outcome": "Remuxed"
+            "outcome": {
+              "Remuxed": {
+                "LiveRemux": {
+                  "input_size": 3000000,
+                  "output_size": 1000000
+                }
+              }
+            },
+            "at": 1752000090000,
+            "phase_spans": [
+              {
+                "phase": "Preparing",
+                "duration": 150
+              },
+              {
+                "phase": "Encoding",
+                "duration": 88000
+              }
+            ]
           }
         }
       ],
@@ -2339,7 +2479,14 @@
             "operation": "Convert",
             "output_target": "Replace",
             "state": {
-              "Finished": "Remuxed"
+              "Finished": {
+                "Remuxed": {
+                  "LiveRemux": {
+                    "input_size": 3000000,
+                    "output_size": 1000000
+                  }
+                }
+              }
             }
           }
         ],
@@ -2347,7 +2494,7 @@
           "path-1": {
             "stamp": {
               "size": 3000000,
-              "modified_ns": 1000000
+              "modified_ns": "1000000"
             },
             "content_key": "ck-1"
           }
@@ -2379,7 +2526,7 @@
                 }
               },
               "size": 3000000,
-              "modified_ns": 2000000
+              "modified_ns": "2000000"
             },
             "staging": "videos/.input-1.crfty-staging.mkv",
             "initial_staging_identity": {
@@ -2390,7 +2537,7 @@
                 }
               },
               "size": 0,
-              "modified_ns": 2000000
+              "modified_ns": "2000000"
             },
             "final_path": "videos/input-1.mkv",
             "final_preimage": null,
@@ -2407,7 +2554,7 @@
                       }
                     },
                     "size": 1000000,
-                    "modified_ns": 2000000
+                    "modified_ns": "2000000"
                   }
                 }
               }
@@ -2450,7 +2597,26 @@
             },
             "analysis": null,
             "output_content_key": "ck-out",
-            "outcome": "Remuxed"
+            "outcome": {
+              "Remuxed": {
+                "LiveRemux": {
+                  "input_size": 3000000,
+                  "output_size": 1000000
+                }
+              }
+            },
+            "started_at": 1752000000000,
+            "finished_at": 1752000090000,
+            "phase_spans": [
+              {
+                "phase": "Preparing",
+                "duration": 150
+              },
+              {
+                "phase": "Encoding",
+                "duration": 88000
+              }
+            ]
           }
         }
       }
@@ -2476,7 +2642,7 @@
           "path-1": {
             "stamp": {
               "size": 3000000,
-              "modified_ns": 1000000
+              "modified_ns": "1000000"
             },
             "content_key": "ck-1"
           }
@@ -2508,7 +2674,7 @@
                 }
               },
               "size": 3000000,
-              "modified_ns": 2000000
+              "modified_ns": "2000000"
             },
             "staging": "videos/.input-1.crfty-staging.mkv",
             "initial_staging_identity": {
@@ -2519,7 +2685,7 @@
                 }
               },
               "size": 0,
-              "modified_ns": 2000000
+              "modified_ns": "2000000"
             },
             "final_path": "videos/input-1.mkv",
             "final_preimage": null,
@@ -2536,7 +2702,7 @@
                       }
                     },
                     "size": 1000000,
-                    "modified_ns": 2000000
+                    "modified_ns": "2000000"
                   }
                 }
               }
@@ -2579,7 +2745,10 @@
             },
             "analysis": null,
             "output_content_key": null,
-            "outcome": null
+            "outcome": null,
+            "started_at": 1752000000000,
+            "finished_at": null,
+            "phase_spans": []
           }
         }
       },
@@ -2589,7 +2758,32 @@
             "item_id": 1,
             "claim_id": 10,
             "run_id": 100,
-            "outcome": "Converted"
+            "outcome": {
+              "Converted": {
+                "LiveEncode": {
+                  "input_size": 3000000,
+                  "output_size": 1000000,
+                  "stream_sizes": {
+                    "video": 850000,
+                    "audio": 120000,
+                    "subtitle": 5000,
+                    "other": 25000
+                  },
+                  "encode_decode": "Software"
+                }
+              }
+            },
+            "at": 1752000090000,
+            "phase_spans": [
+              {
+                "phase": "Preparing",
+                "duration": 150
+              },
+              {
+                "phase": "Encoding",
+                "duration": 88000
+              }
+            ]
           }
         }
       ],
@@ -2601,7 +2795,21 @@
             "operation": "Convert",
             "output_target": "Replace",
             "state": {
-              "Finished": "Converted"
+              "Finished": {
+                "Converted": {
+                  "LiveEncode": {
+                    "input_size": 3000000,
+                    "output_size": 1000000,
+                    "stream_sizes": {
+                      "video": 850000,
+                      "audio": 120000,
+                      "subtitle": 5000,
+                      "other": 25000
+                    },
+                    "encode_decode": "Software"
+                  }
+                }
+              }
             }
           }
         ],
@@ -2609,7 +2817,7 @@
           "path-1": {
             "stamp": {
               "size": 3000000,
-              "modified_ns": 1000000
+              "modified_ns": "1000000"
             },
             "content_key": "ck-1"
           }
@@ -2641,7 +2849,7 @@
                 }
               },
               "size": 3000000,
-              "modified_ns": 2000000
+              "modified_ns": "2000000"
             },
             "staging": "videos/.input-1.crfty-staging.mkv",
             "initial_staging_identity": {
@@ -2652,7 +2860,7 @@
                 }
               },
               "size": 0,
-              "modified_ns": 2000000
+              "modified_ns": "2000000"
             },
             "final_path": "videos/input-1.mkv",
             "final_preimage": null,
@@ -2669,7 +2877,7 @@
                       }
                     },
                     "size": 1000000,
-                    "modified_ns": 2000000
+                    "modified_ns": "2000000"
                   }
                 }
               }
@@ -2712,7 +2920,327 @@
             },
             "analysis": null,
             "output_content_key": null,
-            "outcome": "Converted"
+            "outcome": {
+              "Converted": {
+                "LiveEncode": {
+                  "input_size": 3000000,
+                  "output_size": 1000000,
+                  "stream_sizes": {
+                    "video": 850000,
+                    "audio": 120000,
+                    "subtitle": 5000,
+                    "other": 25000
+                  },
+                  "encode_decode": "Software"
+                }
+              }
+            },
+            "started_at": 1752000000000,
+            "finished_at": 1752000090000,
+            "phase_spans": [
+              {
+                "phase": "Preparing",
+                "duration": 150
+              },
+              {
+                "phase": "Encoding",
+                "duration": 88000
+              }
+            ]
+          }
+        }
+      }
+    },
+    {
+      "name": "item_finished_converted_recovered_at_startup",
+      "initial": {
+        "queue": [
+          {
+            "id": 1,
+            "input": "videos/input-1.mp4",
+            "operation": "Convert",
+            "output_target": "Replace",
+            "state": {
+              "Running": {
+                "claim_id": 10,
+                "run_id": 100
+              }
+            }
+          }
+        ],
+        "paths": {
+          "path-1": {
+            "stamp": {
+              "size": 3000000,
+              "modified_ns": "1000000"
+            },
+            "content_key": "ck-1"
+          }
+        },
+        "records": {
+          "ck-1": {
+            "metadata": {
+              "codec": "H264",
+              "container": {
+                "Other": "mp4"
+              },
+              "width": 1920,
+              "height": 1080,
+              "rotation_degrees": 0,
+              "duration_ms": 120000
+            },
+            "analyses": []
+          }
+        },
+        "outputs": {
+          "100": {
+            "run_id": 100,
+            "input": "videos/input-1.mp4",
+            "input_identity": {
+              "file_id": {
+                "Unix": {
+                  "device": 1,
+                  "inode": 42
+                }
+              },
+              "size": 3000000,
+              "modified_ns": "2000000"
+            },
+            "staging": "videos/.input-1.crfty-staging.mkv",
+            "initial_staging_identity": {
+              "file_id": {
+                "Unix": {
+                  "device": 1,
+                  "inode": 42
+                }
+              },
+              "size": 0,
+              "modified_ns": "2000000"
+            },
+            "final_path": "videos/input-1.mkv",
+            "final_preimage": null,
+            "replacement": "RetireOriginal",
+            "state": {
+              "Committed": {
+                "final_identity": {
+                  "content_key": "ck-out",
+                  "destructive": {
+                    "file_id": {
+                      "Unix": {
+                        "device": 1,
+                        "inode": 42
+                      }
+                    },
+                    "size": 1000000,
+                    "modified_ns": "2000000"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "conversion_runs": {
+          "100": {
+            "spec": {
+              "item_id": 1,
+              "claim_id": 10,
+              "run_id": 100,
+              "input": "videos/input-1.mp4",
+              "content_key": "ck-1",
+              "operation": "Convert",
+              "output_target": "Replace",
+              "execution": {
+                "requested_target": 95,
+                "fallback_floor": 90,
+                "fallback_step": 1,
+                "overwrite_existing": false,
+                "decode_preference": "HardwarePreferred",
+                "profile": {
+                  "preset": 6,
+                  "max_encoded_percent_basis_points": 8000,
+                  "samples": null,
+                  "sample_duration_ms": 20000,
+                  "thorough": false,
+                  "decode_mode": "Software",
+                  "ab_av1_revision": "ab-av1-test",
+                  "ffmpeg_revision": "ffmpeg-test",
+                  "encoder_revision": "svt-av1-test"
+                }
+              },
+              "action": {
+                "Encode": {
+                  "selected_analysis": null
+                }
+              }
+            },
+            "analysis": null,
+            "output_content_key": null,
+            "outcome": null,
+            "started_at": 1752000000000,
+            "finished_at": null,
+            "phase_spans": []
+          }
+        }
+      },
+      "deltas": [
+        {
+          "ItemFinished": {
+            "item_id": 1,
+            "claim_id": 10,
+            "run_id": 100,
+            "outcome": {
+              "Converted": "RecoveredAtStartup"
+            },
+            "at": 1752000090000,
+            "phase_spans": [
+              {
+                "phase": "Preparing",
+                "duration": 150
+              },
+              {
+                "phase": "Encoding",
+                "duration": 88000
+              }
+            ]
+          }
+        }
+      ],
+      "expected": {
+        "queue": [
+          {
+            "id": 1,
+            "input": "videos/input-1.mp4",
+            "operation": "Convert",
+            "output_target": "Replace",
+            "state": {
+              "Finished": {
+                "Converted": "RecoveredAtStartup"
+              }
+            }
+          }
+        ],
+        "paths": {
+          "path-1": {
+            "stamp": {
+              "size": 3000000,
+              "modified_ns": "1000000"
+            },
+            "content_key": "ck-1"
+          }
+        },
+        "records": {
+          "ck-1": {
+            "metadata": {
+              "codec": "H264",
+              "container": {
+                "Other": "mp4"
+              },
+              "width": 1920,
+              "height": 1080,
+              "rotation_degrees": 0,
+              "duration_ms": 120000
+            },
+            "analyses": []
+          }
+        },
+        "outputs": {
+          "100": {
+            "run_id": 100,
+            "input": "videos/input-1.mp4",
+            "input_identity": {
+              "file_id": {
+                "Unix": {
+                  "device": 1,
+                  "inode": 42
+                }
+              },
+              "size": 3000000,
+              "modified_ns": "2000000"
+            },
+            "staging": "videos/.input-1.crfty-staging.mkv",
+            "initial_staging_identity": {
+              "file_id": {
+                "Unix": {
+                  "device": 1,
+                  "inode": 42
+                }
+              },
+              "size": 0,
+              "modified_ns": "2000000"
+            },
+            "final_path": "videos/input-1.mkv",
+            "final_preimage": null,
+            "replacement": "RetireOriginal",
+            "state": {
+              "Committed": {
+                "final_identity": {
+                  "content_key": "ck-out",
+                  "destructive": {
+                    "file_id": {
+                      "Unix": {
+                        "device": 1,
+                        "inode": 42
+                      }
+                    },
+                    "size": 1000000,
+                    "modified_ns": "2000000"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "conversion_runs": {
+          "100": {
+            "spec": {
+              "item_id": 1,
+              "claim_id": 10,
+              "run_id": 100,
+              "input": "videos/input-1.mp4",
+              "content_key": "ck-1",
+              "operation": "Convert",
+              "output_target": "Replace",
+              "execution": {
+                "requested_target": 95,
+                "fallback_floor": 90,
+                "fallback_step": 1,
+                "overwrite_existing": false,
+                "decode_preference": "HardwarePreferred",
+                "profile": {
+                  "preset": 6,
+                  "max_encoded_percent_basis_points": 8000,
+                  "samples": null,
+                  "sample_duration_ms": 20000,
+                  "thorough": false,
+                  "decode_mode": "Software",
+                  "ab_av1_revision": "ab-av1-test",
+                  "ffmpeg_revision": "ffmpeg-test",
+                  "encoder_revision": "svt-av1-test"
+                }
+              },
+              "action": {
+                "Encode": {
+                  "selected_analysis": null
+                }
+              }
+            },
+            "analysis": null,
+            "output_content_key": "ck-out",
+            "outcome": {
+              "Converted": "RecoveredAtStartup"
+            },
+            "started_at": 1752000000000,
+            "finished_at": 1752000090000,
+            "phase_spans": [
+              {
+                "phase": "Preparing",
+                "duration": 150
+              },
+              {
+                "phase": "Encoding",
+                "duration": 88000
+              }
+            ]
           }
         }
       }
@@ -2738,7 +3266,7 @@
           "path-1": {
             "stamp": {
               "size": 3000000,
-              "modified_ns": 1000000
+              "modified_ns": "1000000"
             },
             "content_key": "ck-1"
           }
@@ -2795,7 +3323,10 @@
             },
             "analysis": null,
             "output_content_key": null,
-            "outcome": null
+            "outcome": null,
+            "started_at": 1752000000000,
+            "finished_at": null,
+            "phase_spans": []
           }
         }
       },
@@ -2811,7 +3342,18 @@
                 "message": "encoder exited with status 1",
                 "diagnostic": "Error: <input>: unsupported bit depth"
               }
-            }
+            },
+            "at": 1752000090000,
+            "phase_spans": [
+              {
+                "phase": "Preparing",
+                "duration": 150
+              },
+              {
+                "phase": "Encoding",
+                "duration": 88000
+              }
+            ]
           }
         }
       ],
@@ -2837,7 +3379,7 @@
           "path-1": {
             "stamp": {
               "size": 3000000,
-              "modified_ns": 1000000
+              "modified_ns": "1000000"
             },
             "content_key": "ck-1"
           }
@@ -2900,7 +3442,19 @@
                 "message": "encoder exited with status 1",
                 "diagnostic": "Error: <input>: unsupported bit depth"
               }
-            }
+            },
+            "started_at": 1752000000000,
+            "finished_at": 1752000090000,
+            "phase_spans": [
+              {
+                "phase": "Preparing",
+                "duration": 150
+              },
+              {
+                "phase": "Encoding",
+                "duration": 88000
+              }
+            ]
           }
         }
       }
@@ -2926,7 +3480,7 @@
           "path-1": {
             "stamp": {
               "size": 3000000,
-              "modified_ns": 1000000
+              "modified_ns": "1000000"
             },
             "content_key": "ck-1"
           }
@@ -2983,7 +3537,10 @@
             },
             "analysis": null,
             "output_content_key": null,
-            "outcome": null
+            "outcome": null,
+            "started_at": 1752000000000,
+            "finished_at": null,
+            "phase_spans": []
           }
         }
       },
@@ -3013,7 +3570,18 @@
                   }
                 ]
               }
-            }
+            },
+            "at": 1752000090000,
+            "phase_spans": [
+              {
+                "phase": "Preparing",
+                "duration": 150
+              },
+              {
+                "phase": "Encoding",
+                "duration": 88000
+              }
+            ]
           }
         }
       ],
@@ -3053,7 +3621,7 @@
           "path-1": {
             "stamp": {
               "size": 3000000,
-              "modified_ns": 1000000
+              "modified_ns": "1000000"
             },
             "content_key": "ck-1"
           }
@@ -3130,7 +3698,19 @@
                   }
                 ]
               }
-            }
+            },
+            "started_at": 1752000000000,
+            "finished_at": 1752000090000,
+            "phase_spans": [
+              {
+                "phase": "Preparing",
+                "duration": 150
+              },
+              {
+                "phase": "Encoding",
+                "duration": 88000
+              }
+            ]
           }
         }
       }
@@ -3156,7 +3736,7 @@
           "path-1": {
             "stamp": {
               "size": 3000000,
-              "modified_ns": 1000000
+              "modified_ns": "1000000"
             },
             "content_key": "ck-1"
           }
@@ -3213,7 +3793,10 @@
             },
             "analysis": null,
             "output_content_key": null,
-            "outcome": null
+            "outcome": null,
+            "started_at": 1752000000000,
+            "finished_at": null,
+            "phase_spans": []
           }
         }
       },
@@ -3232,7 +3815,18 @@
                   }
                 }
               }
-            }
+            },
+            "at": 1752000090000,
+            "phase_spans": [
+              {
+                "phase": "Preparing",
+                "duration": 150
+              },
+              {
+                "phase": "Encoding",
+                "duration": 88000
+              }
+            ]
           }
         }
       ],
@@ -3261,7 +3855,7 @@
           "path-1": {
             "stamp": {
               "size": 3000000,
-              "modified_ns": 1000000
+              "modified_ns": "1000000"
             },
             "content_key": "ck-1"
           }
@@ -3327,7 +3921,19 @@
                   }
                 }
               }
-            }
+            },
+            "started_at": 1752000000000,
+            "finished_at": 1752000090000,
+            "phase_spans": [
+              {
+                "phase": "Preparing",
+                "duration": 150
+              },
+              {
+                "phase": "Encoding",
+                "duration": 88000
+              }
+            ]
           }
         }
       }
@@ -3353,7 +3959,7 @@
           "path-1": {
             "stamp": {
               "size": 3000000,
-              "modified_ns": 1000000
+              "modified_ns": "1000000"
             },
             "content_key": "ck-1"
           }
@@ -3410,7 +4016,10 @@
             },
             "analysis": null,
             "output_content_key": null,
-            "outcome": null
+            "outcome": null,
+            "started_at": 1752000000000,
+            "finished_at": null,
+            "phase_spans": []
           }
         }
       },
@@ -3420,7 +4029,18 @@
             "item_id": 1,
             "claim_id": 10,
             "run_id": 100,
-            "outcome": "Stopped"
+            "outcome": "Stopped",
+            "at": 1752000090000,
+            "phase_spans": [
+              {
+                "phase": "Preparing",
+                "duration": 150
+              },
+              {
+                "phase": "Encoding",
+                "duration": 88000
+              }
+            ]
           }
         }
       ],
@@ -3440,7 +4060,7 @@
           "path-1": {
             "stamp": {
               "size": 3000000,
-              "modified_ns": 1000000
+              "modified_ns": "1000000"
             },
             "content_key": "ck-1"
           }
@@ -3497,7 +4117,19 @@
             },
             "analysis": null,
             "output_content_key": null,
-            "outcome": "Stopped"
+            "outcome": "Stopped",
+            "started_at": 1752000000000,
+            "finished_at": 1752000090000,
+            "phase_spans": [
+              {
+                "phase": "Preparing",
+                "duration": 150
+              },
+              {
+                "phase": "Encoding",
+                "duration": 88000
+              }
+            ]
           }
         }
       }
@@ -3523,7 +4155,7 @@
           "path-1": {
             "stamp": {
               "size": 3000000,
-              "modified_ns": 1000000
+              "modified_ns": "1000000"
             },
             "content_key": "ck-1"
           }
@@ -3555,7 +4187,7 @@
                 }
               },
               "size": 3000000,
-              "modified_ns": 2000000
+              "modified_ns": "2000000"
             },
             "staging": "videos/.input-1.crfty-staging.mkv",
             "initial_staging_identity": {
@@ -3566,7 +4198,7 @@
                 }
               },
               "size": 0,
-              "modified_ns": 2000000
+              "modified_ns": "2000000"
             },
             "final_path": "videos/input-1.mkv",
             "final_preimage": null,
@@ -3610,7 +4242,10 @@
             },
             "analysis": null,
             "output_content_key": null,
-            "outcome": null
+            "outcome": null,
+            "started_at": 1752000000000,
+            "finished_at": null,
+            "phase_spans": []
           }
         }
       },
@@ -3642,7 +4277,7 @@
           "path-1": {
             "stamp": {
               "size": 3000000,
-              "modified_ns": 1000000
+              "modified_ns": "1000000"
             },
             "content_key": "ck-1"
           }
@@ -3674,7 +4309,7 @@
                 }
               },
               "size": 3000000,
-              "modified_ns": 2000000
+              "modified_ns": "2000000"
             },
             "staging": "videos/.input-1.crfty-staging.mkv",
             "initial_staging_identity": {
@@ -3685,7 +4320,7 @@
                 }
               },
               "size": 0,
-              "modified_ns": 2000000
+              "modified_ns": "2000000"
             },
             "final_path": "videos/input-1.mkv",
             "final_preimage": null,
@@ -3729,7 +4364,10 @@
             },
             "analysis": null,
             "output_content_key": null,
-            "outcome": null
+            "outcome": null,
+            "started_at": 1752000000000,
+            "finished_at": null,
+            "phase_spans": []
           }
         }
       }
@@ -3755,7 +4393,7 @@
           "path-1": {
             "stamp": {
               "size": 3000000,
-              "modified_ns": 1000000
+              "modified_ns": "1000000"
             },
             "content_key": "ck-1"
           }
@@ -3787,7 +4425,7 @@
                 }
               },
               "size": 3000000,
-              "modified_ns": 2000000
+              "modified_ns": "2000000"
             },
             "staging": "videos/.input-1.crfty-staging.mkv",
             "initial_staging_identity": {
@@ -3798,7 +4436,7 @@
                 }
               },
               "size": 0,
-              "modified_ns": 2000000
+              "modified_ns": "2000000"
             },
             "final_path": "videos/input-1.mkv",
             "final_preimage": null,
@@ -3815,7 +4453,7 @@
                       }
                     },
                     "size": 1000000,
-                    "modified_ns": 2000000
+                    "modified_ns": "2000000"
                   }
                 }
               }
@@ -3858,7 +4496,10 @@
             },
             "analysis": null,
             "output_content_key": null,
-            "outcome": null
+            "outcome": null,
+            "started_at": 1752000000000,
+            "finished_at": null,
+            "phase_spans": []
           }
         }
       },
@@ -3890,7 +4531,7 @@
           "path-1": {
             "stamp": {
               "size": 3000000,
-              "modified_ns": 1000000
+              "modified_ns": "1000000"
             },
             "content_key": "ck-1"
           }
@@ -3922,7 +4563,7 @@
                 }
               },
               "size": 3000000,
-              "modified_ns": 2000000
+              "modified_ns": "2000000"
             },
             "staging": "videos/.input-1.crfty-staging.mkv",
             "initial_staging_identity": {
@@ -3933,7 +4574,7 @@
                 }
               },
               "size": 0,
-              "modified_ns": 2000000
+              "modified_ns": "2000000"
             },
             "final_path": "videos/input-1.mkv",
             "final_preimage": null,
@@ -3950,7 +4591,7 @@
                       }
                     },
                     "size": 1000000,
-                    "modified_ns": 2000000
+                    "modified_ns": "2000000"
                   }
                 }
               }
@@ -3993,7 +4634,10 @@
             },
             "analysis": null,
             "output_content_key": null,
-            "outcome": null
+            "outcome": null,
+            "started_at": 1752000000000,
+            "finished_at": null,
+            "phase_spans": []
           }
         }
       }
@@ -4019,7 +4663,7 @@
           "path-1": {
             "stamp": {
               "size": 3000000,
-              "modified_ns": 1000000
+              "modified_ns": "1000000"
             },
             "content_key": "ck-1"
           }
@@ -4051,7 +4695,7 @@
                 }
               },
               "size": 3000000,
-              "modified_ns": 2000000
+              "modified_ns": "2000000"
             },
             "staging": "videos/.input-1.crfty-staging.mkv",
             "initial_staging_identity": {
@@ -4062,7 +4706,7 @@
                 }
               },
               "size": 0,
-              "modified_ns": 2000000
+              "modified_ns": "2000000"
             },
             "final_path": "videos/input-1.mkv",
             "final_preimage": null,
@@ -4106,7 +4750,10 @@
             },
             "analysis": null,
             "output_content_key": null,
-            "outcome": null
+            "outcome": null,
+            "started_at": 1752000000000,
+            "finished_at": null,
+            "phase_spans": []
           }
         }
       },
@@ -4123,7 +4770,7 @@
                   }
                 },
                 "size": 500000,
-                "modified_ns": 2000000
+                "modified_ns": "2000000"
               }
             }
           }
@@ -4155,7 +4802,7 @@
           "path-1": {
             "stamp": {
               "size": 3000000,
-              "modified_ns": 1000000
+              "modified_ns": "1000000"
             },
             "content_key": "ck-1"
           }
@@ -4187,7 +4834,7 @@
                 }
               },
               "size": 3000000,
-              "modified_ns": 2000000
+              "modified_ns": "2000000"
             },
             "staging": "videos/.input-1.crfty-staging.mkv",
             "initial_staging_identity": {
@@ -4198,7 +4845,7 @@
                 }
               },
               "size": 0,
-              "modified_ns": 2000000
+              "modified_ns": "2000000"
             },
             "final_path": "videos/input-1.mkv",
             "final_preimage": null,
@@ -4242,7 +4889,10 @@
             },
             "analysis": null,
             "output_content_key": null,
-            "outcome": null
+            "outcome": null,
+            "started_at": 1752000000000,
+            "finished_at": null,
+            "phase_spans": []
           }
         }
       }
@@ -4268,7 +4918,7 @@
           "path-1": {
             "stamp": {
               "size": 3000000,
-              "modified_ns": 1000000
+              "modified_ns": "1000000"
             },
             "content_key": "ck-1"
           }
@@ -4300,7 +4950,7 @@
                 }
               },
               "size": 3000000,
-              "modified_ns": 2000000
+              "modified_ns": "2000000"
             },
             "staging": "videos/.input-1.crfty-staging.mkv",
             "initial_staging_identity": {
@@ -4311,7 +4961,7 @@
                 }
               },
               "size": 0,
-              "modified_ns": 2000000
+              "modified_ns": "2000000"
             },
             "final_path": "videos/input-1.mkv",
             "final_preimage": null,
@@ -4355,7 +5005,10 @@
             },
             "analysis": null,
             "output_content_key": null,
-            "outcome": null
+            "outcome": null,
+            "started_at": 1752000000000,
+            "finished_at": null,
+            "phase_spans": []
           }
         }
       },
@@ -4389,7 +5042,7 @@
           "path-1": {
             "stamp": {
               "size": 3000000,
-              "modified_ns": 1000000
+              "modified_ns": "1000000"
             },
             "content_key": "ck-1"
           }
@@ -4421,7 +5074,7 @@
                 }
               },
               "size": 3000000,
-              "modified_ns": 2000000
+              "modified_ns": "2000000"
             },
             "staging": "videos/.input-1.crfty-staging.mkv",
             "initial_staging_identity": {
@@ -4432,7 +5085,7 @@
                 }
               },
               "size": 0,
-              "modified_ns": 2000000
+              "modified_ns": "2000000"
             },
             "final_path": "videos/input-1.mkv",
             "final_preimage": null,
@@ -4481,7 +5134,10 @@
             },
             "analysis": null,
             "output_content_key": null,
-            "outcome": null
+            "outcome": null,
+            "started_at": 1752000000000,
+            "finished_at": null,
+            "phase_spans": []
           }
         }
       }
@@ -4510,7 +5166,7 @@
                     }
                   },
                   "size": 1000000,
-                  "modified_ns": 2000000
+                  "modified_ns": "2000000"
                 }
               }
             }

@@ -2,7 +2,7 @@ use std::{collections::BTreeMap, path::PathBuf};
 
 use serde::{Deserialize, Serialize};
 
-use crate::RunId;
+use crate::{FileTimeNs, RunId};
 
 #[derive(
     Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize, specta::Type,
@@ -25,9 +25,25 @@ pub enum FileSystemId {
     WindowsHighResolution {
         #[specta(type = crate::JsNumber)]
         volume_serial: u64,
-        #[specta(type = crate::JsNumber)]
+        // ReFS 128-bit file ids overflow a JavaScript number, so the wire
+        // representation is a string; the frontend treats it as opaque.
+        #[serde(with = "u128_string")]
+        #[specta(type = String)]
         file_id: u128,
     },
+}
+
+mod u128_string {
+    use serde::{Deserialize, Deserializer, Serializer};
+
+    pub fn serialize<S: Serializer>(value: &u128, serializer: S) -> Result<S::Ok, S::Error> {
+        serializer.collect_str(value)
+    }
+
+    pub fn deserialize<'de, D: Deserializer<'de>>(deserializer: D) -> Result<u128, D::Error> {
+        let text = String::deserialize(deserializer)?;
+        text.parse::<u128>().map_err(serde::de::Error::custom)
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, specta::Type)]
@@ -35,8 +51,7 @@ pub struct DestructiveIdentity {
     pub file_id: FileSystemId,
     #[specta(type = crate::JsNumber)]
     pub size: u64,
-    #[specta(type = Option<crate::JsNumber>)]
-    pub modified_ns: Option<u128>,
+    pub modified_ns: Option<FileTimeNs>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, specta::Type)]

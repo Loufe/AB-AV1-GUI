@@ -551,8 +551,8 @@ mod tests {
         AnalysisProfile, ClaimId, Command, ConfigDelta, DurableDelta, Effect, EphemeralDelta,
         ExecutionSettings, ItemOutcome, JobPhase, JobProgress, Operation, OutputTarget,
         QueueCommand, QueueItemId, Reply, RunId, SessionCommand, SessionState, Settings,
-        SettingsCommand, SystemCommand, Telemetry, ToolAvailability, ToolRevisions, WorkerCommand,
-        apply,
+        SettingsCommand, SystemCommand, Telemetry, ToolAvailability, ToolRevisions, UnixMillis,
+        WorkerCommand, apply,
     };
 
     use super::{
@@ -673,6 +673,8 @@ mod tests {
                     crfty_core::FailureKind::Internal,
                     "fixture",
                 )),
+                at: UnixMillis(1_000),
+                phase_spans: Vec::new(),
                 final_telemetry: Some(Telemetry {
                     run_id: RunId(3),
                     sequence: 7,

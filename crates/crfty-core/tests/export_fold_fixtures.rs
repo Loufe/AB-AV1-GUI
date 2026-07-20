@@ -14,13 +14,14 @@
 use std::path::PathBuf;
 
 use crfty_core::{
-    AnalysisAttempt, AnalysisProfile, AnalysisResult, ArtifactIdentity, ClaimId, ConflictKind,
-    ContentKey, Crf, DecodeMode, DecodePreference, DestructiveIdentity, DiagnosticTail,
-    DurableDelta, DurableState, ExecutionSettings, FailureFacts, FailureKind, FileStamp,
-    FileSystemId, ItemOutcome, JobAction, JobSpec, MediaContainer, MediaObservation, Operation,
-    OutputDelta, OutputState, OutputTarget, OutputTransaction, PathBinding, PathHash, QueueItem,
-    QueueItemId, QueueItemState, Replacement, ReservedJob, RunId, SearchMeasurement, SkipReason,
-    VideoCodec, VideoMeta, VmafScore, VmafTarget, fold,
+    AnalysisAttempt, AnalysisProfile, AnalysisResult, ArtifactIdentity, ClaimId,
+    CompletionEvidence, ConflictKind, ContentKey, Crf, DecodeMode, DecodePreference,
+    DestructiveIdentity, DiagnosticTail, DurableDelta, DurableState, DurationMs, ExecutionSettings,
+    FailureFacts, FailureKind, FileStamp, FileSystemId, FileTimeNs, ItemOutcome, JobAction,
+    JobPhase, JobSpec, MediaContainer, MediaObservation, Operation, OutputDelta, OutputState,
+    OutputTarget, OutputTransaction, PathBinding, PathHash, PhaseSpan, QueueItem, QueueItemId,
+    QueueItemState, Replacement, ReservedJob, RunId, SearchMeasurement, SkipReason,
+    StreamByteSizes, UnixMillis, VideoCodec, VideoMeta, VmafScore, VmafTarget, fold,
 };
 use serde::Serialize;
 
@@ -93,11 +94,15 @@ fn reserved(item: u64, claim: u64, run: u64) -> DurableDelta {
     }
 }
 
+const STARTED_AT_MS: u64 = 1_752_000_000_000;
+const FINISHED_AT_MS: u64 = 1_752_000_090_000;
+
 fn running(item: u64, claim: u64, run: u64) -> DurableDelta {
     DurableDelta::ItemRunning {
         item_id: QueueItemId(item),
         claim_id: ClaimId(claim),
         run_id: RunId(run),
+        at: UnixMillis(STARTED_AT_MS),
     }
 }
 
@@ -107,6 +112,31 @@ fn finished(item: u64, claim: u64, run: u64, outcome: ItemOutcome) -> DurableDel
         claim_id: ClaimId(claim),
         run_id: RunId(run),
         outcome,
+        at: UnixMillis(FINISHED_AT_MS),
+        phase_spans: vec![
+            PhaseSpan {
+                phase: JobPhase::Preparing,
+                duration: DurationMs(150),
+            },
+            PhaseSpan {
+                phase: JobPhase::Encoding,
+                duration: DurationMs(88_000),
+            },
+        ],
+    }
+}
+
+fn live_encode_evidence() -> CompletionEvidence {
+    CompletionEvidence::LiveEncode {
+        input_size: 3_000_000,
+        output_size: 1_000_000,
+        stream_sizes: StreamByteSizes {
+            video: 850_000,
+            audio: 120_000,
+            subtitle: 5_000,
+            other: 25_000,
+        },
+        encode_decode: DecodeMode::Software,
     }
 }
 
@@ -128,7 +158,7 @@ fn observed(path: &str, key: &str, duration_ms: u64) -> DurableDelta {
             binding: PathBinding {
                 stamp: FileStamp {
                     size: 3_000_000,
-                    modified_ns: Some(1_000_000),
+                    modified_ns: Some(FileTimeNs(1_000_000)),
                 },
                 content_key: ContentKey(key.to_owned()),
             },
@@ -211,7 +241,7 @@ fn destructive(size: u64) -> DestructiveIdentity {
             inode: 42,
         },
         size,
-        modified_ns: Some(2_000_000),
+        modified_ns: Some(FileTimeNs(2_000_000)),
     }
 }
 
@@ -428,7 +458,12 @@ fn scenarios() -> Vec<Scenario> {
                 ],
             ]
             .concat(),
-            vec![finished(1, 10, 100, ItemOutcome::Converted)],
+            vec![finished(
+                1,
+                10,
+                100,
+                ItemOutcome::Converted(live_encode_evidence()),
+            )],
         ),
         scenario(
             "item_finished_remuxed_retired",
@@ -443,7 +478,15 @@ fn scenarios() -> Vec<Scenario> {
                 ],
             ]
             .concat(),
-            vec![finished(1, 10, 100, ItemOutcome::Remuxed)],
+            vec![finished(
+                1,
+                10,
+                100,
+                ItemOutcome::Remuxed(CompletionEvidence::LiveRemux {
+                    input_size: 3_000_000,
+                    output_size: 1_000_000,
+                }),
+            )],
         ),
         scenario(
             "item_finished_converted_without_commit",
@@ -452,7 +495,32 @@ fn scenarios() -> Vec<Scenario> {
                 vec![output_started(100), output_ready(100, "ck-out")],
             ]
             .concat(),
-            vec![finished(1, 10, 100, ItemOutcome::Converted)],
+            vec![finished(
+                1,
+                10,
+                100,
+                ItemOutcome::Converted(live_encode_evidence()),
+            )],
+        ),
+        scenario(
+            "item_finished_converted_recovered_at_startup",
+            [
+                convert_prelude("ck-1"),
+                vec![
+                    output_started(100),
+                    output_ready(100, "ck-out"),
+                    output_committed(100, "ck-out"),
+                ],
+            ]
+            .concat(),
+            // The crash-window recovery outcome: settlement is durable, the
+            // live adapter facts are not, so evidence carries nothing.
+            vec![finished(
+                1,
+                10,
+                100,
+                ItemOutcome::Converted(CompletionEvidence::RecoveredAtStartup),
+            )],
         ),
         scenario(
             "item_finished_failed",

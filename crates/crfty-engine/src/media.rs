@@ -14,8 +14,8 @@ use blake2::{
 };
 use crfty_core::{
     ArtifactIdentity, ContentKey, DecodeMode, DecodePreference, DestructiveIdentity, FileStamp,
-    FileSystemId, HardwareDecoder, MediaContainer, MediaObservation, PathBinding, PathHash,
-    VideoCodec, VideoMeta,
+    FileSystemId, FileTimeNs, HardwareDecoder, MediaContainer, MediaObservation, PathBinding,
+    PathHash, VideoCodec, VideoMeta,
 };
 use serde::Deserialize;
 
@@ -362,11 +362,14 @@ fn identity_from_metadata(path: &Path, metadata: &Metadata) -> io::Result<Destru
             file_id,
         },
     };
+    // Epoch-nanoseconds fit u64 until the year 2554; a clock past that (or
+    // before the epoch) degrades to "no modification time" rather than lying.
     let modified_ns = metadata
         .modified()
         .ok()
         .and_then(|modified| modified.duration_since(UNIX_EPOCH).ok())
-        .map(|duration| duration.as_nanos());
+        .and_then(|duration| u64::try_from(duration.as_nanos()).ok())
+        .map(FileTimeNs);
     Ok(DestructiveIdentity {
         file_id,
         size: metadata.len(),

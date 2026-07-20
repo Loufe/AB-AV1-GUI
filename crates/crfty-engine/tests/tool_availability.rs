@@ -18,7 +18,8 @@ use crfty_core::{
     AnalysisProfile, AnalysisResult, AppState, ClaimId, Command, Crf, EphemeralDelta,
     ExecutionSettings, ItemOutcome, MediaTool, Operation, OutputDelta, OutputTarget, QueueCommand,
     QueueItemId, QueueItemState, Replacement, Reply, RunId, SearchMeasurement, SessionCommand,
-    Settings, SettingsCommand, ToolAvailability, ToolRevisions, VmafScore, WorkerCommand, apply,
+    Settings, SettingsCommand, ToolAvailability, ToolRevisions, UnixMillis, VmafScore,
+    WorkerCommand, apply,
 };
 use crfty_engine::{
     ab_av1::MediaTools,
@@ -243,6 +244,7 @@ fn startup_recovery_without_ffprobe_defers_output_settlement() {
             item_id: QueueItemId(1),
             claim_id: ClaimId(2),
             run_id: RunId(3),
+            at: UnixMillis(1_000),
         }),
         Command::Worker(WorkerCommand::RecordAnalysis {
             item_id: QueueItemId(1),

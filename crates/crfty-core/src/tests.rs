@@ -5,16 +5,17 @@ use proptest::prelude::*;
 use crate::reducer::validate_terminal;
 
 use crate::{
-    AnalysisProfile, AnalysisResult, AppState, ArtifactIdentity, ClaimId, Command, ConflictKind,
-    ContentKey, Crf, DecodeMode, DecodePreference, DefaultOutputMode, DestructiveIdentity,
-    DestructiveObservation, DurableDelta, Effect, Eligibility, EphemeralDelta, ExecutionSettings,
-    FailureFacts, FailureKind, FileRecord, FileStamp, FileSystemFacts, FileSystemId, ItemOutcome,
-    JOURNAL_SCHEMA_VERSION, JobAction, JobPhase, JobProgress, JournalEnvelope, JournalSequence,
-    MediaContainer, MediaObservation, Operation, OutputDelta, OutputRecoveryAction, OutputState,
-    OutputTarget, OutputTransaction, PathBinding, PathHash, QueueCommand, QueueItemId,
-    QueueItemState, Replacement, Reply, RunId, SearchMeasurement, SessionCommand, SessionState,
-    Settings, SettingsCommand, SkipReason, SystemCommand, Telemetry, ToolAvailability,
-    ToolRevisions, VideoCodec, VideoMeta, VmafScore, VmafTarget, WorkerCommand, apply,
+    AnalysisProfile, AnalysisResult, AppState, ArtifactIdentity, ClaimId, Command,
+    CompletionEvidence, ConflictKind, ContentKey, Crf, DecodeMode, DecodePreference,
+    DefaultOutputMode, DestructiveIdentity, DestructiveObservation, DurableDelta, DurationMs,
+    Effect, Eligibility, EphemeralDelta, ExecutionSettings, FailureFacts, FailureKind, FileRecord,
+    FileStamp, FileSystemFacts, FileSystemId, FileTimeNs, ItemOutcome, JOURNAL_SCHEMA_VERSION,
+    JobAction, JobPhase, JobProgress, JournalEnvelope, JournalSequence, MediaContainer,
+    MediaObservation, Operation, OutputDelta, OutputRecoveryAction, OutputState, OutputTarget,
+    OutputTransaction, PathBinding, PathHash, PhaseSpan, QueueCommand, QueueItemId, QueueItemState,
+    Replacement, Reply, RunId, SearchMeasurement, SessionCommand, SessionState, Settings,
+    SettingsCommand, SkipReason, StreamByteSizes, SystemCommand, Telemetry, ToolAvailability,
+    ToolRevisions, UnixMillis, VideoCodec, VideoMeta, VmafScore, VmafTarget, WorkerCommand, apply,
     encode_record, evaluate_eligibility, recover_output, replay, select_analysis,
     select_job_action,
 };
@@ -217,7 +218,7 @@ fn destructive(name: &str, size: u64) -> DestructiveIdentity {
             inode: u64::from(name.as_bytes().first().copied().unwrap_or_default()),
         },
         size,
-        modified_ns: Some(u128::from(size)),
+        modified_ns: Some(FileTimeNs(size)),
     }
 }
 
@@ -241,7 +242,7 @@ fn media_observation(content: &str) -> MediaObservation {
         binding: PathBinding {
             stamp: FileStamp {
                 size: 10_000,
-                modified_ns: Some(1),
+                modified_ns: Some(FileTimeNs(1)),
             },
             content_key: ContentKey(content.to_owned()),
         },
@@ -271,6 +272,7 @@ fn reducer_enforces_session_claim_and_terminal_ordering() {
             item_id: QueueItemId(1),
             claim_id: ClaimId(99),
             run_id: RunId(3),
+            at: UnixMillis(1_000),
         }),
     );
     assert!(matches!(stale.reply, Reply::Rejected { .. }));
@@ -285,6 +287,8 @@ fn reducer_enforces_session_claim_and_terminal_ordering() {
             claim_id: ClaimId(2),
             run_id: RunId(3),
             outcome: ItemOutcome::Failed(FailureFacts::new(FailureKind::Internal, "fixture")),
+            at: UnixMillis(1_000),
+            phase_spans: Vec::new(),
             final_telemetry: Some(Telemetry {
                 run_id: RunId(3),
                 sequence: 20,
@@ -383,6 +387,8 @@ fn durable_analysis_is_selected_for_the_same_content_and_profile() {
                 FailureKind::Internal,
                 "fixture boundary",
             )),
+            at: UnixMillis(1_000),
+            phase_spans: Vec::new(),
             final_telemetry: None,
         }),
     );
@@ -430,6 +436,8 @@ fn reorder_fixture() -> AppState {
             claim_id: ClaimId(20),
             run_id: RunId(21),
             outcome: ItemOutcome::Failed(FailureFacts::new(FailureKind::Internal, "fixture")),
+            at: UnixMillis(1_000),
+            phase_spans: Vec::new(),
             final_telemetry: None,
         }),
     );
@@ -599,6 +607,8 @@ fn reorder_of_the_only_pending_item_above_active_is_a_no_op() {
             claim_id: ClaimId(20),
             run_id: RunId(21),
             outcome: ItemOutcome::Failed(FailureFacts::new(FailureKind::Internal, "fixture")),
+            at: UnixMillis(1_000),
+            phase_spans: Vec::new(),
             final_telemetry: None,
         }),
     );
@@ -743,6 +753,8 @@ fn media_record_and_analysis_checkpoint_replay_as_one_state() {
                 FailureKind::Internal,
                 "fixture boundary",
             )),
+            at: UnixMillis(1_000),
+            phase_spans: Vec::new(),
             final_telemetry: None,
         }),
     );
@@ -797,6 +809,8 @@ fn terminal_is_rejected_until_output_ledger_is_settled() {
             claim_id: ClaimId(2),
             run_id: RunId(3),
             outcome: ItemOutcome::Stopped,
+            at: UnixMillis(1_000),
+            phase_spans: Vec::new(),
             final_telemetry: None,
         }),
     );
@@ -812,7 +826,9 @@ fn converted_requires_a_successfully_committed_output() {
             item_id: QueueItemId(1),
             claim_id: ClaimId(2),
             run_id: RunId(3),
-            outcome: ItemOutcome::Converted,
+            outcome: ItemOutcome::Converted(CompletionEvidence::RecoveredAtStartup),
+            at: UnixMillis(1_000),
+            phase_spans: Vec::new(),
             final_telemetry: None,
         }),
     );
@@ -848,7 +864,9 @@ fn converted_requires_a_successfully_committed_output() {
             item_id: QueueItemId(1),
             claim_id: ClaimId(2),
             run_id: RunId(3),
-            outcome: ItemOutcome::Converted,
+            outcome: ItemOutcome::Converted(CompletionEvidence::RecoveredAtStartup),
+            at: UnixMillis(1_000),
+            phase_spans: Vec::new(),
             final_telemetry: None,
         }),
     );
@@ -881,12 +899,23 @@ fn remuxed_requires_a_remux_action_and_committed_output() {
         }),
     );
     assert!(matches!(prepared.reply, Reply::Claimed(Some(_))));
+    let running = apply(
+        &mut state,
+        Command::Worker(WorkerCommand::Started {
+            item_id: QueueItemId(1),
+            claim_id: ClaimId(2),
+            run_id: RunId(3),
+            at: UnixMillis(1_000),
+        }),
+    );
+    assert_eq!(running.reply, Reply::Accepted);
     let run = state
         .durable
         .conversion_runs
         .get(&RunId(3))
         .expect("prepared remux run");
     assert_eq!(run.spec.action, JobAction::Remux);
+    assert_eq!(run.started_at, Some(UnixMillis(1_000)));
     let mut output = transaction(
         OutputState::Committed {
             final_identity: identity("remux-output", 20),
@@ -894,8 +923,161 @@ fn remuxed_requires_a_remux_action_and_committed_output() {
         Replacement::KeepOriginal,
     );
     output.run_id = RunId(3);
-    assert!(validate_terminal(run, Some(&output), &ItemOutcome::Remuxed).is_ok());
-    assert!(validate_terminal(run, Some(&output), &ItemOutcome::Converted).is_err());
+    let live_remux = ItemOutcome::Remuxed(CompletionEvidence::LiveRemux {
+        input_size: 10_000,
+        output_size: 20,
+    });
+    assert!(validate_terminal(run, Some(&output), &live_remux).is_ok());
+    assert!(
+        validate_terminal(
+            run,
+            Some(&output),
+            &ItemOutcome::Remuxed(CompletionEvidence::RecoveredAtStartup),
+        )
+        .is_ok()
+    );
+    assert!(
+        validate_terminal(
+            run,
+            Some(&output),
+            &ItemOutcome::Converted(CompletionEvidence::RecoveredAtStartup),
+        )
+        .is_err()
+    );
+    // Evidence provenance must match the outcome kind: a remux cannot carry
+    // adapter encode facts and vice versa.
+    assert!(
+        validate_terminal(
+            run,
+            Some(&output),
+            &ItemOutcome::Remuxed(CompletionEvidence::LiveEncode {
+                input_size: 10_000,
+                output_size: 20,
+                stream_sizes: StreamByteSizes {
+                    video: 10,
+                    audio: 5,
+                    subtitle: 0,
+                    other: 5,
+                },
+                encode_decode: DecodeMode::Software,
+            }),
+        )
+        .is_err()
+    );
+}
+
+#[test]
+fn successful_outcomes_require_a_started_run_and_matching_evidence() {
+    // Claimed but never Started: a live success is impossible from this state,
+    // and recovery derives Stopped for it — Converted must be rejected.
+    let mut state = AppState::default();
+    let _added = apply(&mut state, add_command(QueueItemId(1), "video.mkv"));
+    let _started = start_session(&mut state);
+    let _claimed = reserve_and_prepare(&mut state, ClaimId(2), RunId(3), execution());
+    let _analysis = apply(
+        &mut state,
+        Command::Worker(WorkerCommand::RecordAnalysis {
+            item_id: QueueItemId(1),
+            claim_id: ClaimId(2),
+            run_id: RunId(3),
+            result: Box::new(analysis()),
+        }),
+    );
+    let run = state
+        .durable
+        .conversion_runs
+        .get(&RunId(3))
+        .expect("claimed run");
+    assert_eq!(run.started_at, None);
+    let mut output = transaction(
+        OutputState::Committed {
+            final_identity: identity("encoded", 20),
+        },
+        Replacement::KeepOriginal,
+    );
+    output.run_id = RunId(3);
+    assert!(
+        validate_terminal(
+            run,
+            Some(&output),
+            &ItemOutcome::Converted(CompletionEvidence::RecoveredAtStartup),
+        )
+        .is_err()
+    );
+    // Converted with remux-shaped evidence is a provenance lie even when the
+    // run is otherwise valid.
+    let started_state = active_state();
+    let started_run = started_state
+        .durable
+        .conversion_runs
+        .get(&RunId(3))
+        .expect("started run");
+    assert!(started_run.started_at.is_some());
+    assert!(
+        validate_terminal(
+            started_run,
+            Some(&output),
+            &ItemOutcome::Converted(CompletionEvidence::LiveRemux {
+                input_size: 10_000,
+                output_size: 20,
+            }),
+        )
+        .is_err()
+    );
+    assert!(
+        validate_terminal(
+            started_run,
+            Some(&output),
+            &ItemOutcome::Converted(CompletionEvidence::LiveEncode {
+                input_size: 10_000,
+                output_size: 20,
+                stream_sizes: StreamByteSizes {
+                    video: 15,
+                    audio: 3,
+                    subtitle: 1,
+                    other: 1,
+                },
+                encode_decode: DecodeMode::Software,
+            }),
+        )
+        .is_ok()
+    );
+}
+
+#[test]
+fn run_facts_fold_start_finish_instants_and_phase_spans() {
+    let mut state = active_state();
+    let spans = vec![
+        PhaseSpan {
+            phase: JobPhase::Preparing,
+            duration: DurationMs(40),
+        },
+        PhaseSpan {
+            phase: JobPhase::Analyzing,
+            duration: DurationMs(65_000),
+        },
+    ];
+    let terminal = apply(
+        &mut state,
+        Command::Worker(WorkerCommand::Terminal {
+            item_id: QueueItemId(1),
+            claim_id: ClaimId(2),
+            run_id: RunId(3),
+            outcome: ItemOutcome::Failed(FailureFacts::new(FailureKind::Internal, "fixture")),
+            at: UnixMillis(2_000),
+            phase_spans: spans.clone(),
+            final_telemetry: None,
+        }),
+    );
+    assert_eq!(terminal.reply, Reply::Accepted);
+    let run = state
+        .durable
+        .conversion_runs
+        .get(&RunId(3))
+        .expect("finished run");
+    assert_eq!(run.started_at, Some(UnixMillis(1_000)));
+    assert_eq!(run.finished_at, Some(UnixMillis(2_000)));
+    assert_eq!(run.phase_spans, spans);
 }
 
 #[test]
@@ -1010,6 +1192,7 @@ fn reserved_item_can_be_durably_stopped_before_preparation() {
             item_id: QueueItemId(1),
             claim_id: ClaimId(2),
             run_id: RunId(3),
+            at: UnixMillis(1_000),
         }),
     );
     assert_eq!(stopped.reply, Reply::Accepted);
@@ -1125,6 +1308,7 @@ fn replay_rejects_semantically_impossible_durable_transition() {
             item_id: QueueItemId(1),
             claim_id: ClaimId(2),
             run_id: RunId(3),
+            at: UnixMillis(1_000),
         }],
     };
     let replayed = replay(&encode_record(&envelope).expect("journal record"));
@@ -1151,6 +1335,7 @@ fn replay_rejects_an_entire_semantically_invalid_batch() {
                 item_id: QueueItemId(1),
                 claim_id: ClaimId(2),
                 run_id: RunId(3),
+                at: UnixMillis(1_000),
             },
         ],
     };
@@ -1176,7 +1361,7 @@ fn recovery_covers_every_destructive_boundary() {
     let changed_partial = FileSystemFacts {
         staging: DestructiveObservation::Present(DestructiveIdentity {
             size: 123,
-            modified_ns: Some(456),
+            modified_ns: Some(FileTimeNs(456)),
             ..destructive("empty", 0)
         }),
         ..started_facts.clone()
@@ -1282,6 +1467,7 @@ fn active_state() -> AppState {
             item_id: QueueItemId(1),
             claim_id: ClaimId(2),
             run_id: RunId(3),
+            at: UnixMillis(1_000),
         }),
     );
     let _analysis = apply(

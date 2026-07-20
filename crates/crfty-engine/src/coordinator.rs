@@ -7,16 +7,17 @@ use std::{
         mpsc,
     },
     thread,
-    time::Duration,
+    time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
 
 use crfty_core::{
     AnalysisAttempt, AnalysisResult, AppSnapshot, CRF_FIXED_SCALE, ClaimId, ClaimedJob, Command,
-    ConflictKind, Crf, DurableDelta, DurableState, Effect, ExecutionSettings, FailureFacts,
-    FailureKind, ItemOutcome, JobAction, JobPhase, JobProgress, MAX_PERCENT_BASIS_POINTS,
-    MAX_VMAF_SCORE, OutputDelta, OutputTarget, OutputTransaction, PERCENT_BASIS_POINTS_SCALE,
-    QueueCommand, QueueItemState, Replacement, Reply, RunId, SearchMeasurement, SessionCommand,
-    SettingsCommand, SkipReason, SystemCommand, Telemetry, VMAF_SCORE_FIXED_SCALE, VmafScore,
+    CompletionEvidence, ConflictKind, Crf, DecodeMode, DurableDelta, DurableState, DurationMs,
+    Effect, ExecutionSettings, FailureFacts, FailureKind, ItemOutcome, JobAction, JobPhase,
+    JobProgress, MAX_PERCENT_BASIS_POINTS, MAX_VMAF_SCORE, OutputDelta, OutputState, OutputTarget,
+    OutputTransaction, PERCENT_BASIS_POINTS_SCALE, PhaseSpan, QueueCommand, QueueItemState,
+    Replacement, Reply, RunId, SearchMeasurement, SessionCommand, SettingsCommand, SkipReason,
+    StreamByteSizes, SystemCommand, Telemetry, UnixMillis, VMAF_SCORE_FIXED_SCALE, VmafScore,
     VmafTarget, WorkerCommand, fold,
 };
 
@@ -46,10 +47,86 @@ struct JobServices<'a> {
     cancellation: &'a ActiveCancellation,
 }
 
+/// What a successful adapter run measured before settlement. The terminal
+/// outcome is built only after the output transaction settles, from these
+/// facts plus the settled ledger state.
+enum SuccessfulJob {
+    Encode {
+        outcome: EncodeOutcome,
+        decode_mode: DecodeMode,
+    },
+    Remux,
+}
+
+/// Wall-clock instant for durable command payloads; core has no clock. A
+/// pre-epoch system clock degrades to zero rather than failing the run.
+fn now_millis() -> UnixMillis {
+    UnixMillis(
+        SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map_or(0, |elapsed| {
+                u64::try_from(elapsed.as_millis()).unwrap_or(u64::MAX)
+            }),
+    )
+}
+
+/// Per-job telemetry sequencing plus monotonic phase-span accumulation. The
+/// spans ride the lossless terminal command; telemetry stays the lossy path.
+struct PhaseTracker {
+    sequence: u64,
+    current: Option<(JobPhase, Instant)>,
+    spans: Vec<PhaseSpan>,
+}
+
+impl PhaseTracker {
+    fn new() -> Self {
+        Self {
+            sequence: 0,
+            current: None,
+            spans: Vec::new(),
+        }
+    }
+
+    fn next_sequence(&mut self) -> u64 {
+        self.sequence = self.sequence.saturating_add(1);
+        self.sequence
+    }
+
+    /// Starts measuring `phase`, closing the previous span. Re-entering the
+    /// running phase is a no-op so repeated search attempts accumulate into
+    /// one span instead of fragmenting.
+    fn enter(&mut self, phase: JobPhase) {
+        if self
+            .current
+            .as_ref()
+            .is_some_and(|(active, _)| *active == phase)
+        {
+            return;
+        }
+        self.close_current();
+        self.current = Some((phase, Instant::now()));
+    }
+
+    fn close_current(&mut self) {
+        if let Some((phase, entered)) = self.current.take() {
+            let elapsed = u64::try_from(entered.elapsed().as_millis()).unwrap_or(u64::MAX);
+            self.spans.push(PhaseSpan {
+                phase,
+                duration: DurationMs(elapsed),
+            });
+        }
+    }
+
+    fn finish(&mut self) -> Vec<PhaseSpan> {
+        self.close_current();
+        std::mem::take(&mut self.spans)
+    }
+}
+
 use crate::{
     ab_av1::{
-        AbAv1Runtime, CancelMode, CancellationHandle, EncodeRequest, JobFailureKind, JobHandle,
-        JobReport, JobTerminal, MediaTools, SearchOutcome, SearchRequest,
+        AbAv1Runtime, CancelMode, CancellationHandle, EncodeOutcome, EncodeRequest, JobFailureKind,
+        JobHandle, JobReport, JobTerminal, MediaTools, SearchOutcome, SearchRequest,
         Telemetry as AdapterTelemetry,
     },
     driver::{CommandSender, DriverEvent, DriverHandle, DriverStartError},
@@ -300,11 +377,13 @@ fn recover_startup(
     for (item_id, claim_id, run_id) in active {
         let reservation_only = !state.conversion_runs.contains_key(&run_id);
         if reservation_only {
+            let at = now_millis();
             if accepted(
                 commands.submit(Command::Worker(WorkerCommand::AbandonReservation {
                     item_id,
                     claim_id,
                     run_id,
+                    at,
                 })),
             ) {
                 fold(
@@ -314,6 +393,8 @@ fn recover_startup(
                         claim_id,
                         run_id,
                         outcome: ItemOutcome::Stopped,
+                        at,
+                        phase_spans: Vec::new(),
                     },
                 );
             }
@@ -350,12 +431,17 @@ fn recover_startup(
             .get(&run_id)
             .is_none_or(crfty_core::OutputTransaction::is_settled);
         if output_settled {
-            let outcome = ItemOutcome::Stopped;
+            let outcome = recovered_outcome(&state, run_id);
+            // Honest timestamp: this is when the outcome was decided, which
+            // for a crash-recovered run is recovery time, not encode time.
+            let at = now_millis();
             if accepted(commands.submit(Command::Worker(WorkerCommand::Terminal {
                 item_id,
                 claim_id,
                 run_id,
                 outcome: outcome.clone(),
+                at,
+                phase_spans: Vec::new(),
                 final_telemetry: None,
             }))) {
                 fold(
@@ -365,12 +451,50 @@ fn recover_startup(
                         claim_id,
                         run_id,
                         outcome,
+                        at,
+                        phase_spans: Vec::new(),
                     },
                 );
             }
         }
     }
     state
+}
+
+/// Derives the terminal outcome for a recovered run from its settled output
+/// transaction: a promoted-and-settled output is a success even though the
+/// process died before acknowledging it, distinguished as Converted or
+/// Remuxed by the prepared action; a conflicted settlement is a structured
+/// failure; everything else (abandoned staging, no output) stopped cleanly.
+fn recovered_outcome(state: &DurableState, run_id: RunId) -> ItemOutcome {
+    let Some(transaction) = state.outputs.get(&run_id) else {
+        return ItemOutcome::Stopped;
+    };
+    match (&transaction.replacement, &transaction.state) {
+        (Replacement::KeepOriginal, OutputState::Committed { .. })
+        | (Replacement::RetireOriginal, OutputState::Retired { .. }) => {
+            match state
+                .conversion_runs
+                .get(&run_id)
+                .map(|run| &run.spec.action)
+            {
+                Some(JobAction::Remux) => {
+                    ItemOutcome::Remuxed(CompletionEvidence::RecoveredAtStartup)
+                }
+                Some(JobAction::Encode { .. }) => {
+                    ItemOutcome::Converted(CompletionEvidence::RecoveredAtStartup)
+                }
+                // Unreachable: the ledger only accepts output transactions
+                // for encode and remux runs.
+                _ => ItemOutcome::Stopped,
+            }
+        }
+        (_, OutputState::Conflict { .. }) => ItemOutcome::Failed(FailureFacts::new(
+            FailureKind::OutputConflict,
+            "output transaction settled as a conflict",
+        )),
+        _ => ItemOutcome::Stopped,
+    }
 }
 
 #[derive(Clone)]
@@ -634,6 +758,7 @@ fn run_session(
                     item_id: reserved.item_id,
                     claim_id,
                     run_id,
+                    at: now_millis(),
                 }));
                 return Err(reason);
             }
@@ -642,6 +767,7 @@ fn run_session(
                     item_id: reserved.item_id,
                     claim_id,
                     run_id,
+                    at: now_millis(),
                 }));
                 return Err(format!("worker preparation failed: {error}"));
             }
@@ -655,6 +781,7 @@ fn run_session(
                 item_id: job.spec.item_id,
                 claim_id,
                 run_id,
+                at: now_millis(),
             })),
         )?;
         process_job(commands, runtime, tools, cancellation, &job)?;
@@ -672,24 +799,20 @@ fn process_job(
     cancellation: &ActiveCancellation,
     job: &ClaimedJob,
 ) -> Result<(), String> {
-    let mut telemetry_sequence = 0_u64;
+    let mut tracker = PhaseTracker::new();
     let services = JobServices {
         commands,
         runtime,
         tools,
         cancellation,
     };
-    publish_phase(
-        commands,
-        job.spec.run_id,
-        &mut telemetry_sequence,
-        JobPhase::Preparing,
-    );
+    publish_phase(commands, job.spec.run_id, &mut tracker, JobPhase::Preparing);
     match &job.spec.action {
         JobAction::Skip { reason } => {
             terminal(
                 commands,
                 job,
+                &mut tracker,
                 ItemOutcome::Skipped {
                     reason: reason.clone(),
                 },
@@ -698,19 +821,20 @@ fn process_job(
             return Ok(());
         }
         JobAction::Remux => {
-            let Some(destination) = resolve_output_destination(commands, job)? else {
+            let Some(destination) = resolve_output_destination(commands, job, &mut tracker)? else {
                 return Ok(());
             };
-            let Some(output) = begin_output(commands, tools, job, destination)? else {
+            let Some(output) = begin_output(commands, tools, job, destination, &mut tracker)?
+            else {
                 return Ok(());
             };
-            return run_remux(services, job, output, &mut telemetry_sequence);
+            return run_remux(services, job, output, &mut tracker);
         }
         JobAction::Analyze { .. } | JobAction::Encode { .. } => {}
     }
 
     let destination = if matches!(job.spec.action, JobAction::Encode { .. }) {
-        let Some(destination) = resolve_output_destination(commands, job)? else {
+        let Some(destination) = resolve_output_destination(commands, job, &mut tracker)? else {
             return Ok(());
         };
         Some(destination)
@@ -720,20 +844,14 @@ fn process_job(
     let analysis = if let Some(selected) = job.spec.action.selected_analysis() {
         selected.clone()
     } else {
-        let searched = match search_with_fallback(
-            commands,
-            runtime,
-            tools,
-            cancellation,
-            job,
-            &mut telemetry_sequence,
-        ) {
-            Ok(result) => result,
-            Err(outcome) => {
-                terminal(commands, job, outcome, None)?;
-                return Ok(());
-            }
-        };
+        let searched =
+            match search_with_fallback(commands, runtime, tools, cancellation, job, &mut tracker) {
+                Ok(result) => result,
+                Err(outcome) => {
+                    terminal(commands, job, &mut tracker, outcome, None)?;
+                    return Ok(());
+                }
+            };
         require_accepted(
             "record analysis",
             commands.submit(Command::Worker(WorkerCommand::RecordAnalysis {
@@ -749,20 +867,20 @@ fn process_job(
         publish_phase(
             commands,
             job.spec.run_id,
-            &mut telemetry_sequence,
+            &mut tracker,
             JobPhase::Finalizing,
         );
-        terminal(commands, job, ItemOutcome::Analyzed, None)?;
+        terminal(commands, job, &mut tracker, ItemOutcome::Analyzed, None)?;
         return Ok(());
     }
 
     let Some(destination) = destination else {
         return Err("encode job has no resolved output destination".to_owned());
     };
-    let Some(output) = begin_output(commands, tools, job, destination)? else {
+    let Some(output) = begin_output(commands, tools, job, destination, &mut tracker)? else {
         return Ok(());
     };
-    run_encode(services, job, output, analysis, &mut telemetry_sequence)
+    run_encode(services, job, output, analysis, &mut tracker)
 }
 
 fn run_encode(
@@ -770,7 +888,7 @@ fn run_encode(
     job: &ClaimedJob,
     output: PreparedOutput,
     analysis: AnalysisResult,
-    telemetry_sequence: &mut u64,
+    tracker: &mut PhaseTracker,
 ) -> Result<(), String> {
     let PreparedOutput {
         manager,
@@ -799,6 +917,7 @@ fn run_encode(
                     error.to_string(),
                 )),
                 None,
+                tracker,
             )?;
             return Ok(());
         }
@@ -809,20 +928,23 @@ fn run_encode(
         handle,
         services.cancellation,
         JobPhase::Encoding,
-        telemetry_sequence,
+        tracker,
     );
     match report {
         Ok(JobReport {
-            terminal: JobTerminal::Completed(_),
+            terminal: JobTerminal::Completed(outcome),
             final_telemetry,
         }) => finish_successful_output(
             services.commands,
             job,
             manager,
             transaction,
-            ItemOutcome::Converted,
+            SuccessfulJob::Encode {
+                outcome,
+                decode_mode: analysis.profile.decode_mode,
+            },
             final_telemetry.as_ref().map(telemetry_progress),
-            telemetry_sequence,
+            tracker,
         )?,
         Ok(JobReport {
             terminal: JobTerminal::Cancelled,
@@ -835,10 +957,11 @@ fn run_encode(
             ItemOutcome::Stopped,
             map_progress(
                 job.spec.run_id,
-                telemetry_sequence,
+                tracker,
                 JobPhase::Encoding,
                 final_telemetry.as_ref().map(telemetry_progress),
             ),
+            tracker,
         )?,
         Ok(JobReport {
             terminal: JobTerminal::Failed(failure),
@@ -851,10 +974,11 @@ fn run_encode(
             ItemOutcome::Failed(FailureFacts::new(FailureKind::EncodeRun, failure.message)),
             map_progress(
                 job.spec.run_id,
-                telemetry_sequence,
+                tracker,
                 JobPhase::Encoding,
                 final_telemetry.as_ref().map(telemetry_progress),
             ),
+            tracker,
         )?,
         Ok(JobReport {
             terminal: JobTerminal::Panicked { cleanup_failure },
@@ -872,10 +996,11 @@ fn run_encode(
             )),
             map_progress(
                 job.spec.run_id,
-                telemetry_sequence,
+                tracker,
                 JobPhase::Encoding,
                 final_telemetry.as_ref().map(telemetry_progress),
             ),
+            tracker,
         )?,
         Err(message) => abandon_output(
             &manager,
@@ -884,6 +1009,7 @@ fn run_encode(
             &transaction,
             ItemOutcome::Failed(FailureFacts::new(FailureKind::Internal, message)),
             None,
+            tracker,
         )?,
     }
     Ok(())
@@ -920,7 +1046,7 @@ fn run_remux(
     services: JobServices<'_>,
     job: &ClaimedJob,
     output: PreparedOutput,
-    telemetry_sequence: &mut u64,
+    tracker: &mut PhaseTracker,
 ) -> Result<(), String> {
     let PreparedOutput {
         manager,
@@ -943,6 +1069,7 @@ fn run_remux(
                     error.to_string(),
                 )),
                 None,
+                tracker,
             )?;
             return Ok(());
         }
@@ -952,7 +1079,7 @@ fn run_remux(
         job.spec.run_id,
         handle,
         services.cancellation,
-        telemetry_sequence,
+        tracker,
     );
     match report {
         Ok(RemuxReport {
@@ -963,9 +1090,9 @@ fn run_remux(
             job,
             manager,
             transaction,
-            ItemOutcome::Remuxed,
+            SuccessfulJob::Remux,
             final_telemetry.map(remux_progress),
-            telemetry_sequence,
+            tracker,
         )?,
         Ok(RemuxReport {
             terminal: RemuxTerminal::Cancelled,
@@ -978,10 +1105,11 @@ fn run_remux(
             ItemOutcome::Stopped,
             map_progress(
                 job.spec.run_id,
-                telemetry_sequence,
+                tracker,
                 JobPhase::Encoding,
                 final_telemetry.map(remux_progress),
             ),
+            tracker,
         )?,
         Ok(RemuxReport {
             terminal: RemuxTerminal::Failed(failure),
@@ -1005,10 +1133,11 @@ fn run_remux(
                 ItemOutcome::Failed(facts),
                 map_progress(
                     job.spec.run_id,
-                    telemetry_sequence,
+                    tracker,
                     JobPhase::Encoding,
                     final_telemetry.map(remux_progress),
                 ),
+                tracker,
             )?;
         }
         Err(message) => abandon_output(
@@ -1018,6 +1147,7 @@ fn run_remux(
             &transaction,
             ItemOutcome::Failed(FailureFacts::new(FailureKind::Internal, message)),
             None,
+            tracker,
         )?,
     }
     Ok(())
@@ -1030,14 +1160,16 @@ fn abandon_output(
     transaction: &OutputTransaction,
     outcome: ItemOutcome,
     final_telemetry: Option<Telemetry>,
+    tracker: &mut PhaseTracker,
 ) -> Result<(), String> {
     settle_abandoned(manager, commands, transaction)?;
-    terminal(commands, job, outcome, final_telemetry)
+    terminal(commands, job, tracker, outcome, final_telemetry)
 }
 
 fn resolve_output_destination(
     commands: &CommandSender,
     job: &ClaimedJob,
+    tracker: &mut PhaseTracker,
 ) -> Result<Option<OutputDestination>, String> {
     let (final_path, replacement) = match resolve_output(job) {
         Ok(resolved) => resolved,
@@ -1045,6 +1177,7 @@ fn resolve_output_destination(
             terminal(
                 commands,
                 job,
+                tracker,
                 ItemOutcome::Failed(FailureFacts::new(FailureKind::OutputPrepare, message)),
                 None,
             )?;
@@ -1057,6 +1190,7 @@ fn resolve_output_destination(
         terminal(
             commands,
             job,
+            tracker,
             ItemOutcome::Failed(FailureFacts::new(
                 FailureKind::OutputPrepare,
                 format!("failed to create output directory: {error}"),
@@ -1070,6 +1204,7 @@ fn resolve_output_destination(
         terminal(
             commands,
             job,
+            tracker,
             ItemOutcome::Skipped {
                 reason: SkipReason::OutputExists,
             },
@@ -1088,6 +1223,7 @@ fn begin_output(
     tools: &MediaTools,
     job: &ClaimedJob,
     destination: OutputDestination,
+    tracker: &mut PhaseTracker,
 ) -> Result<Option<PreparedOutput>, String> {
     let manager = OutputManager::new(MediaArtifactInspector::new(tools.ffprobe.clone()));
     let transaction = match manager.prepare(
@@ -1102,6 +1238,7 @@ fn begin_output(
             terminal(
                 commands,
                 job,
+                tracker,
                 ItemOutcome::Skipped {
                     reason: SkipReason::OutputExists,
                 },
@@ -1113,6 +1250,7 @@ fn begin_output(
             terminal(
                 commands,
                 job,
+                tracker,
                 ItemOutcome::Failed(FailureFacts::new(
                     FailureKind::OutputPrepare,
                     error.to_string(),
@@ -1144,45 +1282,37 @@ fn finish_successful_output(
     job: &ClaimedJob,
     manager: MediaOutputManager,
     mut transaction: OutputTransaction,
-    outcome: ItemOutcome,
+    success: SuccessfulJob,
     final_progress: Option<JobProgress>,
-    telemetry_sequence: &mut u64,
+    tracker: &mut PhaseTracker,
 ) -> Result<(), String> {
-    publish_phase(
-        commands,
-        job.spec.run_id,
-        telemetry_sequence,
-        JobPhase::Verifying,
-    );
+    publish_phase(commands, job.spec.run_id, tracker, JobPhase::Verifying);
     let ready = match manager.mark_ready(&transaction) {
         Ok(ready) => ready,
         Err(error) => {
             settle_abandoned(&manager, commands, &transaction)?;
+            let final_telemetry = map_progress(
+                job.spec.run_id,
+                tracker,
+                JobPhase::Verifying,
+                final_progress,
+            );
             terminal(
                 commands,
                 job,
+                tracker,
                 ItemOutcome::Failed(FailureFacts::new(
                     FailureKind::OutputPromote,
                     error.to_string(),
                 )),
-                map_progress(
-                    job.spec.run_id,
-                    telemetry_sequence,
-                    JobPhase::Verifying,
-                    final_progress,
-                ),
+                final_telemetry,
             )?;
             return Ok(());
         }
     };
     submit_output(commands, ready.clone())?;
     fold_transaction(&mut transaction, ready);
-    publish_phase(
-        commands,
-        job.spec.run_id,
-        telemetry_sequence,
-        JobPhase::Finalizing,
-    );
+    publish_phase(commands, job.spec.run_id, tracker, JobPhase::Finalizing);
     while !transaction.is_settled() {
         let next = match manager.recover_once(&transaction) {
             Ok(Some(next)) => next,
@@ -1191,19 +1321,21 @@ fn finish_successful_output(
             }
             Err(error) => {
                 settle_conflict(commands, job.spec.run_id, error.to_string())?;
+                let final_telemetry = map_progress(
+                    job.spec.run_id,
+                    tracker,
+                    JobPhase::Finalizing,
+                    final_progress,
+                );
                 terminal(
                     commands,
                     job,
+                    tracker,
                     ItemOutcome::Failed(FailureFacts::new(
                         FailureKind::OutputConflict,
                         error.to_string(),
                     )),
-                    map_progress(
-                        job.spec.run_id,
-                        telemetry_sequence,
-                        JobPhase::Finalizing,
-                        final_progress,
-                    ),
+                    final_telemetry,
                 )?;
                 return Ok(());
             }
@@ -1211,17 +1343,53 @@ fn finish_successful_output(
         submit_output(commands, next.clone())?;
         fold_transaction(&mut transaction, next);
     }
-    terminal(
-        commands,
-        job,
-        outcome,
-        map_progress(
-            job.spec.run_id,
-            telemetry_sequence,
-            JobPhase::Finalizing,
-            final_progress,
-        ),
-    )
+    // The outcome is built only now, after settlement: remux evidence needs
+    // the settled final identity, and a delta-borne conflict settlement must
+    // surface as the structured failure it is rather than a claimed success.
+    let outcome = settled_outcome(success, &transaction);
+    let final_telemetry = map_progress(
+        job.spec.run_id,
+        tracker,
+        JobPhase::Finalizing,
+        final_progress,
+    );
+    terminal(commands, job, tracker, outcome, final_telemetry)
+}
+
+/// Maps a settled transaction plus the adapter's success facts to the
+/// terminal outcome. Success requires the replacement-consistent settled
+/// state; a Conflict settlement becomes a structured output-conflict failure.
+fn settled_outcome(success: SuccessfulJob, transaction: &OutputTransaction) -> ItemOutcome {
+    match (&transaction.replacement, &transaction.state) {
+        (Replacement::KeepOriginal, OutputState::Committed { final_identity })
+        | (Replacement::RetireOriginal, OutputState::Retired { final_identity }) => match success {
+            SuccessfulJob::Encode {
+                outcome,
+                decode_mode,
+            } => ItemOutcome::Converted(CompletionEvidence::LiveEncode {
+                input_size: outcome.input_size,
+                output_size: outcome.output_size,
+                stream_sizes: StreamByteSizes {
+                    video: outcome.stream_sizes.video,
+                    audio: outcome.stream_sizes.audio,
+                    subtitle: outcome.stream_sizes.subtitle,
+                    other: outcome.stream_sizes.other,
+                },
+                encode_decode: decode_mode,
+            }),
+            // The remux adapter reports only the output path; sizes come from
+            // the identities the settlement itself verified.
+            SuccessfulJob::Remux => ItemOutcome::Remuxed(CompletionEvidence::LiveRemux {
+                input_size: transaction.input_identity.size,
+                output_size: final_identity.destructive.size,
+            }),
+        },
+        (_, OutputState::Conflict { .. }) => ItemOutcome::Failed(FailureFacts::new(
+            FailureKind::OutputConflict,
+            "output transaction settled as a conflict",
+        )),
+        _ => ItemOutcome::Stopped,
+    }
 }
 
 fn search_with_fallback(
@@ -1230,7 +1398,7 @@ fn search_with_fallback(
     tools: &MediaTools,
     cancellation: &ActiveCancellation,
     job: &ClaimedJob,
-    telemetry_sequence: &mut u64,
+    tracker: &mut PhaseTracker,
 ) -> Result<AnalysisResult, ItemOutcome> {
     let execution = &job.spec.execution;
     let mut target = execution.requested_target.0;
@@ -1261,7 +1429,7 @@ fn search_with_fallback(
             handle,
             cancellation,
             JobPhase::Analyzing,
-            telemetry_sequence,
+            tracker,
         )
         .map_err(|message| {
             ItemOutcome::Failed(FailureFacts::new(FailureKind::Internal, message))
@@ -1334,8 +1502,9 @@ fn wait_for_report<T>(
     mut handle: JobHandle<T>,
     cancellation: &ActiveCancellation,
     phase: JobPhase,
-    telemetry_sequence: &mut u64,
+    tracker: &mut PhaseTracker,
 ) -> Result<JobReport<T>, String> {
+    tracker.enter(phase);
     let _registration = cancellation.register(
         run_id,
         ActiveJobCancellation::AbAv1(handle.cancellation_handle()),
@@ -1350,10 +1519,9 @@ fn wait_for_report<T>(
                 if let Some(update) = handle.latest_telemetry() {
                     let progress = telemetry_progress(&update);
                     if last_progress.as_ref() != Some(&progress) {
-                        *telemetry_sequence = telemetry_sequence.saturating_add(1);
                         commands.publish_telemetry(Telemetry {
                             run_id,
-                            sequence: *telemetry_sequence,
+                            sequence: tracker.next_sequence(),
                             phase,
                             progress: progress.clone(),
                         });
@@ -1371,8 +1539,9 @@ fn wait_for_remux_report(
     run_id: RunId,
     mut handle: RemuxHandle,
     cancellation: &ActiveCancellation,
-    telemetry_sequence: &mut u64,
+    tracker: &mut PhaseTracker,
 ) -> Result<RemuxReport, String> {
+    tracker.enter(JobPhase::Encoding);
     let _registration = cancellation.register(
         run_id,
         ActiveJobCancellation::Remux(handle.cancellation_handle()),
@@ -1385,10 +1554,9 @@ fn wait_for_remux_report(
                 if let Some(update) = handle.latest_telemetry() {
                     let progress = remux_progress(update);
                     if last_progress.as_ref() != Some(&progress) {
-                        *telemetry_sequence = telemetry_sequence.saturating_add(1);
                         commands.publish_telemetry(Telemetry {
                             run_id,
-                            sequence: *telemetry_sequence,
+                            sequence: tracker.next_sequence(),
                             phase: JobPhase::Encoding,
                             progress: progress.clone(),
                         });
@@ -1627,6 +1795,7 @@ fn fold_transaction(transaction: &mut crfty_core::OutputTransaction, delta: Outp
 fn terminal(
     commands: &CommandSender,
     job: &ClaimedJob,
+    tracker: &mut PhaseTracker,
     outcome: ItemOutcome,
     final_telemetry: Option<Telemetry>,
 ) -> Result<(), String> {
@@ -1637,6 +1806,8 @@ fn terminal(
             claim_id: job.spec.claim_id,
             run_id: job.spec.run_id,
             outcome,
+            at: now_millis(),
+            phase_spans: tracker.finish(),
             final_telemetry,
         })),
     )
@@ -1644,26 +1815,28 @@ fn terminal(
 
 fn map_progress(
     run_id: RunId,
-    sequence: &mut u64,
+    tracker: &mut PhaseTracker,
     phase: JobPhase,
     progress: Option<JobProgress>,
 ) -> Option<Telemetry> {
-    progress.map(|progress| {
-        *sequence = sequence.saturating_add(1);
-        Telemetry {
-            run_id,
-            sequence: *sequence,
-            phase,
-            progress,
-        }
+    progress.map(|progress| Telemetry {
+        run_id,
+        sequence: tracker.next_sequence(),
+        phase,
+        progress,
     })
 }
 
-fn publish_phase(commands: &CommandSender, run_id: RunId, sequence: &mut u64, phase: JobPhase) {
-    *sequence = sequence.saturating_add(1);
+fn publish_phase(
+    commands: &CommandSender,
+    run_id: RunId,
+    tracker: &mut PhaseTracker,
+    phase: JobPhase,
+) {
+    tracker.enter(phase);
     commands.publish_telemetry(Telemetry {
         run_id,
-        sequence: *sequence,
+        sequence: tracker.next_sequence(),
         phase,
         progress: JobProgress::Phase,
     });

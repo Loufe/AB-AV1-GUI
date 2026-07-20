@@ -4,10 +4,11 @@ use serde::Serialize;
 
 use crate::state::ConversionRun;
 use crate::{
-    AnalysisResult, AppState, ClaimId, ClaimedJob, ConfigDelta, DecodeMode, DecodePreference,
-    DurableDelta, ExecutionSettings, ItemOutcome, JobAction, JobSpec, MediaObservation, Operation,
-    OutputDelta, OutputTarget, QueueItem, QueueItemId, QueueItemState, ReservedJob, RunId,
-    SessionState, Settings, Telemetry, ToolAvailability, fold, fold_config, select_job_action,
+    AnalysisResult, AppState, ClaimId, ClaimedJob, CompletionEvidence, ConfigDelta, DecodeMode,
+    DecodePreference, DurableDelta, ExecutionSettings, ItemOutcome, JobAction, JobSpec,
+    MediaObservation, Operation, OutputDelta, OutputTarget, PhaseSpan, QueueItem, QueueItemId,
+    QueueItemState, ReservedJob, RunId, SessionState, Settings, Telemetry, ToolAvailability,
+    UnixMillis, fold, fold_config, select_job_action,
 };
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -65,11 +66,13 @@ pub enum WorkerCommand {
         item_id: QueueItemId,
         claim_id: ClaimId,
         run_id: RunId,
+        at: UnixMillis,
     },
     Started {
         item_id: QueueItemId,
         claim_id: ClaimId,
         run_id: RunId,
+        at: UnixMillis,
     },
     Output(OutputDelta),
     RecordAnalysis {
@@ -83,6 +86,8 @@ pub enum WorkerCommand {
         claim_id: ClaimId,
         run_id: RunId,
         outcome: ItemOutcome,
+        at: UnixMillis,
+        phase_spans: Vec<PhaseSpan>,
         final_telemetry: Option<Telemetry>,
     },
     Crashed {
@@ -463,6 +468,7 @@ fn apply_worker(state: &AppState, command: WorkerCommand) -> Applied {
             item_id,
             claim_id,
             run_id,
+            at,
         } => {
             let Some(item) = find_item(state, item_id) else {
                 return Applied::rejected("queue item does not exist");
@@ -483,6 +489,8 @@ fn apply_worker(state: &AppState, command: WorkerCommand) -> Applied {
                 claim_id,
                 run_id,
                 outcome: ItemOutcome::Stopped,
+                at,
+                phase_spans: Vec::new(),
             });
             applied
         }
@@ -490,11 +498,13 @@ fn apply_worker(state: &AppState, command: WorkerCommand) -> Applied {
             item_id,
             claim_id,
             run_id,
+            at,
         } => transition_active(state, item_id, claim_id, run_id, |applied| {
             applied.durable.push(DurableDelta::ItemRunning {
                 item_id,
                 claim_id,
                 run_id,
+                at,
             });
         }),
         WorkerCommand::Output(output_delta) => {
@@ -542,6 +552,8 @@ fn apply_worker(state: &AppState, command: WorkerCommand) -> Applied {
             claim_id,
             run_id,
             outcome,
+            at,
+            phase_spans,
             final_telemetry,
         } => transition_active(state, item_id, claim_id, run_id, |applied| {
             let unsettled = state
@@ -583,6 +595,8 @@ fn apply_worker(state: &AppState, command: WorkerCommand) -> Applied {
                 claim_id,
                 run_id,
                 outcome,
+                at,
+                phase_spans,
             });
         }),
         WorkerCommand::Finished => {
@@ -623,20 +637,32 @@ pub(crate) fn validate_terminal(
                 return Err("analyzed outcome is incompatible with the run state");
             }
         }
-        ItemOutcome::Converted => {
+        ItemOutcome::Converted(evidence) => {
             if !matches!(run.spec.action, JobAction::Encode { .. }) || run.analysis.is_none() {
                 return Err("converted outcome requires a converted run with durable analysis");
             }
             if !has_successful_output(output) {
                 return Err("converted outcome requires a successfully settled output");
             }
+            if run.started_at.is_none() {
+                return Err("successful outcome requires a started run");
+            }
+            if matches!(evidence, CompletionEvidence::LiveRemux { .. }) {
+                return Err("converted outcome cannot carry remux evidence");
+            }
         }
-        ItemOutcome::Remuxed => {
+        ItemOutcome::Remuxed(evidence) => {
             if !matches!(run.spec.action, JobAction::Remux) || run.analysis.is_some() {
                 return Err("remuxed outcome requires a remux run without analysis");
             }
             if !has_successful_output(output) {
                 return Err("remuxed outcome requires a successfully settled output");
+            }
+            if run.started_at.is_none() {
+                return Err("successful outcome requires a started run");
+            }
+            if matches!(evidence, CompletionEvidence::LiveEncode { .. }) {
+                return Err("remuxed outcome cannot carry encode evidence");
             }
         }
         ItemOutcome::NotWorthwhile { attempts } => {

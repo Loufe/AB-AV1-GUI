@@ -59,9 +59,16 @@ export type AppSnapshot_Serialize = {
 	settings: Settings,
 };
 
-export type ArtifactIdentity = {
+export type ArtifactIdentity = ArtifactIdentity_Serialize | ArtifactIdentity_Deserialize;
+
+export type ArtifactIdentity_Deserialize = {
 	content_key: ContentKey,
-	destructive: DestructiveIdentity,
+	destructive: DestructiveIdentity_Deserialize,
+};
+
+export type ArtifactIdentity_Serialize = {
+	content_key: ContentKey,
+	destructive: DestructiveIdentity_Serialize,
 };
 
 export type ClaimId = number;
@@ -70,6 +77,26 @@ export type CommandError = {
 	code: string,
 	message: string,
 };
+
+/**
+ *  Where the facts backing a successful outcome came from. A live run carries
+ *  what the adapter measured; a crash-recovered success carries nothing —
+ *  output size, path, and content key are already durable on the settled
+ *  transaction, and fabricating adapter fields would be dishonest.
+ */
+export type CompletionEvidence = ({ LiveEncode: {
+	input_size: number,
+	output_size: number,
+	stream_sizes: StreamByteSizes,
+	/**
+	 *  The decode mode the encode actually ran with; diverges from the
+	 *  analysis profile once the hardware→software retry ladder exists.
+	 */
+	encode_decode: DecodeMode,
+} }) & { LiveRemux?: never } | ({ LiveRemux: {
+	input_size: number,
+	output_size: number,
+} }) & { LiveEncode?: never } | "RecoveredAtStartup";
 
 export type ConfigDelta = { SettingsChanged: {
 	settings: Settings,
@@ -89,6 +116,9 @@ export type ConversionRun = {
 	analysis: AnalysisResult | null,
 	output_content_key: ContentKey | null,
 	outcome: ItemOutcome | null,
+	started_at: UnixMillis | null,
+	finished_at: UnixMillis | null,
+	phase_spans: PhaseSpan[],
 };
 
 export type Crf = number;
@@ -99,10 +129,18 @@ export type DecodePreference = "SoftwareOnly" | "HardwarePreferred";
 
 export type DefaultOutputMode = "replace" | "suffix" | "separate_folder";
 
-export type DestructiveIdentity = {
-	file_id: FileSystemId,
+export type DestructiveIdentity = DestructiveIdentity_Serialize | DestructiveIdentity_Deserialize;
+
+export type DestructiveIdentity_Deserialize = {
+	file_id: FileSystemId_Deserialize,
 	size: number,
-	modified_ns: number | null,
+	modified_ns: FileTimeNs | null,
+};
+
+export type DestructiveIdentity_Serialize = {
+	file_id: FileSystemId_Serialize,
+	size: number,
+	modified_ns: FileTimeNs | null,
 };
 
 /**
@@ -115,7 +153,9 @@ export type DestructiveIdentity = {
  */
 export type DiagnosticTail = string;
 
-export type DurableDelta = ({ QueueAdded: {
+export type DurableDelta = DurableDelta_Serialize | DurableDelta_Deserialize;
+
+export type DurableDelta_Deserialize = ({ QueueAdded: {
 	item: QueueItem,
 } }) & { AnalysisRecorded?: never; ItemFinished?: never; ItemPrepared?: never; ItemReserved?: never; ItemRunning?: never; MediaObserved?: never; Output?: never; QueueMoved?: never; QueueRemoved?: never } | ({ QueueRemoved: {
 	item_id: QueueItemId,
@@ -132,6 +172,7 @@ export type DurableDelta = ({ QueueAdded: {
 	item_id: QueueItemId,
 	claim_id: ClaimId,
 	run_id: RunId,
+	at: UnixMillis,
 } }) & { AnalysisRecorded?: never; ItemFinished?: never; ItemPrepared?: never; ItemReserved?: never; MediaObserved?: never; Output?: never; QueueAdded?: never; QueueMoved?: never; QueueRemoved?: never } | ({ AnalysisRecorded: {
 	run_id: RunId,
 	result: AnalysisResult,
@@ -140,7 +181,39 @@ export type DurableDelta = ({ QueueAdded: {
 	claim_id: ClaimId,
 	run_id: RunId,
 	outcome: ItemOutcome,
-} }) & { AnalysisRecorded?: never; ItemPrepared?: never; ItemReserved?: never; ItemRunning?: never; MediaObserved?: never; Output?: never; QueueAdded?: never; QueueMoved?: never; QueueRemoved?: never } | ({ Output: OutputDelta }) & { AnalysisRecorded?: never; ItemFinished?: never; ItemPrepared?: never; ItemReserved?: never; ItemRunning?: never; MediaObserved?: never; QueueAdded?: never; QueueMoved?: never; QueueRemoved?: never };
+	at: UnixMillis,
+	phase_spans: PhaseSpan[],
+} }) & { AnalysisRecorded?: never; ItemPrepared?: never; ItemReserved?: never; ItemRunning?: never; MediaObserved?: never; Output?: never; QueueAdded?: never; QueueMoved?: never; QueueRemoved?: never } | ({ Output: OutputDelta_Deserialize }) & { AnalysisRecorded?: never; ItemFinished?: never; ItemPrepared?: never; ItemReserved?: never; ItemRunning?: never; MediaObserved?: never; QueueAdded?: never; QueueMoved?: never; QueueRemoved?: never };
+
+export type DurableDelta_Serialize = ({ QueueAdded: {
+	item: QueueItem,
+} }) & { AnalysisRecorded?: never; ItemFinished?: never; ItemPrepared?: never; ItemReserved?: never; ItemRunning?: never; MediaObserved?: never; Output?: never; QueueMoved?: never; QueueRemoved?: never } | ({ QueueRemoved: {
+	item_id: QueueItemId,
+} }) & { AnalysisRecorded?: never; ItemFinished?: never; ItemPrepared?: never; ItemReserved?: never; ItemRunning?: never; MediaObserved?: never; Output?: never; QueueAdded?: never; QueueMoved?: never } | ({ QueueMoved: {
+	item_id: QueueItemId,
+	before: QueueItemId | null,
+} }) & { AnalysisRecorded?: never; ItemFinished?: never; ItemPrepared?: never; ItemReserved?: never; ItemRunning?: never; MediaObserved?: never; Output?: never; QueueAdded?: never; QueueRemoved?: never } | ({ ItemReserved: {
+	job: ReservedJob,
+} }) & { AnalysisRecorded?: never; ItemFinished?: never; ItemPrepared?: never; ItemRunning?: never; MediaObserved?: never; Output?: never; QueueAdded?: never; QueueMoved?: never; QueueRemoved?: never } | ({ MediaObserved: {
+	observation: MediaObservation,
+} }) & { AnalysisRecorded?: never; ItemFinished?: never; ItemPrepared?: never; ItemReserved?: never; ItemRunning?: never; Output?: never; QueueAdded?: never; QueueMoved?: never; QueueRemoved?: never } | ({ ItemPrepared: {
+	spec: JobSpec,
+} }) & { AnalysisRecorded?: never; ItemFinished?: never; ItemReserved?: never; ItemRunning?: never; MediaObserved?: never; Output?: never; QueueAdded?: never; QueueMoved?: never; QueueRemoved?: never } | ({ ItemRunning: {
+	item_id: QueueItemId,
+	claim_id: ClaimId,
+	run_id: RunId,
+	at: UnixMillis,
+} }) & { AnalysisRecorded?: never; ItemFinished?: never; ItemPrepared?: never; ItemReserved?: never; MediaObserved?: never; Output?: never; QueueAdded?: never; QueueMoved?: never; QueueRemoved?: never } | ({ AnalysisRecorded: {
+	run_id: RunId,
+	result: AnalysisResult,
+} }) & { ItemFinished?: never; ItemPrepared?: never; ItemReserved?: never; ItemRunning?: never; MediaObserved?: never; Output?: never; QueueAdded?: never; QueueMoved?: never; QueueRemoved?: never } | ({ ItemFinished: {
+	item_id: QueueItemId,
+	claim_id: ClaimId,
+	run_id: RunId,
+	outcome: ItemOutcome,
+	at: UnixMillis,
+	phase_spans: PhaseSpan[],
+} }) & { AnalysisRecorded?: never; ItemPrepared?: never; ItemReserved?: never; ItemRunning?: never; MediaObserved?: never; Output?: never; QueueAdded?: never; QueueMoved?: never; QueueRemoved?: never } | ({ Output: OutputDelta_Serialize }) & { AnalysisRecorded?: never; ItemFinished?: never; ItemPrepared?: never; ItemReserved?: never; ItemRunning?: never; MediaObserved?: never; QueueAdded?: never; QueueMoved?: never; QueueRemoved?: never };
 
 export type DurableState = DurableState_Serialize | DurableState_Deserialize;
 
@@ -148,7 +221,7 @@ export type DurableState_Deserialize = {
 	queue: QueueItem[],
 	paths: { [key in PathHash]: PathBinding },
 	records: { [key in ContentKey]: FileRecord_Deserialize },
-	outputs: { [key in RunId]: OutputTransaction },
+	outputs: { [key in RunId]: OutputTransaction_Deserialize },
 	conversion_runs: { [key in RunId]: ConversionRun },
 };
 
@@ -156,9 +229,12 @@ export type DurableState_Serialize = {
 	queue: QueueItem[],
 	paths: { [key in PathHash]: PathBinding },
 	records: { [key in ContentKey]: FileRecord_Serialize },
-	outputs: { [key in RunId]: OutputTransaction },
+	outputs: { [key in RunId]: OutputTransaction_Serialize },
 	conversion_runs: { [key in RunId]: ConversionRun },
 };
+
+/**  A duration in milliseconds, measured engine-side with a monotonic clock. */
+export type DurationMs = number;
 
 export type EphemeralDelta = ({ SessionChanged: SessionState }) & { CommandRejected?: never; Telemetry?: never; TelemetryCleared?: never; ToolsChanged?: never; WorkerCrashed?: never } | ({ Telemetry: Telemetry }) & { CommandRejected?: never; SessionChanged?: never; TelemetryCleared?: never; ToolsChanged?: never; WorkerCrashed?: never } | ({ TelemetryCleared: {
 	run_id: RunId,
@@ -210,10 +286,12 @@ export type FileRecord_Serialize = {
 
 export type FileStamp = {
 	size: number,
-	modified_ns: number | null,
+	modified_ns: FileTimeNs | null,
 };
 
-export type FileSystemId = ({ Unix: {
+export type FileSystemId = FileSystemId_Serialize | FileSystemId_Deserialize;
+
+export type FileSystemId_Deserialize = ({ Unix: {
 	device: number,
 	inode: number,
 } }) & { WindowsHighResolution?: never; WindowsLowResolution?: never } | ({ WindowsLowResolution: {
@@ -221,16 +299,34 @@ export type FileSystemId = ({ Unix: {
 	file_index: number,
 } }) & { Unix?: never; WindowsHighResolution?: never } | ({ WindowsHighResolution: {
 	volume_serial: number,
-	file_id: number,
+	file_id: string,
 } }) & { Unix?: never; WindowsLowResolution?: never };
+
+export type FileSystemId_Serialize = ({ Unix: {
+	device: number,
+	inode: number,
+} }) & { WindowsHighResolution?: never; WindowsLowResolution?: never } | ({ WindowsLowResolution: {
+	volume_serial: number,
+	file_index: number,
+} }) & { Unix?: never; WindowsHighResolution?: never } | ({ WindowsHighResolution: {
+	volume_serial: number,
+	file_id: string,
+} }) & { Unix?: never; WindowsLowResolution?: never };
+
+/**
+ *  A filesystem modification time in nanoseconds since the Unix epoch.
+ *  Serialized as a JSON string: the value routinely exceeds 2^53, which a
+ *  JavaScript `number` would silently round. The frontend treats it as opaque.
+ */
+export type FileTimeNs = string;
 
 export type HardwareDecoder = "H264Cuvid" | "H264Qsv" | "HevcCuvid" | "HevcQsv" | "Vp9Cuvid" | "Vp9Qsv" | "Av1Cuvid" | "Av1Qsv";
 
-export type ItemOutcome = "Analyzed" | "Converted" | "Remuxed" | ({ NotWorthwhile: {
+export type ItemOutcome = "Analyzed" | ({ Converted: CompletionEvidence }) & { Failed?: never; NotWorthwhile?: never; Remuxed?: never; Skipped?: never } | ({ Remuxed: CompletionEvidence }) & { Converted?: never; Failed?: never; NotWorthwhile?: never; Skipped?: never } | ({ NotWorthwhile: {
 	attempts: AnalysisAttempt[],
-} }) & { Failed?: never; Skipped?: never } | "Stopped" | ({ Skipped: {
+} }) & { Converted?: never; Failed?: never; Remuxed?: never; Skipped?: never } | "Stopped" | ({ Skipped: {
 	reason: SkipReason,
-} }) & { Failed?: never; NotWorthwhile?: never } | ({ Failed: FailureFacts }) & { NotWorthwhile?: never; Skipped?: never };
+} }) & { Converted?: never; Failed?: never; NotWorthwhile?: never; Remuxed?: never } | ({ Failed: FailureFacts }) & { Converted?: never; NotWorthwhile?: never; Remuxed?: never; Skipped?: never };
 
 export type JobAction = ({ Analyze: {
 	selected_analysis: AnalysisResult | null,
@@ -268,21 +364,46 @@ export type MediaTool = "Ffmpeg" | "Ffprobe";
 
 export type Operation = "Analyze" | "Convert";
 
-export type OutputDelta = ({ OutputStarted: {
-	transaction: OutputTransaction,
+export type OutputDelta = OutputDelta_Serialize | OutputDelta_Deserialize;
+
+export type OutputDelta_Deserialize = ({ OutputStarted: {
+	transaction: OutputTransaction_Deserialize,
 } }) & { AbandonStagingIntent?: never; Abandoned?: never; Conflict?: never; OriginalRetired?: never; OutputCommitted?: never; OutputReady?: never; RetireOriginalIntent?: never } | ({ OutputReady: {
 	run_id: RunId,
-	staging_identity: ArtifactIdentity,
+	staging_identity: ArtifactIdentity_Deserialize,
 } }) & { AbandonStagingIntent?: never; Abandoned?: never; Conflict?: never; OriginalRetired?: never; OutputCommitted?: never; OutputStarted?: never; RetireOriginalIntent?: never } | ({ OutputCommitted: {
 	run_id: RunId,
-	final_identity: ArtifactIdentity,
+	final_identity: ArtifactIdentity_Deserialize,
 } }) & { AbandonStagingIntent?: never; Abandoned?: never; Conflict?: never; OriginalRetired?: never; OutputReady?: never; OutputStarted?: never; RetireOriginalIntent?: never } | ({ RetireOriginalIntent: {
 	run_id: RunId,
 } }) & { AbandonStagingIntent?: never; Abandoned?: never; Conflict?: never; OriginalRetired?: never; OutputCommitted?: never; OutputReady?: never; OutputStarted?: never } | ({ OriginalRetired: {
 	run_id: RunId,
 } }) & { AbandonStagingIntent?: never; Abandoned?: never; Conflict?: never; OutputCommitted?: never; OutputReady?: never; OutputStarted?: never; RetireOriginalIntent?: never } | ({ AbandonStagingIntent: {
 	run_id: RunId,
-	staging_identity: DestructiveIdentity,
+	staging_identity: DestructiveIdentity_Deserialize,
+} }) & { Abandoned?: never; Conflict?: never; OriginalRetired?: never; OutputCommitted?: never; OutputReady?: never; OutputStarted?: never; RetireOriginalIntent?: never } | ({ Abandoned: {
+	run_id: RunId,
+} }) & { AbandonStagingIntent?: never; Conflict?: never; OriginalRetired?: never; OutputCommitted?: never; OutputReady?: never; OutputStarted?: never; RetireOriginalIntent?: never } | ({ Conflict: {
+	run_id: RunId,
+	kind: ConflictKind,
+	detail: string,
+} }) & { AbandonStagingIntent?: never; Abandoned?: never; OriginalRetired?: never; OutputCommitted?: never; OutputReady?: never; OutputStarted?: never; RetireOriginalIntent?: never };
+
+export type OutputDelta_Serialize = ({ OutputStarted: {
+	transaction: OutputTransaction_Serialize,
+} }) & { AbandonStagingIntent?: never; Abandoned?: never; Conflict?: never; OriginalRetired?: never; OutputCommitted?: never; OutputReady?: never; RetireOriginalIntent?: never } | ({ OutputReady: {
+	run_id: RunId,
+	staging_identity: ArtifactIdentity_Serialize,
+} }) & { AbandonStagingIntent?: never; Abandoned?: never; Conflict?: never; OriginalRetired?: never; OutputCommitted?: never; OutputStarted?: never; RetireOriginalIntent?: never } | ({ OutputCommitted: {
+	run_id: RunId,
+	final_identity: ArtifactIdentity_Serialize,
+} }) & { AbandonStagingIntent?: never; Abandoned?: never; Conflict?: never; OriginalRetired?: never; OutputReady?: never; OutputStarted?: never; RetireOriginalIntent?: never } | ({ RetireOriginalIntent: {
+	run_id: RunId,
+} }) & { AbandonStagingIntent?: never; Abandoned?: never; Conflict?: never; OriginalRetired?: never; OutputCommitted?: never; OutputReady?: never; OutputStarted?: never } | ({ OriginalRetired: {
+	run_id: RunId,
+} }) & { AbandonStagingIntent?: never; Abandoned?: never; Conflict?: never; OutputCommitted?: never; OutputReady?: never; OutputStarted?: never; RetireOriginalIntent?: never } | ({ AbandonStagingIntent: {
+	run_id: RunId,
+	staging_identity: DestructiveIdentity_Serialize,
 } }) & { Abandoned?: never; Conflict?: never; OriginalRetired?: never; OutputCommitted?: never; OutputReady?: never; OutputStarted?: never; RetireOriginalIntent?: never } | ({ Abandoned: {
 	run_id: RunId,
 } }) & { AbandonStagingIntent?: never; Conflict?: never; OriginalRetired?: never; OutputCommitted?: never; OutputReady?: never; OutputStarted?: never; RetireOriginalIntent?: never } | ({ Conflict: {
@@ -298,16 +419,33 @@ export type OutputSettings = {
 	overwrite_existing: boolean,
 };
 
-export type OutputState = "Started" | ({ Ready: {
-	staging_identity: ArtifactIdentity,
+export type OutputState = OutputState_Serialize | OutputState_Deserialize;
+
+export type OutputState_Deserialize = "Started" | ({ Ready: {
+	staging_identity: ArtifactIdentity_Deserialize,
 } }) & { AbandonIntent?: never; Committed?: never; Conflict?: never; RetireIntent?: never; Retired?: never } | ({ Committed: {
-	final_identity: ArtifactIdentity,
+	final_identity: ArtifactIdentity_Deserialize,
 } }) & { AbandonIntent?: never; Conflict?: never; Ready?: never; RetireIntent?: never; Retired?: never } | ({ RetireIntent: {
-	final_identity: ArtifactIdentity,
+	final_identity: ArtifactIdentity_Deserialize,
 } }) & { AbandonIntent?: never; Committed?: never; Conflict?: never; Ready?: never; Retired?: never } | ({ Retired: {
-	final_identity: ArtifactIdentity,
+	final_identity: ArtifactIdentity_Deserialize,
 } }) & { AbandonIntent?: never; Committed?: never; Conflict?: never; Ready?: never; RetireIntent?: never } | ({ AbandonIntent: {
-	staging_identity: DestructiveIdentity,
+	staging_identity: DestructiveIdentity_Deserialize,
+} }) & { Committed?: never; Conflict?: never; Ready?: never; RetireIntent?: never; Retired?: never } | "Abandoned" | ({ Conflict: {
+	kind: ConflictKind,
+	detail: string,
+} }) & { AbandonIntent?: never; Committed?: never; Ready?: never; RetireIntent?: never; Retired?: never };
+
+export type OutputState_Serialize = "Started" | ({ Ready: {
+	staging_identity: ArtifactIdentity_Serialize,
+} }) & { AbandonIntent?: never; Committed?: never; Conflict?: never; RetireIntent?: never; Retired?: never } | ({ Committed: {
+	final_identity: ArtifactIdentity_Serialize,
+} }) & { AbandonIntent?: never; Conflict?: never; Ready?: never; RetireIntent?: never; Retired?: never } | ({ RetireIntent: {
+	final_identity: ArtifactIdentity_Serialize,
+} }) & { AbandonIntent?: never; Committed?: never; Conflict?: never; Ready?: never; Retired?: never } | ({ Retired: {
+	final_identity: ArtifactIdentity_Serialize,
+} }) & { AbandonIntent?: never; Committed?: never; Conflict?: never; Ready?: never; RetireIntent?: never } | ({ AbandonIntent: {
+	staging_identity: DestructiveIdentity_Serialize,
 } }) & { Committed?: never; Conflict?: never; Ready?: never; RetireIntent?: never; Retired?: never } | "Abandoned" | ({ Conflict: {
 	kind: ConflictKind,
 	detail: string,
@@ -320,16 +458,30 @@ export type OutputTarget = "Replace" | ({ Suffix: {
 	source_root: string | null,
 } }) & { Suffix?: never };
 
-export type OutputTransaction = {
+export type OutputTransaction = OutputTransaction_Serialize | OutputTransaction_Deserialize;
+
+export type OutputTransaction_Deserialize = {
 	run_id: RunId,
 	input: string,
-	input_identity: DestructiveIdentity,
+	input_identity: DestructiveIdentity_Deserialize,
 	staging: string,
-	initial_staging_identity: DestructiveIdentity,
+	initial_staging_identity: DestructiveIdentity_Deserialize,
 	final_path: string,
-	final_preimage: DestructiveIdentity | null,
+	final_preimage: DestructiveIdentity_Deserialize | null,
 	replacement: Replacement,
-	state: OutputState,
+	state: OutputState_Deserialize,
+};
+
+export type OutputTransaction_Serialize = {
+	run_id: RunId,
+	input: string,
+	input_identity: DestructiveIdentity_Serialize,
+	staging: string,
+	initial_staging_identity: DestructiveIdentity_Serialize,
+	final_path: string,
+	final_preimage: DestructiveIdentity_Serialize | null,
+	replacement: Replacement,
+	state: OutputState_Serialize,
 };
 
 export type PathBinding = {
@@ -338,6 +490,16 @@ export type PathBinding = {
 };
 
 export type PathHash = string;
+
+/**
+ *  How long one job phase ran, measured monotonically by the worker and
+ *  delivered in the lossless terminal command — telemetry is never a durable
+ *  source.
+ */
+export type PhaseSpan = {
+	phase: JobPhase,
+	duration: DurationMs,
+};
 
 export type PrivacySettings = {
 	anonymize_logs: boolean,
@@ -415,15 +577,23 @@ export type SkipReason = { LowResolution: {
 	minimum: number,
 } } | "AlreadyAv1Matroska" | "OutputExists";
 
+/**  Core-owned mirror of the adapter's per-stream output byte accounting. */
+export type StreamByteSizes = {
+	video: number,
+	audio: number,
+	subtitle: number,
+	other: number,
+};
+
 export type StreamPayload = StreamPayload_Serialize | StreamPayload_Deserialize;
 
-export type StreamPayload_Deserialize = ({ Snapshot: AppSnapshot_Deserialize }) & { Config?: never; Degraded?: never; Durable?: never; EngineFatal?: never; Ephemeral?: never } | ({ Durable: DurableDelta }) & { Config?: never; Degraded?: never; EngineFatal?: never; Ephemeral?: never; Snapshot?: never } | ({ Config: ConfigDelta }) & { Degraded?: never; Durable?: never; EngineFatal?: never; Ephemeral?: never; Snapshot?: never } | ({ Ephemeral: EphemeralDelta }) & { Config?: never; Degraded?: never; Durable?: never; EngineFatal?: never; Snapshot?: never } | ({ Degraded: {
+export type StreamPayload_Deserialize = ({ Snapshot: AppSnapshot_Deserialize }) & { Config?: never; Degraded?: never; Durable?: never; EngineFatal?: never; Ephemeral?: never } | ({ Durable: DurableDelta_Deserialize }) & { Config?: never; Degraded?: never; EngineFatal?: never; Ephemeral?: never; Snapshot?: never } | ({ Config: ConfigDelta }) & { Degraded?: never; Durable?: never; EngineFatal?: never; Ephemeral?: never; Snapshot?: never } | ({ Ephemeral: EphemeralDelta }) & { Config?: never; Degraded?: never; Durable?: never; EngineFatal?: never; Snapshot?: never } | ({ Degraded: {
 	reason: string,
 } }) & { Config?: never; Durable?: never; EngineFatal?: never; Ephemeral?: never; Snapshot?: never } | ({ EngineFatal: {
 	message: string,
 } }) & { Config?: never; Degraded?: never; Durable?: never; Ephemeral?: never; Snapshot?: never };
 
-export type StreamPayload_Serialize = ({ Snapshot: AppSnapshot_Serialize }) & { Config?: never; Degraded?: never; Durable?: never; EngineFatal?: never; Ephemeral?: never } | ({ Durable: DurableDelta }) & { Config?: never; Degraded?: never; EngineFatal?: never; Ephemeral?: never; Snapshot?: never } | ({ Config: ConfigDelta }) & { Degraded?: never; Durable?: never; EngineFatal?: never; Ephemeral?: never; Snapshot?: never } | ({ Ephemeral: EphemeralDelta }) & { Config?: never; Degraded?: never; Durable?: never; EngineFatal?: never; Snapshot?: never } | ({ Degraded: {
+export type StreamPayload_Serialize = ({ Snapshot: AppSnapshot_Serialize }) & { Config?: never; Degraded?: never; Durable?: never; EngineFatal?: never; Ephemeral?: never } | ({ Durable: DurableDelta_Serialize }) & { Config?: never; Degraded?: never; EngineFatal?: never; Ephemeral?: never; Snapshot?: never } | ({ Config: ConfigDelta }) & { Degraded?: never; Durable?: never; EngineFatal?: never; Ephemeral?: never; Snapshot?: never } | ({ Ephemeral: EphemeralDelta }) & { Config?: never; Degraded?: never; Durable?: never; EngineFatal?: never; Snapshot?: never } | ({ Degraded: {
 	reason: string,
 } }) & { Config?: never; Durable?: never; EngineFatal?: never; Ephemeral?: never; Snapshot?: never } | ({ EngineFatal: {
 	message: string,
@@ -445,6 +615,12 @@ export type ToolAvailability = "Available" | { Missing: {
 	missing: MediaTool[],
 	detail: string,
 } };
+
+/**
+ *  A wall-clock instant in milliseconds since the Unix epoch. Stamped by the
+ *  engine (core has no clock) and delivered inside command payloads.
+ */
+export type UnixMillis = number;
 
 export type VideoCodec = "Av1" | "H264" | "Hevc" | "Vp9" | { Other: string };
 

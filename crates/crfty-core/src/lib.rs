@@ -19,6 +19,7 @@ mod policy;
 mod reducer;
 mod settings;
 mod state;
+mod time;
 
 /// Export-only override target for `#[specta(type = ...)]` on integers wider
 /// than 32 bits. Tauri's JSON transport delivers every integer as a JavaScript
@@ -60,10 +61,12 @@ pub use settings::{
     VideoExtension,
 };
 pub use state::{
-    AppSnapshot, AppState, ClaimId, ConfigDelta, DurableDelta, DurableState, ItemOutcome,
-    JobProgress, JournalSequence, MediaTool, QueueItem, QueueItemId, QueueItemState, RunId,
-    SessionState, Telemetry, ToolAvailability, fold, fold_config,
+    AppSnapshot, AppState, ClaimId, CompletionEvidence, ConfigDelta, DurableDelta, DurableState,
+    ItemOutcome, JobProgress, JournalSequence, MediaTool, PhaseSpan, QueueItem, QueueItemId,
+    QueueItemState, RunId, SessionState, StreamByteSizes, Telemetry, ToolAvailability, fold,
+    fold_config,
 };
+pub use time::{DurationMs, FileTimeNs, UnixMillis};
 
 #[cfg(test)]
 mod tests;

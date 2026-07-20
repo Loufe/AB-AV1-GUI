@@ -4,7 +4,10 @@
 use std::{
     fs,
     path::{Path, PathBuf},
-    sync::atomic::{AtomicU64, Ordering},
+    sync::{
+        Mutex,
+        atomic::{AtomicU64, Ordering},
+    },
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
 
@@ -14,7 +17,7 @@ use crfty_core::{
     FailureFacts, FailureKind, ItemOutcome, JobPhase, JobProgress, Operation, OutputDelta,
     OutputTarget, QueueCommand, QueueItemId, Replacement, Reply, RunId, SearchMeasurement,
     SessionCommand, Settings, SettingsCommand, SystemCommand, Telemetry, ToolAvailability,
-    ToolRevisions, VmafScore, WorkerCommand, apply, fold, replay,
+    ToolRevisions, UnixMillis, VmafScore, WorkerCommand, apply, fold, replay,
 };
 use crfty_engine::{
     ab_av1::MediaTools,
@@ -26,6 +29,10 @@ use crfty_engine::{
 };
 
 static TEMP_SEQUENCE: AtomicU64 = AtomicU64::new(0);
+
+/// `AbAv1Runtime` is a process-wide singleton; engine-starting tests in this
+/// file must not overlap.
+static ENGINE_GUARD: Mutex<()> = Mutex::new(());
 
 fn execution() -> ExecutionSettings {
     ExecutionSettings::production(
@@ -322,6 +329,8 @@ fn telemetry_pressure_coalesces_and_terminal_value_wins() {
                 claim_id: ClaimId(2),
                 run_id: RunId(3),
                 outcome: ItemOutcome::Failed(FailureFacts::new(FailureKind::Internal, "fixture")),
+                at: UnixMillis(1_000),
+                phase_spans: Vec::new(),
                 final_telemetry: Some(Telemetry {
                     run_id: RunId(3),
                     sequence: terminal_sequence,
@@ -382,6 +391,8 @@ fn terminal_publishes_final_telemetry_and_clear_before_item_finished() {
                 claim_id: ClaimId(2),
                 run_id: RunId(3),
                 outcome: ItemOutcome::Failed(FailureFacts::new(FailureKind::Internal, "fixture")),
+                at: UnixMillis(1_000),
+                phase_spans: Vec::new(),
                 final_telemetry: Some(Telemetry {
                     run_id: RunId(3),
                     sequence: final_sequence,
@@ -453,12 +464,15 @@ fn restart_after_fsynced_terminal_folds_to_finished_snapshot() {
             item_id: QueueItemId(1),
             claim_id: ClaimId(2),
             run_id: RunId(3),
+            at: UnixMillis(1_000),
         }),
         Command::Worker(WorkerCommand::Terminal {
             item_id: QueueItemId(1),
             claim_id: ClaimId(2),
             run_id: RunId(3),
             outcome: ItemOutcome::Failed(FailureFacts::new(FailureKind::Internal, "fixture")),
+            at: UnixMillis(1_000),
+            phase_spans: Vec::new(),
             final_telemetry: Some(Telemetry {
                 run_id: RunId(3),
                 sequence: 9,
@@ -600,6 +614,7 @@ fn invalid_partial_staging_is_cleaned_without_media_validation() {
 
 #[test]
 fn engine_startup_recovers_an_active_partial_staging_transaction() {
+    let _engine_guard = ENGINE_GUARD.lock().expect("engine guard");
     let directory = TestDirectory::new("engine-startup-recovery");
     let journal_path = directory.path().join("state.jsonl");
     let input = directory.path().join("input.mp4");
@@ -646,6 +661,7 @@ fn engine_startup_recovers_an_active_partial_staging_transaction() {
             item_id: QueueItemId(1),
             claim_id: ClaimId(2),
             run_id: RunId(3),
+            at: UnixMillis(1_000),
         }),
         Command::Worker(WorkerCommand::RecordAnalysis {
             item_id: QueueItemId(1),
@@ -691,6 +707,154 @@ fn engine_startup_recovers_an_active_partial_staging_transaction() {
     assert!(!transaction.staging.exists());
     // Recovery may forward an idempotent TelemetryCleared after the snapshot,
     // but live telemetry must never follow a recovered terminal.
+    while let Ok(event) = engine.events.try_recv() {
+        assert!(
+            !matches!(event, DriverEvent::Ephemeral(EphemeralDelta::Telemetry(_))),
+            "telemetry after recovered terminal: {event:?}"
+        );
+    }
+    engine.shutdown().expect("engine shutdown");
+}
+
+/// The crash-after-settlement window: the journal holds a fully settled,
+/// promoted output transaction but the process died before the terminal was
+/// recorded. Startup recovery must derive success from the settled ledger —
+/// `Converted(RecoveredAtStartup)` — not record a lying `Stopped`, and no
+/// telemetry may follow the recovered terminal.
+#[test]
+fn engine_startup_derives_converted_from_a_settled_output_without_terminal() {
+    let _engine_guard = ENGINE_GUARD.lock().expect("engine guard");
+    let directory = TestDirectory::new("engine-startup-settled");
+    let journal_path = directory.path().join("state.jsonl");
+    let input = directory.path().join("input.mp4");
+    let final_path = directory.path().join("input.mkv");
+    fs::write(&input, b"input bytes").expect("input fixture");
+    let manager = OutputManager::new(FixtureByteInspector);
+    let transaction = manager
+        .prepare(
+            RunId(3),
+            &input,
+            &final_path,
+            Replacement::KeepOriginal,
+            false,
+        )
+        .expect("prepare transaction");
+    fs::write(&transaction.staging, b"encoded bytes").expect("staging artifact");
+
+    let settings = execution();
+    let mut state = AppState::default();
+    let mut durable = Vec::new();
+    let submit = |state: &mut AppState, command| {
+        let applied = apply(state, command);
+        assert!(!matches!(applied.reply, Reply::Rejected { .. }));
+        applied.durable
+    };
+    for command in [
+        Command::Queue(QueueCommand::Add {
+            item_id: QueueItemId(1),
+            input: input.clone(),
+            operation: Operation::Convert,
+            output_target: OutputTarget::Replace,
+        }),
+        Command::System(SystemCommand::ToolsDiscovered {
+            availability: ToolAvailability::Available,
+        }),
+        Command::Session(SessionCommand::Start),
+        Command::Worker(WorkerCommand::ReserveNext {
+            claim_id: ClaimId(2),
+            run_id: RunId(3),
+        }),
+        Command::Worker(WorkerCommand::PrepareReserved {
+            item_id: QueueItemId(1),
+            claim_id: ClaimId(2),
+            run_id: RunId(3),
+            observation: None,
+            execution: settings.clone(),
+        }),
+        Command::Worker(WorkerCommand::Started {
+            item_id: QueueItemId(1),
+            claim_id: ClaimId(2),
+            run_id: RunId(3),
+            at: UnixMillis(1_000),
+        }),
+        Command::Worker(WorkerCommand::RecordAnalysis {
+            item_id: QueueItemId(1),
+            claim_id: ClaimId(2),
+            run_id: RunId(3),
+            result: Box::new(fixture_analysis(&settings)),
+        }),
+        Command::Worker(WorkerCommand::Output(OutputDelta::OutputStarted {
+            transaction: Box::new(transaction.clone()),
+        })),
+    ] {
+        durable.extend(submit(&mut state, command));
+    }
+    // Drive the transaction to a settled Committed state the way the live
+    // worker would: mark ready, then promote via one recovery step.
+    let ready = manager.mark_ready(&transaction).expect("ready delta");
+    durable.extend(submit(
+        &mut state,
+        Command::Worker(WorkerCommand::Output(ready)),
+    ));
+    let current = state
+        .durable
+        .outputs
+        .get(&RunId(3))
+        .expect("ready transaction")
+        .clone();
+    let committed = manager
+        .recover_once(&current)
+        .expect("promotion")
+        .expect("committed delta");
+    assert!(matches!(committed, OutputDelta::OutputCommitted { .. }));
+    durable.extend(submit(
+        &mut state,
+        Command::Worker(WorkerCommand::Output(committed)),
+    ));
+    let (mut writer, _replay) = JournalWriter::open(&journal_path).expect("journal writer");
+    writer.append_batch(&durable).expect("crash-window batch");
+    drop(writer);
+
+    let executable = std::env::current_exe().expect("test executable");
+    let engine = EngineRuntime::start(EngineConfig {
+        journal_path,
+        config_path: directory.path().join("config.json"),
+        media_tools: ToolDiscovery::Available(MediaTools {
+            ffmpeg: executable.clone(),
+            ffprobe: executable,
+        }),
+        execution: settings,
+    })
+    .expect("engine startup");
+    let DriverEvent::Snapshot(snapshot) = engine.events.recv().expect("recovered snapshot") else {
+        panic!("expected recovered snapshot");
+    };
+    assert!(
+        matches!(
+            snapshot.durable.queue.first().expect("queue item").state,
+            crfty_core::QueueItemState::Finished(ItemOutcome::Converted(
+                crfty_core::CompletionEvidence::RecoveredAtStartup
+            ))
+        ),
+        "unexpected recovered snapshot: {snapshot:?}"
+    );
+    let run = snapshot
+        .durable
+        .conversion_runs
+        .get(&RunId(3))
+        .expect("conversion run");
+    assert!(matches!(
+        run.outcome,
+        Some(ItemOutcome::Converted(
+            crfty_core::CompletionEvidence::RecoveredAtStartup
+        ))
+    ));
+    assert_eq!(run.started_at, Some(UnixMillis(1_000)));
+    assert!(run.finished_at.is_some());
+    assert_eq!(
+        fs::read(&final_path).expect("promoted output"),
+        b"encoded bytes"
+    );
     while let Ok(event) = engine.events.try_recv() {
         assert!(
             !matches!(event, DriverEvent::Ephemeral(EphemeralDelta::Telemetry(_))),

@@ -165,7 +165,15 @@ fn real_coordinator_analyzes_encodes_verifies_and_promotes() {
             ..
         }) = engine.events.recv().expect("coordinator event")
         {
-            assert_eq!(outcome, crfty_core::ItemOutcome::Converted);
+            assert!(
+                matches!(
+                    outcome,
+                    crfty_core::ItemOutcome::Converted(
+                        crfty_core::CompletionEvidence::LiveEncode { .. }
+                    )
+                ),
+                "unexpected outcome: {outcome:?}"
+            );
             break;
         }
     }
@@ -212,7 +220,15 @@ fn real_coordinator_remuxes_av1_mp4_without_reencoding() {
             ..
         }) = engine.events.recv().expect("remux coordinator event")
         {
-            assert_eq!(outcome, crfty_core::ItemOutcome::Remuxed);
+            assert!(
+                matches!(
+                    outcome,
+                    crfty_core::ItemOutcome::Remuxed(
+                        crfty_core::CompletionEvidence::LiveRemux { .. }
+                    )
+                ),
+                "unexpected outcome: {outcome:?}"
+            );
             break;
         }
     }

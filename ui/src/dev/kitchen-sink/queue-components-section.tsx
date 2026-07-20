@@ -40,15 +40,33 @@ function item(
 
 const ENCODE_DURATION_MS = 120_000;
 
+const CONVERTED: QueueItem["state"] = {
+  Finished: {
+    Converted: {
+      LiveEncode: {
+        input_size: 3.21 * GIB,
+        output_size: 1.34 * GIB,
+        stream_sizes: {
+          video: 1.1 * GIB,
+          audio: 0.2 * GIB,
+          subtitle: 0.001 * GIB,
+          other: 0.039 * GIB,
+        },
+        encode_decode: "Software",
+      },
+    },
+  },
+};
+
 const ROWS: QueueRowData[] = [
   {
-    item: item(1, "s01e01.mkv", "Convert", { Finished: "Converted" }),
+    item: item(1, "s01e01.mkv", "Convert", CONVERTED),
     streams: "H264 / AAC",
     sizeBytes: 3.21 * GIB,
     timeSec: 4320,
     timeConfidence: "exact",
     preciseCrf: false,
-    status: deriveRowStatus({ Finished: "Converted" }, null, null, 1.87 * GIB),
+    status: deriveRowStatus(CONVERTED, null, null, 1.87 * GIB),
   },
   {
     item: item(2, "s01e02.mkv", "Convert", { Running: { claim_id: 2, run_id: 2 } }),

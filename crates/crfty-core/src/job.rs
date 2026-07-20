@@ -313,7 +313,7 @@ pub struct ClaimedJob {
     pub spec: JobSpec,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, specta::Type)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, specta::Type)]
 pub enum JobPhase {
     Preparing,
     Analyzing,

@@ -16,8 +16,7 @@ pub struct PathHash(pub String);
 pub struct FileStamp {
     #[specta(type = crate::JsNumber)]
     pub size: u64,
-    #[specta(type = Option<crate::JsNumber>)]
-    pub modified_ns: Option<u128>,
+    pub modified_ns: Option<crate::FileTimeNs>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, specta::Type)]

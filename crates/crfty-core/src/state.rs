@@ -3,9 +3,9 @@ use std::{collections::BTreeMap, path::PathBuf};
 use serde::{Deserialize, Serialize};
 
 use crate::{
-    AnalysisAttempt, AnalysisResult, ContentKey, FailureFacts, FileRecord, JobPhase, JobSpec,
-    MediaObservation, Operation, OutputDelta, OutputTarget, PathBinding, PathHash, ReservedJob,
-    Settings, SkipReason,
+    AnalysisAttempt, AnalysisResult, ContentKey, DecodeMode, DurationMs, FailureFacts, FileRecord,
+    JobPhase, JobSpec, MediaObservation, Operation, OutputDelta, OutputTarget, PathBinding,
+    PathHash, ReservedJob, Settings, SkipReason, UnixMillis,
 };
 
 macro_rules! numeric_id {
@@ -53,12 +53,59 @@ pub enum QueueItemState {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, specta::Type)]
 pub enum ItemOutcome {
     Analyzed,
-    Converted,
-    Remuxed,
+    Converted(CompletionEvidence),
+    Remuxed(CompletionEvidence),
     NotWorthwhile { attempts: Vec<AnalysisAttempt> },
     Stopped,
     Skipped { reason: SkipReason },
     Failed(FailureFacts),
+}
+
+/// Where the facts backing a successful outcome came from. A live run carries
+/// what the adapter measured; a crash-recovered success carries nothing —
+/// output size, path, and content key are already durable on the settled
+/// transaction, and fabricating adapter fields would be dishonest.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, specta::Type)]
+pub enum CompletionEvidence {
+    LiveEncode {
+        #[specta(type = crate::JsNumber)]
+        input_size: u64,
+        #[specta(type = crate::JsNumber)]
+        output_size: u64,
+        stream_sizes: StreamByteSizes,
+        /// The decode mode the encode actually ran with; diverges from the
+        /// analysis profile once the hardware→software retry ladder exists.
+        encode_decode: DecodeMode,
+    },
+    LiveRemux {
+        #[specta(type = crate::JsNumber)]
+        input_size: u64,
+        #[specta(type = crate::JsNumber)]
+        output_size: u64,
+    },
+    RecoveredAtStartup,
+}
+
+/// Core-owned mirror of the adapter's per-stream output byte accounting.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, specta::Type)]
+pub struct StreamByteSizes {
+    #[specta(type = crate::JsNumber)]
+    pub video: u64,
+    #[specta(type = crate::JsNumber)]
+    pub audio: u64,
+    #[specta(type = crate::JsNumber)]
+    pub subtitle: u64,
+    #[specta(type = crate::JsNumber)]
+    pub other: u64,
+}
+
+/// How long one job phase ran, measured monotonically by the worker and
+/// delivered in the lossless terminal command — telemetry is never a durable
+/// source.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, specta::Type)]
+pub struct PhaseSpan {
+    pub phase: JobPhase,
+    pub duration: DurationMs,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, specta::Type)]
@@ -67,6 +114,9 @@ pub struct ConversionRun {
     pub analysis: Option<AnalysisResult>,
     pub output_content_key: Option<ContentKey>,
     pub outcome: Option<ItemOutcome>,
+    pub started_at: Option<UnixMillis>,
+    pub finished_at: Option<UnixMillis>,
+    pub phase_spans: Vec<PhaseSpan>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, specta::Type)]
@@ -94,6 +144,7 @@ pub enum DurableDelta {
         item_id: QueueItemId,
         claim_id: ClaimId,
         run_id: RunId,
+        at: UnixMillis,
     },
     AnalysisRecorded {
         run_id: RunId,
@@ -104,6 +155,8 @@ pub enum DurableDelta {
         claim_id: ClaimId,
         run_id: RunId,
         outcome: ItemOutcome,
+        at: UnixMillis,
+        phase_spans: Vec<PhaseSpan>,
     },
     Output(OutputDelta),
 }
@@ -240,6 +293,9 @@ pub fn fold(state: &mut DurableState, delta: &DurableDelta) {
                     analysis: spec.action.selected_analysis().cloned(),
                     output_content_key: None,
                     outcome: None,
+                    started_at: None,
+                    finished_at: None,
+                    phase_spans: Vec::new(),
                 },
             );
         }
@@ -247,14 +303,20 @@ pub fn fold(state: &mut DurableState, delta: &DurableDelta) {
             item_id,
             claim_id,
             run_id,
-        } => set_item_state(
-            &mut state.queue,
-            *item_id,
-            QueueItemState::Running {
-                claim_id: *claim_id,
-                run_id: *run_id,
-            },
-        ),
+            at,
+        } => {
+            set_item_state(
+                &mut state.queue,
+                *item_id,
+                QueueItemState::Running {
+                    claim_id: *claim_id,
+                    run_id: *run_id,
+                },
+            );
+            if let Some(run) = state.conversion_runs.get_mut(run_id) {
+                run.started_at = Some(*at);
+            }
+        }
         DurableDelta::AnalysisRecorded { run_id, result } => {
             if let Some(run) = state.conversion_runs.get_mut(run_id) {
                 run.analysis = Some(result.as_ref().clone());
@@ -269,6 +331,8 @@ pub fn fold(state: &mut DurableState, delta: &DurableDelta) {
             item_id,
             run_id,
             outcome,
+            at,
+            phase_spans,
             ..
         } => {
             set_item_state(
@@ -277,7 +341,7 @@ pub fn fold(state: &mut DurableState, delta: &DurableDelta) {
                 QueueItemState::Finished(outcome.clone()),
             );
             if let Some(run) = state.conversion_runs.get_mut(run_id) {
-                if matches!(outcome, ItemOutcome::Converted | ItemOutcome::Remuxed)
+                if matches!(outcome, ItemOutcome::Converted(_) | ItemOutcome::Remuxed(_))
                     && let Some(transaction) = state.outputs.get(run_id)
                 {
                     run.output_content_key = match &transaction.state {
@@ -289,6 +353,8 @@ pub fn fold(state: &mut DurableState, delta: &DurableDelta) {
                     };
                 }
                 run.outcome = Some(outcome.clone());
+                run.finished_at = Some(*at);
+                run.phase_spans = phase_spans.clone();
             }
         }
         DurableDelta::Output(delta) => delta.fold_into(&mut state.outputs),

@@ -21,6 +21,7 @@ import type {
   OutputDelta,
   OutputState,
   OutputTransaction,
+  PhaseSpan,
   QueueItem,
   QueueItemId,
   QueueItemState,
@@ -28,6 +29,7 @@ import type {
   SessionState,
   Settings,
   Telemetry,
+  UnixMillis,
 } from "@/lib/bindings";
 
 export function emptyDurableState(): DurableState_Deserialize {
@@ -75,15 +77,23 @@ export function foldDurable(
           analysis: selectedAnalysis(spec.action),
           output_content_key: null,
           outcome: null,
+          started_at: null,
+          finished_at: null,
+          phase_spans: [],
         },
       },
     };
   }
   if ("ItemRunning" in delta && delta.ItemRunning !== undefined) {
-    const { item_id, claim_id, run_id } = delta.ItemRunning;
+    const { item_id, claim_id, run_id, at } = delta.ItemRunning;
+    const run = state.conversion_runs[run_id];
     return {
       ...state,
       queue: withItemState(state.queue, item_id, { Running: { claim_id, run_id } }),
+      conversion_runs:
+        run === undefined
+          ? state.conversion_runs
+          : { ...state.conversion_runs, [run_id]: { ...run, started_at: at } },
     };
   }
   if ("AnalysisRecorded" in delta && delta.AnalysisRecorded !== undefined) {
@@ -195,16 +205,26 @@ function foldAnalysisRecorded(
 
 function foldItemFinished(
   state: DurableState_Deserialize,
-  finished: { item_id: QueueItemId; run_id: RunId; outcome: ItemOutcome },
+  finished: {
+    item_id: QueueItemId;
+    run_id: RunId;
+    outcome: ItemOutcome;
+    at: UnixMillis;
+    phase_spans: PhaseSpan[];
+  },
 ): DurableState_Deserialize {
-  const { item_id, run_id, outcome } = finished;
+  const { item_id, run_id, outcome, at, phase_spans } = finished;
   const queue = withItemState(state.queue, item_id, { Finished: outcome });
   const run = state.conversion_runs[run_id];
   if (run === undefined) {
     return { ...state, queue };
   }
   let outputContentKey = run.output_content_key;
-  if (outcome === "Converted" || outcome === "Remuxed") {
+  const successful =
+    typeof outcome === "object" &&
+    (("Converted" in outcome && outcome.Converted !== undefined) ||
+      ("Remuxed" in outcome && outcome.Remuxed !== undefined));
+  if (successful) {
     const transaction = state.outputs[run_id];
     if (transaction !== undefined) {
       outputContentKey = committedContentKey(transaction.state);
@@ -215,7 +235,13 @@ function foldItemFinished(
     queue,
     conversion_runs: {
       ...state.conversion_runs,
-      [run_id]: { ...run, output_content_key: outputContentKey, outcome },
+      [run_id]: {
+        ...run,
+        output_content_key: outputContentKey,
+        outcome,
+        finished_at: at,
+        phase_spans,
+      },
     },
   };
 }
