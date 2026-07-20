@@ -5,8 +5,8 @@
 # path on stdout; non-zero exit aborts creation.
 set -euo pipefail
 input=$(cat)
-name=$(python3 -c 'import json,sys; print(json.load(sys.stdin)["worktree_name"])' <<<"$input")
-base=$(python3 -c 'import json,sys; print(json.load(sys.stdin).get("base_ref") or "main")' <<<"$input")
+name=$(jq -er '.worktree_name' <<<"$input")
+base=$(jq -r 'if (.base_ref // "") == "" then "main" else .base_ref end' <<<"$input")
 dir=".worktrees/$name"
 git worktree add "$dir" -b "$name" "$base" >&2
 cd "$dir" && pwd

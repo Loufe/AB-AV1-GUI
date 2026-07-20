@@ -47,6 +47,11 @@ The frontend gate runs from `ui/` — see `ui/AGENTS.md`.
 - Never read logs or history containing real paths. Stop if unanonymized paths are
   encountered and do not quote them.
 - Do not provide effort or duration estimates.
+- Never commit Python — no scripts, no tooling, no dev dependencies. The V2 app
+  retained on `main` is a read-only oracle: consult it via `git show main:<path>`,
+  and freeze any semantics worth keeping as committed JSON fixtures. Fixture
+  generation scripts are throwaway and never committed; once frozen, fixtures are
+  spec data maintained by hand.
 
 ## Zero backwards compatibility
 

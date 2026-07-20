@@ -22,9 +22,9 @@ import { Section } from "./theme-pair";
  * the drag spike; the verdict becomes a D7 amendment on #36.
  *
  * Design decisions under review:
- * - Layout inverts the Python tab: metric cards first, hero time-series,
+ * - Layout inverts the V2 tab: metric cards first, hero time-series,
  *   secondary breakdowns last (Plausible/Umami pattern).
- * - Source codecs render as horizontal bars, not the Python pie (NN/g pie
+ * - Source codecs render as horizontal bars, not the V2 pie (NN/g pie
  *   critique; recharts#6338 keyboard-tooltip bug; direct labels kill the
  *   legend).
  * - Tooltips are supplementary precision only — axes carry coarse values.

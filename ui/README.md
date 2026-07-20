@@ -7,7 +7,7 @@ design record). Managed with pnpm.
 pnpm install
 pnpm dev           # Vite dev server (polls for changes — WSL2 /mnt/c)
 pnpm tauri:dev     # full desktop app (shell crate + this frontend)
-pnpm test          # vitest (includes Python-parity fixtures)
+pnpm test          # vitest (includes V2-parity fixtures)
 pnpm typecheck     # tsc -b
 pnpm lint          # oxlint
 pnpm format        # oxfmt (format:check in CI)
@@ -38,9 +38,8 @@ the webview crashes on the GPU path — launch with
   AGENTS.md); `app-store.ts`/`progress-store.ts` are the Zustand containers
   (telemetry separate so progress ticks skip tree subscribers); `connect.ts`
   is the single stream consumer with the sequence tripwire.
-- `src/lib/format/` — display formatters ported from the Python app;
-  parity enforced by fixtures regenerated with
-  `scripts/generate-parity-fixtures.py /path/to/main-checkout`.
+- `src/lib/format/` — display formatters; semantics frozen from the V2 app
+  as `parity-fixtures.json` (hand-maintained spec data, no regeneration path).
 - `src/dev/` — dev-gated (never in release bundles): the kitchen sink
   (token/primitive gallery + approved view mockups for queue and
   statistics) and the winning drag-spike reference (`@dnd-kit/react`).
