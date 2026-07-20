@@ -18,7 +18,7 @@ pub mod lock;
 pub mod media;
 pub mod output;
 pub mod remux;
-pub mod tools;
+pub mod vendor;
 
 mod failure;
 mod filesystem;

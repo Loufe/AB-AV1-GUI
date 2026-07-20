@@ -16,7 +16,7 @@ use super::{
         SearchOutcome, SearchRequest, ShutdownError, StartJobError, Telemetry, WaitError,
     },
 };
-use crate::tools::MediaTools;
+use crate::vendor::discovery::MediaTools;
 
 static RUNTIME_ACTIVE: AtomicBool = AtomicBool::new(false);
 const RUNTIME_COMMAND_CAPACITY: usize = 1;

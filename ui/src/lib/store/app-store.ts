@@ -5,12 +5,7 @@
 import { useStore } from "zustand";
 import { createStore } from "zustand/vanilla";
 
-import type {
-  DurableState_Deserialize,
-  SessionState,
-  Settings,
-  ToolAvailability,
-} from "@/lib/bindings";
+import type { DurableState_Deserialize, SessionState, Settings, ToolsState } from "@/lib/bindings";
 import { emptyDurableState } from "@/lib/store/fold";
 
 /** Standing engine health from the stream; cleared by each snapshot. */
@@ -28,11 +23,12 @@ export interface AppStoreState {
   session: SessionState;
   health: Health;
   /**
-   * Standing tool availability; null until the stream delivers it. The shell
-   * replays ToolsChanged right after each snapshot (ADR-006 standing health),
-   * so the snapshot handler resets this to null rather than guessing.
+   * Standing tool state (availability, vendor activity, update flag); null
+   * until the stream delivers it. The shell replays ToolsChanged right after
+   * each snapshot (ADR-006 standing health), so the snapshot handler resets
+   * this to null rather than guessing.
    */
-  tools: ToolAvailability | null;
+  tools: ToolsState | null;
 }
 
 export function initialAppState(): AppStoreState {

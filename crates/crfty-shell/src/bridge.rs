@@ -18,10 +18,10 @@ use std::{
 use crfty_core::{
     AnalysisProfile, AppSnapshot, ConfigDelta, DurableDelta, DurableState, EphemeralDelta,
     ExecutionSettings, QueueCommand, QueueItemId, Reply, RunId, SessionCommand, SessionState,
-    Settings, SettingsCommand, Telemetry, ToolAvailability, ToolRevisions, fold, fold_config,
+    Settings, SettingsCommand, Telemetry, ToolsState, VendorCommand, fold, fold_config,
 };
 use crfty_engine::{
-    coordinator::{EngineConfig, EngineRuntime, UserCommandSender},
+    coordinator::{EngineConfig, EngineRuntime, ToolsConfig, UserCommandSender},
     driver::DriverEvent,
 };
 use serde::Serialize;
@@ -29,9 +29,7 @@ use tauri::{Manager, ipc::Channel};
 
 const JOURNAL_FILE_NAME: &str = "journal.jsonl";
 const CONFIG_FILE_NAME: &str = "config.json";
-/// Real tool revisions arrive with the vendor subsystem; until then analysis
-/// provenance records a placeholder (core only requires non-empty strings).
-const INTERIM_TOOL_REVISION: &str = "unknown";
+const VENDOR_DIR_NAME: &str = "vendor";
 
 #[derive(Debug, Clone, Serialize, specta::Type)]
 pub struct ShellEvent {
@@ -88,7 +86,7 @@ enum Health {
 struct StreamState {
     model: AppSnapshot,
     session: SessionState,
-    tools: ToolAvailability,
+    tools: ToolsState,
     /// Latest telemetry per active run, mirroring `AppState::telemetry` in
     /// the reducer so a reconnecting webview sees live progress immediately
     /// instead of waiting for the next update.
@@ -103,7 +101,7 @@ impl StreamState {
         Self {
             model: AppSnapshot::default(),
             session: SessionState::Idle,
-            tools: ToolAvailability::default(),
+            tools: ToolsState::default(),
             telemetry: BTreeMap::new(),
             health,
             subscriber: None,
@@ -170,20 +168,15 @@ impl Bridge {
                 "failed to create application data directory: {error}"
             ))
         })?;
-        // Discovery is infallible: missing tools become typed availability
-        // state on the stream, never a startup failure that would hide the
-        // queue, history, or settings.
-        let media_tools = crfty_engine::tools::discover_media_tools();
-        let revisions = ToolRevisions {
-            ab_av1: INTERIM_TOOL_REVISION.to_owned(),
-            ffmpeg: INTERIM_TOOL_REVISION.to_owned(),
-            encoder: INTERIM_TOOL_REVISION.to_owned(),
-        };
+        // Discovery runs inside the engine and is infallible: missing tools
+        // become typed availability state on the stream, never a startup
+        // failure that would hide the queue, history, or settings.
         let config = EngineConfig {
             journal_path: data_dir.join(JOURNAL_FILE_NAME),
             config_path: data_dir.join(CONFIG_FILE_NAME),
-            media_tools,
-            execution: ExecutionSettings::production(AnalysisProfile::production(revisions), false),
+            vendor_root: data_dir.join(VENDOR_DIR_NAME),
+            tools: ToolsConfig::Discover,
+            execution: ExecutionSettings::production(AnalysisProfile::production(), false),
         };
         let mut runtime = EngineRuntime::start(config).map_err(|error| match error {
             crfty_engine::coordinator::EngineStartError::AlreadyRunning { lock_path } => {
@@ -262,6 +255,11 @@ impl Bridge {
     pub fn submit_settings(&self, settings: Settings) -> Result<(), CommandError> {
         let commands = self.commands()?;
         map_reply(commands.submit_settings(SettingsCommand::Set { settings }))
+    }
+
+    pub fn submit_vendor(&self, command: VendorCommand) -> Result<(), CommandError> {
+        let commands = self.commands()?;
+        map_reply(commands.submit_vendor(command))
     }
 
     fn commands(&self) -> Result<&UserCommandSender, CommandError> {
@@ -431,9 +429,13 @@ mod tests {
             ephemeral(EphemeralDelta::SessionChanged(SessionState::Running)),
             &ids,
         );
+        let tools = ToolsState {
+            update_available: true,
+            ..ToolsState::default()
+        };
         absorb(
             &mut state,
-            ephemeral(EphemeralDelta::ToolsChanged(ToolAvailability::Available)),
+            ephemeral(EphemeralDelta::ToolsChanged(tools.clone())),
             &ids,
         );
         absorb(
@@ -444,7 +446,7 @@ mod tests {
             &ids,
         );
         assert_eq!(state.session, SessionState::Running);
-        assert_eq!(state.tools, ToolAvailability::Available);
+        assert_eq!(state.tools, tools);
         assert!(state.telemetry.is_empty());
     }
 }

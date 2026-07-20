@@ -20,11 +20,21 @@ blake2 = { version = "=0.10.6", default-features = false }
 command-group = "=5.0.1"
 crfty-core = { path = "../crfty-core", version = "=3.0.0-alpha.0" }
 file-id = "=0.2.3"
+lzma-rs = "=0.3.0"
+# rustls-no-provider + an explicit ring provider: reqwest 0.13 dropped bundled
+# webpki roots, and the default rustls feature would pull aws-lc-rs (cmake +
+# nasm on Windows). Trust roots come from the OS verifier; the compiled-in
+# SHA-256 manifest is the actual trust anchor for vendor downloads (ADR-010).
+reqwest = { version = "=0.13.4", default-features = false, features = ["blocking", "rustls-no-provider"] }
+rustls = { version = "=0.23.42", default-features = false, features = ["ring", "std", "tls12"] }
 serde = { workspace = true }
 serde_json = { workspace = true }
+sha2 = { version = "=0.10.9", default-features = false }
+tar = { version = "=0.4.45", default-features = false }
 tempfile = { version = "=3.27.0", default-features = false }
 tokio = { version = "=1.49.0", features = ["rt", "sync"] }
 tokio-stream = "=0.1.18"
+zip = { version = "=8.6.0", default-features = false, features = ["deflate-flate2-zlib-rs"] }
 
 [lints]
 workspace = true

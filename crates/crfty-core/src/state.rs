@@ -5,8 +5,8 @@ use serde::{Deserialize, Serialize};
 use crate::{
     AnalysisAttempt, AnalysisIntent, AnalysisResult, ContentKey, DecodeMode, DurationMs,
     FailureFacts, FileRecord, JobPhase, JobSpec, MediaObservation, Operation, OutputDelta,
-    OutputTarget, PathBinding, PathHash, ReservedJob, Settings, SkipReason, UnixMillis, Verdict,
-    VerdictKind,
+    OutputTarget, PathBinding, PathHash, ReservedJob, Settings, SkipReason, ToolRevisions,
+    UnixMillis, Verdict, VerdictKind,
 };
 
 macro_rules! numeric_id {
@@ -184,7 +184,7 @@ pub struct AppState {
     pub settings: Settings,
     pub session: SessionState,
     pub telemetry: BTreeMap<RunId, Telemetry>,
-    pub tools: ToolAvailability,
+    pub tools: ToolsState,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, specta::Type)]
@@ -193,12 +193,24 @@ pub enum MediaTool {
     Ffprobe,
 }
 
+/// Which discovery tier produced the active media tools. Precedence is
+/// explicit environment paths, then the managed vendor install, then PATH.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, specta::Type)]
+pub enum ToolSource {
+    Explicit,
+    System,
+    Managed,
+}
+
 /// Whether external media tools are usable. Ephemeral state: discovery is a
 /// filesystem fact reported to the reducer, never journaled. Fail-closed by
 /// default so media work stays gated until discovery actually reports.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, specta::Type)]
 pub enum ToolAvailability {
-    Available,
+    Available {
+        source: ToolSource,
+        revisions: ToolRevisions,
+    },
     Missing {
         missing: Vec<MediaTool>,
         detail: String,
@@ -212,6 +224,36 @@ impl Default for ToolAvailability {
             detail: "media tool discovery has not completed".to_owned(),
         }
     }
+}
+
+/// What the vendor subsystem is doing right now. `Downloading` progress is
+/// throttled by the engine (core has no clock); a terminal `Failed` stands
+/// until the next vendor command replaces it.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, specta::Type)]
+pub enum VendorActivity {
+    #[default]
+    Idle,
+    Checking,
+    Downloading {
+        #[specta(type = crate::JsNumber)]
+        received: u64,
+        #[specta(type = Option<crate::JsNumber>)]
+        total: Option<u64>,
+    },
+    Installing,
+    Failed {
+        detail: String,
+    },
+}
+
+/// The full ephemeral tool picture: what is usable, what the vendor pipeline
+/// is doing, and whether the compiled-in manifest is newer than the managed
+/// install. Never journaled; replayed after each snapshot on subscribe.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, specta::Type)]
+pub struct ToolsState {
+    pub availability: ToolAvailability,
+    pub activity: VendorActivity,
+    pub update_available: bool,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, specta::Type)]

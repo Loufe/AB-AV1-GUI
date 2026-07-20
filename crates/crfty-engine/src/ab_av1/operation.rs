@@ -14,7 +14,7 @@ use super::types::{
     CancelMode, EncodeOutcome, EncodeRequest, EncodeTelemetry, JobFailure, JobTerminal,
     SearchOutcome, SearchRequest, SearchTelemetry, SearchWork, StreamSizes, Telemetry,
 };
-use crate::tools::MediaTools;
+use crate::vendor::discovery::MediaTools;
 
 const DEFAULT_SAMPLE_EVERY: Duration = Duration::from_secs(12 * 60);
 const DEFAULT_XPSNR_FPS: f32 = 60.0;

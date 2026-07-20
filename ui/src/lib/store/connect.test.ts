@@ -118,14 +118,28 @@ describe("applyPayload", () => {
     warn.mockRestore();
   });
 
-  it("records tool availability until the next snapshot resets it", () => {
-    const missing = { Missing: { missing: ["Ffmpeg" as const], detail: "ffmpeg not found" } };
+  it("records tool state until the next snapshot resets it", () => {
+    const missing = {
+      availability: { Missing: { missing: ["Ffmpeg" as const], detail: "ffmpeg not found" } },
+      activity: "Idle" as const,
+      update_available: false,
+    };
     applyPayload({ Ephemeral: { ToolsChanged: missing } });
     expect(appStore.getState().tools).toEqual(missing);
     expect(progressStore.getState().telemetry).toEqual({});
 
-    applyPayload({ Ephemeral: { ToolsChanged: "Available" } });
-    expect(appStore.getState().tools).toBe("Available");
+    const available = {
+      availability: {
+        Available: {
+          source: "System" as const,
+          revisions: { ab_av1: "rev-a", ffmpeg: "rev-f", encoder: "rev-s" },
+        },
+      },
+      activity: "Idle" as const,
+      update_available: true,
+    };
+    applyPayload({ Ephemeral: { ToolsChanged: available } });
+    expect(appStore.getState().tools).toEqual(available);
 
     // The shell replays ToolsChanged right after each snapshot, so the
     // snapshot itself resets to the unknown state rather than guessing.
