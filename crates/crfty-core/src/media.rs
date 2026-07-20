@@ -25,7 +25,9 @@ pub struct PathBinding {
     pub content_key: ContentKey,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, specta::Type)]
+#[derive(
+    Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize, specta::Type,
+)]
 pub enum VideoCodec {
     Av1,
     H264,

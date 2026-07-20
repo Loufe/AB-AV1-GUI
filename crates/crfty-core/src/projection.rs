@@ -182,7 +182,7 @@ fn joined_sizes(
     (Some(record.metadata.size_bytes), None)
 }
 
-fn phase_totals(run: Option<&ConversionRun>) -> (u64, u64) {
+pub(crate) fn phase_totals(run: Option<&ConversionRun>) -> (u64, u64) {
     let mut analyzing_ms = 0u64;
     let mut encoding_ms = 0u64;
     let Some(run) = run else {

@@ -10,6 +10,7 @@
 //! or user-interface frameworks.
 
 mod constants;
+mod estimation;
 mod failure;
 mod job;
 mod journal;
@@ -30,6 +31,10 @@ mod time;
 /// back. Do not use this alias as a runtime type.
 pub type JsNumber = u32;
 
+pub use estimation::{
+    EstimateBasis, EstimateConfidence, EstimationModel, HistoricalTier, Quartiles,
+    ResolutionBucket, TimeEstimate, exclusive_quartiles,
+};
 pub use failure::{DIAGNOSTIC_TAIL_MAX_BYTES, DiagnosticTail, FailureFacts, FailureKind};
 pub use job::{
     AnalysisAttempt, AnalysisIntent, AnalysisProfile, AnalysisResult, ClaimedJob, Crf, DecodeMode,
