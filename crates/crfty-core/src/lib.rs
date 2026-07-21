@@ -49,9 +49,9 @@ pub use journal::{
     corruption_signature, encode_record, encode_snapshot, replay,
 };
 pub use media::{
-    AudioCodec, AudioStreamMeta, FileRecord, FileStamp, ImportPath, MediaContainer,
-    MediaObservation, ParkedRecord, ParkedStatus, PathBinding, PathHash, Verdict, VerdictKind,
-    VideoCodec, VideoMeta,
+    AudioCodec, AudioStreamMeta, FileRecord, FileStamp, ImportPath, ImportedHistoryRecord,
+    ImportedProvenance, MediaContainer, MediaObservation, ParkedStatus, PathBinding, PathHash,
+    Verdict, VerdictKind, VideoCodec, VideoMeta,
 };
 pub use output::{
     ArtifactIdentity, ConflictKind, ContentKey, DestructiveIdentity, DestructiveObservation,
@@ -64,8 +64,8 @@ pub use policy::{
     settled_output_identity, stamp_matches, verdict_applies,
 };
 pub use projection::{
-    CodecCount, CumulativeSavingsPoint, HistoryRow, HistoryStatus, RunTotals, StatFact,
-    StatFactKind, StatisticsPayload, ValueSpread, collect_stat_facts, history_rows,
+    CodecCount, CumulativeSavingsPoint, HistoryRow, HistoryRowKey, HistoryStatus, RunTotals,
+    StatFact, StatFactKind, StatisticsPayload, ValueSpread, collect_stat_facts, history_rows,
     local_epoch_day, statistics,
 };
 pub use reducer::{

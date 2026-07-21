@@ -11,7 +11,7 @@
 use std::path::Path;
 
 use crfty_core::{
-    FileTimeNs, ImportPath, MAX_VMAF_SCORE, ParkedRecord, ParkedStatus, UnixMillis,
+    FileTimeNs, ImportPath, ImportedHistoryRecord, MAX_VMAF_SCORE, ParkedStatus, UnixMillis,
     VMAF_SCORE_FIXED_SCALE, VideoCodec,
 };
 use serde::Deserialize;
@@ -66,7 +66,7 @@ impl std::error::Error for ImportError {}
 pub fn load_import_file(
     path: &Path,
     now: UnixMillis,
-) -> Result<Vec<(ImportPath, ParkedRecord)>, ImportError> {
+) -> Result<Vec<(ImportPath, ImportedHistoryRecord)>, ImportError> {
     load_import_file_capped(path, MAX_IMPORT_BYTES, now)
 }
 
@@ -74,7 +74,7 @@ fn load_import_file_capped(
     path: &Path,
     cap: u64,
     now: UnixMillis,
-) -> Result<Vec<(ImportPath, ParkedRecord)>, ImportError> {
+) -> Result<Vec<(ImportPath, ImportedHistoryRecord)>, ImportError> {
     let metadata = std::fs::metadata(path).map_err(|error| ImportError::Unreadable {
         detail: error.to_string(),
     })?;
@@ -206,7 +206,7 @@ impl From<ImportStatus> for ParkedStatus {
 pub fn parse_import(
     bytes: &[u8],
     now: UnixMillis,
-) -> Result<Vec<(ImportPath, ParkedRecord)>, ImportError> {
+) -> Result<Vec<(ImportPath, ImportedHistoryRecord)>, ImportError> {
     let file: ImportFile =
         serde_json::from_slice(bytes).map_err(|error| ImportError::Malformed {
             detail: error.to_string(),
@@ -225,7 +225,7 @@ pub fn parse_import(
 fn convert_record(
     record: ImportRecord,
     now: UnixMillis,
-) -> Result<(ImportPath, ParkedRecord), ImportError> {
+) -> Result<(ImportPath, ImportedHistoryRecord), ImportError> {
     let key = normalize_import_path(&record.path);
     if key.0.is_empty() {
         return Err(ImportError::Malformed {
@@ -254,7 +254,7 @@ fn convert_record(
             });
         }
     }
-    let parked = ParkedRecord {
+    let parked = ImportedHistoryRecord {
         status: record.status.into(),
         size: record.size,
         modified_ns: record.modified_ns,

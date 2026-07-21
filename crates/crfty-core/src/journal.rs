@@ -522,10 +522,7 @@ fn validate_replayed_delta(state: &DurableState, delta: &DurableDelta) -> Result
                 }
                 let known = !batch.insert(import_path)
                     || state.parked.contains_key(import_path)
-                    || state
-                        .records
-                        .values()
-                        .any(|record| record.imported.as_ref() == Some(import_path));
+                    || state.adopted_imports.contains(import_path);
                 if known {
                     return Err("history import repeats a known key");
                 }
@@ -534,10 +531,14 @@ fn validate_replayed_delta(state: &DurableState, delta: &DurableDelta) -> Result
         DurableDelta::ParkedAdopted {
             import_path,
             content_key,
+            imported,
             ..
         } => {
-            if !state.parked.contains_key(import_path) {
+            let Some(parked) = state.parked.get(import_path) else {
                 return Err("adoption references a record that is not parked");
+            };
+            if parked != imported {
+                return Err("adoption facts differ from the parked record");
             }
             if !state.records.contains_key(content_key) {
                 return Err("adoption references a missing content record");

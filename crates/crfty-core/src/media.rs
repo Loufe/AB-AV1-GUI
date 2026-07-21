@@ -184,9 +184,11 @@ pub struct FileRecord {
     #[specta(type = AnalysisIndexEntries)]
     pub analyses: BTreeMap<AnalysisProfile, BTreeMap<VmafTarget, AnalysisResult>>,
     pub verdict: Option<Verdict>,
-    /// Provenance of a history-import adoption, and the re-import guard:
-    /// keys recorded here (or still parked) are skipped by later imports.
-    pub imported: Option<ImportPath>,
+    /// The deterministic imported summary retained for History/Statistics
+    /// continuity. The complete re-import guard lives in
+    /// `DurableState::adopted_imports` because several paths may collapse
+    /// onto one content record.
+    pub imported: Option<ImportedProvenance>,
 }
 
 mod analysis_index {
@@ -242,13 +244,15 @@ pub enum ParkedStatus {
     Converted,
 }
 
-/// An imported history record waiting to be matched against a real file.
+/// Historical facts imported from V2. The same value starts in the parked
+/// inbox and, after adoption, may survive as display-only provenance on a
+/// content record.
 /// Every field the import schema marks optional is nullable — the import
 /// carries what the source record actually said, nothing synthesized.
 /// Fixed-point integers only: durable state derives `Eq`, so any float
 /// representation is the converter script's problem, never this crate's.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, specta::Type)]
-pub struct ParkedRecord {
+pub struct ImportedHistoryRecord {
     pub status: ParkedStatus,
     /// Byte size of the source file when the record was decided: both the
     /// freshness-stamp probe and the input size for a converted record's
@@ -272,4 +276,26 @@ pub struct ParkedRecord {
     /// When the source record was decided, falling back to the import
     /// instant when the source carried no timestamp.
     pub decided_at: UnixMillis,
+}
+
+/// The one deterministic imported summary retained on a content record.
+/// Every adopted path is guarded separately by `DurableState::adopted_imports`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, specta::Type)]
+pub struct ImportedProvenance {
+    pub import_path: ImportPath,
+    pub record: ImportedHistoryRecord,
+}
+
+impl ImportedProvenance {
+    /// Whether this imported summary outranks the summary currently retained
+    /// on a content record: newer decision, then stronger status, then the
+    /// lexicographically smaller normalized path.
+    #[must_use]
+    pub fn outranks(&self, current: &Self) -> bool {
+        self.record.decided_at > current.record.decided_at
+            || (self.record.decided_at == current.record.decided_at
+                && (self.record.status > current.record.status
+                    || (self.record.status == current.record.status
+                        && self.import_path < current.import_path)))
+    }
 }

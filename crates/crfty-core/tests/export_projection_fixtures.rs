@@ -18,11 +18,11 @@ use std::path::PathBuf;
 use crfty_core::{
     AnalysisIntent, AnalysisProfile, AnalysisResult, ArtifactIdentity, AudioCodec, AudioStreamMeta,
     ClaimId, CompletionEvidence, ContentKey, ConversionRun, Crf, DestructiveIdentity, DurableState,
-    DurationMs, ExecutionSettings, FailureFacts, FailureKind, FileRecord, FileSystemId, HistoryRow,
-    ItemOutcome, JobAction, JobPhase, JobSpec, MediaContainer, Operation, OutputState,
-    OutputTarget, OutputTransaction, PhaseSpan, QueueItemId, Replacement, RunId, SearchMeasurement,
-    StreamByteSizes, UnixMillis, Verdict, VerdictKind, VideoCodec, VideoMeta, VmafScore,
-    VmafTarget, history_rows,
+    DurationMs, ExecutionSettings, FailureFacts, FailureKind, FileRecord, FileSystemId, FileTimeNs,
+    HistoryRow, ImportPath, ImportedHistoryRecord, ImportedProvenance, ItemOutcome, JobAction,
+    JobPhase, JobSpec, MediaContainer, Operation, OutputState, OutputTarget, OutputTransaction,
+    ParkedStatus, PhaseSpan, QueueItemId, Replacement, RunId, SearchMeasurement, StreamByteSizes,
+    UnixMillis, Verdict, VerdictKind, VideoCodec, VideoMeta, VmafScore, VmafTarget, history_rows,
 };
 use serde::Serialize;
 
@@ -178,6 +178,42 @@ fn record(codec: VideoCodec, size_bytes: u64, verdict: Option<Verdict>) -> FileR
     record
 }
 
+fn imported(status: ParkedStatus, codec: Option<VideoCodec>) -> ImportedHistoryRecord {
+    ImportedHistoryRecord {
+        status,
+        size: Some(3_000_000),
+        modified_ns: Some(FileTimeNs(1_000_000)),
+        video_codec: codec,
+        width: Some(1_280),
+        height: Some(720),
+        duration_ms: Some(120_000),
+        output_size: Some(1_000_000),
+        encoding_time: Some(DurationMs(88_000)),
+        crf: Some(Crf(30_000)),
+        vmaf: Some(VmafScore(9_550)),
+        target: Some(VmafTarget(95)),
+        requested_target: Some(VmafTarget(94)),
+        floor_target: Some(VmafTarget(91)),
+        decided_at: FINISHED_AT,
+    }
+}
+
+fn imported_converted_verdict(imported: &ImportedHistoryRecord) -> Verdict {
+    Verdict {
+        kind: VerdictKind::Converted {
+            output_content_key: None,
+            input_size: imported.size,
+            output_size: imported.output_size,
+            encoding_time: imported.encoding_time,
+            crf: imported.crf,
+            vmaf: imported.vmaf,
+            target: imported.target,
+        },
+        source_run: None,
+        decided_at: imported.decided_at,
+    }
+}
+
 fn identity(size: u64) -> DestructiveIdentity {
     DestructiveIdentity {
         file_id: FileSystemId::Unix {
@@ -248,14 +284,54 @@ fn scenarios() -> Vec<Scenario> {
         .insert(RunId(1), committed_transaction(1, 8_000_000, 3_000_000));
     list.push(scenario("converted_recovered_at_startup", recovered));
 
-    // A verdict whose run is gone (the parked-record stand-in): input size
-    // falls back to metadata, output stays unknown, date to decided_at.
+    // A native verdict whose run is gone: input size falls back to metadata,
+    // output stays unknown, and the date falls back to decided_at.
     let mut adopted = DurableState::default();
     adopted.records.insert(
         key("adopted"),
         record(VideoCodec::H264, 5_000_000, Some(converted_verdict(77))),
     );
     list.push(scenario("converted_verdict_without_run", adopted));
+
+    let mut parked = DurableState::default();
+    parked.parked.insert(
+        ImportPath("c:/history/analyzed.mkv".to_owned()),
+        imported(ParkedStatus::Analyzed, Some(VideoCodec::Hevc)),
+    );
+    parked.parked.insert(
+        ImportPath("c:/history/converted.mkv".to_owned()),
+        imported(ParkedStatus::Converted, Some(VideoCodec::H264)),
+    );
+    parked.parked.insert(
+        ImportPath("c:/history/declined.mkv".to_owned()),
+        imported(ParkedStatus::NotWorthwhile, None),
+    );
+    parked.parked.insert(
+        ImportPath("c:/history/scanned.mkv".to_owned()),
+        imported(ParkedStatus::Scanned, None),
+    );
+    list.push(scenario("parked_imported_history", parked));
+
+    let mut adopted_import = DurableState::default();
+    let import_path = ImportPath("c:/history/adopted.mkv".to_owned());
+    let imported_record = imported(ParkedStatus::Converted, Some(VideoCodec::H264));
+    let mut adopted_record = record(VideoCodec::Av1, 1_000_000, None);
+    adopted_record.verdict = Some(imported_converted_verdict(&imported_record));
+    adopted_record.imported = Some(ImportedProvenance {
+        import_path: import_path.clone(),
+        record: imported_record,
+    });
+    adopted_import
+        .records
+        .insert(key("adopted-import"), adopted_record);
+    adopted_import.adopted_imports.insert(import_path);
+    adopted_import
+        .adopted_imports
+        .insert(ImportPath("c:/history/collision-copy.mkv".to_owned()));
+    adopted_import.adopted_imports.insert(ImportPath(
+        "c:/history/second-collision-copy.mkv".to_owned(),
+    ));
+    list.push(scenario("adopted_imported_history", adopted_import));
 
     let mut remuxed = DurableState::default();
     let remux_key = key("remuxed");

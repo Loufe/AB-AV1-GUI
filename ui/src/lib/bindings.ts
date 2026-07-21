@@ -344,7 +344,7 @@ export type DurableDelta_Deserialize = ({ QueueAdded: {
  *  adopted.
  */
 ({ HistoryImported: {
-	records: ([ImportPath, ParkedRecord])[],
+	records: ([ImportPath, ImportedHistoryRecord])[],
 } }) & { AnalysisRecorded?: never; ItemFinished?: never; ItemPrepared?: never; ItemReserved?: never; ItemRunning?: never; MediaObserved?: never; Output?: never; ParkedAdopted?: never; ParkedRetired?: never; QueueAdded?: never; QueueEdited?: never; QueueMoved?: never; QueueRemoved?: never; QueueRequeued?: never } | 
 /**
  *  A parked record matched the observed file: the parked entry leaves
@@ -354,6 +354,7 @@ export type DurableDelta_Deserialize = ({ QueueAdded: {
 ({ ParkedAdopted: {
 	import_path: ImportPath,
 	content_key: ContentKey,
+	imported: ImportedHistoryRecord,
 	verdict: Verdict | null,
 } }) & { AnalysisRecorded?: never; HistoryImported?: never; ItemFinished?: never; ItemPrepared?: never; ItemReserved?: never; ItemRunning?: never; MediaObserved?: never; Output?: never; ParkedRetired?: never; QueueAdded?: never; QueueEdited?: never; QueueMoved?: never; QueueRemoved?: never; QueueRequeued?: never } | 
 /**
@@ -420,7 +421,7 @@ export type DurableDelta_Serialize = ({ QueueAdded: {
  *  adopted.
  */
 ({ HistoryImported: {
-	records: ([ImportPath, ParkedRecord])[],
+	records: ([ImportPath, ImportedHistoryRecord])[],
 } }) & { AnalysisRecorded?: never; ItemFinished?: never; ItemPrepared?: never; ItemReserved?: never; ItemRunning?: never; MediaObserved?: never; Output?: never; ParkedAdopted?: never; ParkedRetired?: never; QueueAdded?: never; QueueEdited?: never; QueueMoved?: never; QueueRemoved?: never; QueueRequeued?: never } | 
 /**
  *  A parked record matched the observed file: the parked entry leaves
@@ -430,6 +431,7 @@ export type DurableDelta_Serialize = ({ QueueAdded: {
 ({ ParkedAdopted: {
 	import_path: ImportPath,
 	content_key: ContentKey,
+	imported: ImportedHistoryRecord,
 	verdict: Verdict | null,
 } }) & { AnalysisRecorded?: never; HistoryImported?: never; ItemFinished?: never; ItemPrepared?: never; ItemReserved?: never; ItemRunning?: never; MediaObserved?: never; Output?: never; ParkedRetired?: never; QueueAdded?: never; QueueEdited?: never; QueueMoved?: never; QueueRemoved?: never; QueueRequeued?: never } | 
 /**
@@ -454,7 +456,13 @@ export type DurableState_Deserialize = {
 	 *  empties itself: prepare-time adoption or retirement removes entries;
 	 *  nothing else writes here after an import.
 	 */
-	parked: { [key in ImportPath]: ParkedRecord },
+	parked: { [key in ImportPath]: ImportedHistoryRecord },
+	/**
+	 *  Every successfully adopted normalized path. This is the complete
+	 *  re-import guard; collision losers remain here even though a content
+	 *  record retains only one imported summary.
+	 */
+	adopted_imports: ImportPath[],
 };
 
 export type DurableState_Serialize = {
@@ -468,7 +476,13 @@ export type DurableState_Serialize = {
 	 *  empties itself: prepare-time adoption or retirement removes entries;
 	 *  nothing else writes here after an import.
 	 */
-	parked: { [key in ImportPath]: ParkedRecord },
+	parked: { [key in ImportPath]: ImportedHistoryRecord },
+	/**
+	 *  Every successfully adopted normalized path. This is the complete
+	 *  re-import guard; collision losers remain here even though a content
+	 *  record retains only one imported summary.
+	 */
+	adopted_imports: ImportPath[],
 };
 
 /**  A duration in milliseconds, measured engine-side with a monotonic clock. */
@@ -538,10 +552,12 @@ export type FileRecord_Deserialize = {
 	analyses: ([AnalysisProfile, { [key in VmafTarget]: AnalysisResult }])[],
 	verdict: Verdict | null,
 	/**
-	 *  Provenance of a history-import adoption, and the re-import guard:
-	 *  keys recorded here (or still parked) are skipped by later imports.
+	 *  The deterministic imported summary retained for History/Statistics
+	 *  continuity. The complete re-import guard lives in
+	 *  `DurableState::adopted_imports` because several paths may collapse
+	 *  onto one content record.
 	 */
-	imported: ImportPath | null,
+	imported: ImportedProvenance | null,
 };
 
 export type FileRecord_Serialize = {
@@ -549,10 +565,12 @@ export type FileRecord_Serialize = {
 	analyses: ([AnalysisProfile, { [key in VmafTarget]: AnalysisResult }])[],
 	verdict: Verdict | null,
 	/**
-	 *  Provenance of a history-import adoption, and the re-import guard:
-	 *  keys recorded here (or still parked) are skipped by later imports.
+	 *  The deterministic imported summary retained for History/Statistics
+	 *  continuity. The complete re-import guard lives in
+	 *  `DurableState::adopted_imports` because several paths may collapse
+	 *  onto one content record.
 	 */
-	imported: ImportPath | null,
+	imported: ImportedProvenance | null,
 };
 
 export type FileStamp = {
@@ -594,27 +612,38 @@ export type FileTimeNs = string;
 export type HardwareDecoder = "H264Cuvid" | "H264Qsv" | "HevcCuvid" | "HevcQsv" | "Vp9Cuvid" | "Vp9Qsv" | "Av1Cuvid" | "Av1Qsv";
 
 /**
- *  One History row per content with something to report. Facts only — units,
- *  prefixes, and labels are presentation. Width and height are post-rotation.
- *  Bitrate is derived in views from size and duration, matching the
- *  [`crate::VideoMeta`] contract.
+ *  One History row per native/adopted content or reportable parked import.
+ *  Facts only — units, prefixes, and labels are presentation. Native width
+ *  and height are post-rotation. Bitrate is derived in views from size and
+ *  duration, matching the [`crate::VideoMeta`] contract.
  */
 export type HistoryRow = {
-	content_key: ContentKey,
+	key: HistoryRowKey,
 	status: HistoryStatus,
 	source_run: RunId | null,
 	happened_at: UnixMillis | null,
-	codec: VideoCodec,
-	container: MediaContainer,
-	width: number,
-	height: number,
-	duration_ms: number,
-	audio: AudioCodec[],
-	input_size_bytes: number,
+	codec: VideoCodec | null,
+	container: MediaContainer | null,
+	width: number | null,
+	height: number | null,
+	duration_ms: number | null,
+	/**
+	 *  `None` means the source did not record audio metadata; `Some([])`
+	 *  means probing established that the file has no audio streams.
+	 */
+	audio: AudioCodec[] | null,
+	input_size_bytes: number | null,
 	output_size_bytes: number | null,
+	encoding_time_ms: number | null,
 	vmaf: VmafScore | null,
 	crf: Crf | null,
 };
+
+/**
+ *  Stable identity for either an observed content row or an unresolved
+ *  imported path row.
+ */
+export type HistoryRowKey = { kind: "Content"; value: ContentKey } | { kind: "Parked"; value: ImportPath };
 
 /**  The current standing of one content in History terms. */
 export type HistoryStatus = "Converted" | "Remuxed" | ({ NotWorthwhile: {
@@ -641,6 +670,51 @@ export type ImportPath = string;
 export type ImportSummary = {
 	parked: number,
 	skipped: number,
+};
+
+/**
+ *  Historical facts imported from V2. The same value starts in the parked
+ *  inbox and, after adoption, may survive as display-only provenance on a
+ *  content record.
+ *  Every field the import schema marks optional is nullable — the import
+ *  carries what the source record actually said, nothing synthesized.
+ *  Fixed-point integers only: durable state derives `Eq`, so any float
+ *  representation is the converter script's problem, never this crate's.
+ */
+export type ImportedHistoryRecord = {
+	status: ParkedStatus,
+	/**
+	 *  Byte size of the source file when the record was decided: both the
+	 *  freshness-stamp probe and the input size for a converted record's
+	 *  summary.
+	 */
+	size: number | null,
+	modified_ns: FileTimeNs | null,
+	video_codec: VideoCodec | null,
+	width: number | null,
+	height: number | null,
+	duration_ms: number | null,
+	output_size: number | null,
+	encoding_time: DurationMs | null,
+	crf: Crf | null,
+	vmaf: VmafScore | null,
+	target: VmafTarget | null,
+	requested_target: VmafTarget | null,
+	floor_target: VmafTarget | null,
+	/**
+	 *  When the source record was decided, falling back to the import
+	 *  instant when the source carried no timestamp.
+	 */
+	decided_at: UnixMillis,
+};
+
+/**
+ *  The one deterministic imported summary retained on a content record.
+ *  Every adopted path is guarded separately by `DurableState::adopted_imports`.
+ */
+export type ImportedProvenance = {
+	import_path: ImportPath,
+	record: ImportedHistoryRecord,
 };
 
 export type ItemOutcome = "Analyzed" | ({ Converted: CompletionEvidence }) & { Failed?: never; NotWorthwhile?: never; Remuxed?: never; Skipped?: never } | ({ Remuxed: CompletionEvidence }) & { Converted?: never; Failed?: never; NotWorthwhile?: never; Skipped?: never } | ({ NotWorthwhile: {
@@ -840,40 +914,6 @@ export type OutputTransaction_Serialize = {
  *  touching an active job: edit the item to `Allow` and retry.
  */
 export type OverwriteDecision = "FollowSettings" | "Allow" | "Deny";
-
-/**
- *  An imported history record waiting to be matched against a real file.
- *  Every field the import schema marks optional is nullable — the import
- *  carries what the source record actually said, nothing synthesized.
- *  Fixed-point integers only: durable state derives `Eq`, so any float
- *  representation is the converter script's problem, never this crate's.
- */
-export type ParkedRecord = {
-	status: ParkedStatus,
-	/**
-	 *  Byte size of the source file when the record was decided: both the
-	 *  freshness-stamp probe and the input size for a converted record's
-	 *  summary.
-	 */
-	size: number | null,
-	modified_ns: FileTimeNs | null,
-	video_codec: VideoCodec | null,
-	width: number | null,
-	height: number | null,
-	duration_ms: number | null,
-	output_size: number | null,
-	encoding_time: DurationMs | null,
-	crf: Crf | null,
-	vmaf: VmafScore | null,
-	target: VmafTarget | null,
-	requested_target: VmafTarget | null,
-	floor_target: VmafTarget | null,
-	/**
-	 *  When the source record was decided, falling back to the import
-	 *  instant when the source carried no timestamp.
-	 */
-	decided_at: UnixMillis,
-};
 
 /**  The decisive standing of an imported history record. */
 export type ParkedStatus = "Scanned" | "Analyzed" | "NotWorthwhile" | "Converted";
@@ -1105,8 +1145,8 @@ export type StatisticsPayload = {
 	 */
 	grew_count: number,
 	/**
-	 *  Source codecs of converted facts, most frequent first; ties keep the
-	 *  deterministic content-key iteration order.
+	 *  Source codecs of converted facts, most frequent first; ties use the
+	 *  codec enum's ascending canonical order.
 	 */
 	codecs: CodecCount[],
 	cumulative_savings: CumulativeSavingsPoint[],

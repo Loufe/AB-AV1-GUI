@@ -11,10 +11,10 @@ use crate::{
     DecodePreference, DefaultOutputMode, DestructiveIdentity, DestructiveObservation, DurableDelta,
     DurationMs, Effect, Eligibility, EphemeralDelta, ExecutionSettings, FailureFacts, FailureKind,
     FileRecord, FileStamp, FileSystemFacts, FileSystemId, FileTimeNs, HistoryCommand, ImportPath,
-    ItemOutcome, JOURNAL_SCHEMA_VERSION, JobAction, JobPhase, JobProgress, JournalEnvelope,
-    JournalSequence, MediaContainer, MediaObservation, Operation, OutputDelta,
-    OutputRecoveryAction, OutputState, OutputTarget, OutputTransaction, OverwriteDecision,
-    ParkedRecord, ParkedResolution, ParkedStatus, PathBinding, PathHash, PhaseSpan,
+    ImportedHistoryRecord, ImportedProvenance, ItemOutcome, JOURNAL_SCHEMA_VERSION, JobAction,
+    JobPhase, JobProgress, JournalEnvelope, JournalSequence, MediaContainer, MediaObservation,
+    Operation, OutputDelta, OutputRecoveryAction, OutputState, OutputTarget, OutputTransaction,
+    OverwriteDecision, ParkedResolution, ParkedStatus, PathBinding, PathHash, PhaseSpan,
     ProjectionCommand, QueueAddRequest, QueueCommand, QueueItemEdit, QueueItemId, QueueItemState,
     Replacement, Reply, RunId, SearchMeasurement, SessionAggregates, SessionCommand, SessionState,
     Settings, SettingsCommand, SkipReason, StreamByteSizes, SystemCommand, Telemetry,
@@ -2102,6 +2102,36 @@ fn replay_rejects_an_entire_semantically_invalid_batch() {
     let replayed = replay(&encode_record(&envelope).expect("journal record"));
     assert!(replayed.corruption.is_some());
     assert!(replayed.state.queue.is_empty());
+}
+
+#[test]
+fn replay_rejects_adoption_when_carried_facts_do_not_match_parked_record() {
+    let import_path = ImportPath("c:/videos/imported.mkv".to_owned());
+    let parked = parked_record(ParkedStatus::Converted);
+    let mut mismatched = parked.clone();
+    mismatched.output_size = Some(123);
+    let observation = media_observation("imported-content");
+    let envelope = JournalEnvelope {
+        sequence: JournalSequence(0),
+        deltas: vec![
+            DurableDelta::HistoryImported {
+                records: vec![(import_path.clone(), parked)],
+            },
+            DurableDelta::MediaObserved {
+                observation: Box::new(observation.clone()),
+            },
+            DurableDelta::ParkedAdopted {
+                import_path,
+                content_key: observation.binding.content_key,
+                imported: mismatched,
+                verdict: None,
+            },
+        ],
+    };
+
+    let replayed = replay(&encode_record(&envelope).expect("journal record"));
+    assert!(replayed.corruption.is_some());
+    assert_eq!(replayed.state, crate::DurableState::default());
 }
 
 #[test]
@@ -4226,8 +4256,8 @@ fn statistics_request_rejects_an_implausible_offset() {
 }
 /// A parked record whose stamp matches `media_observation` (size 10_000,
 /// mtime 1 ns) with a full summary.
-fn parked_record(status: ParkedStatus) -> ParkedRecord {
-    ParkedRecord {
+fn parked_record(status: ParkedStatus) -> ImportedHistoryRecord {
+    ImportedHistoryRecord {
         status,
         size: Some(10_000),
         modified_ns: Some(FileTimeNs(1)),
@@ -4368,6 +4398,33 @@ fn resolve_parked_stamp_tolerance_and_retirement() {
 }
 
 #[test]
+fn imported_provenance_priority_is_total_and_deterministic() {
+    let current = ImportedProvenance {
+        import_path: ImportPath("c:/videos/z.mkv".to_owned()),
+        record: parked_record(ParkedStatus::Analyzed),
+    };
+    let stronger = ImportedProvenance {
+        import_path: ImportPath("c:/videos/y.mkv".to_owned()),
+        record: parked_record(ParkedStatus::Converted),
+    };
+    assert!(stronger.outranks(&current));
+
+    let smaller_path = ImportedProvenance {
+        import_path: ImportPath("c:/videos/a.mkv".to_owned()),
+        record: parked_record(ParkedStatus::Converted),
+    };
+    assert!(smaller_path.outranks(&stronger));
+
+    let mut newest = parked_record(ParkedStatus::Scanned);
+    newest.decided_at = UnixMillis(1_001);
+    let newer = ImportedProvenance {
+        import_path: ImportPath("c:/videos/zz.mkv".to_owned()),
+        record: newest,
+    };
+    assert!(newer.outranks(&smaller_path));
+}
+
+#[test]
 fn history_deltas_fold_park_adopt_and_retire() {
     let mut state = crate::DurableState::default();
     let key_a = ImportPath("c:/videos/a.mkv".to_owned());
@@ -4403,6 +4460,7 @@ fn history_deltas_fold_park_adopt_and_retire() {
         &DurableDelta::ParkedAdopted {
             import_path: key_a.clone(),
             content_key: observation.binding.content_key.clone(),
+            imported: parked_record(ParkedStatus::Converted),
             verdict: Some(adopted_verdict.clone()),
         },
     );
@@ -4410,7 +4468,13 @@ fn history_deltas_fold_park_adopt_and_retire() {
         .records
         .get(&observation.binding.content_key)
         .expect("content record");
-    assert_eq!(record.imported, Some(key_a.clone()));
+    assert_eq!(
+        record
+            .imported
+            .as_ref()
+            .map(|imported| &imported.import_path),
+        Some(&key_a)
+    );
     assert_eq!(record.verdict, Some(adopted_verdict.clone()));
     assert!(!state.parked.contains_key(&key_a));
 
@@ -4420,6 +4484,7 @@ fn history_deltas_fold_park_adopt_and_retire() {
         &DurableDelta::ParkedAdopted {
             import_path: key_b.clone(),
             content_key: observation.binding.content_key.clone(),
+            imported: parked_record(ParkedStatus::Scanned),
             verdict: None,
         },
     );
@@ -4427,20 +4492,35 @@ fn history_deltas_fold_park_adopt_and_retire() {
         .records
         .get(&observation.binding.content_key)
         .expect("content record");
-    assert_eq!(record.imported, Some(key_b.clone()));
+    assert_eq!(
+        record
+            .imported
+            .as_ref()
+            .map(|imported| &imported.import_path),
+        Some(&key_a)
+    );
     assert_eq!(record.verdict, Some(adopted_verdict));
     assert!(state.parked.is_empty());
+    assert_eq!(state.adopted_imports.len(), 2);
+    assert!(state.adopted_imports.contains(&key_a));
+    assert!(state.adopted_imports.contains(&key_b));
+
+    let encoded = serde_json::to_string(&state).expect("serialize adopted import guards");
+    let restarted: crate::DurableState =
+        serde_json::from_str(&encoded).expect("deserialize adopted import guards");
+    assert_eq!(restarted.adopted_imports, state.adopted_imports);
 
     // Retirement just drops the parked entry.
+    let key_c = ImportPath("c:/videos/c.mkv".to_owned());
     crate::fold(
         &mut state,
         &DurableDelta::HistoryImported {
-            records: vec![(key_a.clone(), parked_record(ParkedStatus::Scanned))],
+            records: vec![(key_c.clone(), parked_record(ParkedStatus::Scanned))],
         },
     );
     crate::fold(
         &mut state,
-        &DurableDelta::ParkedRetired { import_path: key_a },
+        &DurableDelta::ParkedRetired { import_path: key_c },
     );
     assert!(state.parked.is_empty());
 }
@@ -4499,6 +4579,7 @@ fn import_parks_fresh_records_and_skips_known_keys() {
         &DurableDelta::ParkedAdopted {
             import_path: key_a.clone(),
             content_key: observation.binding.content_key,
+            imported: parked_record(ParkedStatus::Converted),
             verdict: None,
         },
     );
@@ -4521,6 +4602,7 @@ fn import_parks_fresh_records_and_skips_known_keys() {
 fn prepare_resolves_parked_records_after_the_observation() {
     let mut state = AppState::default();
     let matching = ImportPath("c:/videos/match.mkv".to_owned());
+    let weaker_match = ImportPath("c:/videos/also-match.mkv".to_owned());
     let stale = ImportPath("c:/videos/stale.mkv".to_owned());
     let mut stale_record = parked_record(ParkedStatus::Scanned);
     stale_record.size = Some(99_999);
@@ -4529,11 +4611,12 @@ fn prepare_resolves_parked_records_after_the_observation() {
         Command::History(HistoryCommand::Import {
             records: vec![
                 (matching.clone(), parked_record(ParkedStatus::Converted)),
+                (weaker_match.clone(), parked_record(ParkedStatus::Analyzed)),
                 (stale.clone(), stale_record),
             ],
         }),
     );
-    assert!(matches!(imported.reply, Reply::Imported { parked: 2, .. }));
+    assert!(matches!(imported.reply, Reply::Imported { parked: 3, .. }));
 
     apply(&mut state, add_command(QueueItemId(1), "video.mkv"));
     start_session(&mut state);
@@ -4553,7 +4636,7 @@ fn prepare_resolves_parked_records_after_the_observation() {
             claim_id: ClaimId(2),
             run_id: RunId(3),
             observation: Some(Box::new(observation.clone())),
-            import_paths: vec![matching.clone(), stale.clone()],
+            import_paths: vec![weaker_match.clone(), stale.clone(), matching.clone()],
             execution: execution(),
         }),
     );
@@ -4578,12 +4661,20 @@ fn prepare_resolves_parked_records_after_the_observation() {
     );
 
     assert!(state.durable.parked.is_empty());
+    assert!(state.durable.adopted_imports.contains(&matching));
+    assert!(state.durable.adopted_imports.contains(&weaker_match));
     let record = state
         .durable
         .records
         .get(&observation.binding.content_key)
         .expect("content record");
-    assert_eq!(record.imported, Some(matching));
+    assert_eq!(
+        record
+            .imported
+            .as_ref()
+            .map(|imported| &imported.import_path),
+        Some(&matching)
+    );
     let verdict = record.verdict.clone().expect("adopted verdict");
     assert_eq!(verdict.source_run, None);
     assert!(matches!(
@@ -4655,7 +4746,13 @@ fn adoption_never_overwrites_a_native_verdict() {
         .get(&observation.binding.content_key)
         .expect("content record");
     // Provenance lands, the native verdict stands, the inbox empties.
-    assert_eq!(record.imported, Some(key));
+    assert_eq!(
+        record
+            .imported
+            .as_ref()
+            .map(|imported| &imported.import_path),
+        Some(&key)
+    );
     assert_eq!(record.verdict, Some(native));
     assert!(state.durable.parked.is_empty());
 }

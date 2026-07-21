@@ -6,12 +6,12 @@ use crate::state::ConversionRun;
 use crate::{
     AnalysisIntent, AnalysisResult, AppState, ClaimId, ClaimedJob, CompletionEvidence, ConfigDelta,
     CorruptionSignature, DecodeMode, DecodePreference, DurableDelta, ExecutionSettings, FileStamp,
-    ImportPath, ItemOutcome, JobAction, JobSpec, MediaObservation, Operation, OutputDelta,
-    OutputTarget, OverwriteDecision, ParkedRecord, ParkedResolution, PathHash, PhaseSpan,
-    QueueItem, QueueItemId, QueueItemState, ReservedJob, RunId, SessionAggregates, SessionState,
-    Settings, SkipReason, StatisticsPayload, Telemetry, ToolAvailability, ToolsState, UnixMillis,
-    VendorActivity, evaluate_enqueue, fold, fold_config, resolve_parked, select_job_action,
-    statistics,
+    ImportPath, ImportedHistoryRecord, ImportedProvenance, ItemOutcome, JobAction, JobSpec,
+    MediaObservation, Operation, OutputDelta, OutputTarget, OverwriteDecision, ParkedResolution,
+    PathHash, PhaseSpan, QueueItem, QueueItemId, QueueItemState, ReservedJob, RunId,
+    SessionAggregates, SessionState, Settings, SkipReason, StatisticsPayload, Telemetry,
+    ToolAvailability, ToolsState, UnixMillis, VendorActivity, evaluate_enqueue, fold, fold_config,
+    resolve_parked, select_job_action, statistics,
 };
 
 /// Sanity bound for a requester-supplied UTC offset: one day in minutes.
@@ -40,7 +40,7 @@ pub enum HistoryCommand {
     /// are skipped; an all-known batch is still accepted (a re-import is a
     /// counted no-op, not an error).
     Import {
-        records: Vec<(ImportPath, ParkedRecord)>,
+        records: Vec<(ImportPath, ImportedHistoryRecord)>,
     },
 }
 
@@ -679,15 +679,9 @@ fn apply_history(state: &AppState, command: HistoryCommand) -> Applied {
                 .parked
                 .keys()
                 .cloned()
-                .chain(
-                    state
-                        .durable
-                        .records
-                        .values()
-                        .filter_map(|record| record.imported.clone()),
-                )
+                .chain(state.durable.adopted_imports.iter().cloned())
                 .collect();
-            let mut fresh: Vec<(ImportPath, ParkedRecord)> = Vec::new();
+            let mut fresh: Vec<(ImportPath, ImportedHistoryRecord)> = Vec::new();
             let mut skipped: u32 = 0;
             for (import_path, parked) in records {
                 if known.contains(&import_path) {
@@ -848,30 +842,69 @@ fn apply_worker(state: &AppState, command: WorkerCommand) -> Applied {
             // recomputes the action after these deltas fold. A native
             // verdict already on the record outranks an adopted one —
             // provenance stays, the verdict does not regress.
-            let adoptions: Vec<DurableDelta> = observation
+            let native_verdict_stands = record
+                .and_then(|known| known.verdict.as_ref())
+                .is_some_and(|existing| existing.source_run.is_some());
+            let resolutions: Vec<(ImportPath, ImportedHistoryRecord, ParkedResolution)> =
+                observation
+                    .as_ref()
+                    .map(|observation| {
+                        import_paths
+                            .iter()
+                            .filter_map(|key| {
+                                state.durable.parked.get(key).map(|parked| (key, parked))
+                            })
+                            .map(|(key, parked)| {
+                                (
+                                    key.clone(),
+                                    parked.clone(),
+                                    resolve_parked(parked, observation),
+                                )
+                            })
+                            .collect()
+                    })
+                    .unwrap_or_default();
+            let mut selected_import = record.and_then(|known| known.imported.clone());
+            for (import_path, imported, resolution) in &resolutions {
+                if !matches!(resolution, ParkedResolution::Adopt { .. }) {
+                    continue;
+                }
+                let candidate = ImportedProvenance {
+                    import_path: import_path.clone(),
+                    record: imported.clone(),
+                };
+                if selected_import
+                    .as_ref()
+                    .is_none_or(|current| candidate.outranks(current))
+                {
+                    selected_import = Some(candidate);
+                }
+            }
+            let selected_path = selected_import
                 .as_ref()
-                .map(|observation| {
-                    import_paths
-                        .iter()
-                        .filter_map(|key| state.durable.parked.get(key).map(|parked| (key, parked)))
-                        .map(|(key, parked)| match resolve_parked(parked, observation) {
-                            ParkedResolution::Adopt { verdict } => {
-                                let native_verdict_stands = record
-                                    .and_then(|known| known.verdict.as_ref())
-                                    .is_some_and(|existing| existing.source_run.is_some());
-                                DurableDelta::ParkedAdopted {
-                                    import_path: key.clone(),
-                                    content_key: observation.binding.content_key.clone(),
-                                    verdict: if native_verdict_stands { None } else { verdict },
-                                }
-                            }
-                            ParkedResolution::Retire => DurableDelta::ParkedRetired {
-                                import_path: key.clone(),
+                .map(|selected| &selected.import_path);
+            let adoptions: Vec<DurableDelta> = if let Some(adoption_content_key) = &content_key {
+                resolutions
+                    .into_iter()
+                    .map(|(import_path, imported, resolution)| match resolution {
+                        ParkedResolution::Adopt { verdict } => DurableDelta::ParkedAdopted {
+                            verdict: if !native_verdict_stands
+                                && selected_path == Some(&import_path)
+                            {
+                                verdict
+                            } else {
+                                None
                             },
-                        })
-                        .collect()
-                })
-                .unwrap_or_default();
+                            import_path,
+                            content_key: adoption_content_key.clone(),
+                            imported,
+                        },
+                        ParkedResolution::Retire => DurableDelta::ParkedRetired { import_path },
+                    })
+                    .collect()
+            } else {
+                Vec::new()
+            };
             let adopted_verdict = adoptions.iter().rev().find_map(|delta| match delta {
                 DurableDelta::ParkedAdopted {
                     verdict: Some(verdict),

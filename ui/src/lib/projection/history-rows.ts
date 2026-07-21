@@ -14,6 +14,7 @@ import type {
   FileRecord_Deserialize,
   HistoryRow,
   HistoryStatus,
+  ImportedHistoryRecord,
   RunId,
   Verdict,
   VideoMeta,
@@ -81,7 +82,8 @@ function carriedSizes(verdict: Verdict): { input: number | null; output: number 
 }
 
 /**
- * Project one row per content worth reporting, in content-key order.
+ * Project native/adopted content rows in content-key order, followed by
+ * unresolved imported rows in normalized import-path order.
  * Filtering and sorting are frontend concerns. Mirrors `history_rows`: a
  * standing verdict wins; without one, the latest failed or stopped run
  * reports with its reason; without that, completed analyses report as
@@ -124,11 +126,31 @@ export function historyRows(state: DurableState_Deserialize): HistoryRow[] {
     const record = state.records[contentKey];
     const interruption = latestInterruption.get(contentKey);
     if (record.verdict !== null) {
-      rows.push(verdictRow(contentKey, record, record.verdict, state));
+      const imported = record.imported?.record;
+      const status = imported === undefined ? null : importedStatus(imported);
+      rows.push(
+        record.verdict.source_run === null && imported !== undefined && status !== null
+          ? importedRow({ kind: "Content", value: contentKey }, imported, status)
+          : verdictRow(contentKey, record, record.verdict, state),
+      );
     } else if (interruption !== undefined) {
       rows.push(interruptionRow(contentKey, record, interruption.runId, interruption.run));
     } else if (record.analyses.length > 0) {
       rows.push(analyzedRow(contentKey, record, latestAnalysis.get(contentKey)));
+    } else if (record.imported !== null) {
+      const status = importedStatus(record.imported.record);
+      if (status !== null) {
+        rows.push(
+          importedRow({ kind: "Content", value: contentKey }, record.imported.record, status),
+        );
+      }
+    }
+  }
+  for (const importPath of Object.keys(state.parked).sort()) {
+    const imported = state.parked[importPath];
+    const status = importedStatus(imported);
+    if (status !== null) {
+      rows.push(importedRow({ kind: "Parked", value: importPath }, imported, status));
     }
   }
   return rows;
@@ -148,7 +170,7 @@ function baseRow(
 ): HistoryRow {
   const { width, height } = postRotationDimensions(record.metadata);
   return {
-    content_key: contentKey,
+    key: { kind: "Content", value: contentKey },
     status,
     source_run: null,
     happened_at: null,
@@ -160,6 +182,7 @@ function baseRow(
     audio: record.metadata.audio.map((stream) => stream.codec),
     input_size_bytes: record.metadata.size_bytes,
     output_size_bytes: null,
+    encoding_time_ms: null,
     vmaf: null,
     crf: null,
   };
@@ -200,9 +223,22 @@ function verdictRow(
     row.input_size_bytes = input;
   }
   row.output_size_bytes = output;
+  row.encoding_time_ms =
+    run === undefined
+      ? "Converted" in kind && kind.Converted !== undefined
+        ? kind.Converted.encoding_time
+        : null
+      : encodingDuration(run);
   row.vmaf = measurement === null ? carried.vmaf : measurement.score;
   row.crf = measurement === null ? carried.crf : measurement.crf;
   return row;
+}
+
+function encodingDuration(run: ConversionRun): number {
+  return run.phase_spans.reduce(
+    (total, span) => (span.phase === "Encoding" ? total + span.duration : total),
+    0,
+  );
 }
 
 function interruptionRow(
@@ -254,4 +290,46 @@ function lastRecordedAnalysis(record: FileRecord_Deserialize): AnalysisResult | 
     .sort((a, b) => a - b);
   const highest = targets.at(-1);
   return highest === undefined ? null : byTarget[highest];
+}
+
+function importedStatus(imported: ImportedHistoryRecord): HistoryStatus | null {
+  switch (imported.status) {
+    case "Converted":
+      return "Converted";
+    case "NotWorthwhile":
+      return {
+        NotWorthwhile: {
+          requested: imported.requested_target ?? 95,
+          floor: imported.floor_target ?? 90,
+        },
+      };
+    case "Analyzed":
+      return "Analyzed";
+    case "Scanned":
+      return null;
+  }
+}
+
+function importedRow(
+  key: HistoryRow["key"],
+  imported: ImportedHistoryRecord,
+  status: HistoryStatus,
+): HistoryRow {
+  return {
+    key,
+    status,
+    source_run: null,
+    happened_at: imported.decided_at,
+    codec: imported.video_codec,
+    container: null,
+    width: imported.width,
+    height: imported.height,
+    duration_ms: imported.duration_ms,
+    audio: null,
+    input_size_bytes: imported.size,
+    output_size_bytes: imported.output_size,
+    encoding_time_ms: imported.encoding_time,
+    vmaf: imported.vmaf,
+    crf: imported.crf,
+  };
 }
