@@ -63,6 +63,12 @@ export function foldDurable(
     const { item_id, before } = delta.QueueMoved;
     return { ...state, queue: movedQueue(state.queue, item_id, before) };
   }
+  if ("QueueReordered" in delta && delta.QueueReordered !== undefined) {
+    return {
+      ...state,
+      queue: reorderedPendingQueue(state.queue, delta.QueueReordered.pending_order),
+    };
+  }
   if ("QueueRequeued" in delta && delta.QueueRequeued !== undefined) {
     const { item_id } = delta.QueueRequeued;
     const source = state.queue.findIndex((item) => item.id === item_id);
@@ -248,6 +254,20 @@ function movedQueue(
   const target = before === null ? -1 : next.findIndex((entry) => entry.id === before);
   next.splice(target === -1 ? next.length : target, 0, item);
   return next;
+}
+
+function reorderedPendingQueue(queue: QueueItem[], pendingOrder: QueueItemId[]): QueueItem[] {
+  const frozen = queue.filter((item) => item.state !== "Queued");
+  const pending = queue.filter((item) => item.state === "Queued");
+  const reordered: QueueItem[] = [];
+  for (const itemId of pendingOrder) {
+    const source = pending.findIndex((item) => item.id === itemId);
+    if (source !== -1) {
+      const [item] = pending.splice(source, 1);
+      reordered.push(item);
+    }
+  }
+  return [...frozen, ...reordered, ...pending];
 }
 
 function withItemState(

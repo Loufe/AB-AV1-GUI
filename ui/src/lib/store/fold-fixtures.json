@@ -583,6 +583,94 @@
       }
     },
     {
+      "name": "queue_reordered_pending",
+      "initial": {
+        "queue": [
+          {
+            "id": 1,
+            "input": "videos/input-1.mp4",
+            "operation": "Convert",
+            "intent": "ReuseIfFresh",
+            "output_target": "Replace",
+            "overwrite": "FollowSettings",
+            "state": "Queued"
+          },
+          {
+            "id": 2,
+            "input": "videos/input-2.mp4",
+            "operation": "Convert",
+            "intent": "ReuseIfFresh",
+            "output_target": "Replace",
+            "overwrite": "FollowSettings",
+            "state": "Queued"
+          },
+          {
+            "id": 3,
+            "input": "videos/input-3.mp4",
+            "operation": "Convert",
+            "intent": "ReuseIfFresh",
+            "output_target": "Replace",
+            "overwrite": "FollowSettings",
+            "state": "Queued"
+          }
+        ],
+        "paths": {},
+        "records": {},
+        "outputs": {},
+        "conversion_runs": {},
+        "parked": {},
+        "adopted_imports": []
+      },
+      "deltas": [
+        {
+          "QueueReordered": {
+            "pending_order": [
+              3,
+              1,
+              2
+            ]
+          }
+        }
+      ],
+      "expected": {
+        "queue": [
+          {
+            "id": 3,
+            "input": "videos/input-3.mp4",
+            "operation": "Convert",
+            "intent": "ReuseIfFresh",
+            "output_target": "Replace",
+            "overwrite": "FollowSettings",
+            "state": "Queued"
+          },
+          {
+            "id": 1,
+            "input": "videos/input-1.mp4",
+            "operation": "Convert",
+            "intent": "ReuseIfFresh",
+            "output_target": "Replace",
+            "overwrite": "FollowSettings",
+            "state": "Queued"
+          },
+          {
+            "id": 2,
+            "input": "videos/input-2.mp4",
+            "operation": "Convert",
+            "intent": "ReuseIfFresh",
+            "output_target": "Replace",
+            "overwrite": "FollowSettings",
+            "state": "Queued"
+          }
+        ],
+        "paths": {},
+        "records": {},
+        "outputs": {},
+        "conversion_runs": {},
+        "parked": {},
+        "adopted_imports": []
+      }
+    },
+    {
       "name": "queue_requeued_resets_and_moves_to_end",
       "initial": {
         "queue": [

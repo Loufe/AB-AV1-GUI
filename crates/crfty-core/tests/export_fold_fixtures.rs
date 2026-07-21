@@ -89,6 +89,12 @@ fn moved(id: u64, before: Option<u64>) -> DurableDelta {
     }
 }
 
+fn reordered(pending_order: &[u64]) -> DurableDelta {
+    DurableDelta::QueueReordered {
+        pending_order: pending_order.iter().copied().map(QueueItemId).collect(),
+    }
+}
+
 fn requeued(id: u64) -> DurableDelta {
     DurableDelta::QueueRequeued {
         item_id: QueueItemId(id),
@@ -457,6 +463,11 @@ fn scenarios() -> Vec<Scenario> {
             "queue_moved_missing_item",
             vec![added(1), added(2)],
             vec![moved(9, Some(1))],
+        ),
+        scenario(
+            "queue_reordered_pending",
+            vec![added(1), added(2), added(3)],
+            vec![reordered(&[3, 1, 2])],
         ),
         scenario(
             // The retried item resets to Queued and moves to the end.
