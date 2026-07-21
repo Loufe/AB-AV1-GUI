@@ -8,7 +8,12 @@ import {
   TooltipProvider,
   TooltipTrigger,
 } from "@/components/ui";
-import { formatCrf, formatFileSize, formatTime } from "@/lib/format/format";
+import {
+  formatDurationMsClock,
+  formatEngineCrf,
+  formatEngineVmafScore,
+} from "@/lib/format/engine-values";
+import { formatFileSize } from "@/lib/format/format";
 import { cn } from "@/lib/utils";
 
 import { Section, ThemePair } from "./theme-pair";
@@ -42,7 +47,7 @@ interface MockHistoryRow {
   afterBytes: number | null;
   savedPercent: number | null;
   quality: { vmaf: number; crf: number } | null;
-  elapsedSec: number | null;
+  elapsedMs: number | null;
   outcome: React.ReactNode;
 }
 
@@ -104,8 +109,8 @@ const ROWS: MockHistoryRow[] = [
     beforeBytes: 4.11 * GIB,
     afterBytes: 2.02 * GIB,
     savedPercent: 51,
-    quality: { vmaf: 95.3, crf: 24.25 },
-    elapsedSec: 4813,
+    quality: { vmaf: 9530, crf: 24_250 },
+    elapsedMs: 4_813_000,
     outcome: (
       <OutcomeText tone="success" icon={CircleCheck}>
         Converted
@@ -118,8 +123,8 @@ const ROWS: MockHistoryRow[] = [
     beforeBytes: 3.21 * GIB,
     afterBytes: 1.34 * GIB,
     savedPercent: 58,
-    quality: { vmaf: 95.2, crf: 24 },
-    elapsedSec: 4320,
+    quality: { vmaf: 9520, crf: 24_000 },
+    elapsedMs: 4_320_000,
     outcome: (
       <OutcomeText tone="success" icon={CircleCheck}>
         Converted
@@ -132,8 +137,8 @@ const ROWS: MockHistoryRow[] = [
     beforeBytes: 8.6 * GIB,
     afterBytes: null,
     savedPercent: null,
-    quality: { vmaf: 95, crf: 22.75 },
-    elapsedSec: 118,
+    quality: { vmaf: 9500, crf: 22_750 },
+    elapsedMs: 118_000,
     outcome: (
       <OutcomeText
         tone="primary"
@@ -151,7 +156,7 @@ const ROWS: MockHistoryRow[] = [
     afterBytes: null,
     savedPercent: null,
     quality: null,
-    elapsedSec: 640,
+    elapsedMs: 640_000,
     outcome: (
       <OutcomeText
         tone="warning"
@@ -169,7 +174,7 @@ const ROWS: MockHistoryRow[] = [
     afterBytes: null,
     savedPercent: null,
     quality: null,
-    elapsedSec: 4,
+    elapsedMs: 4_000,
     outcome: (
       <OutcomeText
         tone="destructive"
@@ -211,7 +216,7 @@ function HistoryRow({ row }: { row: MockHistoryRow }) {
               />
             }
           >
-            {row.quality.vmaf} · CRF {formatCrf(row.quality.crf)}
+            {formatEngineVmafScore(row.quality.vmaf)} · CRF {formatEngineCrf(row.quality.crf)}
           </TooltipTrigger>
           <TooltipContent>SVT-AV1 preset 6 · target VMAF 95 · no fallback</TooltipContent>
         </Tooltip>
@@ -219,7 +224,7 @@ function HistoryRow({ row }: { row: MockHistoryRow }) {
         <span className="text-right text-muted-foreground/60 tabular-nums">—</span>
       )}
       <span className="text-right text-muted-foreground tabular-nums">
-        {row.elapsedSec !== null ? formatTime(row.elapsedSec) : "—"}
+        {formatDurationMsClock(row.elapsedMs)}
       </span>
       {row.outcome}
     </div>

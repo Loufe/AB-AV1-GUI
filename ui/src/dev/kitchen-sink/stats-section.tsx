@@ -13,7 +13,13 @@ import {
   ChartTooltipContent,
   type ChartConfig,
 } from "@/components/ui";
-import { formatCompactTime, formatEfficiency, formatFileSize } from "@/lib/format/format";
+import {
+  formatDurationMsCompact,
+  formatStatisticsInputThroughput,
+  formatStatisticsReduction,
+  formatStatisticsVmaf,
+} from "@/lib/format/engine-values";
+import { formatFileSize } from "@/lib/format/format";
 
 import { Section } from "./theme-pair";
 
@@ -35,14 +41,15 @@ import { Section } from "./theme-pair";
 
 const GIB = 1024 ** 3;
 
-// Shapes mirror what the Rust stats delta will carry (#33 §11: aggregation is
-// backend-side) — but these are mock literals, not domain types.
+// Statistics values are backend-side aggregates. Unlike History facts, its
+// spreads are already normalized human-scale floats.
 const SUMMARY = {
-  totalFiles: 1284,
-  savedBytes: 412.4 * GIB,
-  avgReductionPct: 54,
-  totalTimeSec: 214 * 3600 + 36 * 60,
-  avgVmaf: 95.4,
+  converted_files: 1284,
+  total_saved_bytes: 412.4 * GIB,
+  reduction_percent: { average: 54, minimum: -2, maximum: 91, count: 1284 },
+  total_time_ms: (214 * 3600 + 36 * 60) * 1000,
+  gigabytes_per_hour: 1.92,
+  vmaf: { average: 95.4, minimum: 90.1, maximum: 99.2, count: 1284 },
 };
 
 /** Cumulative space saved, monthly points (bytes). */
@@ -60,7 +67,7 @@ const CUMULATIVE = [
   { month: "Apr ’26", saved: 342 * GIB },
   { month: "May ’26", saved: 371 * GIB },
   { month: "Jun ’26", saved: 396 * GIB },
-  { month: "Jul ’26", saved: SUMMARY.savedBytes },
+  { month: "Jul ’26", saved: SUMMARY.total_saved_bytes },
 ];
 
 /** Size-reduction histogram, 10% bins (sums to totalFiles). */
@@ -264,16 +271,28 @@ function CodecBreakdownCard() {
 
 function StatsPanel() {
   const metrics: Metric[] = [
-    { label: "Space saved", value: formatFileSize(SUMMARY.savedBytes), icon: HardDrive },
-    { label: "Files converted", value: SUMMARY.totalFiles.toLocaleString(), icon: FileCheck2 },
-    { label: "Avg reduction", value: `${SUMMARY.avgReductionPct}%`, icon: TrendingDown },
+    { label: "Space saved", value: formatFileSize(SUMMARY.total_saved_bytes), icon: HardDrive },
+    {
+      label: "Files converted",
+      value: SUMMARY.converted_files.toLocaleString(),
+      icon: FileCheck2,
+    },
+    {
+      label: "Avg reduction",
+      value: formatStatisticsReduction(SUMMARY.reduction_percent.average),
+      icon: TrendingDown,
+    },
     {
       label: "Throughput",
-      value: formatEfficiency(SUMMARY.savedBytes, SUMMARY.totalTimeSec),
+      value: formatStatisticsInputThroughput(SUMMARY.gigabytes_per_hour),
       icon: Gauge,
     },
-    { label: "Encode time", value: formatCompactTime(SUMMARY.totalTimeSec), icon: Clock },
-    { label: "Avg VMAF", value: SUMMARY.avgVmaf.toFixed(1), icon: Eye },
+    {
+      label: "Processing time",
+      value: formatDurationMsCompact(SUMMARY.total_time_ms),
+      icon: Clock,
+    },
+    { label: "Avg VMAF", value: formatStatisticsVmaf(SUMMARY.vmaf.average), icon: Eye },
   ];
   return (
     <div className="flex flex-col gap-4">
