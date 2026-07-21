@@ -15,7 +15,7 @@ use std::{
 use crfty_core::{
     AnalysisIntent, AnalysisProfile, AnalysisResult, AppState, ArtifactIdentity, AudioCodec,
     AudioStreamMeta, ClaimId, Command, ContentKey, Crf, DestructiveIdentity, DurableDelta,
-    DurableState, EphemeralDelta, ExecutionSettings, FailureFacts, FailureKind, FileStamp,
+    DurableState, EphemeralDelta, ExecutionSettings, FailureFacts, FailureKind, FileSystemId,
     FileTimeNs, HistoryCommand, ItemOutcome, JobPhase, JobProgress, MediaContainer,
     MediaObservation, Operation, OutputDelta, OutputTarget, OverwriteDecision, PathBinding,
     PathHash, QueueAddRequest, QueueCommand, QueueItemId, Replacement, Reply, RunId,
@@ -78,7 +78,8 @@ fn add_input(item_id: QueueItemId, input: PathBuf) -> Command {
             item_id,
             input,
             path_hash: None,
-            stamp: None,
+            identity: None,
+            timestamp_reliability: crfty_core::TimestampReliability::Unknown,
             operation: Operation::Convert,
             intent: AnalysisIntent::ReuseIfFresh,
             output_target: OutputTarget::Replace,
@@ -739,7 +740,11 @@ fn imported_media_observation() -> MediaObservation {
     MediaObservation {
         path_hash: PathHash("path-imported-movie".to_owned()),
         binding: PathBinding {
-            stamp: FileStamp {
+            identity: DestructiveIdentity {
+                file_id: FileSystemId::Unix {
+                    device: 1,
+                    inode: 10,
+                },
                 size: 10_000,
                 modified_ns: Some(FileTimeNs(1)),
             },
@@ -1650,7 +1655,8 @@ fn overflow_request(id: u64) -> QueueAddRequest {
         item_id: QueueItemId(id),
         input: PathBuf::from(format!("video-{id}.mkv")),
         path_hash: None,
-        stamp: None,
+        identity: None,
+        timestamp_reliability: crfty_core::TimestampReliability::Unknown,
         operation: Operation::Convert,
         intent: AnalysisIntent::ReuseIfFresh,
         output_target: OutputTarget::Replace,
@@ -1719,7 +1725,8 @@ fn settled_success_journal(
                 item_id: QueueItemId(1),
                 input: input.clone(),
                 path_hash: None,
-                stamp: None,
+                identity: None,
+                timestamp_reliability: crfty_core::TimestampReliability::Unknown,
                 operation: Operation::Convert,
                 intent: AnalysisIntent::ReuseIfFresh,
                 output_target,

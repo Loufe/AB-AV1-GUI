@@ -11,15 +11,15 @@ use std::{
 };
 
 use crfty_core::{
-    AnalysisAttempt, AnalysisResult, AppSnapshot, CRF_FIXED_SCALE, ClaimId, ClaimedJob, Command,
-    CompletionEvidence, ConflictKind, CorruptionSignature, Crf, DecodeMode, DurableDelta,
-    DurableState, DurationMs, Effect, ExecutionSettings, FailureFacts, FailureKind, HistoryCommand,
-    ItemOutcome, JobAction, JobPhase, JobProgress, MAX_PERCENT_BASIS_POINTS, MAX_VMAF_SCORE,
-    OutputDelta, OutputState, OutputTarget, OutputTransaction, PERCENT_BASIS_POINTS_SCALE,
-    PhaseSpan, ProjectionCommand, QueueCommand, QueueItemState, Replacement, Reply, RunId,
-    SearchMeasurement, SessionCommand, SettingsCommand, SkipReason, StreamByteSizes, SystemCommand,
-    Telemetry, UnixMillis, VMAF_SCORE_FIXED_SCALE, VendorActivity, VendorCommand, VmafScore,
-    VmafTarget, WorkerCommand, fold,
+    AnalysisAttempt, AnalysisCommand, AnalysisResult, AppSnapshot, CRF_FIXED_SCALE, ClaimId,
+    ClaimedJob, Command, CompletionEvidence, ConflictKind, CorruptionSignature, Crf, DecodeMode,
+    DurableDelta, DurableState, DurationMs, Effect, ExecutionSettings, FailureFacts, FailureKind,
+    HistoryCommand, ItemOutcome, JobAction, JobPhase, JobProgress, MAX_PERCENT_BASIS_POINTS,
+    MAX_VMAF_SCORE, OutputDelta, OutputState, OutputTarget, OutputTransaction,
+    PERCENT_BASIS_POINTS_SCALE, PhaseSpan, ProjectionCommand, QueueCommand, QueueItemState,
+    Replacement, Reply, RunId, SearchMeasurement, SessionCommand, SettingsCommand, SkipReason,
+    StreamByteSizes, SystemCommand, Telemetry, UnixMillis, VMAF_SCORE_FIXED_SCALE, VendorActivity,
+    VendorCommand, VmafScore, VmafTarget, WorkerCommand, fold,
 };
 
 const FIRST_RUNTIME_ID: u64 = 1;
@@ -418,6 +418,13 @@ pub struct UserCommandSender {
 }
 
 impl UserCommandSender {
+    pub fn submit_analysis(
+        &self,
+        command: AnalysisCommand,
+    ) -> Result<Reply, crate::driver::SubmitError> {
+        self.inner.submit(Command::Analysis(command))
+    }
+
     pub fn submit_queue(&self, command: QueueCommand) -> Result<Reply, crate::driver::SubmitError> {
         self.inner.submit(Command::Queue(command))
     }
@@ -464,9 +471,10 @@ impl UserCommandSender {
         match reply {
             Reply::Imported { parked, skipped } => Ok(ImportSummary { parked, skipped }),
             Reply::Rejected { reason } | Reply::DurabilityUnknown { reason } => Err(reason),
-            Reply::Accepted | Reply::Reserved(_) | Reply::Claimed(_) => {
-                Err("import command returned an invalid reply".to_owned())
-            }
+            Reply::Accepted
+            | Reply::AnalysisStarted { .. }
+            | Reply::Reserved(_)
+            | Reply::Claimed(_) => Err("import command returned an invalid reply".to_owned()),
         }
     }
 
@@ -1162,7 +1170,12 @@ fn run_session(
             Ok(Reply::Reserved(None) | Reply::Rejected { .. }) => break,
             Ok(Reply::DurabilityUnknown { reason }) => return Err(reason),
             Err(error) => return Err(format!("worker reservation failed: {error}")),
-            Ok(Reply::Accepted | Reply::Claimed(_) | Reply::Imported { .. }) => {
+            Ok(
+                Reply::Accepted
+                | Reply::AnalysisStarted { .. }
+                | Reply::Claimed(_)
+                | Reply::Imported { .. },
+            ) => {
                 return Err("reservation command returned an invalid reply".to_owned());
             }
         };
@@ -1219,6 +1232,7 @@ fn run_session(
             }
             Ok(
                 Reply::Accepted
+                | Reply::AnalysisStarted { .. }
                 | Reply::Claimed(None)
                 | Reply::Reserved(_)
                 | Reply::Imported { .. },

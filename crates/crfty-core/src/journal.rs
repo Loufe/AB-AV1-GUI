@@ -6,7 +6,7 @@ use crate::{
     UnixMillis, fold, output::validate_output_delta, reducer::validate_terminal,
 };
 
-pub const JOURNAL_SCHEMA_VERSION: u32 = 13;
+pub const JOURNAL_SCHEMA_VERSION: u32 = 14;
 
 /// Compaction fires at an idle writer barrier when the journal is both large
 /// in absolute terms and dominated by dead upserts (#33 §10). The floor keeps
@@ -381,7 +381,7 @@ fn validate_replayed_delta(state: &DurableState, delta: &DurableDelta) -> Result
         DurableDelta::MediaObserved { observation } => {
             if observation.path_hash.0.is_empty()
                 || observation.binding.content_key.0.is_empty()
-                || observation.binding.stamp.size == 0
+                || observation.binding.identity.size == 0
                 || observation.metadata.duration_ms == 0
                 || observation.metadata.width == 0
                 || observation.metadata.height == 0

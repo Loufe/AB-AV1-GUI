@@ -373,7 +373,7 @@ impl Bridge {
     }
 
     /// Expands files and folders into one `AddMany` batch carrying real
-    /// enqueue facts (path hash + stamp, best-effort). The scan-extension
+    /// enqueue facts (path hash + destructive identity, best-effort). The scan-extension
     /// filter comes from the settings read model; for `SeparateFolder`
     /// targets, each folder-discovered file gets its originating folder as
     /// `source_root` so the output tree mirrors the source tree.
@@ -406,7 +406,8 @@ impl Bridge {
                     item_id: self.allocate_item_id(),
                     input: file.path,
                     path_hash: file.path_hash,
-                    stamp: file.stamp,
+                    identity: file.identity,
+                    timestamp_reliability: file.timestamp_reliability,
                     operation,
                     intent,
                     output_target,
@@ -702,12 +703,15 @@ fn map_reply(reply: Result<Reply, crfty_engine::driver::SubmitError>) -> Result<
         Ok(Reply::DurabilityUnknown { reason }) => {
             Err(CommandError::new("durability_unknown", reason))
         }
-        Ok(Reply::Reserved(_) | Reply::Claimed(_) | Reply::Imported { .. }) => {
-            Err(CommandError::new(
-                "internal",
-                "driver returned a worker reply to a user command",
-            ))
-        }
+        Ok(
+            Reply::AnalysisStarted { .. }
+            | Reply::Reserved(_)
+            | Reply::Claimed(_)
+            | Reply::Imported { .. },
+        ) => Err(CommandError::new(
+            "internal",
+            "driver returned a worker reply to a user command",
+        )),
         Err(error) => Err(CommandError::engine_unavailable(error.to_string())),
     }
 }

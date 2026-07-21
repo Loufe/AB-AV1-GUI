@@ -2,7 +2,7 @@ use std::collections::BTreeMap;
 
 use serde::{Deserialize, Serialize, Serializer};
 
-use crate::DestructiveIdentity;
+use crate::{DestructiveIdentity, ExecutionSettings, FileRecord, ParkedStatus, VerdictKind};
 
 #[derive(
     Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize, specta::Type,
@@ -59,6 +59,91 @@ pub enum AnalysisActivity {
     Failed { detail: String },
 }
 
+/// Highest useful Analysis tier. This value is always derived from current
+/// facts and execution settings; it is never persisted as a second source of
+/// truth.
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize, specta::Type,
+)]
+pub enum AnalysisLevel {
+    Discovered,
+    Scanned,
+    Analyzed,
+    Converted,
+}
+
+/// Separates what can be reused for the current file/settings from the best
+/// thing known to have happened historically. An imported Analyzed summary,
+/// for example, raises `historical` but cannot raise `applicable`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, specta::Type)]
+pub struct AnalysisLevelAssessment {
+    pub applicable: AnalysisLevel,
+    pub historical: Option<AnalysisLevel>,
+}
+
+/// Derive current applicability and historical achievement for one row.
+/// `record` must be the record selected by the row's freshly observed
+/// `ContentKey`; passing it is the content-identity gate. `parked_status`
+/// supplies display-only history before that path has been adopted.
+#[must_use]
+pub fn assess_analysis_levels(
+    record: Option<&FileRecord>,
+    parked_status: Option<ParkedStatus>,
+    execution: &ExecutionSettings,
+) -> AnalysisLevelAssessment {
+    let applicable = record.map_or(AnalysisLevel::Discovered, |record| {
+        match record.verdict.as_ref().map(|verdict| &verdict.kind) {
+            Some(VerdictKind::Converted { .. } | VerdictKind::Remuxed { .. }) => {
+                AnalysisLevel::Converted
+            }
+            _ if crate::select_analysis(record, execution).is_some() => AnalysisLevel::Analyzed,
+            _ => AnalysisLevel::Scanned,
+        }
+    });
+
+    let mut historical = parked_status.map(level_for_imported_status);
+    if let Some(record) = record {
+        promote_level(&mut historical, AnalysisLevel::Scanned);
+        if !record.analyses.is_empty() {
+            promote_level(&mut historical, AnalysisLevel::Analyzed);
+        }
+        if let Some(imported) = &record.imported {
+            promote_level(
+                &mut historical,
+                level_for_imported_status(imported.record.status),
+            );
+        }
+        if let Some(verdict) = &record.verdict {
+            let level = match &verdict.kind {
+                VerdictKind::Converted { .. } | VerdictKind::Remuxed { .. } => {
+                    AnalysisLevel::Converted
+                }
+                VerdictKind::NotWorthwhile { .. } => AnalysisLevel::Analyzed,
+            };
+            promote_level(&mut historical, level);
+        }
+    }
+
+    AnalysisLevelAssessment {
+        applicable,
+        historical,
+    }
+}
+
+fn level_for_imported_status(status: ParkedStatus) -> AnalysisLevel {
+    match status {
+        ParkedStatus::Scanned => AnalysisLevel::Scanned,
+        ParkedStatus::Analyzed | ParkedStatus::NotWorthwhile => AnalysisLevel::Analyzed,
+        ParkedStatus::Converted => AnalysisLevel::Converted,
+    }
+}
+
+fn promote_level(current: &mut Option<AnalysisLevel>, candidate: AnalysisLevel) {
+    if current.is_none_or(|level| candidate > level) {
+        *current = Some(candidate);
+    }
+}
+
 /// One generation's standing public state. Native paths and execution
 /// handles deliberately live in the engine's generation registry instead.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, specta::Type)]
@@ -100,6 +185,135 @@ pub enum AnalysisDelta {
         generation: AnalysisGenerationId,
         activity: AnalysisActivity,
     },
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum AnalysisCommand {
+    Begin {
+        root: AnalysisDisplayText,
+    },
+    UpsertRows {
+        generation: AnalysisGenerationId,
+        rows: Vec<AnalysisRow>,
+    },
+    SetActivity {
+        generation: AnalysisGenerationId,
+        activity: AnalysisActivity,
+    },
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AnalysisMutationError {
+    GenerationExhausted,
+    InvalidActivityTransition,
+    ResetIsNotNext,
+    StaleGeneration,
+}
+
+/// Allocate and install the next process-local generation. The discovery
+/// command path added by #55 calls this reducer primitive; callers never
+/// supply their own generation id.
+pub fn begin_analysis_generation(
+    state: &AnalysisSnapshot,
+    root: AnalysisDisplayText,
+) -> Result<AnalysisDelta, AnalysisMutationError> {
+    let next = state.current.as_ref().map_or(Ok(1), |current| {
+        current
+            .id
+            .0
+            .checked_add(1)
+            .ok_or(AnalysisMutationError::GenerationExhausted)
+    })?;
+    Ok(AnalysisDelta::Reset {
+        snapshot: Box::new(AnalysisSnapshot {
+            current: Some(AnalysisGeneration {
+                id: AnalysisGenerationId(next),
+                root,
+                activity: AnalysisActivity::Discovering,
+                rows: BTreeMap::new(),
+            }),
+        }),
+    })
+}
+
+/// Authoritative reducer-side mutation gate. Unlike the consumer fold,
+/// replacement must advance the generation and live deltas must name the
+/// current generation. The shell/frontend use [`fold_analysis`] because a
+/// reconnect Reset is allowed to replace any local state.
+pub fn apply_analysis_mutation(
+    state: &mut AnalysisSnapshot,
+    delta: &AnalysisDelta,
+) -> Result<(), AnalysisMutationError> {
+    match delta {
+        AnalysisDelta::Reset { snapshot } => {
+            let Some(next) = snapshot.current.as_ref() else {
+                return Err(AnalysisMutationError::ResetIsNotNext);
+            };
+            let expected = state.current.as_ref().map_or(Ok(1), |current| {
+                current
+                    .id
+                    .0
+                    .checked_add(1)
+                    .ok_or(AnalysisMutationError::GenerationExhausted)
+            })?;
+            if next.id != AnalysisGenerationId(expected) {
+                return Err(AnalysisMutationError::ResetIsNotNext);
+            }
+        }
+        AnalysisDelta::RowsUpserted { generation, .. } => {
+            if state.current.as_ref().map(|current| current.id) != Some(*generation) {
+                return Err(AnalysisMutationError::StaleGeneration);
+            }
+            if !matches!(
+                state.current.as_ref().map(|current| &current.activity),
+                Some(AnalysisActivity::Discovering | AnalysisActivity::BasicScanning)
+            ) {
+                return Err(AnalysisMutationError::InvalidActivityTransition);
+            }
+        }
+        AnalysisDelta::ActivityChanged {
+            generation,
+            activity,
+        } => {
+            let Some(current) = state
+                .current
+                .as_ref()
+                .filter(|current| current.id == *generation)
+            else {
+                return Err(AnalysisMutationError::StaleGeneration);
+            };
+            if !activity_transition_allowed(&current.activity, activity) {
+                return Err(AnalysisMutationError::InvalidActivityTransition);
+            }
+        }
+    }
+    fold_analysis(state, delta);
+    Ok(())
+}
+
+fn activity_transition_allowed(from: &AnalysisActivity, to: &AnalysisActivity) -> bool {
+    matches!(
+        (from, to),
+        (AnalysisActivity::Discovering, AnalysisActivity::Discovered)
+            | (AnalysisActivity::Discovering, AnalysisActivity::Cancelled)
+            | (
+                AnalysisActivity::Discovering,
+                AnalysisActivity::Failed { .. }
+            )
+            | (
+                AnalysisActivity::Discovered,
+                AnalysisActivity::BasicScanning
+            )
+            | (AnalysisActivity::Discovered, AnalysisActivity::Cancelled)
+            | (AnalysisActivity::BasicScanning, AnalysisActivity::Ready)
+            | (AnalysisActivity::BasicScanning, AnalysisActivity::Cancelled)
+            | (
+                AnalysisActivity::BasicScanning,
+                AnalysisActivity::Failed { .. }
+            )
+            | (AnalysisActivity::Ready, AnalysisActivity::BasicScanning)
+            | (AnalysisActivity::Ready, AnalysisActivity::Cancelled)
+    )
 }
 
 /// Structural Analysis fold shared by the reducer and shell mirror. A stale
@@ -171,6 +385,30 @@ pub enum FreshnessDecision {
     Unavailable,
 }
 
+/// Result of the three destructive-identity reads bracketing probe and
+/// content sampling. A changed file never publishes a successful observation.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ObservationStability {
+    Stable,
+    ChangedAfterProbe,
+    ChangedDuringSampling,
+}
+
+#[must_use]
+pub fn observation_stability(
+    before_probe: &DestructiveIdentity,
+    after_probe: &DestructiveIdentity,
+    after_sampling: &DestructiveIdentity,
+) -> ObservationStability {
+    if before_probe != after_probe {
+        ObservationStability::ChangedAfterProbe
+    } else if after_probe != after_sampling {
+        ObservationStability::ChangedDuringSampling
+    } else {
+        ObservationStability::Stable
+    }
+}
+
 /// Decide the metadata fast path before ordinary path rebinding. Exact full
 /// settled-output identity deliberately outranks a stale source binding.
 /// Unknown/coarse/recent timestamps never become size-only cache hits.
@@ -193,6 +431,9 @@ pub fn decide_freshness(
         }
         TimestampReliability::CoarseOrRecent => Some(FreshnessReason::CoarseOrRecentTimestamp),
     };
+    if let Some(reason) = current_timestamp_reason {
+        return FreshnessDecision::Reobserve(reason);
+    }
     if settled_output == Some(current) {
         return FreshnessDecision::RecognizeSettledOutput;
     }
@@ -204,9 +445,6 @@ pub fn decide_freshness(
     }
     if current.size != cached.size {
         return FreshnessDecision::Reobserve(FreshnessReason::SizeChanged);
-    }
-    if let Some(reason) = current_timestamp_reason {
-        return FreshnessDecision::Reobserve(reason);
     }
     if cached.modified_ns.is_none() {
         return FreshnessDecision::Reobserve(FreshnessReason::UnknownTimestamp);
@@ -221,7 +459,13 @@ pub fn decide_freshness(
 mod tests {
     use std::collections::BTreeMap;
 
-    use crate::{FileSystemId, FileTimeNs};
+    use crate::{
+        AnalysisProfile, AnalysisResult, ContentKey, Crf, DecodeMode, DurationMs,
+        ExecutionSettings, FileSystemId, FileTimeNs, HardwareDecoder, ImportPath,
+        ImportedHistoryRecord, ImportedProvenance, MediaContainer, ParkedStatus, RunId,
+        SearchMeasurement, UnixMillis, Verdict, VerdictKind, VideoCodec, VideoMeta, VmafScore,
+        VmafTarget,
+    };
 
     use super::*;
 
@@ -264,6 +508,86 @@ mod tests {
         }
     }
 
+    fn execution() -> ExecutionSettings {
+        let mut profile = AnalysisProfile::production();
+        profile.ab_av1_revision = "ab-fixture".to_owned();
+        profile.ffmpeg_revision = "ffmpeg-fixture".to_owned();
+        profile.encoder_revision = "encoder-fixture".to_owned();
+        ExecutionSettings::production(profile, false)
+    }
+
+    fn record() -> FileRecord {
+        FileRecord::new(VideoMeta {
+            codec: VideoCodec::H264,
+            container: MediaContainer::Matroska,
+            width: 1_920,
+            height: 1_080,
+            rotation_degrees: 0,
+            duration_ms: 60_000,
+            size_bytes: 1_000,
+            audio: Vec::new(),
+            subtitle_count: 0,
+        })
+    }
+
+    fn reusable_result(execution: &ExecutionSettings) -> AnalysisResult {
+        AnalysisResult {
+            requested_target: execution.requested_target,
+            successful_target: execution.requested_target,
+            fallback_floor: execution.fallback_floor,
+            fallback_step: execution.fallback_step,
+            failed_attempts: Vec::new(),
+            measurement: SearchMeasurement {
+                crf: Crf(30),
+                score: VmafScore(9_500),
+                predicted_size: 500,
+                predicted_percent_basis_points: 5_000,
+                predicted_duration_ms: 30_000,
+                from_cache: false,
+            },
+            profile: execution.profile.clone(),
+        }
+    }
+
+    fn imported(status: ParkedStatus) -> ImportedProvenance {
+        ImportedProvenance {
+            import_path: ImportPath("/videos/movie.mkv".to_owned()),
+            record: ImportedHistoryRecord {
+                status,
+                size: None,
+                modified_ns: None,
+                video_codec: None,
+                width: None,
+                height: None,
+                duration_ms: None,
+                output_size: None,
+                encoding_time: None,
+                crf: None,
+                vmaf: None,
+                target: None,
+                requested_target: None,
+                floor_target: None,
+                decided_at: UnixMillis(1),
+            },
+        }
+    }
+
+    fn converted_verdict() -> Verdict {
+        Verdict {
+            kind: VerdictKind::Converted {
+                output_content_key: None,
+                input_size: None,
+                output_size: None,
+                encoding_time: Some(DurationMs(1)),
+                crf: None,
+                vmaf: None,
+                target: None,
+            },
+            source_run: Some(RunId(1)),
+            decided_at: UnixMillis(2),
+        }
+    }
+
     #[test]
     fn reset_replaces_the_complete_standing_generation() {
         let mut state = snapshot(1);
@@ -275,6 +599,85 @@ mod tests {
             },
         );
         assert_eq!(state, replacement);
+    }
+
+    #[test]
+    fn reducer_allocates_generations_and_rejects_stale_mutations() {
+        let mut state = AnalysisSnapshot::default();
+        let first = begin_analysis_generation(
+            &state,
+            AnalysisDisplayText {
+                text: "first".to_owned(),
+                lossy: false,
+            },
+        )
+        .expect("first generation");
+        assert!(matches!(
+            first,
+            AnalysisDelta::Reset { ref snapshot }
+                if snapshot.current.as_ref().map(|generation| generation.id)
+                    == Some(AnalysisGenerationId(1))
+        ));
+        apply_analysis_mutation(&mut state, &first).expect("apply first generation");
+        let second = begin_analysis_generation(
+            &state,
+            AnalysisDisplayText {
+                text: "second".to_owned(),
+                lossy: false,
+            },
+        )
+        .expect("second generation");
+        apply_analysis_mutation(&mut state, &second).expect("apply second generation");
+        assert_eq!(
+            state.current.as_ref().map(|generation| generation.id),
+            Some(AnalysisGenerationId(2))
+        );
+
+        let stale = AnalysisDelta::RowsUpserted {
+            generation: AnalysisGenerationId(1),
+            rows: vec![row(1, "stale.mkv")],
+        };
+        assert_eq!(
+            apply_analysis_mutation(&mut state, &stale),
+            Err(AnalysisMutationError::StaleGeneration)
+        );
+        assert!(
+            state
+                .current
+                .as_ref()
+                .expect("current generation")
+                .rows
+                .is_empty()
+        );
+
+        assert_eq!(
+            apply_analysis_mutation(
+                &mut state,
+                &AnalysisDelta::Reset {
+                    snapshot: Box::new(snapshot(2)),
+                },
+            ),
+            Err(AnalysisMutationError::ResetIsNotNext)
+        );
+        assert_eq!(
+            apply_analysis_mutation(
+                &mut state,
+                &AnalysisDelta::Reset {
+                    snapshot: Box::default(),
+                },
+            ),
+            Err(AnalysisMutationError::ResetIsNotNext)
+        );
+        assert_eq!(
+            begin_analysis_generation(
+                &snapshot(u64::MAX),
+                AnalysisDisplayText {
+                    text: "exhausted".to_owned(),
+                    lossy: false,
+                },
+            ),
+            Err(AnalysisMutationError::GenerationExhausted)
+        );
     }
 
     #[test]
@@ -313,6 +716,304 @@ mod tests {
     }
 
     #[test]
+    fn activity_transitions_enforce_the_generation_lifecycle() {
+        let allowed = [
+            (AnalysisActivity::Discovering, AnalysisActivity::Discovered),
+            (AnalysisActivity::Discovering, AnalysisActivity::Cancelled),
+            (
+                AnalysisActivity::Discovering,
+                AnalysisActivity::Failed {
+                    detail: "discovery failed".to_owned(),
+                },
+            ),
+            (
+                AnalysisActivity::Discovered,
+                AnalysisActivity::BasicScanning,
+            ),
+            (AnalysisActivity::Discovered, AnalysisActivity::Cancelled),
+            (AnalysisActivity::BasicScanning, AnalysisActivity::Ready),
+            (AnalysisActivity::BasicScanning, AnalysisActivity::Cancelled),
+            (
+                AnalysisActivity::BasicScanning,
+                AnalysisActivity::Failed {
+                    detail: "scan failed".to_owned(),
+                },
+            ),
+            (AnalysisActivity::Ready, AnalysisActivity::BasicScanning),
+            (AnalysisActivity::Ready, AnalysisActivity::Cancelled),
+        ];
+        for (from, to) in allowed {
+            let mut state = snapshot(1);
+            state.current.as_mut().expect("generation").activity = from;
+            assert_eq!(
+                apply_analysis_mutation(
+                    &mut state,
+                    &AnalysisDelta::ActivityChanged {
+                        generation: AnalysisGenerationId(1),
+                        activity: to,
+                    },
+                ),
+                Ok(())
+            );
+        }
+
+        for from in [
+            AnalysisActivity::Cancelled,
+            AnalysisActivity::Failed {
+                detail: "terminal".to_owned(),
+            },
+        ] {
+            let mut state = snapshot(1);
+            state.current.as_mut().expect("generation").activity = from;
+            assert_eq!(
+                apply_analysis_mutation(
+                    &mut state,
+                    &AnalysisDelta::ActivityChanged {
+                        generation: AnalysisGenerationId(1),
+                        activity: AnalysisActivity::Discovering,
+                    },
+                ),
+                Err(AnalysisMutationError::InvalidActivityTransition)
+            );
+        }
+
+        let mut discovered = snapshot(1);
+        discovered.current.as_mut().expect("generation").activity = AnalysisActivity::Discovered;
+        assert_eq!(
+            apply_analysis_mutation(
+                &mut discovered,
+                &AnalysisDelta::RowsUpserted {
+                    generation: AnalysisGenerationId(1),
+                    rows: vec![row(1, "too-late.mkv")],
+                },
+            ),
+            Err(AnalysisMutationError::InvalidActivityTransition)
+        );
+    }
+
+    #[test]
+    fn current_level_and_historical_achievement_are_independent() {
+        let execution = execution();
+        assert_eq!(
+            assess_analysis_levels(None, None, &execution),
+            AnalysisLevelAssessment {
+                applicable: AnalysisLevel::Discovered,
+                historical: None,
+            }
+        );
+        assert_eq!(
+            assess_analysis_levels(None, Some(ParkedStatus::Analyzed), &execution),
+            AnalysisLevelAssessment {
+                applicable: AnalysisLevel::Discovered,
+                historical: Some(AnalysisLevel::Analyzed),
+            }
+        );
+
+        let mut adopted = record();
+        adopted.imported = Some(imported(ParkedStatus::Analyzed));
+        assert_eq!(
+            assess_analysis_levels(Some(&adopted), None, &execution),
+            AnalysisLevelAssessment {
+                applicable: AnalysisLevel::Scanned,
+                historical: Some(AnalysisLevel::Analyzed),
+            }
+        );
+    }
+
+    #[test]
+    fn exact_native_analysis_is_currently_applicable() {
+        let execution = execution();
+        let mut record = record();
+        record.record_analysis(reusable_result(&execution));
+        assert_eq!(
+            assess_analysis_levels(Some(&record), None, &execution),
+            AnalysisLevelAssessment {
+                applicable: AnalysisLevel::Analyzed,
+                historical: Some(AnalysisLevel::Analyzed),
+            }
+        );
+    }
+
+    #[test]
+    fn every_measurement_profile_field_participates_in_current_reuse() {
+        let execution = execution();
+        let mut record = record();
+        record.record_analysis(reusable_result(&execution));
+
+        let mut incompatible = Vec::new();
+        let mut changed = execution.clone();
+        changed.profile.preset = changed.profile.preset.saturating_sub(1);
+        incompatible.push(changed);
+        let mut changed = execution.clone();
+        changed.profile.max_encoded_percent_basis_points += 1;
+        incompatible.push(changed);
+        let mut changed = execution.clone();
+        changed.profile.samples = Some(4);
+        incompatible.push(changed);
+        let mut changed = execution.clone();
+        changed.profile.sample_duration_ms += 1;
+        incompatible.push(changed);
+        let mut changed = execution.clone();
+        changed.profile.thorough = !changed.profile.thorough;
+        incompatible.push(changed);
+        let mut changed = execution.clone();
+        changed.profile.decode_mode = DecodeMode::Hardware(HardwareDecoder::H264Cuvid);
+        incompatible.push(changed);
+        let mut changed = execution.clone();
+        changed.profile.ab_av1_revision.push_str("-new");
+        incompatible.push(changed);
+        let mut changed = execution.clone();
+        changed.profile.ffmpeg_revision.push_str("-new");
+        incompatible.push(changed);
+        let mut changed = execution.clone();
+        changed.profile.encoder_revision.push_str("-new");
+        incompatible.push(changed);
+
+        for changed in incompatible {
+            let assessment = assess_analysis_levels(Some(&record), None, &changed);
+            assert_eq!(assessment.applicable, AnalysisLevel::Scanned);
+            assert_eq!(assessment.historical, Some(AnalysisLevel::Analyzed));
+        }
+        assert_eq!(
+            assess_analysis_levels(Some(&record), None, &execution).applicable,
+            AnalysisLevel::Analyzed
+        );
+    }
+
+    #[test]
+    fn target_and_fallback_provenance_control_current_reuse() {
+        let execution = execution();
+        let mut record = record();
+        record.record_analysis(reusable_result(&execution));
+
+        let mut lower_target = execution.clone();
+        lower_target.requested_target = VmafTarget(execution.requested_target.0 - 1);
+        assert_eq!(
+            assess_analysis_levels(Some(&record), None, &lower_target).applicable,
+            AnalysisLevel::Analyzed
+        );
+
+        let mut higher_target = execution.clone();
+        higher_target.requested_target = VmafTarget(execution.requested_target.0 + 1);
+        assert_eq!(
+            assess_analysis_levels(Some(&record), None, &higher_target).applicable,
+            AnalysisLevel::Scanned
+        );
+
+        let mut changed_ladder = execution.clone();
+        changed_ladder.fallback_step += 1;
+        let mut fallback_result = reusable_result(&execution);
+        fallback_result.successful_target = VmafTarget(execution.requested_target.0 - 1);
+        let mut fallback_record = self::record();
+        fallback_record.record_analysis(fallback_result);
+        assert_eq!(
+            assess_analysis_levels(Some(&fallback_record), None, &changed_ladder).applicable,
+            AnalysisLevel::Scanned
+        );
+    }
+
+    #[test]
+    fn decisive_conversion_is_current_but_not_worthwhile_is_history_only() {
+        let execution = execution();
+        let mut converted = record();
+        converted.verdict = Some(converted_verdict());
+        assert_eq!(
+            assess_analysis_levels(Some(&converted), None, &execution),
+            AnalysisLevelAssessment {
+                applicable: AnalysisLevel::Converted,
+                historical: Some(AnalysisLevel::Converted),
+            }
+        );
+
+        let mut not_worthwhile = record();
+        not_worthwhile.verdict = Some(Verdict {
+            kind: VerdictKind::NotWorthwhile {
+                requested: VmafTarget(95),
+                floor: VmafTarget(90),
+            },
+            source_run: None,
+            decided_at: UnixMillis(2),
+        });
+        assert_eq!(
+            assess_analysis_levels(Some(&not_worthwhile), None, &execution),
+            AnalysisLevelAssessment {
+                applicable: AnalysisLevel::Scanned,
+                historical: Some(AnalysisLevel::Analyzed),
+            }
+        );
+    }
+
+    #[test]
+    fn every_imported_status_maps_only_to_historical_achievement() {
+        let execution = execution();
+        let cases = [
+            (ParkedStatus::Scanned, AnalysisLevel::Scanned),
+            (ParkedStatus::Analyzed, AnalysisLevel::Analyzed),
+            (ParkedStatus::NotWorthwhile, AnalysisLevel::Analyzed),
+            (ParkedStatus::Converted, AnalysisLevel::Converted),
+        ];
+        for (status, historical) in cases {
+            let mut adopted = record();
+            adopted.imported = Some(imported(status));
+            assert_eq!(
+                assess_analysis_levels(Some(&adopted), None, &execution),
+                AnalysisLevelAssessment {
+                    applicable: AnalysisLevel::Scanned,
+                    historical: Some(historical),
+                }
+            );
+            assert_eq!(
+                assess_analysis_levels(None, Some(status), &execution),
+                AnalysisLevelAssessment {
+                    applicable: AnalysisLevel::Discovered,
+                    historical: Some(historical),
+                }
+            );
+        }
+    }
+
+    #[test]
+    fn native_remux_is_a_converted_achievement() {
+        let execution = execution();
+        let mut remuxed = record();
+        remuxed.verdict = Some(Verdict {
+            kind: VerdictKind::Remuxed {
+                output_content_key: ContentKey("remux-output".to_owned()),
+                input_size: Some(1_000),
+                output_size: Some(900),
+            },
+            source_run: Some(RunId(2)),
+            decided_at: UnixMillis(2),
+        });
+        assert_eq!(
+            assess_analysis_levels(Some(&remuxed), None, &execution),
+            AnalysisLevelAssessment {
+                applicable: AnalysisLevel::Converted,
+                historical: Some(AnalysisLevel::Converted),
+            }
+        );
+    }
+
+    #[test]
+    fn observation_window_reports_the_stage_that_changed() {
+        let before = identity(10, 100, Some(1_000));
+        let after_probe = identity(11, 100, Some(1_000));
+        let after_sampling = identity(10, 101, Some(1_000));
+        assert_eq!(
+            observation_stability(&before, &before, &before),
+            ObservationStability::Stable
+        );
+        assert_eq!(
+            observation_stability(&before, &after_probe, &after_probe),
+            ObservationStability::ChangedAfterProbe
+        );
+        assert_eq!(
+            observation_stability(&before, &before, &after_sampling),
+            ObservationStability::ChangedDuringSampling
+        );
+    }
+
+    #[test]
     fn settled_output_identity_precedes_the_cached_source_binding() {
         let source = identity(10, 100, Some(1_000));
         let output = identity(20, 60, Some(2_000));
@@ -328,7 +1029,7 @@ mod tests {
     }
 
     #[test]
-    fn full_settled_identity_is_recognized_even_when_mtime_is_unknown() {
+    fn settled_identity_with_unknown_mtime_requires_reobservation() {
         let source = identity(10, 100, None);
         let output = identity(20, 60, None);
         assert_eq!(
@@ -338,7 +1039,7 @@ mod tests {
                 Some(&output),
                 TimestampReliability::Unknown,
             ),
-            FreshnessDecision::RecognizeSettledOutput
+            FreshnessDecision::Reobserve(FreshnessReason::UnknownTimestamp)
         );
     }
 
@@ -477,5 +1178,17 @@ mod tests {
             ),
             FreshnessDecision::Reobserve(FreshnessReason::NoBinding)
         );
+    }
+
+    #[test]
+    fn moved_and_duplicated_paths_reobserve_before_probable_content_join() {
+        let current = CurrentFileIdentity::Present(identity(10, 100, Some(1_000)));
+        for scenario in ["moved", "duplicated"] {
+            assert_eq!(
+                decide_freshness(&current, None, None, TimestampReliability::Reliable),
+                FreshnessDecision::Reobserve(FreshnessReason::NoBinding),
+                "{scenario}"
+            );
+        }
     }
 }

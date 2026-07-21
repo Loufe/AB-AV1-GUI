@@ -1,5 +1,5 @@
 ---
-status: proposed
+status: accepted
 date: 2026-07-21
 ---
 
@@ -60,39 +60,70 @@ and rejects stale or unknown references.
 
 Display text may be lossy only when explicitly marked as such and is never
 round-tripped into an operation. `PathHash` is not computed at Level 0. When
-Basic Scan needs it, Unix hashes canonical native `OsStr` bytes and Windows
-hashes canonical native wide units under distinct schema prefixes. It does
-not call `to_string_lossy` or blindly lowercase. Operational Windows paths
-retain their verbatim spelling. Alternate path spellings may remain separate
-rows and are deduplicated later by filesystem/content identity.
+Basic Scan or queue discovery needs it, `ph2` hashes canonical native Unix
+`OsStr` bytes or Windows wide units under a platform domain separator. It does
+not call `to_string_lossy` or lowercase. Operational Windows paths retain
+their verbatim spelling. Alternate Level-0 spellings may remain separate rows
+and are joined later by filesystem/probable-content identity.
+
+| Path case | Discovery/native registry | `ph2` / identity behavior | Durable action behavior |
+| --- | --- | --- | --- |
+| Unix Unicode | Supported | Canonical `OsStr` bytes | Supported |
+| Unix non-Unicode | Supported; display is marked lossy when needed | Raw canonical bytes; distinct invalid byte sequences do not collapse through replacement characters | Queue/analyze/convert deferred unless the path round-trips through the current JSON `PathBuf` representation |
+| Windows Unicode | Supported | Canonical native wide units | Supported |
+| Windows unpaired wide units | Native registry retains them; display is lossy | Wide units are hashed directly | Durable action deferred under the same round-trip rule |
+| Windows case variants | No manual case folding | Filesystem canonicalization decides whether spellings converge | Original operational spelling remains native |
+| Verbatim and UNC paths | Retained as native `PathBuf` values | Canonical native result is hashed; prefixes are not rewritten as display text | Supported when the OS operation and JSON round trip support the path |
+| Reserved-name spellings | Never synthesized or string-normalized | Existing filesystem object only; ordinary OS errors surface | No alias or fallback is invented |
+| Long paths | No application length limit | Hash input is the full canonical native path | OS/configuration support is authoritative |
+| Symlink / Windows reparse entry during traversal | Entry may be shown, but directory traversal does not follow it | A directly targeted file canonicalizes to its target identity | #55 uses `symlink_metadata`/reparse detection to prevent traversal cycles |
 
 The existing JSON journal cannot serialize arbitrary non-Unicode `PathBuf`
 values reversibly. This record does not silently widen that durable schema.
-Discovery, Basic Scan, open, and reveal may operate through the native
-registry, but a row whose path cannot round-trip through the durable path
-representation receives a typed `PathNotPersistable` action reason for queue,
-analysis, or conversion actions. Full end-to-end support requires a separate
-cross-cutting decision that replaces persisted and IPC-visible `PathBuf`
-fields with a tagged Unix-byte/Windows-wide-unit representation.
+Discovery and Basic Scan can operate through the native registry. #55 must add
+the typed `PathNotPersistable` action result before exposing queue, analysis,
+conversion, open, or reveal commands for a row that cannot round trip through
+their current boundary. Full durable support remains a separate cross-cutting
+decision replacing persisted/IPC `PathBuf` fields with tagged
+Unix-byte/Windows-wide-unit data. This ADR does not claim that later schema is
+implemented.
 
-Freshness uses full destructive identity where available:
+Freshness uses full destructive identity. `TimestampReliability` is an engine
+fact: core never guesses filesystem granularity or consults a clock. The
+engine conservatively classifies a missing mtime as `Unknown` and an
+exact-second, future, or at-most-two-seconds-old mtime as `CoarseOrRecent`;
+false negatives cause re-observation rather than stale reuse. Queue discovery
+carries this judgment with its identity, so its optimization obeys the same
+gate as Basic Scan.
 
-* No binding, a missing file, or any inspection error does not reuse cache.
-* Equal file ID, size, and a reliable known mtime may reuse the cached media
-  observation.
-* Different file ID invalidates the cache even when size and mtime match.
-* Different size or mtime invalidates the cache even when file ID matches.
-* Unknown, recent, or conservatively classified coarse mtime is indeterminate
-  and requires a full stable observation before reuse.
-* A stable observation that returns an existing probable `ContentKey` joins
-  that content record; a new key creates a new record.
-* Parked adoption occurs only after a successful stable observation.
+| Current condition | Pre-observation decision | After stable observation |
+| --- | --- | --- |
+| No path binding (new path) | Reobserve: `NoBinding` | New probable key creates a record; existing key joins it |
+| Unchanged file id, size, reliable known mtime | Reuse cached observation | No work |
+| Touched: same file id/size, changed mtime | Reobserve: `ModifiedTimeChanged` | Join/create by probable key |
+| Replaced atomically: changed file id, same size/mtime | Reobserve: `FileIdentityChanged` | Join/create by probable key |
+| Changed size, same file id | Reobserve: `SizeChanged` | Join/create by probable key |
+| Moved path with no binding | Reobserve: `NoBinding` | Usually joins the existing probable key; add the new full binding |
+| Duplicated path with no binding | Reobserve: `NoBinding` | Usually joins the existing probable key; retain both bindings |
+| Unknown mtime (including `None`) | Reobserve: `UnknownTimestamp` | Publish only a stable observation |
+| Known but coarse or recent mtime | Reobserve: `CoarseOrRecentTimestamp` | Publish only a stable observation |
+| File changes between initial identity and post-probe identity | No success | Typed `ChangedAfterProbe`; publish no observation/adoption |
+| File changes during content sampling | No success | Typed `ChangedDuringSampling`; publish no observation/adoption |
+| Exact settled replace-output identity with reliable known mtime | `RecognizeSettledOutput`, before consulting the stale source binding | Preserve Level 3/output relationship |
+| Settled identity with unknown/coarse/recent mtime | Reobserve; do not recognize by metadata shortcut | Compare probable output content only after stability |
+| Missing file | `Missing` | Row becomes unavailable; no cache reuse |
+| Stat/identity inspection failure | `Unavailable` | Surface failure; no cache reuse |
 
-`PathBinding` therefore retains the observed `DestructiveIdentity` alongside
-the probable `ContentKey`; `FileStamp` remains a weak enqueue/display fact.
-The engine compares destructive identity before probing, after probing, and
-after sampling. Any observed change produces a typed unstable-file result and
-publishes no successful observation or adoption.
+`PathBinding` retains the observed `DestructiveIdentity` alongside the
+probable `ContentKey`; queue discovery also carries full destructive identity
+rather than a weak `FileStamp`. The engine compares destructive identity
+before probing, after probing, and after sampling. `ObservationStability` is
+the typed core outcome; the current media adapter maps instability to
+`io::ErrorKind::Interrupted`, and #55/#56 carry it as a typed row failure.
+Because `PathBinding` is durable and `ph2` deliberately replaces the old path
+namespace, this change advances the journal schema to 14; schema mismatch is
+reported before payload decoding rather than treating an older binding shape
+as corruption.
 
 Replace-mode handling has strict precedence:
 

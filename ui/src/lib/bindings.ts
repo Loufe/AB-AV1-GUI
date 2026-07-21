@@ -434,7 +434,7 @@ export type DurableDelta_Deserialize = ({ QueueAdded: {
 } }) & { AnalysisRecorded?: never; HistoryImported?: never; ItemFinished?: never; ItemPrepared?: never; ItemReserved?: never; ItemRunning?: never; MediaObserved?: never; Output?: never; ParkedAdopted?: never; ParkedRetired?: never; QueueAdded?: never; QueueMoved?: never; QueueRemoved?: never; QueueRequeued?: never } | ({ ItemReserved: {
 	job: ReservedJob,
 } }) & { AnalysisRecorded?: never; HistoryImported?: never; ItemFinished?: never; ItemPrepared?: never; ItemRunning?: never; MediaObserved?: never; Output?: never; ParkedAdopted?: never; ParkedRetired?: never; QueueAdded?: never; QueueEdited?: never; QueueMoved?: never; QueueRemoved?: never; QueueRequeued?: never } | ({ MediaObserved: {
-	observation: MediaObservation,
+	observation: MediaObservation_Deserialize,
 } }) & { AnalysisRecorded?: never; HistoryImported?: never; ItemFinished?: never; ItemPrepared?: never; ItemReserved?: never; ItemRunning?: never; Output?: never; ParkedAdopted?: never; ParkedRetired?: never; QueueAdded?: never; QueueEdited?: never; QueueMoved?: never; QueueRemoved?: never; QueueRequeued?: never } | ({ ItemPrepared: {
 	spec: JobSpec,
 } }) & { AnalysisRecorded?: never; HistoryImported?: never; ItemFinished?: never; ItemReserved?: never; ItemRunning?: never; MediaObserved?: never; Output?: never; ParkedAdopted?: never; ParkedRetired?: never; QueueAdded?: never; QueueEdited?: never; QueueMoved?: never; QueueRemoved?: never; QueueRequeued?: never } | ({ ItemRunning: {
@@ -511,7 +511,7 @@ export type DurableDelta_Serialize = ({ QueueAdded: {
 } }) & { AnalysisRecorded?: never; HistoryImported?: never; ItemFinished?: never; ItemPrepared?: never; ItemReserved?: never; ItemRunning?: never; MediaObserved?: never; Output?: never; ParkedAdopted?: never; ParkedRetired?: never; QueueAdded?: never; QueueMoved?: never; QueueRemoved?: never; QueueRequeued?: never } | ({ ItemReserved: {
 	job: ReservedJob,
 } }) & { AnalysisRecorded?: never; HistoryImported?: never; ItemFinished?: never; ItemPrepared?: never; ItemRunning?: never; MediaObserved?: never; Output?: never; ParkedAdopted?: never; ParkedRetired?: never; QueueAdded?: never; QueueEdited?: never; QueueMoved?: never; QueueRemoved?: never; QueueRequeued?: never } | ({ MediaObserved: {
-	observation: MediaObservation,
+	observation: MediaObservation_Serialize,
 } }) & { AnalysisRecorded?: never; HistoryImported?: never; ItemFinished?: never; ItemPrepared?: never; ItemReserved?: never; ItemRunning?: never; Output?: never; ParkedAdopted?: never; ParkedRetired?: never; QueueAdded?: never; QueueEdited?: never; QueueMoved?: never; QueueRemoved?: never; QueueRequeued?: never } | ({ ItemPrepared: {
 	spec: JobSpec,
 } }) & { AnalysisRecorded?: never; HistoryImported?: never; ItemFinished?: never; ItemReserved?: never; ItemRunning?: never; MediaObserved?: never; Output?: never; ParkedAdopted?: never; ParkedRetired?: never; QueueAdded?: never; QueueEdited?: never; QueueMoved?: never; QueueRemoved?: never; QueueRequeued?: never } | ({ ItemRunning: {
@@ -562,7 +562,7 @@ export type DurableState = DurableState_Serialize | DurableState_Deserialize;
 
 export type DurableState_Deserialize = {
 	queue: QueueItem[],
-	paths: { [key in PathHash]: PathBinding },
+	paths: { [key in PathHash]: PathBinding_Deserialize },
 	records: { [key in ContentKey]: FileRecord_Deserialize },
 	outputs: { [key in RunId]: OutputTransaction_Deserialize },
 	conversion_runs: { [key in RunId]: ConversionRun },
@@ -582,7 +582,7 @@ export type DurableState_Deserialize = {
 
 export type DurableState_Serialize = {
 	queue: QueueItem[],
-	paths: { [key in PathHash]: PathBinding },
+	paths: { [key in PathHash]: PathBinding_Serialize },
 	records: { [key in ContentKey]: FileRecord_Serialize },
 	outputs: { [key in RunId]: OutputTransaction_Serialize },
 	conversion_runs: { [key in RunId]: ConversionRun },
@@ -727,11 +727,6 @@ export type FileRecord_Serialize = {
 	 *  onto one content record.
 	 */
 	imported: ImportedProvenance | null,
-};
-
-export type FileStamp = {
-	size: number,
-	modified_ns: FileTimeNs | null,
 };
 
 export type FileSystemId = FileSystemId_Serialize | FileSystemId_Deserialize;
@@ -906,9 +901,17 @@ export type JobSpec = {
 
 export type MediaContainer = "Matroska" | { Other: string };
 
-export type MediaObservation = {
+export type MediaObservation = MediaObservation_Serialize | MediaObservation_Deserialize;
+
+export type MediaObservation_Deserialize = {
 	path_hash: PathHash,
-	binding: PathBinding,
+	binding: PathBinding_Deserialize,
+	metadata: VideoMeta,
+};
+
+export type MediaObservation_Serialize = {
+	path_hash: PathHash,
+	binding: PathBinding_Serialize,
 	metadata: VideoMeta,
 };
 
@@ -1074,8 +1077,23 @@ export type OverwriteDecision = "FollowSettings" | "Allow" | "Deny";
 /**  The decisive standing of an imported history record. */
 export type ParkedStatus = "Scanned" | "Analyzed" | "NotWorthwhile" | "Converted";
 
-export type PathBinding = {
-	stamp: FileStamp,
+export type PathBinding = PathBinding_Serialize | PathBinding_Deserialize;
+
+export type PathBinding_Deserialize = {
+	/**
+	 *  Full identity captured by the stable media observation. Queue and Basic
+	 *  Scan freshness compare it exactly and never degrade to size/mtime alone.
+	 */
+	identity: DestructiveIdentity_Deserialize,
+	content_key: ContentKey,
+};
+
+export type PathBinding_Serialize = {
+	/**
+	 *  Full identity captured by the stable media observation. Queue and Basic
+	 *  Scan freshness compare it exactly and never degrade to size/mtime alone.
+	 */
+	identity: DestructiveIdentity_Serialize,
 	content_key: ContentKey,
 };
 
@@ -1233,7 +1251,7 @@ export type SkipReason = ({ LowResolution: {
 } }) & { AlreadyConverted?: never; NotWorthwhile?: never; ProbableDuplicate?: never } | "AlreadyAv1Matroska" | "OutputExists" | 
 /**
  *  Enqueue-time only: the file at the candidate path is recognized by
- *  stamp as the settled output of `source_run` (replace-mode output at
+ *  full destructive identity as the settled output of `source_run` (replace-mode output at
  *  the input path).
  */
 ({ AlreadyConverted: {
@@ -1552,8 +1570,8 @@ export type VideoMeta = {
 	duration_ms: number,
 	/**
 	 *  Byte size of the inspected file — a content fact and the authority for
-	 *  input size in views. `FileStamp.size` remains the freshness probe.
-	 *  Bitrate is derived in views, never stored.
+	 *  input size in views. `PathBinding.identity` is the freshness authority;
+	 *  bitrate is derived in views, never stored.
 	 */
 	size_bytes: number,
 	audio: AudioStreamMeta[],

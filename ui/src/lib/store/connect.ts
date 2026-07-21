@@ -1,6 +1,6 @@
 // The single stream consumer: subscribes to the shell's ordered event channel
 // and routes every payload into the stores through the pure folds. The shell
-// replays Snapshot → SessionChanged → standing health on every subscribe
+// replays Snapshot → Analysis Reset → SessionChanged → standing health on every subscribe
 // (ADR-006), so reconnecting is the one and only resync primitive.
 
 import { toast } from "sonner";

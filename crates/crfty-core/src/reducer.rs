@@ -4,15 +4,15 @@ use serde::{Deserialize, Serialize};
 
 use crate::state::ConversionRun;
 use crate::{
-    AnalysisDelta, AnalysisIntent, AnalysisResult, AppState, ClaimId, ClaimedJob,
+    AnalysisCommand, AnalysisDelta, AnalysisIntent, AnalysisResult, AppState, ClaimId, ClaimedJob,
     CompletionEvidence, ConfigDelta, CorruptionSignature, DecodeMode, DecodePreference,
-    DurableDelta, ExecutionSettings, FileStamp, ImportPath, ImportedHistoryRecord,
-    ImportedProvenance, ItemOutcome, JobAction, JobSpec, MediaObservation, Operation, OutputDelta,
-    OutputTarget, OverwriteDecision, ParkedResolution, PathHash, PhaseSpan, QueueItem, QueueItemId,
+    DurableDelta, ExecutionSettings, ImportPath, ImportedHistoryRecord, ImportedProvenance,
+    ItemOutcome, JobAction, JobSpec, MediaObservation, Operation, OutputDelta, OutputTarget,
+    OverwriteDecision, ParkedResolution, PathHash, PhaseSpan, QueueItem, QueueItemId,
     QueueItemState, ReservedJob, RunId, SessionAggregates, SessionState, Settings, SkipReason,
     StatisticsPayload, Telemetry, ToolAvailability, ToolsState, UnixMillis, VendorActivity,
-    evaluate_enqueue, fold, fold_analysis, fold_config, resolve_parked, select_job_action,
-    statistics,
+    apply_analysis_mutation, begin_analysis_generation, evaluate_enqueue, fold, fold_config,
+    resolve_parked, select_job_action, statistics,
 };
 
 /// Sanity bound for a requester-supplied UTC offset: one day in minutes.
@@ -21,6 +21,7 @@ const MAX_UTC_OFFSET_MINUTES: i32 = 1_440;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Command {
+    Analysis(AnalysisCommand),
     Queue(QueueCommand),
     Session(SessionCommand),
     Settings(SettingsCommand),
@@ -101,16 +102,18 @@ pub struct QueueItemEdit {
 }
 
 /// One add request inside [`QueueCommand::AddMany`]. The enqueue facts
-/// (`path_hash`, `stamp`) are I/O results gathered by the caller — core
-/// cannot stat or hash paths. Either may be absent (unreadable or vanished
-/// path); absence fails open: the item enqueues and any real problem
+/// (`path_hash`, `identity`, and timestamp reliability) are I/O results
+/// gathered by the caller — core cannot stat, hash paths, or consult a clock.
+/// Either identity fact may be absent (unreadable or vanished path), in which
+/// case reliability is `Unknown`; absence fails open so any real problem
 /// surfaces at claim time, where content identity is authoritative.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct QueueAddRequest {
     pub item_id: QueueItemId,
     pub input: PathBuf,
     pub path_hash: Option<PathHash>,
-    pub stamp: Option<FileStamp>,
+    pub identity: Option<crate::DestructiveIdentity>,
+    pub timestamp_reliability: crate::TimestampReliability,
     pub operation: Operation,
     pub intent: AnalysisIntent,
     pub output_target: OutputTarget,
@@ -266,11 +269,21 @@ pub enum Effect {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Reply {
     Accepted,
+    AnalysisStarted {
+        generation: crate::AnalysisGenerationId,
+    },
     Reserved(Option<Box<ReservedJob>>),
     Claimed(Option<Box<ClaimedJob>>),
-    Imported { parked: u32, skipped: u32 },
-    Rejected { reason: String },
-    DurabilityUnknown { reason: String },
+    Imported {
+        parked: u32,
+        skipped: u32,
+    },
+    Rejected {
+        reason: String,
+    },
+    DurabilityUnknown {
+        reason: String,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -312,6 +325,7 @@ impl Applied {
 
 pub fn apply(state: &mut AppState, command: Command) -> Applied {
     let applied = match command {
+        Command::Analysis(command) => apply_analysis_command(state, command),
         Command::Queue(command) => apply_queue(state, command),
         Command::Session(command) => apply_session(state, command),
         Command::Settings(command) => apply_settings(state, command),
@@ -366,7 +380,10 @@ pub fn apply(state: &mut AppState, command: Command) -> Applied {
     }
     for delta in &applied.ephemeral {
         match delta {
-            EphemeralDelta::Analysis(delta) => fold_analysis(&mut state.analysis, delta),
+            EphemeralDelta::Analysis(delta) => {
+                let result = apply_analysis_mutation(&mut state.analysis, delta);
+                debug_assert!(result.is_ok());
+            }
             EphemeralDelta::SessionChanged(session) => state.session = session.clone(),
             EphemeralDelta::SessionAggregates(aggregates) => state.aggregates = *aggregates,
             EphemeralDelta::Telemetry(telemetry) => {
@@ -382,6 +399,47 @@ pub fn apply(state: &mut AppState, command: Command) -> Applied {
             | EphemeralDelta::QueueAddSummary { .. } => {}
         }
     }
+    applied
+}
+
+fn apply_analysis_command(state: &AppState, command: AnalysisCommand) -> Applied {
+    let mut applied = Applied::accepted();
+    let delta = match command {
+        AnalysisCommand::Begin { root } => {
+            let delta = match begin_analysis_generation(&state.analysis, root) {
+                Ok(delta) => delta,
+                Err(_) => return Applied::rejected("Analysis generation id space is exhausted"),
+            };
+            let generation = match &delta {
+                AnalysisDelta::Reset { snapshot } => match &snapshot.current {
+                    Some(generation) => generation.id,
+                    None => return Applied::rejected("Analysis generation Reset is empty"),
+                },
+                AnalysisDelta::RowsUpserted { .. } | AnalysisDelta::ActivityChanged { .. } => {
+                    return Applied::rejected(
+                        "Analysis generation allocator returned a live delta",
+                    );
+                }
+            };
+            applied.reply = Reply::AnalysisStarted { generation };
+            delta
+        }
+        AnalysisCommand::UpsertRows { generation, rows } => {
+            AnalysisDelta::RowsUpserted { generation, rows }
+        }
+        AnalysisCommand::SetActivity {
+            generation,
+            activity,
+        } => AnalysisDelta::ActivityChanged {
+            generation,
+            activity,
+        },
+    };
+    let mut candidate = state.analysis.clone();
+    if let Err(error) = apply_analysis_mutation(&mut candidate, &delta) {
+        return Applied::rejected(format!("Analysis mutation rejected: {error:?}"));
+    }
+    applied.ephemeral.push(EphemeralDelta::Analysis(delta));
     applied
 }
 
@@ -437,7 +495,8 @@ fn apply_queue(state: &AppState, command: QueueCommand) -> Applied {
                         evaluate_enqueue(
                             &state.durable,
                             path_hash,
-                            request.stamp.as_ref(),
+                            request.identity.as_ref(),
+                            request.timestamp_reliability,
                             request.operation,
                             request.intent,
                         )
