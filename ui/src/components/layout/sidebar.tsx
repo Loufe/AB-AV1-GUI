@@ -38,6 +38,7 @@ export function Sidebar({
         {VIEWS.map((view) => (
           <NavButton
             key={view.id}
+            viewId={view.id}
             icon={view.icon}
             label={view.label}
             active={view.id === activeView}
@@ -50,6 +51,7 @@ export function Sidebar({
           {DEV_VIEWS.map((view) => (
             <NavButton
               key={view.id}
+              viewId={view.id}
               icon={view.icon}
               label={view.label}
               active={view.id === activeView}
@@ -76,11 +78,13 @@ export function Sidebar({
 }
 
 function NavButton({
+  viewId,
   icon: Icon,
   label,
   active,
   onClick,
 }: {
+  viewId: AnyViewId;
   icon: React.ComponentType<{ className?: string; "aria-hidden"?: boolean | "true" }>;
   label: string;
   active: boolean;
@@ -88,8 +92,14 @@ function NavButton({
 }) {
   return (
     <button
+      id={`view-nav-${viewId}`}
       type="button"
-      onClick={onClick}
+      onClick={(event) => {
+        // Navigation always leaves focus on a visible, predictable control;
+        // it can never remain in the Activity that is about to be hidden.
+        event.currentTarget.focus();
+        onClick();
+      }}
       aria-current={active ? "page" : undefined}
       className={cn(
         "flex w-full items-center gap-2.5 rounded-md px-2.5 py-1.5 text-sm transition-colors duration-(--duration-fast)",
