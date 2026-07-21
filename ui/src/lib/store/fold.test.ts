@@ -106,7 +106,14 @@ function settings(hardwareDecode: boolean): Settings {
 }
 
 function telemetry(runId: number, sequence: number): Telemetry {
-  return { run_id: runId, sequence, phase: "Encoding", progress: { OutputPositionMs: 5_000 } };
+  return {
+    run_id: runId,
+    sequence,
+    phase: "Encoding",
+    progress: { OutputPositionMs: 5_000 },
+    fps_centi: null,
+    eta_ms: null,
+  };
 }
 
 describe("foldConfig", () => {

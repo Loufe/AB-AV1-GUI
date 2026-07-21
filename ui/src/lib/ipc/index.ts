@@ -2,8 +2,14 @@ import { Channel } from "@tauri-apps/api/core";
 
 import {
   commands,
+  type AnalysisIntent,
+  type CommandError,
   type CorruptionSignature,
   type ImportSummary,
+  type Operation,
+  type OutputTarget,
+  type QueueItemEdit,
+  type QueueItemId,
   type Settings,
   type ShellEvent,
 } from "@/lib/bindings";
@@ -67,4 +73,57 @@ export async function acknowledgeCorruption(signature: CorruptionSignature): Pro
       `corruption acknowledgement failed (${result.error.code}): ${result.error.message}`,
     );
   }
+}
+
+function expectAccepted(
+  result: { status: "ok"; data: null } | { status: "error"; error: CommandError },
+  action: string,
+): void {
+  if (result.status === "error") {
+    throw new Error(`${action} failed (${result.error.code}): ${result.error.message}`);
+  }
+}
+
+/**
+ * Adds files and folders in one batch. Folders expand through the engine
+ * scanner (filtered by the configured scan extensions); directly selected
+ * files pass through unfiltered. The outcome arrives on the event stream as
+ * one `QueueAddSummary`.
+ */
+export async function queueAddPaths(
+  inputs: string[],
+  operation: Operation,
+  intent: AnalysisIntent,
+  outputTarget: OutputTarget,
+): Promise<void> {
+  expectAccepted(
+    await commands.queueAddPaths(inputs, operation, intent, outputTarget),
+    "queue add",
+  );
+}
+
+export async function queueClear(): Promise<void> {
+  expectAccepted(await commands.queueClear(), "queue clear");
+}
+
+export async function queueClearCompleted(): Promise<void> {
+  expectAccepted(await commands.queueClearCompleted(), "clear completed");
+}
+
+export async function queueRetry(itemId: QueueItemId): Promise<void> {
+  expectAccepted(await commands.queueRetry(itemId), "queue retry");
+}
+
+export async function queueEdit(itemId: QueueItemId, patch: QueueItemEdit): Promise<void> {
+  expectAccepted(await commands.queueEdit(itemId, patch), "queue edit");
+}
+
+/** Opens a file or folder with the operating system's default program. */
+export async function openPath(path: string): Promise<void> {
+  expectAccepted(await commands.openPath(path), "open");
+}
+
+/** Reveals a path selected in the system file manager. */
+export async function revealInFileManager(path: string): Promise<void> {
+  expectAccepted(await commands.revealInFileManager(path), "reveal in file manager");
 }

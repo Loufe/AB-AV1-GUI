@@ -12,6 +12,7 @@ function row(id: number): QueueRowData {
     operation: "Convert",
     intent: "ReuseIfFresh",
     output_target: "Replace",
+    overwrite: "FollowSettings",
     state: "Queued",
   };
   return {

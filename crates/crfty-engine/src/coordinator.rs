@@ -23,6 +23,12 @@ use crfty_core::{
 };
 
 const FIRST_RUNTIME_ID: u64 = 1;
+/// Depth of the public event channel. A healthy consumer drains continuously,
+/// so occupancy stays near zero; the bound only bites once the consumer has
+/// stopped, and must comfortably exceed the startup burst (snapshot plus
+/// drained ephemerals) that is buffered before any consumer exists. Public so
+/// the overflow test can size its event flood relative to it.
+pub const PUBLIC_EVENT_CHANNEL_CAPACITY: usize = 1024;
 const ADAPTER_REPORT_POLL_INTERVAL: Duration = Duration::from_millis(20);
 const NORMALIZED_PROGRESS_MIN: f32 = 0.0;
 const NORMALIZED_PROGRESS_MAX: f32 = 1.0;
@@ -46,6 +52,10 @@ struct JobServices<'a> {
     runtime: &'a AbAv1Runtime,
     tools: &'a MediaTools,
     cancellation: &'a ActiveCancellation,
+    /// Input media duration from the claim-time preflight probe; the total
+    /// the encode/remux output position runs toward, so the ETA's remaining
+    /// work is known. `None` (probe failed or reported zero) means no ETA.
+    input_duration_ms: Option<u64>,
 }
 
 /// What a successful adapter run measured before settlement. The terminal
@@ -134,6 +144,7 @@ use crate::{
     failure::scrub_tail,
     media::{DecodeResolver, MediaInspector},
     output::{MediaArtifactInspector, OutputManager},
+    rate::{RateSample, RateTracker},
     remux::{
         self, RemuxCancellationHandle, RemuxHandle, RemuxReport, RemuxRequest, RemuxTelemetry,
         RemuxTerminal,
@@ -212,9 +223,12 @@ impl EngineRuntime {
         let runtime = Arc::new(AbAv1Runtime::start().map_err(|error| {
             EngineStartError::Failed(format!("failed to start encoder: {error}"))
         })?);
-        // Unbounded by design for now: the supervisor loop feeds effects back
-        // into itself, so a bound risks deadlock. Capping belongs to the
-        // backpressure semantics owned by #41.
+        // Unbounded by design: effects form a cycle — the driver emits them,
+        // the supervisor turns them into commands submitted back into the
+        // driver's bounded command channel — so a bound here could deadlock
+        // the driver against its own supervisor. Depth is governed by the
+        // reducer, which serializes work through the session and vendor
+        // activity states and dedups effects per batch, never by event rate.
         let (effect_tx, effect_rx) = mpsc::channel();
         let mut driver =
             DriverHandle::start_with_effects(&config.journal_path, &config.config_path, effect_tx)
@@ -270,11 +284,16 @@ impl EngineRuntime {
             initial.durable,
         );
         let next_runtime_id = next_runtime_id(&recovered)?;
-        // Unbounded by design for now; capping consumer lag is part of the
-        // backpressure semantics owned by #41.
-        let (public_event_tx, public_event_rx) = mpsc::channel();
+        // Bounded: telemetry can outrun a stalled consumer for hours, and an
+        // unbounded buffer would turn that stall into unbounded memory. On
+        // overflow the forwarder below severs the stream instead of blocking
+        // or dropping individual events — a gap-riddled stream would silently
+        // corrupt every downstream fold, while a severed one is observable.
+        // The journal, not the stream, holds the truth, so the recovery is a
+        // reconnect that folds from a fresh snapshot.
+        let (public_event_tx, public_event_rx) = mpsc::sync_channel(PUBLIC_EVENT_CHANNEL_CAPACITY);
         public_event_tx
-            .send(DriverEvent::Snapshot(AppSnapshot {
+            .try_send(DriverEvent::Snapshot(AppSnapshot {
                 durable: recovered,
                 settings: initial.settings,
             }))
@@ -283,7 +302,7 @@ impl EngineRuntime {
             })?;
         for pending in driver_events.try_iter() {
             if !matches!(pending, DriverEvent::Durable(_)) {
-                public_event_tx.send(pending).map_err(|error| {
+                public_event_tx.try_send(pending).map_err(|error| {
                     EngineStartError::Failed(format!("failed to emit startup event: {error}"))
                 })?;
             }
@@ -292,8 +311,21 @@ impl EngineRuntime {
             .name("crfty-event-forwarder".to_owned())
             .spawn(move || {
                 while let Ok(event) = driver_events.recv() {
-                    if public_event_tx.send(event).is_err() {
-                        break;
+                    match public_event_tx.try_send(event) {
+                        Ok(()) => {}
+                        // The consumer stopped draining. Dropping the sender
+                        // keeps the driver unblocked and memory bounded; the
+                        // consumer observes the disconnect once it drains the
+                        // buffered tail and recovers by reconnecting.
+                        Err(mpsc::TrySendError::Full(_)) => {
+                            eprintln!(
+                                "public event channel overflowed \
+                                 ({PUBLIC_EVENT_CHANNEL_CAPACITY} events buffered, consumer \
+                                 not draining); severing the event stream"
+                            );
+                            break;
+                        }
+                        Err(mpsc::TrySendError::Disconnected(_)) => break,
                     }
                 }
             })
@@ -1077,6 +1109,10 @@ fn run_session(
                 None
             }
         };
+        let input_duration_ms = observation
+            .as_ref()
+            .map(|observed| observed.metadata.duration_ms)
+            .filter(|duration| *duration > 0);
         let mut execution = base_execution.clone();
         execution.profile.decode_mode =
             observation
@@ -1133,7 +1169,14 @@ fn run_session(
                 at: now_millis(),
             })),
         )?;
-        process_job(commands, runtime, tools, cancellation, &job)?;
+        process_job(
+            commands,
+            runtime,
+            tools,
+            cancellation,
+            &job,
+            input_duration_ms,
+        )?;
     }
     require_accepted(
         "finish worker session",
@@ -1147,6 +1190,7 @@ fn process_job(
     tools: &MediaTools,
     cancellation: &ActiveCancellation,
     job: &ClaimedJob,
+    input_duration_ms: Option<u64>,
 ) -> Result<(), String> {
     let mut tracker = PhaseTracker::new();
     let services = JobServices {
@@ -1154,6 +1198,7 @@ fn process_job(
         runtime,
         tools,
         cancellation,
+        input_duration_ms,
     };
     publish_phase(commands, job.spec.run_id, &mut tracker, JobPhase::Preparing);
     match &job.spec.action {
@@ -1279,6 +1324,7 @@ fn run_encode(
             services.cancellation,
             JobPhase::Encoding,
             tracker,
+            services.input_duration_ms.map(|duration| duration as f64),
         );
         match report {
             Ok(JobReport {
@@ -1485,6 +1531,7 @@ fn run_remux(
         handle,
         services.cancellation,
         tracker,
+        services.input_duration_ms.map(|duration| duration as f64),
     );
     match report {
         Ok(RemuxReport {
@@ -1870,6 +1917,7 @@ fn search_with_fallback(
             cancellation,
             JobPhase::Analyzing,
             tracker,
+            Some(f64::from(NORMALIZED_PROGRESS_MAX)),
         )
         .map_err(|message| {
             ItemOutcome::Failed(FailureFacts::new(FailureKind::Internal, message))
@@ -1961,13 +2009,17 @@ fn wait_for_report<T>(
     cancellation: &ActiveCancellation,
     phase: JobPhase,
     tracker: &mut PhaseTracker,
+    total_work: Option<f64>,
 ) -> Result<JobReport<T>, String> {
     tracker.enter(phase);
     let _registration = cancellation.register(
         run_id,
         ActiveJobCancellation::AbAv1(handle.cancellation_handle()),
     );
-    let mut last_progress = None;
+    let started = Instant::now();
+    let mut rates = RateTracker::new(total_work);
+    let mut last_update = None;
+    let mut last_published = None;
     loop {
         match handle
             .recv_report(ADAPTER_REPORT_POLL_INTERVAL)
@@ -1977,16 +2029,28 @@ fn wait_for_report<T>(
                 return Ok(report);
             }
             None => {
-                if let Some(update) = handle.latest_telemetry() {
+                // Only a changed adapter value becomes a rate sample: the
+                // poll re-reads the latest value every interval, and feeding
+                // repeats would drag the window's slope down between the
+                // adapter's real updates.
+                if let Some(update) = handle.latest_telemetry()
+                    && last_update.as_ref() != Some(&update)
+                {
+                    let elapsed = started.elapsed();
+                    rates.record(elapsed, &rate_sample(&update));
                     let progress = telemetry_progress(&update);
-                    if last_progress.as_ref() != Some(&progress) {
+                    last_update = Some(update);
+                    let published = (progress, rates.fps_centi(), rates.eta_ms(elapsed));
+                    if last_published.as_ref() != Some(&published) {
                         commands.publish_telemetry(Telemetry {
                             run_id,
                             sequence: tracker.next_sequence(),
                             phase,
-                            progress: progress.clone(),
+                            progress: published.0.clone(),
+                            fps_centi: published.1,
+                            eta_ms: published.2,
                         });
-                        last_progress = Some(progress);
+                        last_published = Some(published);
                     }
                 }
             }
@@ -2000,13 +2064,17 @@ fn wait_for_remux_report(
     mut handle: RemuxHandle,
     cancellation: &ActiveCancellation,
     tracker: &mut PhaseTracker,
+    total_work: Option<f64>,
 ) -> Result<RemuxReport, String> {
     tracker.enter(JobPhase::Remuxing);
     let _registration = cancellation.register(
         run_id,
         ActiveJobCancellation::Remux(handle.cancellation_handle()),
     );
-    let mut last_progress = None;
+    let started = Instant::now();
+    let mut rates = RateTracker::new(total_work);
+    let mut last_update = None;
+    let mut last_published = None;
     loop {
         match handle
             .recv_report(ADAPTER_REPORT_POLL_INTERVAL)
@@ -2014,20 +2082,63 @@ fn wait_for_remux_report(
         {
             Some(report) => return Ok(report),
             None => {
-                if let Some(update) = handle.latest_telemetry() {
-                    let progress = remux_progress(update);
-                    if last_progress.as_ref() != Some(&progress) {
+                if let Some(update) = handle.latest_telemetry()
+                    && last_update != Some(update)
+                {
+                    let elapsed = started.elapsed();
+                    // A remux reports no frame rate; only the position feeds
+                    // the window, so fps stays absent and the ETA works.
+                    rates.record(
+                        elapsed,
+                        &RateSample {
+                            frames: None,
+                            fps_gauge: None,
+                            work_done: update.position_ms as f64,
+                        },
+                    );
+                    last_update = Some(update);
+                    let published = (
+                        remux_progress(update),
+                        rates.fps_centi(),
+                        rates.eta_ms(elapsed),
+                    );
+                    if last_published.as_ref() != Some(&published) {
                         commands.publish_telemetry(Telemetry {
                             run_id,
                             sequence: tracker.next_sequence(),
                             phase: JobPhase::Remuxing,
-                            progress: progress.clone(),
+                            progress: published.0.clone(),
+                            fps_centi: published.1,
+                            eta_ms: published.2,
                         });
-                        last_progress = Some(progress);
+                        last_published = Some(published);
                     }
                 }
             }
         }
+    }
+}
+
+/// Normalizes one adapter update for the rate window: search progress runs
+/// toward [`NORMALIZED_PROGRESS_MAX`] with a reported fps gauge, an encode's
+/// output position runs toward the input duration with a frame counter (the
+/// reported gauge covers the window's first sample).
+fn rate_sample(update: &AdapterTelemetry) -> RateSample {
+    match update {
+        AdapterTelemetry::Search(search) => RateSample {
+            frames: None,
+            fps_gauge: Some(search.fps),
+            work_done: f64::from(
+                search
+                    .progress
+                    .clamp(NORMALIZED_PROGRESS_MIN, NORMALIZED_PROGRESS_MAX),
+            ),
+        },
+        AdapterTelemetry::Encode(encode) => RateSample {
+            frames: Some(encode.frame),
+            fps_gauge: Some(encode.fps),
+            work_done: encode.position.as_millis() as f64,
+        },
     }
 }
 
@@ -2275,6 +2386,9 @@ fn terminal(
     )
 }
 
+/// Wraps a final adapter progress value for the lossless terminal command.
+/// Rate is live display state, meaningless once the run is over, so the
+/// terminal record never carries one.
 fn map_progress(
     run_id: RunId,
     tracker: &mut PhaseTracker,
@@ -2286,6 +2400,8 @@ fn map_progress(
         sequence: tracker.next_sequence(),
         phase,
         progress,
+        fps_centi: None,
+        eta_ms: None,
     })
 }
 
@@ -2301,6 +2417,8 @@ fn publish_phase(
         sequence: tracker.next_sequence(),
         phase,
         progress: JobProgress::Phase,
+        fps_centi: None,
+        eta_ms: None,
     });
 }
 

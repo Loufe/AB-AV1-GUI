@@ -21,6 +21,9 @@ command-group = "=5.0.1"
 crfty-core = { path = "../crfty-core", version = "=3.0.0-alpha.0" }
 file-id = "=0.2.3"
 lzma-rs = "=0.3.0"
+# The `reveal` feature adds select-in-file-manager (D-Bus FileManager1 on
+# Linux, shell item selection on Windows) alongside the default-program open.
+opener = { version = "=0.8.5", features = ["reveal"] }
 # rustls-no-provider + an explicit ring provider: reqwest 0.13 dropped bundled
 # webpki roots, and the default rustls feature would pull aws-lc-rs (cmake +
 # nasm on Windows). Trust roots come from the OS verifier; the compiled-in

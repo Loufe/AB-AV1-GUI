@@ -1,15 +1,17 @@
 use std::path::PathBuf;
 
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 
 use crate::state::ConversionRun;
 use crate::{
     AnalysisIntent, AnalysisResult, AppState, ClaimId, ClaimedJob, CompletionEvidence, ConfigDelta,
-    CorruptionSignature, DecodeMode, DecodePreference, DurableDelta, ExecutionSettings, ImportPath,
-    ItemOutcome, JobAction, JobSpec, MediaObservation, Operation, OutputDelta, OutputTarget,
-    ParkedRecord, ParkedResolution, PhaseSpan, QueueItem, QueueItemId, QueueItemState, ReservedJob,
-    RunId, SessionState, Settings, StatisticsPayload, Telemetry, ToolAvailability, ToolsState,
-    UnixMillis, VendorActivity, fold, fold_config, resolve_parked, select_job_action, statistics,
+    CorruptionSignature, DecodeMode, DecodePreference, DurableDelta, ExecutionSettings, FileStamp,
+    ImportPath, ItemOutcome, JobAction, JobSpec, MediaObservation, Operation, OutputDelta,
+    OutputTarget, OverwriteDecision, ParkedRecord, ParkedResolution, PathHash, PhaseSpan,
+    QueueItem, QueueItemId, QueueItemState, ReservedJob, RunId, SessionAggregates, SessionState,
+    Settings, SkipReason, StatisticsPayload, Telemetry, ToolAvailability, ToolsState, UnixMillis,
+    VendorActivity, evaluate_enqueue, fold, fold_config, resolve_parked, select_job_action,
+    statistics,
 };
 
 /// Sanity bound for a requester-supplied UTC offset: one day in minutes.
@@ -49,12 +51,13 @@ pub enum SettingsCommand {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum QueueCommand {
-    Add {
-        item_id: QueueItemId,
-        input: PathBuf,
-        operation: Operation,
-        intent: AnalysisIntent,
-        output_target: OutputTarget,
+    /// A batch of add requests judged individually: ineligible files never
+    /// become queue items (ADR-013 filter-at-add), and every disposition is
+    /// counted into one [`EphemeralDelta::QueueAddSummary`]. A single add is
+    /// a one-element batch. Adds are append-only and allowed in every
+    /// session state.
+    AddMany {
+        requests: Vec<QueueAddRequest>,
     },
     Remove {
         item_id: QueueItemId,
@@ -63,6 +66,54 @@ pub enum QueueCommand {
         item_id: QueueItemId,
         before: Option<QueueItemId>,
     },
+    /// Removes every `Queued` and `Finished` item. Idle-only — while a
+    /// session runs, the queue's pending tail is the worker's feed. An empty
+    /// result is an accepted no-op.
+    Clear,
+    /// Removes `Finished` items except `Failed(_)` — failures stay visible
+    /// until addressed (V2/HandBrake parity). Allowed while running.
+    ClearCompleted,
+    /// Sends a finished item around again: state resets to `Queued` in place
+    /// (no re-add) and the item moves to the end of the queue. Allowed while
+    /// running — it is a pending append, same as an add.
+    Retry {
+        item_id: QueueItemId,
+    },
+    /// Rewrites a pending item's job parameters. Valid only on `Queued`
+    /// items while the session is idle: a running session's rules are frozen
+    /// (#33 §11). Bulk edits are frontend loops over this command.
+    Edit {
+        item_id: QueueItemId,
+        patch: QueueItemEdit,
+    },
+}
+
+/// A partial edit of a queued item; `None` keeps the current value. The
+/// reducer resolves the full tuple before journaling, so the fold and replay
+/// never see patch semantics.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, specta::Type)]
+pub struct QueueItemEdit {
+    pub operation: Option<Operation>,
+    pub intent: Option<AnalysisIntent>,
+    pub output_target: Option<OutputTarget>,
+    pub overwrite: Option<OverwriteDecision>,
+}
+
+/// One add request inside [`QueueCommand::AddMany`]. The enqueue facts
+/// (`path_hash`, `stamp`) are I/O results gathered by the caller — core
+/// cannot stat or hash paths. Either may be absent (unreadable or vanished
+/// path); absence fails open: the item enqueues and any real problem
+/// surfaces at claim time, where content identity is authoritative.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct QueueAddRequest {
+    pub item_id: QueueItemId,
+    pub input: PathBuf,
+    pub path_hash: Option<PathHash>,
+    pub stamp: Option<FileStamp>,
+    pub operation: Operation,
+    pub intent: AnalysisIntent,
+    pub output_target: OutputTarget,
+    pub overwrite: OverwriteDecision,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -170,6 +221,11 @@ pub enum SystemCommand {
 #[derive(Debug, Clone, PartialEq, Serialize, specta::Type)]
 pub enum EphemeralDelta {
     SessionChanged(SessionState),
+    /// The per-session aggregates after an item finished (zeroed at session
+    /// start). The one post-durable ephemeral: on the stream it follows the
+    /// `ItemFinished` it summarizes, so a consumer never sees counts for a
+    /// finish it has not observed.
+    SessionAggregates(SessionAggregates),
     Telemetry(Telemetry),
     TelemetryCleared {
         run_id: RunId,
@@ -183,6 +239,13 @@ pub enum EphemeralDelta {
     },
     CommandRejected {
         reason: String,
+    },
+    /// Disposition counts for one [`QueueCommand::AddMany`] batch. Reasons
+    /// carry their payloads, so distinct payloads (different source runs)
+    /// count as separate entries — consumers sum across entries.
+    QueueAddSummary {
+        added: u32,
+        skipped: Vec<(SkipReason, u32)>,
     },
 }
 
@@ -300,6 +363,7 @@ pub fn apply(state: &mut AppState, command: Command) -> Applied {
     for delta in &applied.ephemeral {
         match delta {
             EphemeralDelta::SessionChanged(session) => state.session = session.clone(),
+            EphemeralDelta::SessionAggregates(aggregates) => state.aggregates = *aggregates,
             EphemeralDelta::Telemetry(telemetry) => {
                 state.telemetry.insert(telemetry.run_id, telemetry.clone());
             }
@@ -309,7 +373,8 @@ pub fn apply(state: &mut AppState, command: Command) -> Applied {
             EphemeralDelta::ToolsChanged(tools) => state.tools = tools.clone(),
             EphemeralDelta::Statistics(_)
             | EphemeralDelta::WorkerCrashed { .. }
-            | EphemeralDelta::CommandRejected { .. } => {}
+            | EphemeralDelta::CommandRejected { .. }
+            | EphemeralDelta::QueueAddSummary { .. } => {}
         }
     }
     applied
@@ -335,27 +400,65 @@ fn apply_settings(state: &AppState, command: SettingsCommand) -> Applied {
 
 fn apply_queue(state: &AppState, command: QueueCommand) -> Applied {
     match command {
-        QueueCommand::Add {
-            item_id,
-            input,
-            operation,
-            intent,
-            output_target,
-        } => {
-            if state.durable.queue.iter().any(|item| item.id == item_id) {
-                return Applied::rejected("queue item id already exists");
+        QueueCommand::AddMany { requests } => {
+            let mut accepted: Vec<QueueItem> = Vec::new();
+            let mut skipped: Vec<(SkipReason, u32)> = Vec::new();
+            for request in requests {
+                // Item ids are caller-allocated and unique by contract; a
+                // collision is a wiring bug that rejects the whole batch.
+                if state
+                    .durable
+                    .queue
+                    .iter()
+                    .any(|item| item.id == request.item_id)
+                    || accepted.iter().any(|item| item.id == request.item_id)
+                {
+                    return Applied::rejected("queue item id already exists");
+                }
+                // One item per path: a path re-add is only meaningful once
+                // the standing item is finished. Changing an item's
+                // operation is Edit's job, not a second add's.
+                let already_queued = state
+                    .durable
+                    .queue
+                    .iter()
+                    .filter(|item| !matches!(item.state, QueueItemState::Finished(_)))
+                    .chain(accepted.iter())
+                    .any(|item| item.input == request.input);
+                let skip = if already_queued {
+                    Some(SkipReason::AlreadyQueued)
+                } else {
+                    request.path_hash.as_ref().and_then(|path_hash| {
+                        evaluate_enqueue(
+                            &state.durable,
+                            path_hash,
+                            request.stamp.as_ref(),
+                            request.operation,
+                            request.intent,
+                        )
+                    })
+                };
+                match skip {
+                    Some(reason) => count_skip(&mut skipped, reason),
+                    None => accepted.push(QueueItem {
+                        id: request.item_id,
+                        input: request.input,
+                        operation: request.operation,
+                        intent: request.intent,
+                        output_target: request.output_target,
+                        overwrite: request.overwrite,
+                        state: QueueItemState::Queued,
+                    }),
+                }
             }
             let mut applied = Applied::accepted();
-            applied.durable.push(DurableDelta::QueueAdded {
-                item: QueueItem {
-                    id: item_id,
-                    input,
-                    operation,
-                    intent,
-                    output_target,
-                    state: QueueItemState::Queued,
-                },
-            });
+            let added = u32::try_from(accepted.len()).unwrap_or(u32::MAX);
+            for item in accepted {
+                applied.durable.push(DurableDelta::QueueAdded { item });
+            }
+            applied
+                .ephemeral
+                .push(EphemeralDelta::QueueAddSummary { added, skipped });
             applied
         }
         QueueCommand::Remove { item_id } => {
@@ -410,6 +513,90 @@ fn apply_queue(state: &AppState, command: QueueCommand) -> Applied {
             });
             applied
         }
+        QueueCommand::Clear => {
+            if state.session != SessionState::Idle {
+                return Applied::rejected("queue can only be cleared while idle");
+            }
+            let mut applied = Applied::accepted();
+            for item in &state.durable.queue {
+                if matches!(
+                    item.state,
+                    QueueItemState::Queued | QueueItemState::Finished(_)
+                ) {
+                    applied
+                        .durable
+                        .push(DurableDelta::QueueRemoved { item_id: item.id });
+                }
+            }
+            applied
+        }
+        QueueCommand::ClearCompleted => {
+            let mut applied = Applied::accepted();
+            for item in &state.durable.queue {
+                if matches!(&item.state, QueueItemState::Finished(outcome)
+                    if !matches!(outcome, ItemOutcome::Failed(_)))
+                {
+                    applied
+                        .durable
+                        .push(DurableDelta::QueueRemoved { item_id: item.id });
+                }
+            }
+            applied
+        }
+        QueueCommand::Retry { item_id } => {
+            let Some(item) = find_item(state, item_id) else {
+                return Applied::rejected("queue item does not exist");
+            };
+            if !matches!(item.state, QueueItemState::Finished(_)) {
+                return Applied::rejected("only finished items can be retried");
+            }
+            let mut applied = Applied::accepted();
+            applied
+                .durable
+                .push(DurableDelta::QueueRequeued { item_id });
+            applied
+        }
+        QueueCommand::Edit { item_id, patch } => {
+            if state.session != SessionState::Idle {
+                return Applied::rejected("queue items can only be edited while idle");
+            }
+            let Some(item) = find_item(state, item_id) else {
+                return Applied::rejected("queue item does not exist");
+            };
+            if !matches!(item.state, QueueItemState::Queued) {
+                return Applied::rejected("only queued items can be edited");
+            }
+            let operation = patch.operation.unwrap_or(item.operation);
+            let intent = patch.intent.unwrap_or(item.intent);
+            let output_target = patch
+                .output_target
+                .unwrap_or_else(|| item.output_target.clone());
+            let overwrite = patch.overwrite.unwrap_or(item.overwrite);
+            if operation == item.operation
+                && intent == item.intent
+                && output_target == item.output_target
+                && overwrite == item.overwrite
+            {
+                return Applied::accepted();
+            }
+            let mut applied = Applied::accepted();
+            applied.durable.push(DurableDelta::QueueEdited {
+                item_id,
+                operation,
+                intent,
+                output_target,
+                overwrite,
+            });
+            applied
+        }
+    }
+}
+
+fn count_skip(skipped: &mut Vec<(SkipReason, u32)>, reason: SkipReason) {
+    if let Some((_, count)) = skipped.iter_mut().find(|(existing, _)| *existing == reason) {
+        *count = count.saturating_add(1);
+    } else {
+        skipped.push((reason, 1));
     }
 }
 
@@ -535,6 +722,11 @@ fn apply_session(state: &AppState, command: SessionCommand) -> Applied {
             applied
                 .ephemeral
                 .push(EphemeralDelta::SessionChanged(SessionState::Running));
+            // A new session starts its aggregates from zero; the previous
+            // session's totals are display state, not history.
+            applied.ephemeral.push(EphemeralDelta::SessionAggregates(
+                SessionAggregates::default(),
+            ));
             applied.effects.push(Effect::StartWorker);
             applied
         }
@@ -616,16 +808,6 @@ fn apply_worker(state: &AppState, command: WorkerCommand) -> Applied {
             import_paths,
             mut execution,
         } => {
-            execution.overwrite_existing = state.settings.output.overwrite_existing;
-            execution.decode_preference = if state.settings.hardware_decode {
-                DecodePreference::HardwarePreferred
-            } else {
-                execution.profile.decode_mode = DecodeMode::Software;
-                DecodePreference::SoftwareOnly
-            };
-            if let Err(reason) = execution.validate() {
-                return Applied::rejected(reason);
-            }
             let Some(item) = find_item(state, item_id) else {
                 return Applied::rejected("queue item does not exist");
             };
@@ -638,18 +820,93 @@ fn apply_worker(state: &AppState, command: WorkerCommand) -> Applied {
             ) {
                 return Applied::rejected("worker preparation has a stale reservation");
             }
+            execution.overwrite_existing = match item.overwrite {
+                OverwriteDecision::FollowSettings => state.settings.output.overwrite_existing,
+                OverwriteDecision::Allow => true,
+                OverwriteDecision::Deny => false,
+            };
+            execution.decode_preference = if state.settings.hardware_decode {
+                DecodePreference::HardwarePreferred
+            } else {
+                execution.profile.decode_mode = DecodeMode::Software;
+                DecodePreference::SoftwareOnly
+            };
+            if let Err(reason) = execution.validate() {
+                return Applied::rejected(reason);
+            }
             let content_key = observation
                 .as_ref()
                 .map(|observed| observed.binding.content_key.clone());
             let record = content_key
                 .as_ref()
                 .and_then(|key| state.durable.records.get(key));
+            // Parked import records resolve against the fresh observation.
+            // The adoptions are computed BEFORE the action is selected: the
+            // action must be chosen against the post-adoption record, both
+            // because an adopted "already converted" verdict is exactly what
+            // the claim-time skip exists for, and because replay validation
+            // recomputes the action after these deltas fold. A native
+            // verdict already on the record outranks an adopted one —
+            // provenance stays, the verdict does not regress.
+            let adoptions: Vec<DurableDelta> = observation
+                .as_ref()
+                .map(|observation| {
+                    import_paths
+                        .iter()
+                        .filter_map(|key| state.durable.parked.get(key).map(|parked| (key, parked)))
+                        .map(|(key, parked)| match resolve_parked(parked, observation) {
+                            ParkedResolution::Adopt { verdict } => {
+                                let native_verdict_stands = record
+                                    .and_then(|known| known.verdict.as_ref())
+                                    .is_some_and(|existing| existing.source_run.is_some());
+                                DurableDelta::ParkedAdopted {
+                                    import_path: key.clone(),
+                                    content_key: observation.binding.content_key.clone(),
+                                    verdict: if native_verdict_stands { None } else { verdict },
+                                }
+                            }
+                            ParkedResolution::Retire => DurableDelta::ParkedRetired {
+                                import_path: key.clone(),
+                            },
+                        })
+                        .collect()
+                })
+                .unwrap_or_default();
+            let adopted_verdict = adoptions.iter().rev().find_map(|delta| match delta {
+                DurableDelta::ParkedAdopted {
+                    verdict: Some(verdict),
+                    ..
+                } => Some(verdict.clone()),
+                _ => None,
+            });
+            // The record as it will exist once this batch folds: adopted
+            // verdicts land on the existing record, or on the record that
+            // `MediaObserved` is about to create.
+            let effective_record: Option<crate::FileRecord> = match (&adopted_verdict, record) {
+                (Some(verdict), Some(known)) => {
+                    let mut known = known.clone();
+                    known.verdict = Some(verdict.clone());
+                    Some(known)
+                }
+                (Some(verdict), None) => observation.as_ref().map(|observed| {
+                    let mut fresh = crate::FileRecord::new(observed.metadata.clone());
+                    fresh.verdict = Some(verdict.clone());
+                    fresh
+                }),
+                (None, _) => None,
+            };
+            let record_for_action = effective_record.as_ref().or(record);
             let metadata = observation
                 .as_ref()
                 .map(|observed| &observed.metadata)
-                .or_else(|| record.map(|known| &known.metadata));
-            let action =
-                select_job_action(metadata, record, item.operation, item.intent, &execution);
+                .or_else(|| record_for_action.map(|known| &known.metadata));
+            let action = select_job_action(
+                metadata,
+                record_for_action,
+                item.operation,
+                item.intent,
+                &execution,
+            );
             if let Some(selected) = action.selected_analysis()
                 && let Err(reason) = selected.validate_reusable_for(&execution)
             {
@@ -679,38 +936,13 @@ fn apply_worker(state: &AppState, command: WorkerCommand) -> Applied {
                     .records
                     .get(&observation.binding.content_key)
                     .is_none_or(|record| record.metadata != observation.metadata);
-                // Parked import records resolve against the fresh
-                // observation. The deltas land AFTER MediaObserved so the
-                // content record exists when an adoption folds. A native
-                // verdict already on the record outranks an adopted one —
-                // provenance stays, the verdict does not regress.
-                let adoptions: Vec<DurableDelta> = import_paths
-                    .iter()
-                    .filter_map(|key| state.durable.parked.get(key).map(|parked| (key, parked)))
-                    .map(|(key, parked)| match resolve_parked(parked, &observation) {
-                        ParkedResolution::Adopt { verdict } => {
-                            let native_verdict_stands = state
-                                .durable
-                                .records
-                                .get(&observation.binding.content_key)
-                                .and_then(|record| record.verdict.as_ref())
-                                .is_some_and(|existing| existing.source_run.is_some());
-                            DurableDelta::ParkedAdopted {
-                                import_path: key.clone(),
-                                content_key: observation.binding.content_key.clone(),
-                                verdict: if native_verdict_stands { None } else { verdict },
-                            }
-                        }
-                        ParkedResolution::Retire => DurableDelta::ParkedRetired {
-                            import_path: key.clone(),
-                        },
-                    })
-                    .collect();
                 if path_changed || record_changed {
                     applied
                         .durable
                         .push(DurableDelta::MediaObserved { observation });
                 }
+                // The adoption deltas land AFTER MediaObserved so the
+                // content record exists when an adoption folds.
                 applied.durable.extend(adoptions);
             }
             applied.durable.push(DurableDelta::ItemPrepared {
@@ -739,6 +971,11 @@ fn apply_worker(state: &AppState, command: WorkerCommand) -> Applied {
                 return Applied::rejected("reservation cannot be abandoned from its current state");
             }
             let mut applied = Applied::accepted();
+            let mut aggregates = state.aggregates;
+            aggregates.absorb(&ItemOutcome::Stopped, &[]);
+            applied
+                .ephemeral
+                .push(EphemeralDelta::SessionAggregates(aggregates));
             applied.durable.push(DurableDelta::ItemFinished {
                 item_id,
                 claim_id,
@@ -831,6 +1068,11 @@ fn apply_worker(state: &AppState, command: WorkerCommand) -> Applied {
             applied
                 .ephemeral
                 .push(EphemeralDelta::TelemetryCleared { run_id });
+            let mut aggregates = state.aggregates;
+            aggregates.absorb(&outcome, &phase_spans);
+            applied
+                .ephemeral
+                .push(EphemeralDelta::SessionAggregates(aggregates));
             applied.durable.push(DurableDelta::ItemFinished {
                 item_id,
                 claim_id,
@@ -924,7 +1166,10 @@ pub(crate) fn validate_terminal(
             }
         }
         ItemOutcome::Skipped { reason } => match reason {
-            crate::SkipReason::LowResolution { .. } | crate::SkipReason::AlreadyAv1Matroska => {
+            crate::SkipReason::LowResolution { .. }
+            | crate::SkipReason::AlreadyAv1Matroska
+            | crate::SkipReason::NotWorthwhile { .. }
+            | crate::SkipReason::ProbableDuplicate { .. } => {
                 if !matches!(&run.spec.action, JobAction::Skip { reason: expected } if expected == reason)
                     || run.analysis.is_some()
                     || output.is_some()
@@ -936,6 +1181,9 @@ pub(crate) fn validate_terminal(
                 if !run.spec.action.produces_output() || output.is_some() {
                     return Err("output-exists skip is incompatible with the run state");
                 }
+            }
+            crate::SkipReason::AlreadyConverted { .. } | crate::SkipReason::AlreadyQueued => {
+                return Err("enqueue-time skip reasons are never terminal outcomes");
             }
         },
         ItemOutcome::Failed(facts) => {

@@ -13,8 +13,26 @@ use std::{
 
 use crfty_core::{
     AnalysisIntent, AnalysisProfile, DecodeMode, DecodePreference, DurableDelta, ExecutionSettings,
-    Operation, OutputTarget, QueueCommand, QueueItemId, SessionCommand, VmafTarget,
+    Operation, OutputTarget, OverwriteDecision, QueueAddRequest, QueueCommand, QueueItemId,
+    SessionCommand, VmafTarget,
 };
+
+fn add_convert_with_suffix(input: &Path, suffix: &str) -> QueueCommand {
+    QueueCommand::AddMany {
+        requests: vec![QueueAddRequest {
+            item_id: QueueItemId(1),
+            input: input.to_path_buf(),
+            path_hash: None,
+            stamp: None,
+            operation: Operation::Convert,
+            intent: AnalysisIntent::ReuseIfFresh,
+            output_target: OutputTarget::Suffix {
+                suffix: suffix.to_owned(),
+            },
+            overwrite: OverwriteDecision::FollowSettings,
+        }],
+    }
+}
 
 const REAL_CONTRACT_TARGET: VmafTarget = VmafTarget(80);
 const REAL_CONTRACT_PRESET: u8 = 12;
@@ -147,15 +165,7 @@ fn real_coordinator_analyzes_encodes_verifies_and_promotes() {
     let _snapshot = engine.events.recv().expect("startup snapshot");
     engine
         .commands
-        .submit_queue(QueueCommand::Add {
-            item_id: QueueItemId(1),
-            input: input.clone(),
-            operation: Operation::Convert,
-            intent: AnalysisIntent::ReuseIfFresh,
-            output_target: OutputTarget::Suffix {
-                suffix: "_av1".to_owned(),
-            },
-        })
+        .submit_queue(add_convert_with_suffix(&input, "_av1"))
         .expect("queue command");
     engine
         .commands
@@ -203,15 +213,7 @@ fn real_coordinator_remuxes_av1_mp4_without_reencoding() {
     let _snapshot = engine.events.recv().expect("startup snapshot");
     engine
         .commands
-        .submit_queue(QueueCommand::Add {
-            item_id: QueueItemId(1),
-            input: input.clone(),
-            operation: Operation::Convert,
-            intent: AnalysisIntent::ReuseIfFresh,
-            output_target: OutputTarget::Suffix {
-                suffix: "_remuxed".to_owned(),
-            },
-        })
+        .submit_queue(add_convert_with_suffix(&input, "_remuxed"))
         .expect("queue remux command");
     engine
         .commands

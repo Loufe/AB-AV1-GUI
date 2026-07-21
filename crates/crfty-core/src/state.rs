@@ -5,8 +5,8 @@ use serde::{Deserialize, Serialize};
 use crate::{
     AnalysisAttempt, AnalysisIntent, AnalysisResult, ContentKey, DecodeMode, DurationMs,
     FailureFacts, FileRecord, ImportPath, JobPhase, JobSpec, MediaObservation, Operation,
-    OutputDelta, OutputTarget, ParkedRecord, PathBinding, PathHash, ReservedJob, Settings,
-    SkipReason, ToolRevisions, UnixMillis, Verdict, VerdictKind,
+    OutputDelta, OutputTarget, OverwriteDecision, ParkedRecord, PathBinding, PathHash, ReservedJob,
+    Settings, SkipReason, ToolRevisions, UnixMillis, Verdict, VerdictKind,
 };
 
 macro_rules! numeric_id {
@@ -40,6 +40,7 @@ pub struct QueueItem {
     pub operation: Operation,
     pub intent: AnalysisIntent,
     pub output_target: OutputTarget,
+    pub overwrite: OverwriteDecision,
     pub state: QueueItemState,
 }
 
@@ -110,6 +111,67 @@ pub struct PhaseSpan {
     pub duration: DurationMs,
 }
 
+/// Rolling per-session outcome counters and byte totals. Ephemeral state:
+/// zeroed when a session starts, updated as items finish, never journaled and
+/// never in [`AppSnapshot`] — a reconnecting webview gets the latest value
+/// from the shell's subscribe replay.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, specta::Type)]
+pub struct SessionAggregates {
+    pub completed: u32,
+    pub failed: u32,
+    pub skipped: u32,
+    pub stopped: u32,
+    pub not_worthwhile: u32,
+    pub analyzed: u32,
+    pub remuxed: u32,
+    #[specta(type = crate::JsNumber)]
+    pub input_bytes: u64,
+    #[specta(type = crate::JsNumber)]
+    pub output_bytes: u64,
+    #[specta(type = crate::JsNumber)]
+    pub encode_duration_ms: u64,
+}
+
+impl SessionAggregates {
+    /// Folds one finished item in. Byte totals come only from live evidence —
+    /// a crash-recovered success measured nothing — and the encode duration
+    /// sums the `Encoding` phase spans.
+    pub fn absorb(&mut self, outcome: &ItemOutcome, phase_spans: &[PhaseSpan]) {
+        let counter = match outcome {
+            ItemOutcome::Analyzed => &mut self.analyzed,
+            ItemOutcome::Converted(_) => &mut self.completed,
+            ItemOutcome::Remuxed(_) => &mut self.remuxed,
+            ItemOutcome::NotWorthwhile { .. } => &mut self.not_worthwhile,
+            ItemOutcome::Stopped => &mut self.stopped,
+            ItemOutcome::Skipped { .. } => &mut self.skipped,
+            ItemOutcome::Failed(_) => &mut self.failed,
+        };
+        *counter = counter.saturating_add(1);
+        if let ItemOutcome::Converted(evidence) | ItemOutcome::Remuxed(evidence) = outcome {
+            match evidence {
+                CompletionEvidence::LiveEncode {
+                    input_size,
+                    output_size,
+                    ..
+                }
+                | CompletionEvidence::LiveRemux {
+                    input_size,
+                    output_size,
+                } => {
+                    self.input_bytes = self.input_bytes.saturating_add(*input_size);
+                    self.output_bytes = self.output_bytes.saturating_add(*output_size);
+                }
+                CompletionEvidence::RecoveredAtStartup => {}
+            }
+        }
+        for span in phase_spans {
+            if span.phase == JobPhase::Encoding {
+                self.encode_duration_ms = self.encode_duration_ms.saturating_add(span.duration.0);
+            }
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, specta::Type)]
 pub struct ConversionRun {
     pub spec: JobSpec,
@@ -138,6 +200,22 @@ pub enum DurableDelta {
     QueueMoved {
         item_id: QueueItemId,
         before: Option<QueueItemId>,
+    },
+    /// A finished item goes around again: state resets to `Queued` and the
+    /// item moves to the end of the queue, preserving the
+    /// finished < active < queued shape invariant. The old run's lineage is
+    /// untouched; fresh claim/run ids arrive at the next reservation.
+    QueueRequeued {
+        item_id: QueueItemId,
+    },
+    /// A pending item's job parameters, resolved to the full tuple so the
+    /// fold stays structural and replay needs no patch semantics.
+    QueueEdited {
+        item_id: QueueItemId,
+        operation: Operation,
+        intent: AnalysisIntent,
+        output_target: OutputTarget,
+        overwrite: OverwriteDecision,
     },
     ItemReserved {
         job: Box<ReservedJob>,
@@ -207,6 +285,7 @@ pub struct AppState {
     pub durable: DurableState,
     pub settings: Settings,
     pub session: SessionState,
+    pub aggregates: SessionAggregates,
     pub telemetry: BTreeMap<RunId, Telemetry>,
     pub tools: ToolsState,
 }
@@ -307,6 +386,15 @@ pub struct Telemetry {
     pub sequence: u64,
     pub phase: JobPhase,
     pub progress: JobProgress,
+    /// Smoothed live throughput in hundredths of a frame per second, from the
+    /// engine's ~3 s sliding window (#33 §11). Absent until the window has a
+    /// sample and for phases with no frame rate (remux) — never a sentinel.
+    pub fps_centi: Option<u32>,
+    /// Estimated milliseconds until the current phase completes, from the
+    /// window's progress velocity. Absent during the engine's warm-up and
+    /// whenever the remaining work is unknown (#33 §11) — never a sentinel.
+    #[specta(type = Option<crate::JsNumber>)]
+    pub eta_ms: Option<u64>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, specta::Type)]
@@ -330,6 +418,27 @@ pub fn fold(state: &mut DurableState, delta: &DurableDelta) {
         }
         DurableDelta::QueueMoved { item_id, before } => {
             move_item(&mut state.queue, *item_id, *before)
+        }
+        DurableDelta::QueueRequeued { item_id } => {
+            if let Some(source) = state.queue.iter().position(|item| item.id == *item_id) {
+                let mut item = state.queue.remove(source);
+                item.state = QueueItemState::Queued;
+                state.queue.push(item);
+            }
+        }
+        DurableDelta::QueueEdited {
+            item_id,
+            operation,
+            intent,
+            output_target,
+            overwrite,
+        } => {
+            if let Some(item) = state.queue.iter_mut().find(|item| item.id == *item_id) {
+                item.operation = *operation;
+                item.intent = *intent;
+                item.output_target = output_target.clone();
+                item.overwrite = *overwrite;
+            }
         }
         DurableDelta::ItemReserved { job } => {
             set_item_state(

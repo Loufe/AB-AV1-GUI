@@ -7,7 +7,7 @@ import { basename, deriveRowStatus, outputTargetLabel } from "./queue-status";
 const RUNNING: QueueItemState = { Running: { claim_id: 1, run_id: 1 } };
 
 function telemetry(progress: Telemetry["progress"], phase: Telemetry["phase"]): Telemetry {
-  return { run_id: 1, sequence: 1, phase, progress };
+  return { run_id: 1, sequence: 1, phase, progress, fps_centi: null, eta_ms: null };
 }
 
 describe("basename", () => {
