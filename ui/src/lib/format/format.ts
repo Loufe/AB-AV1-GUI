@@ -9,7 +9,7 @@
 
 export type TimeConfidence = "high" | "precise" | "medium" | "low" | "none";
 
-/** GB/h at or above this renders without decimals. */
+/** A per-hour GiB rate at or above this renders without decimals. */
 export const EFFICIENCY_DECIMAL_THRESHOLD = 10;
 
 const EM_DASH = "—";
@@ -36,6 +36,16 @@ export function formatEfficiency(savingsBytes: number, timeSeconds: number): str
   const gbPerHr = savingsBytes / GIB / (timeSeconds / 3600);
   if (gbPerHr >= EFFICIENCY_DECIMAL_THRESHOLD) return `${gbPerHr.toFixed(0)} GB/h`;
   return `${gbPerHr.toFixed(1)} GB/h`;
+}
+
+/**
+ * An already-computed input throughput in GiB/h. Statistics owns this value;
+ * unlike `formatEfficiency`, this formatter never derives a rate from bytes.
+ */
+export function formatInputThroughput(gibPerHour: number | null): string {
+  if (gibPerHour === null || !Number.isFinite(gibPerHour) || gibPerHour <= 0) return EM_DASH;
+  if (gibPerHour >= EFFICIENCY_DECIMAL_THRESHOLD) return `${gibPerHour.toFixed(0)} GiB/h`;
+  return `${gibPerHour.toFixed(1)} GiB/h`;
 }
 
 /** Clock-style duration: "h:mm:ss" above an hour, "m:ss" below. */

@@ -117,8 +117,8 @@ const ROWS: QueueRowData[] = [
             {
               target: 90,
               last_measurement: {
-                crf: 30,
-                score: 89.6,
+                crf: 30_000,
+                score: 8_960,
                 predicted_size: 0.7 * GIB,
                 predicted_percent_basis_points: 9700,
                 predicted_duration_ms: 900_000,
@@ -142,8 +142,8 @@ const ROWS: QueueRowData[] = [
               {
                 target: 90,
                 last_measurement: {
-                  crf: 30,
-                  score: 89.6,
+                  crf: 30_000,
+                  score: 8_960,
                   predicted_size: 0.7 * GIB,
                   predicted_percent_basis_points: 9700,
                   predicted_duration_ms: 900_000,
