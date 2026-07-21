@@ -34,6 +34,17 @@ tauri = { version = "=2.11.5", default-features = false, features = [
 tauri-specta = { version = "=2.0.0-rc.25", features = ["derive", "typescript"] }
 tracing = { version = "=0.1.44", default-features = false, features = ["std"] }
 
+# The official Tauri dialog plugin enables rfd's common-controls-v6 feature,
+# which makes Windows test executables require an embedded application
+# manifest. The shell needs only a narrow generated picker command, so depend
+# on the same native dialog library without widening the webview's plugin
+# permissions or re-enabling that feature.
+[target.'cfg(target_os = "linux")'.dependencies]
+rfd = { version = "=0.16.0", default-features = false, features = ["gtk3"] }
+
+[target.'cfg(any(target_os = "macos", target_os = "windows"))'.dependencies]
+rfd = { version = "=0.16.0", default-features = false }
+
 [dev-dependencies]
 specta-typescript = "=0.0.12"
 

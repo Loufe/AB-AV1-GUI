@@ -5,6 +5,11 @@ import { invoke as __TAURI_INVOKE, Channel } from "@tauri-apps/api/core";
 /** Commands */
 export const commands = {
 	appInfo: () => __TAURI_INVOKE<AppInfo>("app_info"),
+	/**
+	 *  Open a native picker off the webview boundary. Cancellation is an accepted
+	 *  empty list; errors remain reserved for command/bridge failures.
+	 */
+	pickPaths: (kind: PathPickerKind, startingDirectory: string | null) => typedError<string[], CommandError>(__TAURI_INVOKE("pick_paths", { kind, startingDirectory })),
 	subscribe: (channel: Channel<ShellEvent_Deserialize>) => typedError<null, CommandError>(__TAURI_INVOKE("subscribe", { channel })),
 	/**
 	 *  Adds files and folders in one batch: folders expand through the engine
@@ -1117,6 +1122,12 @@ export type PathBinding_Serialize = {
 };
 
 export type PathHash = string;
+
+/**
+ *  Narrow native-picker intents exposed to the webview. The selected path is
+ *  returned without granting general filesystem plugin access.
+ */
+export type PathPickerKind = "File" | "Files" | "Folder" | "Folders" | "HistoryImport";
 
 /**
  *  How long one job phase ran, measured monotonically by the worker and

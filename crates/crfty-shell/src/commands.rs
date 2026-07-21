@@ -4,7 +4,7 @@ use crfty_core::{
     AnalysisIntent, CorruptionSignature, Operation, OutputTarget, ProjectionCommand, QueueCommand,
     QueueItemEdit, QueueItemId, SessionCommand, Settings, VendorCommand,
 };
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use tauri::{State, ipc::Channel};
 use tauri_specta::{Builder, collect_commands};
 
@@ -17,12 +17,73 @@ pub struct AppInfo {
     pub version: String,
 }
 
+/// Narrow native-picker intents exposed to the webview. The selected path is
+/// returned without granting general filesystem plugin access.
+#[derive(Debug, Clone, Copy, Deserialize, Serialize, specta::Type)]
+pub enum PathPickerKind {
+    File,
+    Files,
+    Folder,
+    Folders,
+    HistoryImport,
+}
+
 #[tauri::command]
 #[specta::specta]
 fn app_info() -> AppInfo {
     AppInfo {
         version: env!("CARGO_PKG_VERSION").to_owned(),
     }
+}
+
+/// Open a native picker off the webview boundary. Cancellation is an accepted
+/// empty list; errors remain reserved for command/bridge failures.
+#[tauri::command]
+#[specta::specta]
+async fn pick_paths(
+    kind: PathPickerKind,
+    starting_directory: Option<PathBuf>,
+) -> Result<Vec<PathBuf>, CommandError> {
+    let mut picker = rfd::AsyncFileDialog::new();
+    if let Some(directory) = starting_directory {
+        picker = picker.set_directory(directory);
+    }
+    let selected = match kind {
+        PathPickerKind::File => picker
+            .pick_file()
+            .await
+            .into_iter()
+            .map(|handle| handle.path().to_owned())
+            .collect(),
+        PathPickerKind::Files => picker
+            .pick_files()
+            .await
+            .unwrap_or_default()
+            .into_iter()
+            .map(|handle| handle.path().to_owned())
+            .collect(),
+        PathPickerKind::Folder => picker
+            .pick_folder()
+            .await
+            .into_iter()
+            .map(|handle| handle.path().to_owned())
+            .collect(),
+        PathPickerKind::Folders => picker
+            .pick_folders()
+            .await
+            .unwrap_or_default()
+            .into_iter()
+            .map(|handle| handle.path().to_owned())
+            .collect(),
+        PathPickerKind::HistoryImport => picker
+            .add_filter("CRFty history export", &["json"])
+            .pick_file()
+            .await
+            .into_iter()
+            .map(|handle| handle.path().to_owned())
+            .collect(),
+    };
+    Ok(selected)
 }
 
 #[tauri::command]
@@ -238,6 +299,7 @@ pub fn specta_builder() -> Builder<tauri::Wry> {
     Builder::<tauri::Wry>::new()
         .commands(collect_commands![
             app_info,
+            pick_paths,
             subscribe,
             queue_add_paths,
             queue_remove,
