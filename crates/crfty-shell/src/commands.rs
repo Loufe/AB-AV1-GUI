@@ -8,7 +8,7 @@ use serde::Serialize;
 use tauri::{State, ipc::Channel};
 use tauri_specta::{Builder, collect_commands};
 
-use crate::bridge::{Bridge, CommandError, ImportSummary, ShellEvent};
+use crate::bridge::{Bridge, CommandError, ImportSummary, ScrubSummary, ShellEvent};
 
 #[derive(Debug, Clone, Serialize, specta::Type)]
 pub struct AppInfo {
@@ -122,6 +122,14 @@ fn import_history(bridge: State<'_, Bridge>, path: PathBuf) -> Result<ImportSumm
     bridge.import_history(&path)
 }
 
+/// Anonymize every existing log file in place (Settings tab "Scrub Logs").
+/// Irreversible; runs even when the anonymize-logs toggle is off.
+#[tauri::command]
+#[specta::specta]
+fn scrub_logs(bridge: State<'_, Bridge>) -> Result<ScrubSummary, CommandError> {
+    bridge.scrub_logs()
+}
+
 /// Consent to discard a corrupt journal tail. The signature must echo the
 /// one delivered on the `Degraded` payload — the driver rejects anything
 /// else, so a stale acknowledgement can never discard fresher bytes.
@@ -158,6 +166,7 @@ pub fn specta_builder() -> Builder<tauri::Wry> {
             vendor_check,
             request_statistics,
             import_history,
+            scrub_logs,
             acknowledge_corruption,
         ])
         .typ::<crfty_core::HistoryRow>()

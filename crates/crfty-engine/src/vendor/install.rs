@@ -166,7 +166,7 @@ fn prune_older_installs(vendor_root: &Path, keep_version: &str) {
     let entries = match std::fs::read_dir(&installs) {
         Ok(entries) => entries,
         Err(error) => {
-            eprintln!("failed to list vendor installs for pruning: {error}");
+            tracing::warn!("failed to list vendor installs for pruning: {error}");
             return;
         }
     };
@@ -178,7 +178,7 @@ fn prune_older_installs(vendor_root: &Path, keep_version: &str) {
             continue;
         }
         if let Err(error) = std::fs::remove_dir_all(entry.path()) {
-            eprintln!("failed to prune a superseded vendor install: {error}");
+            tracing::warn!("failed to prune a superseded vendor install: {error}");
         }
     }
 }

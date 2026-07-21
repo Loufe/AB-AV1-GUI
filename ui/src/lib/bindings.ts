@@ -28,6 +28,11 @@ export const commands = {
 	 */
 	importHistory: (path: string) => typedError<ImportSummary, CommandError>(__TAURI_INVOKE("import_history", { path })),
 	/**
+	 *  Anonymize every existing log file in place (Settings tab "Scrub Logs").
+	 *  Irreversible; runs even when the anonymize-logs toggle is off.
+	 */
+	scrubLogs: () => typedError<ScrubSummary, CommandError>(__TAURI_INVOKE("scrub_logs")),
+	/**
 	 *  Consent to discard a corrupt journal tail. The signature must echo the
 	 *  one delivered on the `Degraded` payload — the driver rejects anything
 	 *  else, so a stale acknowledgement can never discard fresher bytes.
@@ -843,6 +848,16 @@ export type RunTotals = {
 	not_worthwhile: number,
 	stopped: number,
 	skipped: number,
+	failed: number,
+};
+
+/**
+ *  Outcome of a retroactive log scrub: how many log files were examined, how
+ *  many were rewritten with anonymized content, and how many failed.
+ */
+export type ScrubSummary = {
+	total: number,
+	modified: number,
 	failed: number,
 };
 

@@ -848,8 +848,8 @@ fn report_worker_crash(commands: &CommandSender, message: &str) {
         message: message.to_owned(),
     })) {
         Ok(Reply::Accepted) => {}
-        Ok(reply) => eprintln!("failed to report worker crash ({message}): {reply:?}"),
-        Err(error) => eprintln!("failed to report worker crash ({message}): {error}"),
+        Ok(reply) => tracing::error!("failed to report worker crash ({message}): {reply:?}"),
+        Err(error) => tracing::error!("failed to report worker crash ({message}): {error}"),
     }
 }
 
@@ -1006,16 +1006,16 @@ fn refresh_discovered_tools(
         update_available: report.update_available,
     })) {
         Ok(Reply::Accepted) => {}
-        Ok(reply) => eprintln!("tool rediscovery report was not accepted: {reply:?}"),
-        Err(error) => eprintln!("failed to report rediscovered tools: {error}"),
+        Ok(reply) => tracing::warn!("tool rediscovery report was not accepted: {reply:?}"),
+        Err(error) => tracing::warn!("failed to report rediscovered tools: {error}"),
     }
 }
 
 fn submit_vendor_activity(commands: &CommandSender, activity: VendorActivity) {
     match commands.submit(Command::System(SystemCommand::VendorProgress { activity })) {
         Ok(Reply::Accepted) => {}
-        Ok(reply) => eprintln!("vendor progress report was not accepted: {reply:?}"),
-        Err(error) => eprintln!("failed to report vendor progress: {error}"),
+        Ok(reply) => tracing::warn!("vendor progress report was not accepted: {reply:?}"),
+        Err(error) => tracing::warn!("failed to report vendor progress: {error}"),
     }
 }
 
@@ -1073,7 +1073,9 @@ fn run_session(
         let observation = match inspector.observe(&reserved.input) {
             Ok(observation) => Some(Box::new(observation)),
             Err(error) => {
-                eprintln!("media preflight failed; continuing without reusable facts: {error}");
+                tracing::warn!(
+                    "media preflight failed; continuing without reusable facts: {error}"
+                );
                 None
             }
         };
@@ -1332,7 +1334,7 @@ fn run_encode(
                 if matches!(decode_mode, DecodeMode::Hardware(_)) {
                     match restage_for_retry(&manager, services.commands, &mut transaction) {
                         Ok(()) => {
-                            eprintln!(
+                            tracing::warn!(
                                 "hardware-decode encode failed ({}); retrying once with software decode",
                                 failure.message
                             );
@@ -1340,7 +1342,7 @@ fn run_encode(
                             continue;
                         }
                         Err(restage_error) => {
-                            eprintln!(
+                            tracing::warn!(
                                 "staging could not be recreated for the software retry: {restage_error}"
                             );
                         }
@@ -1909,7 +1911,7 @@ fn search_with_fallback(
                     // the divergent profile while the JobSpec stays as
                     // requested.
                     if matches!(profile.decode_mode, DecodeMode::Hardware(_)) {
-                        eprintln!(
+                        tracing::warn!(
                             "hardware-decode search failed ({}); retrying with software decode",
                             failure.message
                         );

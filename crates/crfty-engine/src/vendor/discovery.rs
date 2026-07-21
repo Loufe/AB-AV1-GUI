@@ -131,7 +131,7 @@ pub fn discover_with(vendor_root: &Path, environment: &DiscoveryEnvironment) -> 
     let managed = match load_managed(vendor_root) {
         Ok(managed) => managed,
         Err(detail) => {
-            eprintln!("managed vendor install is unusable, falling back: {detail}");
+            tracing::warn!("managed vendor install is unusable, falling back: {detail}");
             None
         }
     };
@@ -327,6 +327,6 @@ fn clean_stale_staging(vendor_root: &Path) {
     match std::fs::remove_dir_all(&staging) {
         Ok(()) => {}
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
-        Err(error) => eprintln!("failed to clean stale vendor staging: {error}"),
+        Err(error) => tracing::warn!("failed to clean stale vendor staging: {error}"),
     }
 }

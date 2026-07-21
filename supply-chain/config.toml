@@ -1307,6 +1307,10 @@ criteria = "safe-to-deploy"
 version = "2.0.19"
 criteria = "safe-to-deploy"
 
+[[exemptions.thread_local]]
+version = "1.1.10"
+criteria = "safe-to-deploy"
+
 [[exemptions.time]]
 version = "0.3.53"
 criteria = "safe-to-deploy"
@@ -1401,6 +1405,10 @@ criteria = "safe-to-deploy"
 
 [[exemptions.tracing-core]]
 version = "0.1.36"
+criteria = "safe-to-deploy"
+
+[[exemptions.tracing-subscriber]]
+version = "0.3.23"
 criteria = "safe-to-deploy"
 
 [[exemptions.typed-path]]

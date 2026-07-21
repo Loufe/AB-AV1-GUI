@@ -16,6 +16,7 @@ pub mod driver;
 pub mod history_import;
 pub mod journal;
 pub mod lock;
+pub mod logging;
 pub mod media;
 pub mod output;
 pub mod remux;

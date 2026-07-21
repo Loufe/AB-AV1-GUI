@@ -31,6 +31,7 @@ use tauri::{Manager, ipc::Channel};
 const JOURNAL_FILE_NAME: &str = "journal.jsonl";
 const CONFIG_FILE_NAME: &str = "config.json";
 const VENDOR_DIR_NAME: &str = "vendor";
+const LOG_DIR_NAME: &str = "logs";
 
 #[derive(Debug, Clone, Serialize, specta::Type)]
 pub struct ShellEvent {
@@ -72,6 +73,15 @@ pub enum StreamPayload {
 pub struct ImportSummary {
     pub parked: u32,
     pub skipped: u32,
+}
+
+/// Outcome of a retroactive log scrub: how many log files were examined, how
+/// many were rewritten with anonymized content, and how many failed.
+#[derive(Debug, Clone, Copy, Serialize, specta::Type)]
+pub struct ScrubSummary {
+    pub total: u32,
+    pub modified: u32,
+    pub failed: u32,
 }
 
 #[derive(Debug, Clone, Serialize, specta::Type)]
@@ -149,7 +159,7 @@ impl StreamState {
         };
         self.seq = self.seq.wrapping_add(1);
         if let Err(error) = channel.send(event) {
-            eprintln!("dropping stream subscriber after failed send: {error}");
+            tracing::warn!("dropping stream subscriber after failed send: {error}");
             self.subscriber = None;
         }
     }
@@ -172,9 +182,11 @@ impl Bridge {
             Err(health) => {
                 match &health {
                     Health::SecondInstance { lock_path } => {
-                        eprintln!("another instance holds the data lock at {lock_path}");
+                        tracing::error!("another instance holds the data lock at {lock_path}");
                     }
-                    Health::Unavailable { reason } => eprintln!("engine unavailable: {reason}"),
+                    Health::Unavailable { reason } => {
+                        tracing::error!("engine unavailable: {reason}")
+                    }
                     Health::Ok | Health::Degraded { .. } | Health::Fatal { .. } => {}
                 }
                 Self {
@@ -198,6 +210,14 @@ impl Bridge {
                 "failed to create application data directory: {error}"
             ))
         })?;
+        // Tracing comes up before the engine so lock contention and journal
+        // recovery are captured; the privacy scrubber inside the sink is
+        // configured from a read-only settings peek, so no line is written
+        // unfiltered.
+        crfty_engine::logging::init(
+            &data_dir.join(LOG_DIR_NAME),
+            &data_dir.join(CONFIG_FILE_NAME),
+        );
         // Discovery runs inside the engine and is infallible: missing tools
         // become typed availability state on the stream, never a startup
         // failure that would hide the queue, history, or settings.
@@ -312,6 +332,22 @@ impl Bridge {
                 skipped: summary.skipped,
             })
             .map_err(|message| CommandError::new("import_failed", message))
+    }
+
+    /// Anonymizes every log file under the active log directory in place,
+    /// including rolled files from earlier launches. Runs regardless of the
+    /// anonymize-logs toggle and is irreversible. Gated on a healthy engine
+    /// so a second instance can never rewrite files the lock holder is
+    /// actively writing.
+    pub fn scrub_logs(&self) -> Result<ScrubSummary, CommandError> {
+        self.commands()?;
+        crfty_engine::logging::scrub_log_files()
+            .map(|outcome| ScrubSummary {
+                total: outcome.total,
+                modified: outcome.modified,
+                failed: outcome.failed,
+            })
+            .map_err(|message| CommandError::new("scrub_failed", message))
     }
 
     /// Passes through while degraded by design: acknowledgement is the one

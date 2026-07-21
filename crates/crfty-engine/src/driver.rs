@@ -362,7 +362,7 @@ fn maybe_compact(
         let live_bytes = match serde_json::to_vec(&state.durable) {
             Ok(encoded) => u64::try_from(encoded.len()).unwrap_or(u64::MAX),
             Err(error) => {
-                eprintln!("skipping compaction; failed to measure live state: {error}");
+                tracing::warn!("skipping compaction; failed to measure live state: {error}");
                 return CompactionOutcome::Failed;
             }
         };
@@ -377,7 +377,7 @@ fn maybe_compact(
     ) {
         Ok(()) => CompactionOutcome::Compacted,
         Err(error) => {
-            eprintln!("journal compaction failed; old journal remains authoritative: {error}");
+            tracing::warn!("journal compaction failed; old journal remains authoritative: {error}");
             CompactionOutcome::Failed
         }
     }
@@ -510,7 +510,7 @@ fn acknowledge_corruption(
             }
         }
         Err(error) => {
-            eprintln!("journal recovery failed; corrupt journal left in place: {error}");
+            tracing::error!("journal recovery failed; corrupt journal left in place: {error}");
             rejected_applied(format!("journal recovery failed: {error}"))
         }
     }
@@ -536,7 +536,11 @@ trait ConfigSink {
 
 impl ConfigSink for ConfigStore {
     fn write(&mut self, settings: &Settings) -> Result<(), String> {
-        ConfigStore::write(self, settings).map_err(|error| error.to_string())
+        ConfigStore::write(self, settings).map_err(|error| error.to_string())?;
+        // Only durably persisted settings reach the live sink: a rejected
+        // write must not change what the logs anonymize or where they land.
+        crate::logging::reconfigure(settings);
+        Ok(())
     }
 }
 
