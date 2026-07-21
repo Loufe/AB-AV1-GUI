@@ -658,10 +658,12 @@ impl JournalSink for JournalWriter {
 /// then durable deltas, followed by its reply. Ephemerals precede durables so
 /// terminal state is never followed by stale progress: a finishing item is
 /// observed as final telemetry, telemetry-cleared, then `ItemFinished`. The
-/// one exception is `SessionAggregates`, which summarizes a finish and is
-/// published after the durables so its counts never lead the `ItemFinished`
-/// they include. Durable publication still requires the token minted by the
-/// journal fsync, so nothing observable can outrun durability.
+/// standing read-model exceptions are `SessionAggregates` and Analysis:
+/// both can summarize durable facts from the same command, so they publish
+/// after the durables and never lead their source. Discovery-only Analysis
+/// commands have no durable deltas, making the same ordering harmless there.
+/// Durable publication still requires the token minted by the journal fsync,
+/// so nothing observable can outrun durability.
 fn emit_batch(
     durability: Option<DurabilityToken>,
     applied_batch: Vec<(mpsc::SyncSender<Reply>, crfty_core::Applied)>,
@@ -674,17 +676,20 @@ fn emit_batch(
         for delta in applied.config {
             let _result = events.send(DriverEvent::Config(delta));
         }
-        let (aggregates, ephemerals): (Vec<_>, Vec<_>) = applied
-            .ephemeral
-            .into_iter()
-            .partition(|delta| matches!(delta, EphemeralDelta::SessionAggregates(_)));
+        let (post_durable, ephemerals): (Vec<_>, Vec<_>) =
+            applied.ephemeral.into_iter().partition(|delta| {
+                matches!(
+                    delta,
+                    EphemeralDelta::Analysis(_) | EphemeralDelta::SessionAggregates(_)
+                )
+            });
         for delta in ephemerals {
             let _result = events.send(DriverEvent::Ephemeral(delta));
         }
         if let Some(token) = &durability {
             emit_durable(token, &applied.durable, events);
         }
-        for delta in aggregates {
+        for delta in post_durable {
             let _result = events.send(DriverEvent::Ephemeral(delta));
         }
         effects.extend(applied.effects);
@@ -794,11 +799,12 @@ mod tests {
     use std::{io, path::PathBuf, sync::mpsc};
 
     use crfty_core::{
-        AnalysisIntent, AnalysisProfile, ClaimId, Command, ConfigDelta, DurableDelta, Effect,
-        EphemeralDelta, ExecutionSettings, ItemOutcome, JobPhase, JobProgress, Operation,
-        OutputTarget, OverwriteDecision, QueueAddRequest, QueueCommand, QueueItemId, Reply, RunId,
-        SessionCommand, SessionState, Settings, SettingsCommand, SystemCommand, Telemetry,
-        ToolAvailability, ToolRevisions, UnixMillis, WorkerCommand, apply,
+        AnalysisDelta, AnalysisIntent, AnalysisProfile, AnalysisSnapshot, ClaimId, Command,
+        ConfigDelta, DurableDelta, Effect, EphemeralDelta, ExecutionSettings, ItemOutcome,
+        JobPhase, JobProgress, Operation, OutputTarget, OverwriteDecision, QueueAddRequest,
+        QueueCommand, QueueItemId, Reply, RunId, SessionCommand, SessionState, Settings,
+        SettingsCommand, SystemCommand, Telemetry, ToolAvailability, ToolRevisions, UnixMillis,
+        WorkerCommand, apply,
     };
 
     fn add_command(id: u64, input: &str) -> Command {
@@ -818,7 +824,7 @@ mod tests {
 
     use super::{
         AppState, CompactionOutcome, ConfigSink, DriverEvent, DriverPersistence, Envelope,
-        JournalError, JournalSink, maybe_compact, process_batch, reconcile_effects,
+        JournalError, JournalSink, emit_batch, maybe_compact, process_batch, reconcile_effects,
         split_batch_at_settings,
     };
     use crate::{
@@ -894,6 +900,38 @@ mod tests {
         fn recover(&mut self, _state: &crfty_core::DurableState) -> Result<(), JournalError> {
             Ok(())
         }
+    }
+
+    #[test]
+    fn standing_analysis_publishes_after_durable_facts_from_the_same_command() {
+        let mut state = AppState::default();
+        let mut applied = apply(&mut state, add_command(1, "video.mkv"));
+        applied
+            .ephemeral
+            .push(EphemeralDelta::Analysis(AnalysisDelta::Reset {
+                snapshot: Box::new(AnalysisSnapshot::default()),
+            }));
+        let (reply_tx, reply_rx) = mpsc::sync_channel(1);
+        let (event_tx, event_rx) = mpsc::channel();
+
+        assert!(!emit_batch(
+            Some(DurabilityToken::new()),
+            vec![(reply_tx, applied)],
+            &state,
+            &event_tx,
+            None,
+        ));
+        assert_eq!(reply_rx.recv().expect("reply"), Reply::Accepted);
+        let observed: Vec<&'static str> = event_rx
+            .try_iter()
+            .map(|event| match event {
+                DriverEvent::Ephemeral(EphemeralDelta::QueueAddSummary { .. }) => "summary",
+                DriverEvent::Durable(DurableDelta::QueueAdded { .. }) => "durable",
+                DriverEvent::Ephemeral(EphemeralDelta::Analysis(_)) => "analysis",
+                _ => "other",
+            })
+            .collect();
+        assert_eq!(observed, ["summary", "durable", "analysis"]);
     }
 
     #[test]

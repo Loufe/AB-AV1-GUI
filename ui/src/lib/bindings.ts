@@ -75,9 +75,88 @@ export const commands = {
 };
 
 /* Types */
+export type AnalysisActivity = "Discovering" | "Discovered" | "BasicScanning" | "Ready" | "Cancelled" | { Failed: {
+	detail: string,
+} };
+
 export type AnalysisAttempt = {
 	target: VmafTarget,
 	last_measurement: SearchMeasurement | null,
+};
+
+/**
+ *  Bounded live changes plus the complete replacement used at generation
+ *  start and reconnect. Consumers apply this through [`fold_analysis`].
+ */
+export type AnalysisDelta = AnalysisDelta_Serialize | AnalysisDelta_Deserialize;
+
+/**
+ *  Bounded live changes plus the complete replacement used at generation
+ *  start and reconnect. Consumers apply this through [`fold_analysis`].
+ */
+export type AnalysisDelta_Deserialize = ({ Reset: {
+	snapshot: AnalysisSnapshot_Deserialize,
+} }) & { ActivityChanged?: never; RowsUpserted?: never } | ({ RowsUpserted: {
+	generation: AnalysisGenerationId,
+	rows: AnalysisRow[],
+} }) & { ActivityChanged?: never; Reset?: never } | ({ ActivityChanged: {
+	generation: AnalysisGenerationId,
+	activity: AnalysisActivity,
+} }) & { Reset?: never; RowsUpserted?: never };
+
+/**
+ *  Bounded live changes plus the complete replacement used at generation
+ *  start and reconnect. Consumers apply this through [`fold_analysis`].
+ */
+export type AnalysisDelta_Serialize = ({ Reset: {
+	snapshot: AnalysisSnapshot_Serialize,
+} }) & { ActivityChanged?: never; RowsUpserted?: never } | ({ RowsUpserted: {
+	generation: AnalysisGenerationId,
+	rows: AnalysisRow[],
+} }) & { ActivityChanged?: never; Reset?: never } | ({ ActivityChanged: {
+	generation: AnalysisGenerationId,
+	activity: AnalysisActivity,
+} }) & { Reset?: never; RowsUpserted?: never };
+
+/**
+ *  Presentation text derived from a native path. `lossy` is explicit so the
+ *  UI never mistakes a replacement-character rendering for a reversible path.
+ */
+export type AnalysisDisplayText = {
+	text: string,
+	lossy: boolean,
+};
+
+export type AnalysisEntryKind = "Folder" | "File";
+
+/**
+ *  One generation's standing public state. Native paths and execution
+ *  handles deliberately live in the engine's generation registry instead.
+ */
+export type AnalysisGeneration = AnalysisGeneration_Serialize | AnalysisGeneration_Deserialize;
+
+export type AnalysisGenerationId = number;
+
+/**
+ *  One generation's standing public state. Native paths and execution
+ *  handles deliberately live in the engine's generation registry instead.
+ */
+export type AnalysisGeneration_Deserialize = {
+	id: AnalysisGenerationId,
+	root: AnalysisDisplayText,
+	activity: AnalysisActivity,
+	rows: AnalysisRow[],
+};
+
+/**
+ *  One generation's standing public state. Native paths and execution
+ *  handles deliberately live in the engine's generation registry instead.
+ */
+export type AnalysisGeneration_Serialize = {
+	id: AnalysisGenerationId,
+	root: AnalysisDisplayText,
+	activity: AnalysisActivity,
+	rows: AnalysisRow[],
 };
 
 /**
@@ -117,6 +196,42 @@ export type AnalysisResult = {
 	failed_attempts: AnalysisAttempt[],
 	measurement: SearchMeasurement,
 	profile: AnalysisProfile,
+};
+
+/**
+ *  Level-0 row facts only. Media facts, applicability, predictions, and
+ *  failures extend the Analysis read model in their owning child issues.
+ */
+export type AnalysisRow = {
+	id: AnalysisRowId,
+	parent: AnalysisRowId | null,
+	kind: AnalysisEntryKind,
+	display_name: AnalysisDisplayText,
+	display_path: AnalysisDisplayText,
+};
+
+export type AnalysisRowId = number;
+
+/**
+ *  Standing Analysis state. It is reducer-owned and replayed on subscribe,
+ *  but never enters the durable application snapshot or journal.
+ */
+export type AnalysisSnapshot = AnalysisSnapshot_Serialize | AnalysisSnapshot_Deserialize;
+
+/**
+ *  Standing Analysis state. It is reducer-owned and replayed on subscribe,
+ *  but never enters the durable application snapshot or journal.
+ */
+export type AnalysisSnapshot_Deserialize = {
+	current: AnalysisGeneration_Deserialize | null,
+};
+
+/**
+ *  Standing Analysis state. It is reducer-owned and replayed on subscribe,
+ *  but never enters the durable application snapshot or journal.
+ */
+export type AnalysisSnapshot_Serialize = {
+	current: AnalysisGeneration_Serialize | null,
 };
 
 export type AppInfo = {
@@ -488,25 +603,32 @@ export type DurableState_Serialize = {
 /**  A duration in milliseconds, measured engine-side with a monotonic clock. */
 export type DurationMs = number;
 
-export type EphemeralDelta = ({ SessionChanged: SessionState }) & { CommandRejected?: never; QueueAddSummary?: never; SessionAggregates?: never; Statistics?: never; Telemetry?: never; TelemetryCleared?: never; ToolsChanged?: never; WorkerCrashed?: never } | 
+export type EphemeralDelta = EphemeralDelta_Serialize | EphemeralDelta_Deserialize;
+
+export type EphemeralDelta_Deserialize = 
+/**
+ *  Incremental or replacement Analysis read-model state. Standing: the
+ *  shell folds it and replays one complete Reset on every subscription.
+ */
+({ Analysis: AnalysisDelta_Deserialize }) & { CommandRejected?: never; QueueAddSummary?: never; SessionAggregates?: never; SessionChanged?: never; Statistics?: never; Telemetry?: never; TelemetryCleared?: never; ToolsChanged?: never; WorkerCrashed?: never } | ({ SessionChanged: SessionState }) & { Analysis?: never; CommandRejected?: never; QueueAddSummary?: never; SessionAggregates?: never; Statistics?: never; Telemetry?: never; TelemetryCleared?: never; ToolsChanged?: never; WorkerCrashed?: never } | 
 /**
  *  The per-session aggregates after an item finished (zeroed at session
  *  start). The one post-durable ephemeral: on the stream it follows the
  *  `ItemFinished` it summarizes, so a consumer never sees counts for a
  *  finish it has not observed.
  */
-({ SessionAggregates: SessionAggregates }) & { CommandRejected?: never; QueueAddSummary?: never; SessionChanged?: never; Statistics?: never; Telemetry?: never; TelemetryCleared?: never; ToolsChanged?: never; WorkerCrashed?: never } | ({ Telemetry: Telemetry }) & { CommandRejected?: never; QueueAddSummary?: never; SessionAggregates?: never; SessionChanged?: never; Statistics?: never; TelemetryCleared?: never; ToolsChanged?: never; WorkerCrashed?: never } | ({ TelemetryCleared: {
+({ SessionAggregates: SessionAggregates }) & { Analysis?: never; CommandRejected?: never; QueueAddSummary?: never; SessionChanged?: never; Statistics?: never; Telemetry?: never; TelemetryCleared?: never; ToolsChanged?: never; WorkerCrashed?: never } | ({ Telemetry: Telemetry }) & { Analysis?: never; CommandRejected?: never; QueueAddSummary?: never; SessionAggregates?: never; SessionChanged?: never; Statistics?: never; TelemetryCleared?: never; ToolsChanged?: never; WorkerCrashed?: never } | ({ TelemetryCleared: {
 	run_id: RunId,
-} }) & { CommandRejected?: never; QueueAddSummary?: never; SessionAggregates?: never; SessionChanged?: never; Statistics?: never; Telemetry?: never; ToolsChanged?: never; WorkerCrashed?: never } | ({ ToolsChanged: ToolsState }) & { CommandRejected?: never; QueueAddSummary?: never; SessionAggregates?: never; SessionChanged?: never; Statistics?: never; Telemetry?: never; TelemetryCleared?: never; WorkerCrashed?: never } | 
+} }) & { Analysis?: never; CommandRejected?: never; QueueAddSummary?: never; SessionAggregates?: never; SessionChanged?: never; Statistics?: never; Telemetry?: never; ToolsChanged?: never; WorkerCrashed?: never } | ({ ToolsChanged: ToolsState }) & { Analysis?: never; CommandRejected?: never; QueueAddSummary?: never; SessionAggregates?: never; SessionChanged?: never; Statistics?: never; Telemetry?: never; TelemetryCleared?: never; WorkerCrashed?: never } | 
 /**
  *  Answer to [`ProjectionCommand::RequestStatistics`]. Fire-and-forget:
  *  not part of the read model and never replayed on subscribe.
  */
-({ Statistics: StatisticsPayload }) & { CommandRejected?: never; QueueAddSummary?: never; SessionAggregates?: never; SessionChanged?: never; Telemetry?: never; TelemetryCleared?: never; ToolsChanged?: never; WorkerCrashed?: never } | ({ WorkerCrashed: {
+({ Statistics: StatisticsPayload }) & { Analysis?: never; CommandRejected?: never; QueueAddSummary?: never; SessionAggregates?: never; SessionChanged?: never; Telemetry?: never; TelemetryCleared?: never; ToolsChanged?: never; WorkerCrashed?: never } | ({ WorkerCrashed: {
 	message: string,
-} }) & { CommandRejected?: never; QueueAddSummary?: never; SessionAggregates?: never; SessionChanged?: never; Statistics?: never; Telemetry?: never; TelemetryCleared?: never; ToolsChanged?: never } | ({ CommandRejected: {
+} }) & { Analysis?: never; CommandRejected?: never; QueueAddSummary?: never; SessionAggregates?: never; SessionChanged?: never; Statistics?: never; Telemetry?: never; TelemetryCleared?: never; ToolsChanged?: never } | ({ CommandRejected: {
 	reason: string,
-} }) & { QueueAddSummary?: never; SessionAggregates?: never; SessionChanged?: never; Statistics?: never; Telemetry?: never; TelemetryCleared?: never; ToolsChanged?: never; WorkerCrashed?: never } | 
+} }) & { Analysis?: never; QueueAddSummary?: never; SessionAggregates?: never; SessionChanged?: never; Statistics?: never; Telemetry?: never; TelemetryCleared?: never; ToolsChanged?: never; WorkerCrashed?: never } | 
 /**
  *  Disposition counts for one [`QueueCommand::AddMany`] batch. Reasons
  *  carry their payloads, so distinct payloads (different source runs)
@@ -515,7 +637,41 @@ export type EphemeralDelta = ({ SessionChanged: SessionState }) & { CommandRejec
 ({ QueueAddSummary: {
 	added: number,
 	skipped: ([SkipReason, number])[],
-} }) & { CommandRejected?: never; SessionAggregates?: never; SessionChanged?: never; Statistics?: never; Telemetry?: never; TelemetryCleared?: never; ToolsChanged?: never; WorkerCrashed?: never };
+} }) & { Analysis?: never; CommandRejected?: never; SessionAggregates?: never; SessionChanged?: never; Statistics?: never; Telemetry?: never; TelemetryCleared?: never; ToolsChanged?: never; WorkerCrashed?: never };
+
+export type EphemeralDelta_Serialize = 
+/**
+ *  Incremental or replacement Analysis read-model state. Standing: the
+ *  shell folds it and replays one complete Reset on every subscription.
+ */
+({ Analysis: AnalysisDelta_Serialize }) & { CommandRejected?: never; QueueAddSummary?: never; SessionAggregates?: never; SessionChanged?: never; Statistics?: never; Telemetry?: never; TelemetryCleared?: never; ToolsChanged?: never; WorkerCrashed?: never } | ({ SessionChanged: SessionState }) & { Analysis?: never; CommandRejected?: never; QueueAddSummary?: never; SessionAggregates?: never; Statistics?: never; Telemetry?: never; TelemetryCleared?: never; ToolsChanged?: never; WorkerCrashed?: never } | 
+/**
+ *  The per-session aggregates after an item finished (zeroed at session
+ *  start). The one post-durable ephemeral: on the stream it follows the
+ *  `ItemFinished` it summarizes, so a consumer never sees counts for a
+ *  finish it has not observed.
+ */
+({ SessionAggregates: SessionAggregates }) & { Analysis?: never; CommandRejected?: never; QueueAddSummary?: never; SessionChanged?: never; Statistics?: never; Telemetry?: never; TelemetryCleared?: never; ToolsChanged?: never; WorkerCrashed?: never } | ({ Telemetry: Telemetry }) & { Analysis?: never; CommandRejected?: never; QueueAddSummary?: never; SessionAggregates?: never; SessionChanged?: never; Statistics?: never; TelemetryCleared?: never; ToolsChanged?: never; WorkerCrashed?: never } | ({ TelemetryCleared: {
+	run_id: RunId,
+} }) & { Analysis?: never; CommandRejected?: never; QueueAddSummary?: never; SessionAggregates?: never; SessionChanged?: never; Statistics?: never; Telemetry?: never; ToolsChanged?: never; WorkerCrashed?: never } | ({ ToolsChanged: ToolsState }) & { Analysis?: never; CommandRejected?: never; QueueAddSummary?: never; SessionAggregates?: never; SessionChanged?: never; Statistics?: never; Telemetry?: never; TelemetryCleared?: never; WorkerCrashed?: never } | 
+/**
+ *  Answer to [`ProjectionCommand::RequestStatistics`]. Fire-and-forget:
+ *  not part of the read model and never replayed on subscribe.
+ */
+({ Statistics: StatisticsPayload }) & { Analysis?: never; CommandRejected?: never; QueueAddSummary?: never; SessionAggregates?: never; SessionChanged?: never; Telemetry?: never; TelemetryCleared?: never; ToolsChanged?: never; WorkerCrashed?: never } | ({ WorkerCrashed: {
+	message: string,
+} }) & { Analysis?: never; CommandRejected?: never; QueueAddSummary?: never; SessionAggregates?: never; SessionChanged?: never; Statistics?: never; Telemetry?: never; TelemetryCleared?: never; ToolsChanged?: never } | ({ CommandRejected: {
+	reason: string,
+} }) & { Analysis?: never; QueueAddSummary?: never; SessionAggregates?: never; SessionChanged?: never; Statistics?: never; Telemetry?: never; TelemetryCleared?: never; ToolsChanged?: never; WorkerCrashed?: never } | 
+/**
+ *  Disposition counts for one [`QueueCommand::AddMany`] batch. Reasons
+ *  carry their payloads, so distinct payloads (different source runs)
+ *  count as separate entries — consumers sum across entries.
+ */
+({ QueueAddSummary: {
+	added: number,
+	skipped: ([SkipReason, number])[],
+} }) & { Analysis?: never; CommandRejected?: never; SessionAggregates?: never; SessionChanged?: never; Statistics?: never; Telemetry?: never; TelemetryCleared?: never; ToolsChanged?: never; WorkerCrashed?: never };
 
 export type ExecutionSettings = {
 	requested_target: VmafTarget,
@@ -1165,7 +1321,7 @@ export type StreamByteSizes = {
 
 export type StreamPayload = StreamPayload_Serialize | StreamPayload_Deserialize;
 
-export type StreamPayload_Deserialize = ({ Snapshot: AppSnapshot_Deserialize }) & { Config?: never; Degraded?: never; Durable?: never; EngineFatal?: never; EngineUnavailable?: never; Ephemeral?: never; SecondInstance?: never } | ({ Durable: DurableDelta_Deserialize }) & { Config?: never; Degraded?: never; EngineFatal?: never; EngineUnavailable?: never; Ephemeral?: never; SecondInstance?: never; Snapshot?: never } | ({ Config: ConfigDelta }) & { Degraded?: never; Durable?: never; EngineFatal?: never; EngineUnavailable?: never; Ephemeral?: never; SecondInstance?: never; Snapshot?: never } | ({ Ephemeral: EphemeralDelta }) & { Config?: never; Degraded?: never; Durable?: never; EngineFatal?: never; EngineUnavailable?: never; SecondInstance?: never; Snapshot?: never } | 
+export type StreamPayload_Deserialize = ({ Snapshot: AppSnapshot_Deserialize }) & { Config?: never; Degraded?: never; Durable?: never; EngineFatal?: never; EngineUnavailable?: never; Ephemeral?: never; SecondInstance?: never } | ({ Durable: DurableDelta_Deserialize }) & { Config?: never; Degraded?: never; EngineFatal?: never; EngineUnavailable?: never; Ephemeral?: never; SecondInstance?: never; Snapshot?: never } | ({ Config: ConfigDelta }) & { Degraded?: never; Durable?: never; EngineFatal?: never; EngineUnavailable?: never; Ephemeral?: never; SecondInstance?: never; Snapshot?: never } | ({ Ephemeral: EphemeralDelta_Deserialize }) & { Config?: never; Degraded?: never; Durable?: never; EngineFatal?: never; EngineUnavailable?: never; SecondInstance?: never; Snapshot?: never } | 
 /**
  *  The journal failed replay validation. Reads keep working over the
  *  valid prefix; mutation is rejected until the operator acknowledges
@@ -1206,7 +1362,7 @@ export type StreamPayload_Deserialize = ({ Snapshot: AppSnapshot_Deserialize }) 
  */
 "CloseRequested";
 
-export type StreamPayload_Serialize = ({ Snapshot: AppSnapshot_Serialize }) & { Config?: never; Degraded?: never; Durable?: never; EngineFatal?: never; EngineUnavailable?: never; Ephemeral?: never; SecondInstance?: never } | ({ Durable: DurableDelta_Serialize }) & { Config?: never; Degraded?: never; EngineFatal?: never; EngineUnavailable?: never; Ephemeral?: never; SecondInstance?: never; Snapshot?: never } | ({ Config: ConfigDelta }) & { Degraded?: never; Durable?: never; EngineFatal?: never; EngineUnavailable?: never; Ephemeral?: never; SecondInstance?: never; Snapshot?: never } | ({ Ephemeral: EphemeralDelta }) & { Config?: never; Degraded?: never; Durable?: never; EngineFatal?: never; EngineUnavailable?: never; SecondInstance?: never; Snapshot?: never } | 
+export type StreamPayload_Serialize = ({ Snapshot: AppSnapshot_Serialize }) & { Config?: never; Degraded?: never; Durable?: never; EngineFatal?: never; EngineUnavailable?: never; Ephemeral?: never; SecondInstance?: never } | ({ Durable: DurableDelta_Serialize }) & { Config?: never; Degraded?: never; EngineFatal?: never; EngineUnavailable?: never; Ephemeral?: never; SecondInstance?: never; Snapshot?: never } | ({ Config: ConfigDelta }) & { Degraded?: never; Durable?: never; EngineFatal?: never; EngineUnavailable?: never; Ephemeral?: never; SecondInstance?: never; Snapshot?: never } | ({ Ephemeral: EphemeralDelta_Serialize }) & { Config?: never; Degraded?: never; Durable?: never; EngineFatal?: never; EngineUnavailable?: never; SecondInstance?: never; Snapshot?: never } | 
 /**
  *  The journal failed replay validation. Reads keep working over the
  *  valid prefix; mutation is rejected until the operator acknowledges

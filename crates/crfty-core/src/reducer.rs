@@ -4,14 +4,15 @@ use serde::{Deserialize, Serialize};
 
 use crate::state::ConversionRun;
 use crate::{
-    AnalysisIntent, AnalysisResult, AppState, ClaimId, ClaimedJob, CompletionEvidence, ConfigDelta,
-    CorruptionSignature, DecodeMode, DecodePreference, DurableDelta, ExecutionSettings, FileStamp,
-    ImportPath, ImportedHistoryRecord, ImportedProvenance, ItemOutcome, JobAction, JobSpec,
-    MediaObservation, Operation, OutputDelta, OutputTarget, OverwriteDecision, ParkedResolution,
-    PathHash, PhaseSpan, QueueItem, QueueItemId, QueueItemState, ReservedJob, RunId,
-    SessionAggregates, SessionState, Settings, SkipReason, StatisticsPayload, Telemetry,
-    ToolAvailability, ToolsState, UnixMillis, VendorActivity, evaluate_enqueue, fold, fold_config,
-    resolve_parked, select_job_action, statistics,
+    AnalysisDelta, AnalysisIntent, AnalysisResult, AppState, ClaimId, ClaimedJob,
+    CompletionEvidence, ConfigDelta, CorruptionSignature, DecodeMode, DecodePreference,
+    DurableDelta, ExecutionSettings, FileStamp, ImportPath, ImportedHistoryRecord,
+    ImportedProvenance, ItemOutcome, JobAction, JobSpec, MediaObservation, Operation, OutputDelta,
+    OutputTarget, OverwriteDecision, ParkedResolution, PathHash, PhaseSpan, QueueItem, QueueItemId,
+    QueueItemState, ReservedJob, RunId, SessionAggregates, SessionState, Settings, SkipReason,
+    StatisticsPayload, Telemetry, ToolAvailability, ToolsState, UnixMillis, VendorActivity,
+    evaluate_enqueue, fold, fold_analysis, fold_config, resolve_parked, select_job_action,
+    statistics,
 };
 
 /// Sanity bound for a requester-supplied UTC offset: one day in minutes.
@@ -220,6 +221,9 @@ pub enum SystemCommand {
 
 #[derive(Debug, Clone, PartialEq, Serialize, specta::Type)]
 pub enum EphemeralDelta {
+    /// Incremental or replacement Analysis read-model state. Standing: the
+    /// shell folds it and replays one complete Reset on every subscription.
+    Analysis(AnalysisDelta),
     SessionChanged(SessionState),
     /// The per-session aggregates after an item finished (zeroed at session
     /// start). The one post-durable ephemeral: on the stream it follows the
@@ -362,6 +366,7 @@ pub fn apply(state: &mut AppState, command: Command) -> Applied {
     }
     for delta in &applied.ephemeral {
         match delta {
+            EphemeralDelta::Analysis(delta) => fold_analysis(&mut state.analysis, delta),
             EphemeralDelta::SessionChanged(session) => state.session = session.clone(),
             EphemeralDelta::SessionAggregates(aggregates) => state.aggregates = *aggregates,
             EphemeralDelta::Telemetry(telemetry) => {

@@ -7,6 +7,8 @@ import { toast } from "sonner";
 
 import type { ShellEvent_Deserialize, StreamPayload_Deserialize } from "@/lib/bindings";
 import { subscribeStream } from "@/lib/ipc";
+import { foldAnalysis } from "@/lib/store/analysis-fold";
+import { analysisStore, emptyAnalysisState } from "@/lib/store/analysis-store";
 import { appStore } from "@/lib/store/app-store";
 import { foldConfig, foldDurable, foldSession, foldTelemetry } from "@/lib/store/fold";
 import { emptySessionAggregates, progressStore } from "@/lib/store/progress-store";
@@ -61,6 +63,9 @@ export function applyPayload(payload: StreamPayload_Deserialize): void {
     // latest aggregates right after each snapshot, so zeroing here never
     // sticks past the replay.
     progressStore.setState({ telemetry: {}, aggregates: emptySessionAggregates() });
+    // The Analysis Reset follows the snapshot on the same ordered stream.
+    // Clear first so a superseded generation is never displayed in between.
+    analysisStore.setState(emptyAnalysisState(), true);
     return;
   }
   if ("Durable" in payload && payload.Durable !== undefined) {
@@ -75,6 +80,10 @@ export function applyPayload(payload: StreamPayload_Deserialize): void {
   }
   if ("Ephemeral" in payload && payload.Ephemeral !== undefined) {
     const delta = payload.Ephemeral;
+    if ("Analysis" in delta && delta.Analysis !== undefined) {
+      analysisStore.setState((state) => foldAnalysis(state, delta.Analysis));
+      return;
+    }
     if ("SessionChanged" in delta && delta.SessionChanged !== undefined) {
       appStore.setState((state) => ({ ...state, session: foldSession(state.session, delta) }));
       return;
