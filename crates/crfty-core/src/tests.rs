@@ -15,12 +15,12 @@ use crate::{
     MediaContainer, MediaObservation, Operation, OutputDelta, OutputRecoveryAction, OutputState,
     OutputTarget, OutputTransaction, OverwriteDecision, PathBinding, PathHash, PhaseSpan,
     QueueAddRequest, QueueCommand, QueueItemEdit, QueueItemId, QueueItemState, Replacement, Reply,
-    RunId, SearchMeasurement, SessionCommand, SessionState, Settings, SettingsCommand, SkipReason,
-    StreamByteSizes, SystemCommand, Telemetry, ToolAvailability, ToolRevisions, ToolSource,
-    ToolsState, UnixMillis, VendorActivity, VendorCommand, VideoCodec, VideoMeta, VmafScore,
-    VmafTarget, WorkerCommand, apply, compaction_due, compaction_quiescent, corruption_signature,
-    encode_record, encode_snapshot, evaluate_eligibility, permitted_profiles, recover_output,
-    replay, select_analysis, select_job_action,
+    RunId, SearchMeasurement, SessionAggregates, SessionCommand, SessionState, Settings,
+    SettingsCommand, SkipReason, StreamByteSizes, SystemCommand, Telemetry, ToolAvailability,
+    ToolRevisions, ToolSource, ToolsState, UnixMillis, VendorActivity, VendorCommand, VideoCodec,
+    VideoMeta, VmafScore, VmafTarget, WorkerCommand, apply, compaction_due, compaction_quiescent,
+    corruption_signature, encode_record, encode_snapshot, evaluate_eligibility, permitted_profiles,
+    recover_output, replay, select_analysis, select_job_action,
 };
 
 fn revisions() -> ToolRevisions {
@@ -1360,6 +1360,159 @@ fn run_facts_fold_start_finish_instants_and_phase_spans() {
     assert_eq!(run.started_at, Some(UnixMillis(1_000)));
     assert_eq!(run.finished_at, Some(UnixMillis(2_000)));
     assert_eq!(run.phase_spans, spans);
+}
+
+#[test]
+fn session_aggregates_absorb_counts_every_outcome_and_live_evidence() {
+    let mut aggregates = SessionAggregates::default();
+    aggregates.absorb(&ItemOutcome::Analyzed, &[]);
+    aggregates.absorb(
+        &ItemOutcome::Converted(CompletionEvidence::LiveEncode {
+            input_size: 1_000,
+            output_size: 400,
+            stream_sizes: StreamByteSizes {
+                video: 300,
+                audio: 80,
+                subtitle: 15,
+                other: 5,
+            },
+            encode_decode: DecodeMode::Software,
+        }),
+        &[
+            PhaseSpan {
+                phase: JobPhase::Analyzing,
+                duration: DurationMs(30_000),
+            },
+            PhaseSpan {
+                phase: JobPhase::Encoding,
+                duration: DurationMs(90_000),
+            },
+        ],
+    );
+    aggregates.absorb(
+        &ItemOutcome::Remuxed(CompletionEvidence::LiveRemux {
+            input_size: 500,
+            output_size: 480,
+        }),
+        &[],
+    );
+    // A crash-recovered success counts the item but measured no bytes.
+    aggregates.absorb(
+        &ItemOutcome::Converted(CompletionEvidence::RecoveredAtStartup),
+        &[],
+    );
+    aggregates.absorb(
+        &ItemOutcome::NotWorthwhile {
+            attempts: Vec::new(),
+        },
+        &[],
+    );
+    aggregates.absorb(&ItemOutcome::Stopped, &[]);
+    aggregates.absorb(
+        &ItemOutcome::Skipped {
+            reason: SkipReason::OutputExists,
+        },
+        &[],
+    );
+    aggregates.absorb(
+        &ItemOutcome::Failed(FailureFacts::new(FailureKind::Internal, "fixture")),
+        &[],
+    );
+    assert_eq!(
+        aggregates,
+        SessionAggregates {
+            completed: 2,
+            failed: 1,
+            skipped: 1,
+            stopped: 1,
+            not_worthwhile: 1,
+            analyzed: 1,
+            remuxed: 1,
+            input_bytes: 1_500,
+            output_bytes: 880,
+            encode_duration_ms: 90_000,
+        }
+    );
+}
+
+#[test]
+fn session_start_zeroes_the_aggregates_for_the_new_run() {
+    let mut state = AppState::default();
+    let _added = apply(&mut state, add_command(QueueItemId(1), "video.mkv"));
+    // Leftover totals from a previous session are display state, not history.
+    state.aggregates.completed = 5;
+    let started = start_session(&mut state);
+    assert_eq!(started.reply, Reply::Accepted);
+    assert_eq!(
+        started.ephemeral,
+        vec![
+            EphemeralDelta::SessionChanged(SessionState::Running),
+            EphemeralDelta::SessionAggregates(SessionAggregates::default()),
+        ]
+    );
+    assert_eq!(state.aggregates, SessionAggregates::default());
+}
+
+#[test]
+fn terminal_and_abandonment_emit_the_updated_aggregates() {
+    let mut state = active_state();
+    let terminal = apply(
+        &mut state,
+        Command::Worker(WorkerCommand::Terminal {
+            item_id: QueueItemId(1),
+            claim_id: ClaimId(2),
+            run_id: RunId(3),
+            outcome: ItemOutcome::Failed(FailureFacts::new(FailureKind::Internal, "fixture")),
+            at: UnixMillis(2_000),
+            phase_spans: vec![PhaseSpan {
+                phase: JobPhase::Encoding,
+                duration: DurationMs(1_500),
+            }],
+            final_telemetry: None,
+        }),
+    );
+    assert_eq!(terminal.reply, Reply::Accepted);
+    let expected = SessionAggregates {
+        failed: 1,
+        encode_duration_ms: 1_500,
+        ..SessionAggregates::default()
+    };
+    assert_eq!(
+        terminal.ephemeral.last(),
+        Some(&EphemeralDelta::SessionAggregates(expected))
+    );
+    assert_eq!(state.aggregates, expected);
+
+    // An abandoned reservation finishes as Stopped and counts as one.
+    let mut state = AppState::default();
+    let _added = apply(&mut state, add_command(QueueItemId(1), "video.mkv"));
+    let _started = start_session(&mut state);
+    let _reserved = apply(
+        &mut state,
+        Command::Worker(WorkerCommand::ReserveNext {
+            claim_id: ClaimId(2),
+            run_id: RunId(3),
+        }),
+    );
+    let stopped = apply(
+        &mut state,
+        Command::Worker(WorkerCommand::AbandonReservation {
+            item_id: QueueItemId(1),
+            claim_id: ClaimId(2),
+            run_id: RunId(3),
+            at: UnixMillis(1_000),
+        }),
+    );
+    assert_eq!(stopped.reply, Reply::Accepted);
+    let expected = SessionAggregates {
+        stopped: 1,
+        ..SessionAggregates::default()
+    };
+    assert_eq!(
+        stopped.ephemeral,
+        vec![EphemeralDelta::SessionAggregates(expected)]
+    );
+    assert_eq!(state.aggregates, expected);
 }
 
 #[test]

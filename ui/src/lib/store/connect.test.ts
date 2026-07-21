@@ -10,7 +10,7 @@ import type {
 
 import { appStore, initialAppState } from "./app-store";
 import { applyPayload, hasSequenceGap } from "./connect";
-import { progressStore } from "./progress-store";
+import { emptySessionAggregates, progressStore } from "./progress-store";
 
 vi.mock("sonner", () => ({ toast: Object.assign(vi.fn(), { error: vi.fn() }) }));
 vi.mock("@/lib/ipc", () => ({ subscribeStream: vi.fn() }));
@@ -68,7 +68,7 @@ function snapshot(item: QueueItem): StreamPayload_Deserialize {
 
 beforeEach(() => {
   appStore.setState(initialAppState(), true);
-  progressStore.setState({ telemetry: {} }, true);
+  progressStore.setState({ telemetry: {}, aggregates: emptySessionAggregates() }, true);
   vi.clearAllMocks();
 });
 
@@ -123,6 +123,24 @@ describe("applyPayload", () => {
     applyPayload({ Ephemeral: { TelemetryCleared: { run_id: 1 } } });
     expect(progressStore.getState().telemetry).toEqual({});
     expect(appStore.getState()).toBe(before);
+  });
+
+  it("routes session aggregates to the progress store and resets them on snapshot", () => {
+    const before = appStore.getState();
+    const aggregates = {
+      ...emptySessionAggregates(),
+      completed: 2,
+      input_bytes: 1_000,
+      output_bytes: 400,
+    };
+    applyPayload({ Ephemeral: { SessionAggregates: aggregates } });
+    expect(progressStore.getState().aggregates).toEqual(aggregates);
+    expect(appStore.getState()).toBe(before);
+
+    // The shell replays the latest aggregates right after each snapshot, so
+    // the snapshot handler resets to zero rather than guessing.
+    applyPayload(snapshot(queueItem(1)));
+    expect(progressStore.getState().aggregates).toEqual(emptySessionAggregates());
   });
 
   it("surfaces the add summary as one neutral toast, not state", async () => {

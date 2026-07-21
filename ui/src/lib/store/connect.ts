@@ -9,7 +9,7 @@ import type { ShellEvent_Deserialize, StreamPayload_Deserialize } from "@/lib/bi
 import { subscribeStream } from "@/lib/ipc";
 import { appStore } from "@/lib/store/app-store";
 import { foldConfig, foldDurable, foldSession, foldTelemetry } from "@/lib/store/fold";
-import { progressStore } from "@/lib/store/progress-store";
+import { emptySessionAggregates, progressStore } from "@/lib/store/progress-store";
 
 // The transport is ordered by construction; seq is a tripwire, not a recovery
 // protocol (#33 §11). Each connection's numbering starts at 0, so a fresh
@@ -34,8 +34,10 @@ export function applyPayload(payload: StreamPayload_Deserialize): void {
       tools: null,
     }));
     // Telemetry for pre-snapshot runs never gets a TelemetryCleared on this
-    // connection; the snapshot is the fresh baseline.
-    progressStore.setState({ telemetry: {} });
+    // connection; the snapshot is the fresh baseline. The shell replays the
+    // latest aggregates right after each snapshot, so zeroing here never
+    // sticks past the replay.
+    progressStore.setState({ telemetry: {}, aggregates: emptySessionAggregates() });
     return;
   }
   if ("Durable" in payload && payload.Durable !== undefined) {
@@ -52,6 +54,11 @@ export function applyPayload(payload: StreamPayload_Deserialize): void {
     const delta = payload.Ephemeral;
     if ("SessionChanged" in delta && delta.SessionChanged !== undefined) {
       appStore.setState((state) => ({ ...state, session: foldSession(state.session, delta) }));
+      return;
+    }
+    if ("SessionAggregates" in delta && delta.SessionAggregates !== undefined) {
+      const aggregates = delta.SessionAggregates;
+      progressStore.setState((state) => ({ ...state, aggregates }));
       return;
     }
     if ("WorkerCrashed" in delta && delta.WorkerCrashed !== undefined) {

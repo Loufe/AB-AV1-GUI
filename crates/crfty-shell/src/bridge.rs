@@ -20,8 +20,8 @@ use crfty_core::{
     AnalysisIntent, AnalysisProfile, AppSnapshot, ConfigDelta, CorruptionReport,
     CorruptionSignature, DurableDelta, DurableState, EphemeralDelta, ExecutionSettings, Operation,
     OutputTarget, OverwriteDecision, QueueAddRequest, QueueCommand, QueueItemId, Reply, RunId,
-    SessionCommand, SessionState, Settings, SettingsCommand, Telemetry, ToolsState, VendorCommand,
-    fold, fold_config,
+    SessionAggregates, SessionCommand, SessionState, Settings, SettingsCommand, Telemetry,
+    ToolsState, VendorCommand, fold, fold_config,
 };
 use crfty_engine::{
     coordinator::{EngineConfig, EngineRuntime, ToolsConfig, UserCommandSender},
@@ -111,6 +111,10 @@ struct StreamState {
     model: AppSnapshot,
     session: SessionState,
     tools: ToolsState,
+    /// Latest session aggregates, mirroring `AppState::aggregates` in the
+    /// reducer. Aggregates are never journaled, so the subscribe replay is
+    /// the only way a mid-session reconnect learns the running totals.
+    aggregates: SessionAggregates,
     /// Latest telemetry per active run, mirroring `AppState::telemetry` in
     /// the reducer so a reconnecting webview sees live progress immediately
     /// instead of waiting for the next update.
@@ -126,6 +130,7 @@ impl StreamState {
             model: AppSnapshot::default(),
             session: SessionState::Idle,
             tools: ToolsState::default(),
+            aggregates: SessionAggregates::default(),
             telemetry: BTreeMap::new(),
             health,
             subscriber: None,
@@ -230,10 +235,10 @@ impl Bridge {
     }
 
     /// Installs the webview's channel and replays current state into it:
-    /// snapshot first, then the session state and tool availability (which a
-    /// fresh connection would otherwise only learn on their next transition),
-    /// then any standing degradation. All under the stream lock, so no delta
-    /// interleaves.
+    /// snapshot first, then the session state, tool availability, and session
+    /// aggregates (which a fresh connection would otherwise only learn on
+    /// their next transition), then any standing degradation. All under the
+    /// stream lock, so no delta interleaves.
     pub fn subscribe(&self, channel: Channel<ShellEvent>) {
         let mut stream = lock_stream(&self.stream);
         stream.subscriber = Some(channel);
@@ -247,6 +252,10 @@ impl Bridge {
         let tools = stream.tools.clone();
         stream.emit(StreamPayload::Ephemeral(EphemeralDelta::ToolsChanged(
             tools,
+        )));
+        let aggregates = stream.aggregates;
+        stream.emit(StreamPayload::Ephemeral(EphemeralDelta::SessionAggregates(
+            aggregates,
         )));
         let telemetry: Vec<Telemetry> = stream.telemetry.values().cloned().collect();
         for value in telemetry {
@@ -399,6 +408,7 @@ fn absorb(state: &mut StreamState, event: DriverEvent, next_item_id: &AtomicU64)
         DriverEvent::Ephemeral(delta) => {
             match &delta {
                 EphemeralDelta::SessionChanged(session) => state.session = session.clone(),
+                EphemeralDelta::SessionAggregates(aggregates) => state.aggregates = *aggregates,
                 EphemeralDelta::ToolsChanged(tools) => state.tools = tools.clone(),
                 EphemeralDelta::Telemetry(telemetry) => {
                     state.telemetry.insert(telemetry.run_id, telemetry.clone());
@@ -542,5 +552,33 @@ mod tests {
         assert_eq!(state.session, SessionState::Running);
         assert_eq!(state.tools, tools);
         assert!(state.telemetry.is_empty());
+    }
+
+    #[test]
+    fn absorb_mirrors_the_latest_session_aggregates() {
+        let ids = AtomicU64::new(1);
+        let mut state = StreamState::new(Health::Ok);
+        let first = SessionAggregates {
+            completed: 1,
+            input_bytes: 1_000,
+            output_bytes: 400,
+            ..SessionAggregates::default()
+        };
+        absorb(
+            &mut state,
+            ephemeral(EphemeralDelta::SessionAggregates(first)),
+            &ids,
+        );
+        assert_eq!(state.aggregates, first);
+
+        // The zeroed emission at session start replaces the standing totals.
+        absorb(
+            &mut state,
+            ephemeral(EphemeralDelta::SessionAggregates(
+                SessionAggregates::default(),
+            )),
+            &ids,
+        );
+        assert_eq!(state.aggregates, SessionAggregates::default());
     }
 }

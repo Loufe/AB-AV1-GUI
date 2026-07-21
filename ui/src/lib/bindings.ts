@@ -354,13 +354,20 @@ export type DurableState_Serialize = {
 /**  A duration in milliseconds, measured engine-side with a monotonic clock. */
 export type DurationMs = number;
 
-export type EphemeralDelta = ({ SessionChanged: SessionState }) & { CommandRejected?: never; QueueAddSummary?: never; Telemetry?: never; TelemetryCleared?: never; ToolsChanged?: never; WorkerCrashed?: never } | ({ Telemetry: Telemetry }) & { CommandRejected?: never; QueueAddSummary?: never; SessionChanged?: never; TelemetryCleared?: never; ToolsChanged?: never; WorkerCrashed?: never } | ({ TelemetryCleared: {
+export type EphemeralDelta = ({ SessionChanged: SessionState }) & { CommandRejected?: never; QueueAddSummary?: never; SessionAggregates?: never; Telemetry?: never; TelemetryCleared?: never; ToolsChanged?: never; WorkerCrashed?: never } | 
+/**
+ *  The per-session aggregates after an item finished (zeroed at session
+ *  start). The one post-durable ephemeral: on the stream it follows the
+ *  `ItemFinished` it summarizes, so a consumer never sees counts for a
+ *  finish it has not observed.
+ */
+({ SessionAggregates: SessionAggregates }) & { CommandRejected?: never; QueueAddSummary?: never; SessionChanged?: never; Telemetry?: never; TelemetryCleared?: never; ToolsChanged?: never; WorkerCrashed?: never } | ({ Telemetry: Telemetry }) & { CommandRejected?: never; QueueAddSummary?: never; SessionAggregates?: never; SessionChanged?: never; TelemetryCleared?: never; ToolsChanged?: never; WorkerCrashed?: never } | ({ TelemetryCleared: {
 	run_id: RunId,
-} }) & { CommandRejected?: never; QueueAddSummary?: never; SessionChanged?: never; Telemetry?: never; ToolsChanged?: never; WorkerCrashed?: never } | ({ ToolsChanged: ToolsState }) & { CommandRejected?: never; QueueAddSummary?: never; SessionChanged?: never; Telemetry?: never; TelemetryCleared?: never; WorkerCrashed?: never } | ({ WorkerCrashed: {
+} }) & { CommandRejected?: never; QueueAddSummary?: never; SessionAggregates?: never; SessionChanged?: never; Telemetry?: never; ToolsChanged?: never; WorkerCrashed?: never } | ({ ToolsChanged: ToolsState }) & { CommandRejected?: never; QueueAddSummary?: never; SessionAggregates?: never; SessionChanged?: never; Telemetry?: never; TelemetryCleared?: never; WorkerCrashed?: never } | ({ WorkerCrashed: {
 	message: string,
-} }) & { CommandRejected?: never; QueueAddSummary?: never; SessionChanged?: never; Telemetry?: never; TelemetryCleared?: never; ToolsChanged?: never } | ({ CommandRejected: {
+} }) & { CommandRejected?: never; QueueAddSummary?: never; SessionAggregates?: never; SessionChanged?: never; Telemetry?: never; TelemetryCleared?: never; ToolsChanged?: never } | ({ CommandRejected: {
 	reason: string,
-} }) & { QueueAddSummary?: never; SessionChanged?: never; Telemetry?: never; TelemetryCleared?: never; ToolsChanged?: never; WorkerCrashed?: never } | 
+} }) & { QueueAddSummary?: never; SessionAggregates?: never; SessionChanged?: never; Telemetry?: never; TelemetryCleared?: never; ToolsChanged?: never; WorkerCrashed?: never } | 
 /**
  *  Disposition counts for one [`QueueCommand::AddMany`] batch. Reasons
  *  carry their payloads, so distinct payloads (different source runs)
@@ -369,7 +376,7 @@ export type EphemeralDelta = ({ SessionChanged: SessionState }) & { CommandRejec
 ({ QueueAddSummary: {
 	added: number,
 	skipped: ([SkipReason, number])[],
-} }) & { CommandRejected?: never; SessionChanged?: never; Telemetry?: never; TelemetryCleared?: never; ToolsChanged?: never; WorkerCrashed?: never };
+} }) & { CommandRejected?: never; SessionAggregates?: never; SessionChanged?: never; Telemetry?: never; TelemetryCleared?: never; ToolsChanged?: never; WorkerCrashed?: never };
 
 export type ExecutionSettings = {
 	requested_target: VmafTarget,
@@ -727,6 +734,25 @@ export type SearchMeasurement = {
 	predicted_percent_basis_points: number,
 	predicted_duration_ms: number,
 	from_cache: boolean,
+};
+
+/**
+ *  Rolling per-session outcome counters and byte totals. Ephemeral state:
+ *  zeroed when a session starts, updated as items finish, never journaled and
+ *  never in [`AppSnapshot`] — a reconnecting webview gets the latest value
+ *  from the shell's subscribe replay.
+ */
+export type SessionAggregates = {
+	completed: number,
+	failed: number,
+	skipped: number,
+	stopped: number,
+	not_worthwhile: number,
+	analyzed: number,
+	remuxed: number,
+	input_bytes: number,
+	output_bytes: number,
+	encode_duration_ms: number,
 };
 
 export type SessionState = "Idle" | "Running" | "StopAfterCurrent" | "ForceStopping";

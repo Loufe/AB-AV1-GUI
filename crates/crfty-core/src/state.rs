@@ -111,6 +111,67 @@ pub struct PhaseSpan {
     pub duration: DurationMs,
 }
 
+/// Rolling per-session outcome counters and byte totals. Ephemeral state:
+/// zeroed when a session starts, updated as items finish, never journaled and
+/// never in [`AppSnapshot`] — a reconnecting webview gets the latest value
+/// from the shell's subscribe replay.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, specta::Type)]
+pub struct SessionAggregates {
+    pub completed: u32,
+    pub failed: u32,
+    pub skipped: u32,
+    pub stopped: u32,
+    pub not_worthwhile: u32,
+    pub analyzed: u32,
+    pub remuxed: u32,
+    #[specta(type = crate::JsNumber)]
+    pub input_bytes: u64,
+    #[specta(type = crate::JsNumber)]
+    pub output_bytes: u64,
+    #[specta(type = crate::JsNumber)]
+    pub encode_duration_ms: u64,
+}
+
+impl SessionAggregates {
+    /// Folds one finished item in. Byte totals come only from live evidence —
+    /// a crash-recovered success measured nothing — and the encode duration
+    /// sums the `Encoding` phase spans.
+    pub fn absorb(&mut self, outcome: &ItemOutcome, phase_spans: &[PhaseSpan]) {
+        let counter = match outcome {
+            ItemOutcome::Analyzed => &mut self.analyzed,
+            ItemOutcome::Converted(_) => &mut self.completed,
+            ItemOutcome::Remuxed(_) => &mut self.remuxed,
+            ItemOutcome::NotWorthwhile { .. } => &mut self.not_worthwhile,
+            ItemOutcome::Stopped => &mut self.stopped,
+            ItemOutcome::Skipped { .. } => &mut self.skipped,
+            ItemOutcome::Failed(_) => &mut self.failed,
+        };
+        *counter = counter.saturating_add(1);
+        if let ItemOutcome::Converted(evidence) | ItemOutcome::Remuxed(evidence) = outcome {
+            match evidence {
+                CompletionEvidence::LiveEncode {
+                    input_size,
+                    output_size,
+                    ..
+                }
+                | CompletionEvidence::LiveRemux {
+                    input_size,
+                    output_size,
+                } => {
+                    self.input_bytes = self.input_bytes.saturating_add(*input_size);
+                    self.output_bytes = self.output_bytes.saturating_add(*output_size);
+                }
+                CompletionEvidence::RecoveredAtStartup => {}
+            }
+        }
+        for span in phase_spans {
+            if span.phase == JobPhase::Encoding {
+                self.encode_duration_ms = self.encode_duration_ms.saturating_add(span.duration.0);
+            }
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, specta::Type)]
 pub struct ConversionRun {
     pub spec: JobSpec,
@@ -200,6 +261,7 @@ pub struct AppState {
     pub durable: DurableState,
     pub settings: Settings,
     pub session: SessionState,
+    pub aggregates: SessionAggregates,
     pub telemetry: BTreeMap<RunId, Telemetry>,
     pub tools: ToolsState,
 }

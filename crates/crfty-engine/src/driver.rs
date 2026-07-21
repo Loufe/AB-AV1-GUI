@@ -594,9 +594,10 @@ impl JournalSink for JournalWriter {
 /// Publishes each applied command in fold order as config, then ephemeral,
 /// then durable deltas, followed by its reply. Ephemerals precede durables so
 /// terminal state is never followed by stale progress: a finishing item is
-/// observed as final telemetry, telemetry-cleared, then `ItemFinished`. A
-/// future ephemeral that needs post-durable semantics would force revisiting
-/// this contract. Durable publication still requires the token minted by the
+/// observed as final telemetry, telemetry-cleared, then `ItemFinished`. The
+/// one exception is `SessionAggregates`, which summarizes a finish and is
+/// published after the durables so its counts never lead the `ItemFinished`
+/// they include. Durable publication still requires the token minted by the
 /// journal fsync, so nothing observable can outrun durability.
 fn emit_batch(
     durability: Option<DurabilityToken>,
@@ -610,11 +611,18 @@ fn emit_batch(
         for delta in applied.config {
             let _result = events.send(DriverEvent::Config(delta));
         }
-        for delta in applied.ephemeral {
+        let (aggregates, ephemerals): (Vec<_>, Vec<_>) = applied
+            .ephemeral
+            .into_iter()
+            .partition(|delta| matches!(delta, EphemeralDelta::SessionAggregates(_)));
+        for delta in ephemerals {
             let _result = events.send(DriverEvent::Ephemeral(delta));
         }
         if let Some(token) = &durability {
             emit_durable(token, &applied.durable, events);
+        }
+        for delta in aggregates {
+            let _result = events.send(DriverEvent::Ephemeral(delta));
         }
         effects.extend(applied.effects);
         let _result = reply.send(applied.reply);
@@ -823,7 +831,7 @@ mod tests {
     }
 
     #[test]
-    fn terminal_publishes_ephemerals_before_the_durable_finish() {
+    fn terminal_orders_progress_before_and_aggregates_after_the_durable_finish() {
         let execution = {
             let mut profile = AnalysisProfile::production();
             profile.ab_av1_revision = "fixture".to_owned();
@@ -899,11 +907,12 @@ mod tests {
             .map(|event| match event {
                 DriverEvent::Ephemeral(EphemeralDelta::Telemetry(_)) => "telemetry",
                 DriverEvent::Ephemeral(EphemeralDelta::TelemetryCleared { .. }) => "cleared",
+                DriverEvent::Ephemeral(EphemeralDelta::SessionAggregates(_)) => "aggregates",
                 DriverEvent::Durable(DurableDelta::ItemFinished { .. }) => "finished",
                 _ => "other",
             })
             .collect();
-        assert_eq!(observed, ["telemetry", "cleared", "finished"]);
+        assert_eq!(observed, ["telemetry", "cleared", "finished", "aggregates"]);
     }
 
     struct RecordingConfig {

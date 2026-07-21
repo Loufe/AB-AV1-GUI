@@ -8,8 +8,8 @@ use crate::{
     CorruptionSignature, DecodeMode, DecodePreference, DurableDelta, ExecutionSettings, FileStamp,
     ItemOutcome, JobAction, JobSpec, MediaObservation, Operation, OutputDelta, OutputTarget,
     OverwriteDecision, PathHash, PhaseSpan, QueueItem, QueueItemId, QueueItemState, ReservedJob,
-    RunId, SessionState, Settings, SkipReason, Telemetry, ToolAvailability, ToolsState, UnixMillis,
-    VendorActivity, evaluate_enqueue, fold, fold_config, select_job_action,
+    RunId, SessionAggregates, SessionState, Settings, SkipReason, Telemetry, ToolAvailability,
+    ToolsState, UnixMillis, VendorActivity, evaluate_enqueue, fold, fold_config, select_job_action,
 };
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -185,6 +185,11 @@ pub enum SystemCommand {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, specta::Type)]
 pub enum EphemeralDelta {
     SessionChanged(SessionState),
+    /// The per-session aggregates after an item finished (zeroed at session
+    /// start). The one post-durable ephemeral: on the stream it follows the
+    /// `ItemFinished` it summarizes, so a consumer never sees counts for a
+    /// finish it has not observed.
+    SessionAggregates(SessionAggregates),
     Telemetry(Telemetry),
     TelemetryCleared {
         run_id: RunId,
@@ -304,6 +309,7 @@ pub fn apply(state: &mut AppState, command: Command) -> Applied {
     for delta in &applied.ephemeral {
         match delta {
             EphemeralDelta::SessionChanged(session) => state.session = session.clone(),
+            EphemeralDelta::SessionAggregates(aggregates) => state.aggregates = *aggregates,
             EphemeralDelta::Telemetry(telemetry) => {
                 state.telemetry.insert(telemetry.run_id, telemetry.clone());
             }
@@ -622,6 +628,11 @@ fn apply_session(state: &AppState, command: SessionCommand) -> Applied {
             applied
                 .ephemeral
                 .push(EphemeralDelta::SessionChanged(SessionState::Running));
+            // A new session starts its aggregates from zero; the previous
+            // session's totals are display state, not history.
+            applied.ephemeral.push(EphemeralDelta::SessionAggregates(
+                SessionAggregates::default(),
+            ));
             applied.effects.push(Effect::StartWorker);
             applied
         }
@@ -801,6 +812,11 @@ fn apply_worker(state: &AppState, command: WorkerCommand) -> Applied {
                 return Applied::rejected("reservation cannot be abandoned from its current state");
             }
             let mut applied = Applied::accepted();
+            let mut aggregates = state.aggregates;
+            aggregates.absorb(&ItemOutcome::Stopped, &[]);
+            applied
+                .ephemeral
+                .push(EphemeralDelta::SessionAggregates(aggregates));
             applied.durable.push(DurableDelta::ItemFinished {
                 item_id,
                 claim_id,
@@ -893,6 +909,11 @@ fn apply_worker(state: &AppState, command: WorkerCommand) -> Applied {
             applied
                 .ephemeral
                 .push(EphemeralDelta::TelemetryCleared { run_id });
+            let mut aggregates = state.aggregates;
+            aggregates.absorb(&outcome, &phase_spans);
+            applied
+                .ephemeral
+                .push(EphemeralDelta::SessionAggregates(aggregates));
             applied.durable.push(DurableDelta::ItemFinished {
                 item_id,
                 claim_id,
