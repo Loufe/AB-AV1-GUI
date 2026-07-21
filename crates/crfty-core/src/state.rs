@@ -6,9 +6,9 @@ use std::{
 use serde::{Deserialize, Serialize};
 
 use crate::{
-    AnalysisAttempt, AnalysisIntent, AnalysisResult, ContentKey, DecodeMode, DurationMs,
-    FailureFacts, FileRecord, ImportPath, ImportedHistoryRecord, ImportedProvenance, JobPhase,
-    JobSpec, MediaObservation, Operation, OutputDelta, OutputTarget, OverwriteDecision,
+    AnalysisAttempt, AnalysisIntent, AnalysisResult, AnalysisSnapshot, ContentKey, DecodeMode,
+    DurationMs, FailureFacts, FileRecord, ImportPath, ImportedHistoryRecord, ImportedProvenance,
+    JobPhase, JobSpec, MediaObservation, Operation, OutputDelta, OutputTarget, OverwriteDecision,
     PathBinding, PathHash, ReservedJob, Settings, SkipReason, ToolRevisions, UnixMillis, Verdict,
     VerdictKind,
 };
@@ -298,6 +298,9 @@ pub struct DurableState {
 pub struct AppState {
     pub durable: DurableState,
     pub settings: Settings,
+    /// Current Analysis read model. Standing and reducer-owned, but never
+    /// journaled or included in [`AppSnapshot`].
+    pub analysis: AnalysisSnapshot,
     pub session: SessionState,
     pub aggregates: SessionAggregates,
     pub telemetry: BTreeMap<RunId, Telemetry>,

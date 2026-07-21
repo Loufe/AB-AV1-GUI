@@ -23,7 +23,8 @@ fn add_convert_with_suffix(input: &Path, suffix: &str) -> QueueCommand {
             item_id: QueueItemId(1),
             input: input.to_path_buf(),
             path_hash: None,
-            stamp: None,
+            identity: None,
+            timestamp_reliability: crfty_core::TimestampReliability::Unknown,
             operation: Operation::Convert,
             intent: AnalysisIntent::ReuseIfFresh,
             output_target: OutputTarget::Suffix {

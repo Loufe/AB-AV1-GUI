@@ -955,7 +955,13 @@
             "observation": {
               "path_hash": "path-1",
               "binding": {
-                "stamp": {
+                "identity": {
+                  "file_id": {
+                    "Unix": {
+                      "device": 1,
+                      "inode": 120000
+                    }
+                  },
                   "size": 3000000,
                   "modified_ns": "1000000"
                 },
@@ -993,7 +999,13 @@
         "queue": [],
         "paths": {
           "path-1": {
-            "stamp": {
+            "identity": {
+              "file_id": {
+                "Unix": {
+                  "device": 1,
+                  "inode": 120000
+                }
+              },
               "size": 3000000,
               "modified_ns": "1000000"
             },
@@ -1043,7 +1055,13 @@
         "queue": [],
         "paths": {
           "path-1": {
-            "stamp": {
+            "identity": {
+              "file_id": {
+                "Unix": {
+                  "device": 1,
+                  "inode": 120000
+                }
+              },
               "size": 3000000,
               "modified_ns": "1000000"
             },
@@ -1092,7 +1110,13 @@
             "observation": {
               "path_hash": "path-2",
               "binding": {
-                "stamp": {
+                "identity": {
+                  "file_id": {
+                    "Unix": {
+                      "device": 1,
+                      "inode": 121000
+                    }
+                  },
                   "size": 3000000,
                   "modified_ns": "1000000"
                 },
@@ -1130,14 +1154,26 @@
         "queue": [],
         "paths": {
           "path-1": {
-            "stamp": {
+            "identity": {
+              "file_id": {
+                "Unix": {
+                  "device": 1,
+                  "inode": 120000
+                }
+              },
               "size": 3000000,
               "modified_ns": "1000000"
             },
             "content_key": "ck-1"
           },
           "path-2": {
-            "stamp": {
+            "identity": {
+              "file_id": {
+                "Unix": {
+                  "device": 1,
+                  "inode": 121000
+                }
+              },
               "size": 3000000,
               "modified_ns": "1000000"
             },
@@ -1600,7 +1636,13 @@
         ],
         "paths": {
           "path-1": {
-            "stamp": {
+            "identity": {
+              "file_id": {
+                "Unix": {
+                  "device": 1,
+                  "inode": 120000
+                }
+              },
               "size": 3000000,
               "modified_ns": "1000000"
             },
@@ -1737,7 +1779,13 @@
         ],
         "paths": {
           "path-1": {
-            "stamp": {
+            "identity": {
+              "file_id": {
+                "Unix": {
+                  "device": 1,
+                  "inode": 120000
+                }
+              },
               "size": 3000000,
               "modified_ns": "1000000"
             },
@@ -1979,7 +2027,13 @@
         ],
         "paths": {
           "path-1": {
-            "stamp": {
+            "identity": {
+              "file_id": {
+                "Unix": {
+                  "device": 1,
+                  "inode": 120000
+                }
+              },
               "size": 3000000,
               "modified_ns": "1000000"
             },
@@ -2269,7 +2323,13 @@
         ],
         "paths": {
           "path-1": {
-            "stamp": {
+            "identity": {
+              "file_id": {
+                "Unix": {
+                  "device": 1,
+                  "inode": 120000
+                }
+              },
               "size": 3000000,
               "modified_ns": "1000000"
             },
@@ -2738,7 +2798,13 @@
         ],
         "paths": {
           "path-1": {
-            "stamp": {
+            "identity": {
+              "file_id": {
+                "Unix": {
+                  "device": 1,
+                  "inode": 120000
+                }
+              },
               "size": 3000000,
               "modified_ns": "1000000"
             },
@@ -2924,7 +2990,13 @@
         ],
         "paths": {
           "path-1": {
-            "stamp": {
+            "identity": {
+              "file_id": {
+                "Unix": {
+                  "device": 1,
+                  "inode": 120000
+                }
+              },
               "size": 3000000,
               "modified_ns": "1000000"
             },
@@ -3104,7 +3176,13 @@
         ],
         "paths": {
           "path-1": {
-            "stamp": {
+            "identity": {
+              "file_id": {
+                "Unix": {
+                  "device": 1,
+                  "inode": 120000
+                }
+              },
               "size": 3000000,
               "modified_ns": "1000000"
             },
@@ -3276,7 +3354,13 @@
         ],
         "paths": {
           "path-1": {
-            "stamp": {
+            "identity": {
+              "file_id": {
+                "Unix": {
+                  "device": 1,
+                  "inode": 120000
+                }
+              },
               "size": 3000000,
               "modified_ns": "1000000"
             },
@@ -3445,7 +3529,13 @@
         ],
         "paths": {
           "path-1": {
-            "stamp": {
+            "identity": {
+              "file_id": {
+                "Unix": {
+                  "device": 1,
+                  "inode": 120000
+                }
+              },
               "size": 3000000,
               "modified_ns": "1000000"
             },
@@ -3631,7 +3721,13 @@
         ],
         "paths": {
           "path-1": {
-            "stamp": {
+            "identity": {
+              "file_id": {
+                "Unix": {
+                  "device": 1,
+                  "inode": 120000
+                }
+              },
               "size": 3000000,
               "modified_ns": "1000000"
             },
@@ -3797,7 +3893,13 @@
         ],
         "paths": {
           "path-1": {
-            "stamp": {
+            "identity": {
+              "file_id": {
+                "Unix": {
+                  "device": 1,
+                  "inode": 120000
+                }
+              },
               "size": 3000000,
               "modified_ns": "1000000"
             },
@@ -3959,7 +4061,13 @@
         ],
         "paths": {
           "path-1": {
-            "stamp": {
+            "identity": {
+              "file_id": {
+                "Unix": {
+                  "device": 1,
+                  "inode": 120000
+                }
+              },
               "size": 3000000,
               "modified_ns": "1000000"
             },
@@ -4127,7 +4235,13 @@
         ],
         "paths": {
           "path-1": {
-            "stamp": {
+            "identity": {
+              "file_id": {
+                "Unix": {
+                  "device": 1,
+                  "inode": 120000
+                }
+              },
               "size": 3000000,
               "modified_ns": "1000000"
             },
@@ -4261,7 +4375,13 @@
         ],
         "paths": {
           "path-1": {
-            "stamp": {
+            "identity": {
+              "file_id": {
+                "Unix": {
+                  "device": 1,
+                  "inode": 120000
+                }
+              },
               "size": 3000000,
               "modified_ns": "1000000"
             },
@@ -4383,7 +4503,13 @@
         ],
         "paths": {
           "path-1": {
-            "stamp": {
+            "identity": {
+              "file_id": {
+                "Unix": {
+                  "device": 1,
+                  "inode": 120000
+                }
+              },
               "size": 3000000,
               "modified_ns": "1000000"
             },
@@ -4545,7 +4671,13 @@
         ],
         "paths": {
           "path-1": {
-            "stamp": {
+            "identity": {
+              "file_id": {
+                "Unix": {
+                  "device": 1,
+                  "inode": 120000
+                }
+              },
               "size": 3000000,
               "modified_ns": "1000000"
             },
@@ -4690,7 +4822,13 @@
         ],
         "paths": {
           "path-1": {
-            "stamp": {
+            "identity": {
+              "file_id": {
+                "Unix": {
+                  "device": 1,
+                  "inode": 120000
+                }
+              },
               "size": 3000000,
               "modified_ns": "1000000"
             },
@@ -4830,7 +4968,13 @@
         ],
         "paths": {
           "path-1": {
-            "stamp": {
+            "identity": {
+              "file_id": {
+                "Unix": {
+                  "device": 1,
+                  "inode": 120000
+                }
+              },
               "size": 3000000,
               "modified_ns": "1000000"
             },
@@ -4955,7 +5099,13 @@
         ],
         "paths": {
           "path-1": {
-            "stamp": {
+            "identity": {
+              "file_id": {
+                "Unix": {
+                  "device": 1,
+                  "inode": 120000
+                }
+              },
               "size": 3000000,
               "modified_ns": "1000000"
             },
@@ -5077,7 +5227,13 @@
         ],
         "paths": {
           "path-1": {
-            "stamp": {
+            "identity": {
+              "file_id": {
+                "Unix": {
+                  "device": 1,
+                  "inode": 120000
+                }
+              },
               "size": 3000000,
               "modified_ns": "1000000"
             },
@@ -5193,7 +5349,13 @@
         ],
         "paths": {
           "path-1": {
-            "stamp": {
+            "identity": {
+              "file_id": {
+                "Unix": {
+                  "device": 1,
+                  "inode": 120000
+                }
+              },
               "size": 3000000,
               "modified_ns": "1000000"
             },
@@ -5326,7 +5488,13 @@
         ],
         "paths": {
           "path-1": {
-            "stamp": {
+            "identity": {
+              "file_id": {
+                "Unix": {
+                  "device": 1,
+                  "inode": 120000
+                }
+              },
               "size": 3000000,
               "modified_ns": "1000000"
             },
@@ -5453,7 +5621,13 @@
         ],
         "paths": {
           "path-1": {
-            "stamp": {
+            "identity": {
+              "file_id": {
+                "Unix": {
+                  "device": 1,
+                  "inode": 120000
+                }
+              },
               "size": 3000000,
               "modified_ns": "1000000"
             },
@@ -5602,7 +5776,13 @@
         ],
         "paths": {
           "path-1": {
-            "stamp": {
+            "identity": {
+              "file_id": {
+                "Unix": {
+                  "device": 1,
+                  "inode": 120000
+                }
+              },
               "size": 3000000,
               "modified_ns": "1000000"
             },
@@ -5745,7 +5925,13 @@
         ],
         "paths": {
           "path-1": {
-            "stamp": {
+            "identity": {
+              "file_id": {
+                "Unix": {
+                  "device": 1,
+                  "inode": 120000
+                }
+              },
               "size": 3000000,
               "modified_ns": "1000000"
             },
@@ -5888,7 +6074,13 @@
         ],
         "paths": {
           "path-1": {
-            "stamp": {
+            "identity": {
+              "file_id": {
+                "Unix": {
+                  "device": 1,
+                  "inode": 120000
+                }
+              },
               "size": 3000000,
               "modified_ns": "1000000"
             },
@@ -6028,7 +6220,13 @@
         ],
         "paths": {
           "path-1": {
-            "stamp": {
+            "identity": {
+              "file_id": {
+                "Unix": {
+                  "device": 1,
+                  "inode": 120000
+                }
+              },
               "size": 3000000,
               "modified_ns": "1000000"
             },
@@ -6184,7 +6382,13 @@
         ],
         "paths": {
           "path-1": {
-            "stamp": {
+            "identity": {
+              "file_id": {
+                "Unix": {
+                  "device": 1,
+                  "inode": 120000
+                }
+              },
               "size": 3000000,
               "modified_ns": "1000000"
             },
@@ -6324,7 +6528,13 @@
         ],
         "paths": {
           "path-1": {
-            "stamp": {
+            "identity": {
+              "file_id": {
+                "Unix": {
+                  "device": 1,
+                  "inode": 120000
+                }
+              },
               "size": 3000000,
               "modified_ns": "1000000"
             },
@@ -6474,7 +6684,13 @@
         ],
         "paths": {
           "path-1": {
-            "stamp": {
+            "identity": {
+              "file_id": {
+                "Unix": {
+                  "device": 1,
+                  "inode": 120000
+                }
+              },
               "size": 3000000,
               "modified_ns": "1000000"
             },
@@ -6601,7 +6817,13 @@
         ],
         "paths": {
           "path-1": {
-            "stamp": {
+            "identity": {
+              "file_id": {
+                "Unix": {
+                  "device": 1,
+                  "inode": 120000
+                }
+              },
               "size": 3000000,
               "modified_ns": "1000000"
             },
@@ -6736,7 +6958,13 @@
         ],
         "paths": {
           "path-1": {
-            "stamp": {
+            "identity": {
+              "file_id": {
+                "Unix": {
+                  "device": 1,
+                  "inode": 120000
+                }
+              },
               "size": 3000000,
               "modified_ns": "1000000"
             },
@@ -7000,7 +7228,13 @@
         "queue": [],
         "paths": {
           "path-1": {
-            "stamp": {
+            "identity": {
+              "file_id": {
+                "Unix": {
+                  "device": 1,
+                  "inode": 120000
+                }
+              },
               "size": 3000000,
               "modified_ns": "1000000"
             },
@@ -7122,7 +7356,13 @@
         "queue": [],
         "paths": {
           "path-1": {
-            "stamp": {
+            "identity": {
+              "file_id": {
+                "Unix": {
+                  "device": 1,
+                  "inode": 120000
+                }
+              },
               "size": 3000000,
               "modified_ns": "1000000"
             },
@@ -7225,7 +7465,13 @@
         "queue": [],
         "paths": {
           "path-1": {
-            "stamp": {
+            "identity": {
+              "file_id": {
+                "Unix": {
+                  "device": 1,
+                  "inode": 120000
+                }
+              },
               "size": 3000000,
               "modified_ns": "1000000"
             },
@@ -7333,7 +7579,13 @@
         "queue": [],
         "paths": {
           "path-1": {
-            "stamp": {
+            "identity": {
+              "file_id": {
+                "Unix": {
+                  "device": 1,
+                  "inode": 120000
+                }
+              },
               "size": 3000000,
               "modified_ns": "1000000"
             },
@@ -7422,7 +7674,13 @@
         "queue": [],
         "paths": {
           "path-1": {
-            "stamp": {
+            "identity": {
+              "file_id": {
+                "Unix": {
+                  "device": 1,
+                  "inode": 120000
+                }
+              },
               "size": 3000000,
               "modified_ns": "1000000"
             },
@@ -7568,7 +7826,13 @@
         "queue": [],
         "paths": {
           "path-1": {
-            "stamp": {
+            "identity": {
+              "file_id": {
+                "Unix": {
+                  "device": 1,
+                  "inode": 120000
+                }
+              },
               "size": 3000000,
               "modified_ns": "1000000"
             },
@@ -7866,7 +8130,13 @@
         ],
         "paths": {
           "path-1": {
-            "stamp": {
+            "identity": {
+              "file_id": {
+                "Unix": {
+                  "device": 1,
+                  "inode": 120000
+                }
+              },
               "size": 3000000,
               "modified_ns": "1000000"
             },
@@ -8119,7 +8389,13 @@
         ],
         "paths": {
           "path-1": {
-            "stamp": {
+            "identity": {
+              "file_id": {
+                "Unix": {
+                  "device": 1,
+                  "inode": 120000
+                }
+              },
               "size": 3000000,
               "modified_ns": "1000000"
             },

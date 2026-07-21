@@ -9,6 +9,7 @@
 //! This crate cannot depend on processes, filesystems, clocks, async runtimes,
 //! or user-interface frameworks.
 
+mod analysis;
 mod constants;
 mod estimation;
 mod failure;
@@ -31,6 +32,14 @@ mod time;
 /// back. Do not use this alias as a runtime type.
 pub type JsNumber = u32;
 
+pub use analysis::{
+    AnalysisActivity, AnalysisCommand, AnalysisDelta, AnalysisDisplayText, AnalysisEntryKind,
+    AnalysisGeneration, AnalysisGenerationId, AnalysisLevel, AnalysisLevelAssessment,
+    AnalysisMutationError, AnalysisRow, AnalysisRowId, AnalysisRowRef, AnalysisSnapshot,
+    CurrentFileIdentity, FreshnessDecision, FreshnessReason, ObservationStability,
+    TimestampReliability, apply_analysis_mutation, assess_analysis_levels,
+    begin_analysis_generation, decide_freshness, fold_analysis, observation_stability,
+};
 pub use estimation::{
     EstimateBasis, EstimateConfidence, EstimationModel, HistoricalTier, Quartiles,
     ResolutionBucket, TimeEstimate, exclusive_quartiles,
@@ -61,7 +70,7 @@ pub use output::{
 pub use policy::{
     Eligibility, MIN_VIDEO_PIXELS, ParkedResolution, SkipReason, evaluate_eligibility,
     evaluate_enqueue, permitted_profiles, resolve_parked, select_analysis, select_job_action,
-    settled_output_identity, stamp_matches, verdict_applies,
+    settled_output_identity, verdict_applies,
 };
 pub use projection::{
     CodecCount, CumulativeSavingsPoint, HistoryRow, HistoryRowKey, HistoryStatus, RunTotals,

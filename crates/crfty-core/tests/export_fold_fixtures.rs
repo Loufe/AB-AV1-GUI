@@ -17,7 +17,7 @@ use crfty_core::{
     AnalysisAttempt, AnalysisIntent, AnalysisProfile, AnalysisResult, ArtifactIdentity, AudioCodec,
     AudioStreamMeta, ClaimId, CompletionEvidence, ConflictKind, ContentKey, Crf, DecodeMode,
     DecodePreference, DestructiveIdentity, DiagnosticTail, DurableDelta, DurableState, DurationMs,
-    ExecutionSettings, FailureFacts, FailureKind, FileStamp, FileSystemId, FileTimeNs, ImportPath,
+    ExecutionSettings, FailureFacts, FailureKind, FileSystemId, FileTimeNs, ImportPath,
     ImportedHistoryRecord, ItemOutcome, JobAction, JobPhase, JobSpec, MediaContainer,
     MediaObservation, Operation, OutputDelta, OutputState, OutputTarget, OutputTransaction,
     OverwriteDecision, ParkedStatus, PathBinding, PathHash, PhaseSpan, QueueItem, QueueItemId,
@@ -201,7 +201,11 @@ fn observed(path: &str, key: &str, duration_ms: u64) -> DurableDelta {
         observation: Box::new(MediaObservation {
             path_hash: PathHash(path.to_owned()),
             binding: PathBinding {
-                stamp: FileStamp {
+                identity: DestructiveIdentity {
+                    file_id: FileSystemId::Unix {
+                        device: 1,
+                        inode: duration_ms,
+                    },
                     size: 3_000_000,
                     modified_ns: Some(FileTimeNs(1_000_000)),
                 },

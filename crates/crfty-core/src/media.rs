@@ -3,8 +3,8 @@ use std::collections::BTreeMap;
 use serde::{Deserialize, Serialize};
 
 use crate::{
-    AnalysisProfile, AnalysisResult, ContentKey, Crf, DurationMs, RunId, UnixMillis, VmafScore,
-    VmafTarget,
+    AnalysisProfile, AnalysisResult, ContentKey, Crf, DestructiveIdentity, DurationMs, RunId,
+    UnixMillis, VmafScore, VmafTarget,
 };
 
 const HALF_ROTATION_DEGREES: i16 = 180;
@@ -34,8 +34,20 @@ pub struct FileStamp {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, specta::Type)]
 pub struct PathBinding {
-    pub stamp: FileStamp,
+    /// Full identity captured by the stable media observation. Queue and Basic
+    /// Scan freshness compare it exactly and never degrade to size/mtime alone.
+    pub identity: DestructiveIdentity,
     pub content_key: ContentKey,
+}
+
+impl PathBinding {
+    #[must_use]
+    pub fn stamp(&self) -> FileStamp {
+        FileStamp {
+            size: self.identity.size,
+            modified_ns: self.identity.modified_ns,
+        }
+    }
 }
 
 #[derive(
@@ -86,8 +98,8 @@ pub struct VideoMeta {
     #[specta(type = crate::JsNumber)]
     pub duration_ms: u64,
     /// Byte size of the inspected file — a content fact and the authority for
-    /// input size in views. `FileStamp.size` remains the freshness probe.
-    /// Bitrate is derived in views, never stored.
+    /// input size in views. `PathBinding.identity` is the freshness authority;
+    /// bitrate is derived in views, never stored.
     #[specta(type = crate::JsNumber)]
     pub size_bytes: u64,
     pub audio: Vec<AudioStreamMeta>,
