@@ -9,6 +9,7 @@
 //! This crate cannot depend on processes, filesystems, clocks, async runtimes,
 //! or user-interface frameworks.
 
+mod analysis;
 mod constants;
 mod estimation;
 mod failure;
@@ -31,6 +32,12 @@ mod time;
 /// back. Do not use this alias as a runtime type.
 pub type JsNumber = u32;
 
+pub use analysis::{
+    AnalysisActivity, AnalysisDelta, AnalysisDisplayText, AnalysisEntryKind, AnalysisGeneration,
+    AnalysisGenerationId, AnalysisRow, AnalysisRowId, AnalysisRowRef, AnalysisSnapshot,
+    CurrentFileIdentity, FreshnessDecision, FreshnessReason, TimestampReliability,
+    decide_freshness, fold_analysis,
+};
 pub use estimation::{
     EstimateBasis, EstimateConfidence, EstimationModel, HistoricalTier, Quartiles,
     ResolutionBucket, TimeEstimate, exclusive_quartiles,
