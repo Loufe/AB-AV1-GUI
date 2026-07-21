@@ -7,12 +7,30 @@ design record). Managed with pnpm.
 pnpm install
 pnpm dev           # Vite dev server (polls for changes — WSL2 /mnt/c)
 pnpm tauri:dev     # full desktop app (shell crate + this frontend)
-pnpm test          # vitest (includes V2-parity fixtures)
+pnpm test          # Node unit tests + headless Chromium component tests
+pnpm test:node     # reducers, projections, formatters, and other pure logic
+pnpm test:browser  # real-browser component and interaction tests
 pnpm typecheck     # tsc -b
 pnpm lint          # oxlint
 pnpm format        # oxfmt (format:check in CI)
 pnpm build         # tsc -b && vite build
 ```
+
+Install the browser binary once after `pnpm install`:
+
+```bash
+pnpm exec playwright install chromium
+```
+
+CI installs Chromium and its Linux system dependencies explicitly with the
+Playwright version pinned in `pnpm-lock.yaml`.
+
+Pure tests stay beside their source as `*.test.ts`. Tests that require a real
+DOM, focus, keyboard input, portals, or React lifecycle behavior use
+`*.browser.test.tsx`; shared browser helpers live in `src/test/browser/`.
+Use `renderApp` for the production root providers and isolated Zustand state,
+and `installTauriMock` to exercise generated commands and stream subscriptions
+without mocking `src/lib/bindings.ts`.
 
 `pnpm tauri:dev` builds `crates/crfty-shell` and opens the window against the
 dev server; Linux needs the Tauri webkit2gtk prerequisites installed (see
