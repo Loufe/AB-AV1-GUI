@@ -102,3 +102,13 @@ export async function queueRetry(itemId: QueueItemId): Promise<void> {
 export async function queueEdit(itemId: QueueItemId, patch: QueueItemEdit): Promise<void> {
   expectAccepted(await commands.queueEdit(itemId, patch), "queue edit");
 }
+
+/** Opens a file or folder with the operating system's default program. */
+export async function openPath(path: string): Promise<void> {
+  expectAccepted(await commands.openPath(path), "open");
+}
+
+/** Reveals a path selected in the system file manager. */
+export async function revealInFileManager(path: string): Promise<void> {
+  expectAccepted(await commands.revealInFileManager(path), "reveal in file manager");
+}

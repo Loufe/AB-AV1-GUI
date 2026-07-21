@@ -138,6 +138,27 @@ fn acknowledge_corruption(
     bridge.acknowledge_corruption(signature)
 }
 
+/// Opens a file or folder with the operating system's default program.
+///
+/// Which path to act on (input, converted output) is frontend state, so the
+/// path arrives explicitly. No domain state is involved: the call goes
+/// straight to the engine, bypassing the reducer. Declared async so the
+/// desktop hand-off (which can stall on a misbehaving handler) runs off the
+/// main thread.
+#[tauri::command]
+#[specta::specta]
+async fn open_path(path: PathBuf) -> Result<(), CommandError> {
+    crfty_engine::os_actions::open_path(&path).map_err(CommandError::from)
+}
+
+/// Reveals a path selected in the system file manager. Same contract as
+/// [`open_path`].
+#[tauri::command]
+#[specta::specta]
+async fn reveal_in_file_manager(path: PathBuf) -> Result<(), CommandError> {
+    crfty_engine::os_actions::reveal_path(&path).map_err(CommandError::from)
+}
+
 /// The complete command/event surface, shared by the running app and the
 /// bindings-export test so the two can never drift.
 #[must_use]
@@ -159,5 +180,7 @@ pub fn specta_builder() -> Builder<tauri::Wry> {
         vendor_install,
         vendor_check,
         acknowledge_corruption,
+        open_path,
+        reveal_in_file_manager,
     ])
 }

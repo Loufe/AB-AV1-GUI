@@ -26,6 +26,7 @@ use crfty_core::{
 use crfty_engine::{
     coordinator::{EngineConfig, EngineRuntime, ToolsConfig, UserCommandSender},
     driver::DriverEvent,
+    os_actions::OsActionError,
 };
 use serde::Serialize;
 use tauri::{Manager, ipc::Channel};
@@ -84,6 +85,19 @@ impl CommandError {
 
     fn engine_unavailable(message: impl Into<String>) -> Self {
         Self::new("engine_unavailable", message)
+    }
+}
+
+/// A missing path is the caller's mistake (a stale row) — `rejected`; a
+/// desktop that refused or failed the action is ours to surface — `internal`.
+impl From<OsActionError> for CommandError {
+    fn from(error: OsActionError) -> Self {
+        match error {
+            OsActionError::Missing { path } => {
+                Self::new("rejected", format!("{} does not exist", path.display()))
+            }
+            OsActionError::Failed { message } => Self::new("internal", message),
+        }
     }
 }
 

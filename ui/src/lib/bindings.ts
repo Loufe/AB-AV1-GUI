@@ -31,6 +31,21 @@ export const commands = {
 	 *  else, so a stale acknowledgement can never discard fresher bytes.
 	 */
 	acknowledgeCorruption: (signature: CorruptionSignature) => typedError<null, CommandError>(__TAURI_INVOKE("acknowledge_corruption", { signature })),
+	/**
+	 *  Opens a file or folder with the operating system's default program.
+	 * 
+	 *  Which path to act on (input, converted output) is frontend state, so the
+	 *  path arrives explicitly. No domain state is involved: the call goes
+	 *  straight to the engine, bypassing the reducer. Declared async so the
+	 *  desktop hand-off (which can stall on a misbehaving handler) runs off the
+	 *  main thread.
+	 */
+	openPath: (path: string) => typedError<null, CommandError>(__TAURI_INVOKE("open_path", { path })),
+	/**
+	 *  Reveals a path selected in the system file manager. Same contract as
+	 *  [`open_path`].
+	 */
+	revealInFileManager: (path: string) => typedError<null, CommandError>(__TAURI_INVOKE("reveal_in_file_manager", { path })),
 };
 
 /* Types */
