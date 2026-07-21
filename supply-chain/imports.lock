@@ -75,6 +75,12 @@ Unsafe code, but its logic looks good to me. Necessary given what it is
 doing. Well tested, has quickchecks.
 """
 
+[[audits.bytecode-alliance.audits.async-task]]
+who = "Chris Fallin <chris@cfallin.org>"
+criteria = "safe-to-deploy"
+version = "4.7.1"
+notes = "Fairly significant chunk of unsafe code in the async executor core, but seems isolated to well-understood patterns, e.g. a manual vtable and some manual layout code."
+
 [[audits.bytecode-alliance.audits.atomic-waker]]
 who = "Alex Crichton <alex@alexcrichton.com>"
 criteria = "safe-to-deploy"
@@ -205,6 +211,12 @@ who = "Andrew Brown <andrew.brown@intel.com>"
 criteria = "safe-to-deploy"
 version = "0.2.19"
 notes = "As advertised: a numeric library. The only `unsafe` is from some float-to-int conversions, which seems expected."
+
+[[audits.bytecode-alliance.audits.parking]]
+who = "Chris Fallin <chris@cfallin.org>"
+criteria = "safe-to-deploy"
+version = "2.2.1"
+notes = "forbid-unsafe crate with straightforward imports."
 
 [[audits.bytecode-alliance.audits.percent-encoding]]
 who = "Alex Crichton <alex@alexcrichton.com>"

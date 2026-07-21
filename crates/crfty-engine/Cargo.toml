@@ -20,6 +20,7 @@ blake2 = { version = "=0.10.6", default-features = false }
 command-group = "=5.0.1"
 crfty-core = { path = "../crfty-core", version = "=3.0.0-alpha.0" }
 file-id = "=0.2.3"
+keepawake = { version = "=0.6.0", default-features = false }
 lzma-rs = "=0.3.0"
 regex = "=1.13.1"
 # rustls-no-provider + an explicit ring provider: reqwest 0.13 dropped bundled

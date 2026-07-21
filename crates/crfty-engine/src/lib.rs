@@ -24,4 +24,5 @@ pub mod vendor;
 
 mod failure;
 mod filesystem;
+mod power;
 mod process;

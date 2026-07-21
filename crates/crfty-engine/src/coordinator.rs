@@ -770,6 +770,10 @@ fn supervise(
                 let spawned = thread::Builder::new()
                     .name("crfty-session-worker".to_owned())
                     .spawn(move || {
+                        // Held for the whole session and released on every
+                        // exit path, including caught panics: the guard sits
+                        // outside catch_unwind on this thread's stack.
+                        let _sleep = crate::power::inhibit_sleep();
                         let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
                             run_session(
                                 &worker_commands,
