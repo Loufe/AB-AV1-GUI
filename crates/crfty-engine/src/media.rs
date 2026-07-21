@@ -5,7 +5,7 @@ use std::{
     io::{self, Read, Seek, SeekFrom},
     path::{Path, PathBuf},
     process::Command,
-    time::UNIX_EPOCH,
+    time::{SystemTime, UNIX_EPOCH},
 };
 
 use blake2::{
@@ -14,8 +14,9 @@ use blake2::{
 };
 use crfty_core::{
     ArtifactIdentity, AudioCodec, AudioStreamMeta, ContentKey, DecodeMode, DecodePreference,
-    DestructiveIdentity, FileStamp, FileSystemId, FileTimeNs, HardwareDecoder, MediaContainer,
-    MediaObservation, PathBinding, PathHash, VideoCodec, VideoMeta,
+    DestructiveIdentity, FileSystemId, FileTimeNs, HardwareDecoder, MediaContainer,
+    MediaObservation, ObservationStability, PathBinding, PathHash, TimestampReliability,
+    VideoCodec, VideoMeta, observation_stability,
 };
 use serde::Deserialize;
 
@@ -23,8 +24,8 @@ use crate::process;
 
 const CONTENT_KEY_SCHEMA: &[u8] = b"ck1";
 const CONTENT_KEY_TEXT_PREFIX: &str = "ck1:";
-const PATH_HASH_SCHEMA: &[u8] = b"ph1";
-const PATH_HASH_TEXT_PREFIX: &str = "ph1:";
+const PATH_HASH_SCHEMA: &[u8] = b"ph2";
+const PATH_HASH_TEXT_PREFIX: &str = "ph2:";
 const DIGEST_BYTES: usize = 16;
 const HEX_CHARACTERS_PER_BYTE: usize = 2;
 const SAMPLE_ALIGNMENT_BYTES: u64 = 4 * 1024;
@@ -35,6 +36,8 @@ const QUARTER_SAMPLE_NUMERATORS: [u64; 3] = [1, 2, 3];
 const SAMPLE_QUARTERS: u64 = 4;
 const MILLISECONDS_PER_SECOND: f64 = 1_000.0;
 const FULL_ROTATION_DEGREES: i16 = 360;
+const NANOSECONDS_PER_SECOND: u64 = 1_000_000_000;
+const RECENT_MTIME_WINDOW_NS: u64 = 2 * NANOSECONDS_PER_SECOND;
 
 #[derive(Debug, Clone)]
 pub struct MediaInspector {
@@ -85,10 +88,7 @@ impl MediaInspector {
         Ok(MediaObservation {
             path_hash: path_hash(path)?,
             binding: PathBinding {
-                stamp: FileStamp {
-                    size: identity.destructive.size,
-                    modified_ns: identity.destructive.modified_ns,
-                },
+                identity: identity.destructive,
                 content_key: identity.content_key,
             },
             metadata,
@@ -120,8 +120,11 @@ impl MediaInspector {
     fn inspect(&self, path: &Path) -> io::Result<(VideoMeta, ArtifactIdentity)> {
         let before_probe = destructive_identity(path)?;
         let metadata = self.probe(path, before_probe.size)?;
+        let after_probe = destructive_identity(path)?;
         let identity = sampled_identity(path, &metadata)?;
-        if identity.destructive != before_probe {
+        if observation_stability(&before_probe, &after_probe, &identity.destructive)
+            != ObservationStability::Stable
+        {
             return Err(io::Error::new(
                 io::ErrorKind::Interrupted,
                 "artifact changed while it was probed and identified",
@@ -272,6 +275,33 @@ pub(crate) fn destructive_identity(path: &Path) -> io::Result<DestructiveIdentit
     identity_from_metadata(path, &metadata)
 }
 
+/// Conservative metadata-cache judgment. Missing timestamps are unknown;
+/// exact-second values are treated as a coarse-filesystem signature; and a
+/// timestamp within the write-race window (including a future timestamp) is
+/// recent. False negatives only cause re-observation, never stale reuse.
+pub(crate) fn timestamp_reliability(
+    identity: &DestructiveIdentity,
+    now: SystemTime,
+) -> TimestampReliability {
+    let Some(modified) = identity.modified_ns else {
+        return TimestampReliability::Unknown;
+    };
+    let Some(now_ns) = now
+        .duration_since(UNIX_EPOCH)
+        .ok()
+        .and_then(|duration| u64::try_from(duration.as_nanos()).ok())
+    else {
+        return TimestampReliability::Unknown;
+    };
+    if modified.0.is_multiple_of(NANOSECONDS_PER_SECOND)
+        || modified.0 >= now_ns.saturating_sub(RECENT_MTIME_WINDOW_NS)
+    {
+        TimestampReliability::CoarseOrRecent
+    } else {
+        TimestampReliability::Reliable
+    }
+}
+
 fn sampled_identity(path: &Path, header: &VideoMeta) -> io::Result<ArtifactIdentity> {
     let before = std::fs::metadata(path)?;
     let before_identity = identity_from_metadata(path, &before)?;
@@ -307,7 +337,9 @@ fn sampled_identity(path: &Path, header: &VideoMeta) -> io::Result<ArtifactIdent
     }
     let after = std::fs::metadata(path)?;
     let after_identity = identity_from_metadata(path, &after)?;
-    if before_identity != after_identity {
+    if observation_stability(&before_identity, &before_identity, &after_identity)
+        != ObservationStability::Stable
+    {
         return Err(io::Error::new(
             io::ErrorKind::Interrupted,
             "artifact changed while its identity was computed",
@@ -329,20 +361,45 @@ fn codec_header(codec: &VideoCodec) -> &str {
     }
 }
 
-/// Hashes a path under the app's canonical normalization (canonicalized,
-/// forward slashes, lowercased on Windows). Every `PathHash` in the system
-/// must come from here so enqueue facts and claim-time observations agree.
+/// Hashes a canonical path's native representation. Display conversion and
+/// case rewriting are deliberately absent: Unix hashes `OsStr` bytes and
+/// Windows hashes wide units. Every `PathHash` in the system must come from
+/// here so enqueue facts and claim-time observations agree.
 pub fn path_hash(path: &Path) -> io::Result<PathHash> {
     let canonical = std::fs::canonicalize(path)?;
-    let mut normalized = canonical.to_string_lossy().replace('\\', "/");
-    if cfg!(windows) {
-        normalized.make_ascii_lowercase();
-    }
+    hash_native_path(&canonical)
+}
+
+fn hash_native_path(path: &Path) -> io::Result<PathHash> {
     let mut digest = Blake2bVar::new(DIGEST_BYTES)
         .map_err(|error| io::Error::new(io::ErrorKind::InvalidInput, error.to_string()))?;
     digest.update(PATH_HASH_SCHEMA);
-    digest.update(normalized.as_bytes());
+    update_native_path(&mut digest, path);
     Ok(PathHash(finalize_hex(digest, PATH_HASH_TEXT_PREFIX)?))
+}
+
+#[cfg(unix)]
+fn update_native_path(digest: &mut Blake2bVar, path: &Path) {
+    use std::os::unix::ffi::OsStrExt as _;
+
+    digest.update(b"unix\0");
+    digest.update(path.as_os_str().as_bytes());
+}
+
+#[cfg(windows)]
+fn update_native_path(digest: &mut Blake2bVar, path: &Path) {
+    use std::os::windows::ffi::OsStrExt as _;
+
+    digest.update(b"windows\0");
+    for unit in path.as_os_str().encode_wide() {
+        digest.update(&unit.to_le_bytes());
+    }
+}
+
+#[cfg(not(any(unix, windows)))]
+fn update_native_path(digest: &mut Blake2bVar, path: &Path) {
+    digest.update(b"other\0");
+    digest.update(path.as_os_str().as_encoded_bytes());
 }
 
 fn finalize_hex(digest: Blake2bVar, prefix: &str) -> io::Result<String> {
@@ -370,17 +427,6 @@ fn hash_region(
     file.read_exact(&mut bytes)?;
     digest.update(&bytes);
     Ok(())
-}
-
-/// A cheap freshness stamp: one stat, no file-id lookup, no content
-/// sampling. This is the enqueue-time fact carried by `QueueAddRequest`;
-/// claim-time content identity remains authoritative.
-pub fn stamp(path: &Path) -> io::Result<FileStamp> {
-    let metadata = std::fs::metadata(path)?;
-    Ok(FileStamp {
-        size: metadata.len(),
-        modified_ns: modified_ns(&metadata),
-    })
 }
 
 fn modified_ns(metadata: &Metadata) -> Option<FileTimeNs> {
@@ -481,13 +527,101 @@ mod tests {
     use std::{
         fs,
         sync::atomic::{AtomicU64, Ordering},
+        time::{Duration, UNIX_EPOCH},
     };
 
-    use crfty_core::{MediaContainer, VideoCodec, VideoMeta};
+    use crfty_core::{
+        DestructiveIdentity, FileSystemId, FileTimeNs, MediaContainer, TimestampReliability,
+        VideoCodec, VideoMeta,
+    };
 
-    use super::sampled_identity;
+    use super::{hash_native_path, path_hash, sampled_identity, timestamp_reliability};
 
     static TEST_SEQUENCE: AtomicU64 = AtomicU64::new(0);
+
+    fn timestamped_identity(modified_ns: Option<u64>) -> DestructiveIdentity {
+        DestructiveIdentity {
+            file_id: FileSystemId::Unix {
+                device: 1,
+                inode: 2,
+            },
+            size: 3,
+            modified_ns: modified_ns.map(FileTimeNs),
+        }
+    }
+
+    #[test]
+    fn timestamp_reliability_is_conservative_about_unknown_coarse_and_recent_values() {
+        let now = UNIX_EPOCH + Duration::from_secs(10);
+        assert_eq!(
+            timestamp_reliability(&timestamped_identity(None), now),
+            TimestampReliability::Unknown
+        );
+        assert_eq!(
+            timestamp_reliability(&timestamped_identity(Some(7_000_000_000)), now),
+            TimestampReliability::CoarseOrRecent
+        );
+        assert_eq!(
+            timestamp_reliability(&timestamped_identity(Some(8_500_000_001)), now),
+            TimestampReliability::CoarseOrRecent
+        );
+        assert_eq!(
+            timestamp_reliability(&timestamped_identity(Some(11_000_000_001)), now),
+            TimestampReliability::CoarseOrRecent
+        );
+        assert_eq!(
+            timestamp_reliability(&timestamped_identity(Some(7_000_000_001)), now),
+            TimestampReliability::Reliable
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn ph2_distinguishes_non_unicode_paths_that_render_identically() {
+        use std::{ffi::OsString, os::unix::ffi::OsStringExt as _, path::PathBuf};
+
+        let first = PathBuf::from(OsString::from_vec(b"/videos/movie-\x80.mkv".to_vec()));
+        let second = PathBuf::from(OsString::from_vec(b"/videos/movie-\x81.mkv".to_vec()));
+        assert_eq!(first.to_string_lossy(), second.to_string_lossy());
+
+        let first_hash = hash_native_path(&first).expect("first native path hash");
+        let second_hash = hash_native_path(&second).expect("second native path hash");
+        assert!(first_hash.0.starts_with("ph2:"));
+        assert_ne!(first_hash, second_hash);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn path_hash_preserves_non_unicode_identity_and_canonicalizes_symlinks() {
+        use std::{ffi::OsString, os::unix::ffi::OsStringExt as _, os::unix::fs::symlink};
+
+        let directory = test_directory("ph2-native");
+        let first = directory.join(OsString::from_vec(b"movie-\x80.mkv".to_vec()));
+        let second = directory.join(OsString::from_vec(b"movie-\x81.mkv".to_vec()));
+        fs::write(&first, b"first").expect("first non-Unicode file");
+        fs::write(&second, b"second").expect("second non-Unicode file");
+        let link = directory.join("movie-link.mkv");
+        symlink(&first, &link).expect("file symlink");
+
+        let first_hash = path_hash(&first).expect("first path hash");
+        assert_ne!(first_hash, path_hash(&second).expect("second path hash"));
+        assert_eq!(first_hash, path_hash(&link).expect("symlink path hash"));
+        fs::remove_dir_all(directory).expect("remove fixture directory");
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn ph2_hashes_windows_wide_units_without_lossy_conversion() {
+        use std::{ffi::OsString, os::windows::ffi::OsStringExt as _, path::PathBuf};
+
+        let first = PathBuf::from(OsString::from_wide(&[0x0043, 0x003a, 0x005c, 0xd800]));
+        let second = PathBuf::from(OsString::from_wide(&[0x0043, 0x003a, 0x005c, 0xd801]));
+        assert_eq!(first.to_string_lossy(), second.to_string_lossy());
+        assert_ne!(
+            hash_native_path(&first).expect("first native path hash"),
+            hash_native_path(&second).expect("second native path hash")
+        );
+    }
 
     #[test]
     fn ck1_matches_independent_golden_fixtures() {

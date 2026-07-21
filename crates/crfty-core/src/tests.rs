@@ -5,24 +5,25 @@ use proptest::prelude::*;
 use crate::reducer::validate_terminal;
 
 use crate::{
-    AnalysisIntent, AnalysisProfile, AnalysisResult, AppState, ArtifactIdentity,
-    COMPACTION_HARD_LIMIT_BYTES, COMPACTION_IDLE_MIN_JOURNAL_BYTES, COMPACTION_IDLE_MIN_RATIO,
-    ClaimId, Command, CompletionEvidence, ConflictKind, ContentKey, Crf, DecodeMode,
-    DecodePreference, DefaultOutputMode, DestructiveIdentity, DestructiveObservation, DurableDelta,
-    DurationMs, Effect, Eligibility, EphemeralDelta, ExecutionSettings, FailureFacts, FailureKind,
-    FileRecord, FileStamp, FileSystemFacts, FileSystemId, FileTimeNs, HistoryCommand, ImportPath,
-    ImportedHistoryRecord, ImportedProvenance, ItemOutcome, JOURNAL_SCHEMA_VERSION, JobAction,
-    JobPhase, JobProgress, JournalEnvelope, JournalSequence, MediaContainer, MediaObservation,
-    Operation, OutputDelta, OutputRecoveryAction, OutputState, OutputTarget, OutputTransaction,
-    OverwriteDecision, ParkedResolution, ParkedStatus, PathBinding, PathHash, PhaseSpan,
-    ProjectionCommand, QueueAddRequest, QueueCommand, QueueItemEdit, QueueItemId, QueueItemState,
-    Replacement, Reply, RunId, SearchMeasurement, SessionAggregates, SessionCommand, SessionState,
-    Settings, SettingsCommand, SkipReason, StreamByteSizes, SystemCommand, Telemetry,
-    ToolAvailability, ToolRevisions, ToolSource, ToolsState, UnixMillis, VendorActivity,
-    VendorCommand, VideoCodec, VideoMeta, VmafScore, VmafTarget, WorkerCommand, apply,
-    compaction_due, compaction_quiescent, corruption_signature, encode_record, encode_snapshot,
-    evaluate_eligibility, permitted_profiles, recover_output, replay, resolve_parked,
-    select_analysis, select_job_action,
+    AnalysisActivity, AnalysisCommand, AnalysisDisplayText, AnalysisEntryKind,
+    AnalysisGenerationId, AnalysisIntent, AnalysisProfile, AnalysisResult, AnalysisRow,
+    AnalysisRowId, AppState, ArtifactIdentity, COMPACTION_HARD_LIMIT_BYTES,
+    COMPACTION_IDLE_MIN_JOURNAL_BYTES, COMPACTION_IDLE_MIN_RATIO, ClaimId, Command,
+    CompletionEvidence, ConflictKind, ContentKey, Crf, DecodeMode, DecodePreference,
+    DefaultOutputMode, DestructiveIdentity, DestructiveObservation, DurableDelta, DurationMs,
+    Effect, Eligibility, EphemeralDelta, ExecutionSettings, FailureFacts, FailureKind, FileRecord,
+    FileSystemFacts, FileSystemId, FileTimeNs, HistoryCommand, ImportPath, ImportedHistoryRecord,
+    ImportedProvenance, ItemOutcome, JOURNAL_SCHEMA_VERSION, JobAction, JobPhase, JobProgress,
+    JournalEnvelope, JournalSequence, MediaContainer, MediaObservation, Operation, OutputDelta,
+    OutputRecoveryAction, OutputState, OutputTarget, OutputTransaction, OverwriteDecision,
+    ParkedResolution, ParkedStatus, PathBinding, PathHash, PhaseSpan, ProjectionCommand,
+    QueueAddRequest, QueueCommand, QueueItemEdit, QueueItemId, QueueItemState, Replacement, Reply,
+    RunId, SearchMeasurement, SessionAggregates, SessionCommand, SessionState, Settings,
+    SettingsCommand, SkipReason, StreamByteSizes, SystemCommand, Telemetry, ToolAvailability,
+    ToolRevisions, ToolSource, ToolsState, UnixMillis, VendorActivity, VendorCommand, VideoCodec,
+    VideoMeta, VmafScore, VmafTarget, WorkerCommand, apply, compaction_due, compaction_quiescent,
+    corruption_signature, encode_record, encode_snapshot, evaluate_eligibility, permitted_profiles,
+    recover_output, replay, resolve_parked, select_analysis, select_job_action,
 };
 
 fn revisions() -> ToolRevisions {
@@ -47,6 +48,101 @@ fn execution() -> ExecutionSettings {
     profile.ffmpeg_revision = revisions.ffmpeg;
     profile.encoder_revision = revisions.encoder;
     ExecutionSettings::production(profile, false)
+}
+
+#[test]
+fn analysis_commands_allocate_generations_and_reject_late_same_generation_work() {
+    let mut state = AppState::default();
+    let root = |name: &str| AnalysisDisplayText {
+        text: name.to_owned(),
+        lossy: false,
+    };
+    let started = apply(
+        &mut state,
+        Command::Analysis(AnalysisCommand::Begin {
+            root: root("first"),
+        }),
+    );
+    assert_eq!(
+        started.reply,
+        Reply::AnalysisStarted {
+            generation: AnalysisGenerationId(1),
+        }
+    );
+    let row = AnalysisRow {
+        id: AnalysisRowId(1),
+        parent: None,
+        kind: AnalysisEntryKind::File,
+        display_name: root("movie.mkv"),
+        display_path: root("first/movie.mkv"),
+    };
+    let inserted = apply(
+        &mut state,
+        Command::Analysis(AnalysisCommand::UpsertRows {
+            generation: AnalysisGenerationId(1),
+            rows: vec![row],
+        }),
+    );
+    assert_eq!(inserted.reply, Reply::Accepted);
+    assert_eq!(
+        state
+            .analysis
+            .current
+            .as_ref()
+            .expect("current generation")
+            .rows
+            .len(),
+        1
+    );
+    assert_eq!(
+        apply(
+            &mut state,
+            Command::Analysis(AnalysisCommand::SetActivity {
+                generation: AnalysisGenerationId(1),
+                activity: AnalysisActivity::Discovered,
+            }),
+        )
+        .reply,
+        Reply::Accepted
+    );
+
+    let late = apply(
+        &mut state,
+        Command::Analysis(AnalysisCommand::UpsertRows {
+            generation: AnalysisGenerationId(1),
+            rows: Vec::new(),
+        }),
+    );
+    assert!(matches!(late.reply, Reply::Rejected { .. }));
+
+    let next = apply(
+        &mut state,
+        Command::Analysis(AnalysisCommand::Begin {
+            root: root("second"),
+        }),
+    );
+    assert_eq!(
+        next.reply,
+        Reply::AnalysisStarted {
+            generation: AnalysisGenerationId(2),
+        }
+    );
+    let stale_completion = apply(
+        &mut state,
+        Command::Analysis(AnalysisCommand::SetActivity {
+            generation: AnalysisGenerationId(1),
+            activity: AnalysisActivity::Ready,
+        }),
+    );
+    assert!(matches!(stale_completion.reply, Reply::Rejected { .. }));
+    assert_eq!(
+        state
+            .analysis
+            .current
+            .as_ref()
+            .map(|generation| generation.id),
+        Some(AnalysisGenerationId(2))
+    );
 }
 
 #[test]
@@ -467,7 +563,8 @@ fn add_request(item_id: QueueItemId, input: impl Into<PathBuf>) -> QueueAddReque
         item_id,
         input: input.into(),
         path_hash: None,
-        stamp: None,
+        identity: None,
+        timestamp_reliability: crate::TimestampReliability::Unknown,
         operation: Operation::Convert,
         intent: AnalysisIntent::ReuseIfFresh,
         output_target: OutputTarget::Replace,
@@ -510,9 +607,9 @@ fn media_observation(content: &str) -> MediaObservation {
     MediaObservation {
         path_hash: PathHash(format!("path-{content}")),
         binding: PathBinding {
-            stamp: FileStamp {
-                size: 10_000,
+            identity: DestructiveIdentity {
                 modified_ns: Some(FileTimeNs(1)),
+                ..destructive(content, 10_000)
             },
             content_key: ContentKey(content.to_owned()),
         },
@@ -531,6 +628,38 @@ fn media_observation(content: &str) -> MediaObservation {
             subtitle_count: 0,
         },
     }
+}
+
+#[test]
+fn moved_or_duplicated_paths_join_the_probable_content_record_after_observation() {
+    let first = media_observation("shared-content");
+    let mut second = first.clone();
+    second.path_hash = PathHash("path-shared-content-copy".to_owned());
+    second.binding.identity = DestructiveIdentity {
+        file_id: FileSystemId::Unix {
+            device: 1,
+            inode: 999,
+        },
+        ..second.binding.identity
+    };
+    let mut durable = crate::DurableState::default();
+    for observation in [first, second] {
+        crate::fold(
+            &mut durable,
+            &DurableDelta::MediaObserved {
+                observation: Box::new(observation),
+            },
+        );
+    }
+
+    assert_eq!(durable.paths.len(), 2);
+    assert_eq!(durable.records.len(), 1);
+    assert!(
+        durable
+            .paths
+            .values()
+            .all(|binding| binding.content_key == ContentKey("shared-content".to_owned()))
+    );
 }
 
 #[test]
@@ -760,6 +889,12 @@ fn move_command(item_id: u64, before: Option<u64>) -> Command {
     })
 }
 
+fn reorder_pending_command(pending_order: &[u64]) -> Command {
+    Command::Queue(QueueCommand::ReorderPending {
+        pending_order: pending_order.iter().copied().map(QueueItemId).collect(),
+    })
+}
+
 #[test]
 fn reorder_destinations_around_active_pending_and_finished_items() {
     struct Case {
@@ -870,6 +1005,83 @@ fn reorder_destinations_around_active_pending_and_finished_items() {
         assert!(applied.durable.is_empty(), "{name}");
         assert_queue_shape(&state, &[1, 2, 3, 4, 5]);
     }
+}
+
+#[test]
+fn whole_pending_order_reorders_atomically_around_the_frozen_prefix() {
+    let mut state = reorder_fixture();
+    let applied = apply(&mut state, reorder_pending_command(&[5, 3, 4]));
+    assert_eq!(applied.reply, Reply::Accepted);
+    assert_eq!(
+        applied.durable,
+        vec![DurableDelta::QueueReordered {
+            pending_order: vec![QueueItemId(5), QueueItemId(3), QueueItemId(4)],
+        }],
+    );
+    assert_queue_shape(&state, &[1, 2, 5, 3, 4]);
+
+    let identity = apply(&mut state, reorder_pending_command(&[5, 3, 4]));
+    assert_eq!(identity.reply, Reply::Accepted);
+    assert!(identity.durable.is_empty());
+    assert_queue_shape(&state, &[1, 2, 5, 3, 4]);
+}
+
+#[test]
+fn whole_pending_order_rejects_every_non_permutation_without_mutation() {
+    let cases: [(&str, &[u64], &str); 5] = [
+        (
+            "duplicate",
+            &[3, 3, 5],
+            "pending order contains duplicate item ids",
+        ),
+        ("omitted", &[3, 4], "pending order omits a queued item"),
+        (
+            "unknown",
+            &[3, 4, 99],
+            "pending order contains an unknown item",
+        ),
+        (
+            "active",
+            &[2, 3, 4],
+            "pending order contains a non-pending item",
+        ),
+        (
+            "finished",
+            &[1, 3, 4],
+            "pending order contains a non-pending item",
+        ),
+    ];
+    for (name, order, reason) in cases {
+        let mut state = reorder_fixture();
+        let applied = apply(&mut state, reorder_pending_command(order));
+        assert_eq!(
+            applied.reply,
+            Reply::Rejected {
+                reason: reason.to_owned(),
+            },
+            "{name}",
+        );
+        assert!(applied.durable.is_empty(), "{name}");
+        assert_queue_shape(&state, &[1, 2, 3, 4, 5]);
+    }
+}
+
+#[test]
+fn whole_pending_order_rejects_a_submission_made_stale_by_a_queue_edit() {
+    let mut state = reorder_fixture();
+    let stale_order = [5, 4, 3];
+    let added = apply(&mut state, add_command(QueueItemId(6), "video-6.mkv"));
+    assert_eq!(added.reply, Reply::Accepted);
+
+    let applied = apply(&mut state, reorder_pending_command(&stale_order));
+    assert_eq!(
+        applied.reply,
+        Reply::Rejected {
+            reason: "pending order omits a queued item".to_owned(),
+        },
+    );
+    assert!(applied.durable.is_empty());
+    assert_queue_shape(&state, &[1, 2, 3, 4, 5, 6]);
 }
 
 #[test]
@@ -1965,15 +2177,17 @@ fn replay_rejects_a_mismatched_sequence_after_a_snapshot() {
 }
 
 #[test]
-fn replay_reports_an_unsupported_schema_version_not_a_parse_error() {
-    let future = JOURNAL_SCHEMA_VERSION + 1;
-    let line = format!("{{\"schema_version\":{future},\"record\":{{\"Unknown\":null}}}}\n");
-    let replayed = replay(line.as_bytes());
-    let corruption = replayed.corruption.expect("unsupported schema");
-    assert_eq!(
-        corruption.reason,
-        format!("unsupported journal schema {future}")
-    );
+fn replay_reports_old_and_future_schema_versions_before_decoding_the_payload() {
+    for unsupported in [JOURNAL_SCHEMA_VERSION - 1, JOURNAL_SCHEMA_VERSION + 1] {
+        let line =
+            format!("{{\"schema_version\":{unsupported},\"record\":{{\"Unknown\":null}}}}\n");
+        let replayed = replay(line.as_bytes());
+        let corruption = replayed.corruption.expect("unsupported schema");
+        assert_eq!(
+            corruption.reason,
+            format!("unsupported journal schema {unsupported}")
+        );
+    }
 }
 
 #[test]
@@ -2069,6 +2283,49 @@ fn replay_rejects_semantically_impossible_durable_transition() {
             run_id: RunId(3),
             at: UnixMillis(1_000),
         }],
+    };
+    let replayed = replay(&encode_record(&envelope).expect("journal record"));
+    assert!(replayed.corruption.is_some());
+    assert!(replayed.state.queue.is_empty());
+}
+
+#[test]
+fn replay_applies_one_atomic_pending_order() {
+    let envelope = JournalEnvelope {
+        sequence: JournalSequence(0),
+        deltas: vec![
+            queue_added_delta(1, "one.mkv"),
+            queue_added_delta(2, "two.mkv"),
+            queue_added_delta(3, "three.mkv"),
+            DurableDelta::QueueReordered {
+                pending_order: vec![QueueItemId(3), QueueItemId(1), QueueItemId(2)],
+            },
+        ],
+    };
+    let replayed = replay(&encode_record(&envelope).expect("journal record"));
+    assert!(replayed.corruption.is_none());
+    assert_eq!(
+        replayed
+            .state
+            .queue
+            .iter()
+            .map(|item| item.id)
+            .collect::<Vec<_>>(),
+        vec![QueueItemId(3), QueueItemId(1), QueueItemId(2)],
+    );
+}
+
+#[test]
+fn replay_rejects_an_incomplete_pending_order_with_its_entire_batch() {
+    let envelope = JournalEnvelope {
+        sequence: JournalSequence(0),
+        deltas: vec![
+            queue_added_delta(1, "one.mkv"),
+            queue_added_delta(2, "two.mkv"),
+            DurableDelta::QueueReordered {
+                pending_order: vec![QueueItemId(2)],
+            },
+        ],
     };
     let replayed = replay(&encode_record(&envelope).expect("journal record"));
     assert!(replayed.corruption.is_some());
@@ -2567,7 +2824,7 @@ fn latest_decisive_run_wins_the_verdict() {
 }
 
 #[test]
-fn verdict_freshness_is_a_stamp_match_against_the_settled_output() {
+fn verdict_freshness_is_a_full_identity_match_against_the_settled_output() {
     let converted = crate::Verdict {
         kind: crate::VerdictKind::Converted {
             output_content_key: Some(ContentKey("ck-out".to_owned())),
@@ -2582,57 +2839,71 @@ fn verdict_freshness_is_a_stamp_match_against_the_settled_output() {
         decided_at: UnixMillis(5_000),
     };
     let settled = destructive("out", 42);
-    let matching = FileStamp {
-        size: 42,
-        modified_ns: settled.modified_ns,
-    };
     assert!(crate::verdict_applies(
         &converted,
         Some(&settled),
-        Some(&matching)
+        Some(&settled),
+        crate::TimestampReliability::Reliable,
+    ));
+    assert!(!crate::verdict_applies(
+        &converted,
+        Some(&settled),
+        Some(&settled),
+        crate::TimestampReliability::CoarseOrRecent,
     ));
     // Changed size or modification time: the file is no longer the output.
     assert!(!crate::verdict_applies(
         &converted,
         Some(&settled),
-        Some(&FileStamp {
+        Some(&DestructiveIdentity {
             size: 43,
-            modified_ns: settled.modified_ns,
-        })
+            ..settled.clone()
+        }),
+        crate::TimestampReliability::Reliable,
     ));
     assert!(!crate::verdict_applies(
         &converted,
         Some(&settled),
-        Some(&FileStamp {
-            size: 42,
+        Some(&DestructiveIdentity {
             modified_ns: Some(FileTimeNs(7)),
-        })
+            ..settled.clone()
+        }),
+        crate::TimestampReliability::Reliable,
     ));
     // One side missing its modification time is not a match.
     assert!(!crate::verdict_applies(
         &converted,
         Some(&settled),
-        Some(&FileStamp {
-            size: 42,
+        Some(&DestructiveIdentity {
             modified_ns: None,
-        })
+            ..settled.clone()
+        }),
+        crate::TimestampReliability::Reliable,
     ));
-    // Both sides unknown degrade to a size-only match.
+    // Even full file-id/size equality is conservative when mtime is unknown.
     let unstamped = DestructiveIdentity {
         modified_ns: None,
         ..destructive("out", 42)
     };
-    assert!(crate::verdict_applies(
+    assert!(!crate::verdict_applies(
         &converted,
         Some(&unstamped),
-        Some(&FileStamp {
-            size: 42,
-            modified_ns: None,
-        })
+        Some(&unstamped),
+        crate::TimestampReliability::Reliable,
     ));
     // Missing file or pruned/unsettled transaction: no answer, not fresh.
-    assert!(!crate::verdict_applies(&converted, Some(&settled), None));
-    assert!(!crate::verdict_applies(&converted, None, Some(&matching)));
+    assert!(!crate::verdict_applies(
+        &converted,
+        Some(&settled),
+        None,
+        crate::TimestampReliability::Reliable,
+    ));
+    assert!(!crate::verdict_applies(
+        &converted,
+        None,
+        Some(&settled),
+        crate::TimestampReliability::Reliable,
+    ));
 
     // Not-worthwhile is content-keyed; path state is irrelevant.
     let not_worthwhile = crate::Verdict {
@@ -2643,16 +2914,23 @@ fn verdict_freshness_is_a_stamp_match_against_the_settled_output() {
         source_run: Some(RunId(3)),
         decided_at: UnixMillis(5_000),
     };
-    assert!(crate::verdict_applies(&not_worthwhile, None, None));
+    assert!(crate::verdict_applies(
+        &not_worthwhile,
+        None,
+        None,
+        crate::TimestampReliability::Unknown,
+    ));
 }
 
 /// A durable state with one observed path/record, optionally carrying a
-/// standing verdict. Returns the bound path hash and the binding's stamp
-/// (the "file is unchanged" probe).
-fn enqueue_fixture(verdict: Option<crate::Verdict>) -> (crate::DurableState, PathHash, FileStamp) {
+/// standing verdict. Returns the bound path hash and its full destructive
+/// identity (the "file is unchanged" probe).
+fn enqueue_fixture(
+    verdict: Option<crate::Verdict>,
+) -> (crate::DurableState, PathHash, DestructiveIdentity) {
     let observation = media_observation("enqueue-content");
     let path_hash = observation.path_hash.clone();
-    let stamp = observation.binding.stamp.clone();
+    let identity = observation.binding.identity.clone();
     let content_key = observation.binding.content_key.clone();
     let mut durable = crate::DurableState::default();
     crate::fold(
@@ -2668,7 +2946,7 @@ fn enqueue_fixture(verdict: Option<crate::Verdict>) -> (crate::DurableState, Pat
             .expect("observed record")
             .verdict = Some(verdict);
     }
-    (durable, path_hash, stamp)
+    (durable, path_hash, identity)
 }
 
 fn converted_verdict(source_run: RunId) -> crate::Verdict {
@@ -2700,28 +2978,29 @@ fn not_worthwhile_verdict(source_run: RunId) -> crate::Verdict {
 }
 
 #[test]
-fn enqueue_disposition_is_verdict_aware_and_stamp_gated() {
+fn enqueue_disposition_is_verdict_aware_and_identity_gated() {
     // Unknown path: nothing cached, nothing to skip on.
     assert_eq!(
         crate::evaluate_enqueue(
             &crate::DurableState::default(),
             &PathHash("path-unknown".to_owned()),
             None,
+            crate::TimestampReliability::Unknown,
             Operation::Convert,
             AnalysisIntent::ReuseIfFresh,
         ),
         None
     );
 
-    let (durable, path_hash, stamp) = enqueue_fixture(Some(not_worthwhile_verdict(RunId(9))));
+    let (durable, path_hash, identity) = enqueue_fixture(Some(not_worthwhile_verdict(RunId(9))));
     let cases: [(
-        Option<&FileStamp>,
+        Option<&DestructiveIdentity>,
         Operation,
         AnalysisIntent,
         Option<SkipReason>,
     ); 4] = [
         (
-            Some(&stamp),
+            Some(&identity),
             Operation::Convert,
             AnalysisIntent::ReuseIfFresh,
             Some(SkipReason::NotWorthwhile {
@@ -2730,40 +3009,48 @@ fn enqueue_disposition_is_verdict_aware_and_stamp_gated() {
         ),
         // Analyze adds are never verdict-filtered.
         (
-            Some(&stamp),
+            Some(&identity),
             Operation::Analyze,
             AnalysisIntent::ReuseIfFresh,
             None,
         ),
         // Refresh is the explicit escape hatch.
         (
-            Some(&stamp),
+            Some(&identity),
             Operation::Convert,
             AnalysisIntent::Refresh,
             None,
         ),
-        // A missing stamp cannot establish the binding still describes the
+        // A missing identity cannot establish the binding still describes the
         // file, so no verdict-based skip fires.
         (None, Operation::Convert, AnalysisIntent::ReuseIfFresh, None),
     ];
-    for (stamp, operation, intent, expected) in cases {
+    for (identity, operation, intent, expected) in cases {
         assert_eq!(
-            crate::evaluate_enqueue(&durable, &path_hash, stamp, operation, intent),
+            crate::evaluate_enqueue(
+                &durable,
+                &path_hash,
+                identity,
+                crate::TimestampReliability::Reliable,
+                operation,
+                intent,
+            ),
             expected,
             "operation {operation:?} intent {intent:?}"
         );
     }
 
-    // A changed file at the known path (stale stamp) is re-queueable.
-    let changed = FileStamp {
-        size: stamp.size + 1,
-        modified_ns: stamp.modified_ns,
+    // A changed file at the known path (stale identity) is re-queueable.
+    let changed = DestructiveIdentity {
+        size: identity.size + 1,
+        ..identity.clone()
     };
     assert_eq!(
         crate::evaluate_enqueue(
             &durable,
             &path_hash,
             Some(&changed),
+            crate::TimestampReliability::Reliable,
             Operation::Convert,
             AnalysisIntent::ReuseIfFresh,
         ),
@@ -2772,12 +3059,13 @@ fn enqueue_disposition_is_verdict_aware_and_stamp_gated() {
 
     // Fresh binding + Converted verdict: the content itself was already
     // processed, so re-converting is duplicate work.
-    let (durable, path_hash, stamp) = enqueue_fixture(Some(converted_verdict(RunId(9))));
+    let (durable, path_hash, identity) = enqueue_fixture(Some(converted_verdict(RunId(9))));
     assert_eq!(
         crate::evaluate_enqueue(
             &durable,
             &path_hash,
-            Some(&stamp),
+            Some(&identity),
+            crate::TimestampReliability::Reliable,
             Operation::Convert,
             AnalysisIntent::ReuseIfFresh,
         ),
@@ -2785,14 +3073,30 @@ fn enqueue_disposition_is_verdict_aware_and_stamp_gated() {
             source_run: Some(RunId(9)),
         })
     );
+    for reliability in [
+        crate::TimestampReliability::Unknown,
+        crate::TimestampReliability::CoarseOrRecent,
+    ] {
+        assert_eq!(
+            crate::evaluate_enqueue(
+                &durable,
+                &path_hash,
+                Some(&identity),
+                reliability,
+                Operation::Convert,
+                AnalysisIntent::ReuseIfFresh,
+            ),
+            None
+        );
+    }
 }
 
 #[test]
 fn enqueue_recognizes_the_replace_mode_output_without_a_fresh_binding() {
     // Replace-mode aftermath: the binding still names the ORIGINAL content
-    // (stamp 10_000), but the file now at the path is the settled output of
+    // (source identity size 10_000), but the file now at the path is the settled output of
     // run 9 (size 42). Recognition rides on the output identity alone.
-    let (mut durable, path_hash, _stamp) = enqueue_fixture(Some(converted_verdict(RunId(9))));
+    let (mut durable, path_hash, _identity) = enqueue_fixture(Some(converted_verdict(RunId(9))));
     durable.outputs.insert(
         RunId(9),
         transaction(
@@ -2802,15 +3106,13 @@ fn enqueue_recognizes_the_replace_mode_output_without_a_fresh_binding() {
             Replacement::RetireOriginal,
         ),
     );
-    let output_stamp = FileStamp {
-        size: 42,
-        modified_ns: destructive("out", 42).modified_ns,
-    };
+    let output_identity = destructive("out", 42);
     assert_eq!(
         crate::evaluate_enqueue(
             &durable,
             &path_hash,
-            Some(&output_stamp),
+            Some(&output_identity),
+            crate::TimestampReliability::Reliable,
             Operation::Convert,
             AnalysisIntent::ReuseIfFresh,
         ),
@@ -2818,12 +3120,29 @@ fn enqueue_recognizes_the_replace_mode_output_without_a_fresh_binding() {
             source_run: Some(RunId(9)),
         })
     );
+    for reliability in [
+        crate::TimestampReliability::Unknown,
+        crate::TimestampReliability::CoarseOrRecent,
+    ] {
+        assert_eq!(
+            crate::evaluate_enqueue(
+                &durable,
+                &path_hash,
+                Some(&output_identity),
+                reliability,
+                Operation::Convert,
+                AnalysisIntent::ReuseIfFresh,
+            ),
+            None
+        );
+    }
     // Refresh bypasses even output recognition.
     assert_eq!(
         crate::evaluate_enqueue(
             &durable,
             &path_hash,
-            Some(&output_stamp),
+            Some(&output_identity),
+            crate::TimestampReliability::Reliable,
             Operation::Convert,
             AnalysisIntent::Refresh,
         ),
@@ -2831,15 +3150,13 @@ fn enqueue_recognizes_the_replace_mode_output_without_a_fresh_binding() {
     );
     // A file that matches neither the output nor the original binding is new
     // content at a known path: accept.
-    let unrelated = FileStamp {
-        size: 43,
-        modified_ns: None,
-    };
+    let unrelated = destructive("unrelated", 43);
     assert_eq!(
         crate::evaluate_enqueue(
             &durable,
             &path_hash,
             Some(&unrelated),
+            crate::TimestampReliability::Reliable,
             Operation::Convert,
             AnalysisIntent::ReuseIfFresh,
         ),
@@ -2859,7 +3176,8 @@ fn enqueue_recognizes_the_replace_mode_output_without_a_fresh_binding() {
         crate::evaluate_enqueue(
             &durable,
             &path_hash,
-            Some(&output_stamp),
+            Some(&output_identity),
+            crate::TimestampReliability::Reliable,
             Operation::Convert,
             AnalysisIntent::ReuseIfFresh,
         ),
@@ -2869,7 +3187,7 @@ fn enqueue_recognizes_the_replace_mode_output_without_a_fresh_binding() {
 
 #[test]
 fn enqueue_filters_ineligible_cached_metadata_only_when_fresh() {
-    let (mut durable, path_hash, stamp) = enqueue_fixture(None);
+    let (mut durable, path_hash, identity) = enqueue_fixture(None);
     {
         let record = durable
             .records
@@ -2882,7 +3200,8 @@ fn enqueue_filters_ineligible_cached_metadata_only_when_fresh() {
         crate::evaluate_enqueue(
             &durable,
             &path_hash,
-            Some(&stamp),
+            Some(&identity),
+            crate::TimestampReliability::Reliable,
             Operation::Convert,
             AnalysisIntent::ReuseIfFresh,
         ),
@@ -2893,22 +3212,24 @@ fn enqueue_filters_ineligible_cached_metadata_only_when_fresh() {
         crate::evaluate_enqueue(
             &durable,
             &path_hash,
-            Some(&stamp),
+            Some(&identity),
+            crate::TimestampReliability::Reliable,
             Operation::Convert,
             AnalysisIntent::Refresh,
         ),
         Some(SkipReason::AlreadyAv1Matroska)
     );
-    // Stale stamp: the cached metadata no longer answers for the file.
-    let changed = FileStamp {
-        size: stamp.size + 1,
-        modified_ns: stamp.modified_ns,
+    // Stale identity: the cached metadata no longer answers for the file.
+    let changed = DestructiveIdentity {
+        size: identity.size + 1,
+        ..identity.clone()
     };
     assert_eq!(
         crate::evaluate_enqueue(
             &durable,
             &path_hash,
             Some(&changed),
+            crate::TimestampReliability::Reliable,
             Operation::Convert,
             AnalysisIntent::ReuseIfFresh,
         ),
@@ -2926,7 +3247,8 @@ fn enqueue_filters_ineligible_cached_metadata_only_when_fresh() {
         crate::evaluate_enqueue(
             &durable,
             &path_hash,
-            Some(&stamp),
+            Some(&identity),
+            crate::TimestampReliability::Reliable,
             Operation::Convert,
             AnalysisIntent::ReuseIfFresh,
         ),
@@ -3116,7 +3438,7 @@ fn enqueue_time_skip_reasons_are_never_terminal_outcomes() {
 fn add_many_judges_each_request_and_reports_one_summary() {
     // A fresh-bound path whose content carries a Converted verdict — the
     // enqueue tier's ProbableDuplicate case.
-    let (durable, path_hash, stamp) = enqueue_fixture(Some(converted_verdict(RunId(9))));
+    let (durable, path_hash, identity) = enqueue_fixture(Some(converted_verdict(RunId(9))));
     let mut state = AppState {
         durable,
         ..AppState::default()
@@ -3126,7 +3448,8 @@ fn add_many_judges_each_request_and_reports_one_summary() {
             // Fresh binding + decisive verdict: filtered at add.
             QueueAddRequest {
                 path_hash: Some(path_hash.clone()),
-                stamp: Some(stamp.clone()),
+                identity: Some(identity.clone()),
+                timestamp_reliability: crate::TimestampReliability::Reliable,
                 ..add_request(QueueItemId(1), "known.mkv")
             },
             // No enqueue facts: fails open and enqueues.
@@ -3136,7 +3459,8 @@ fn add_many_judges_each_request_and_reports_one_summary() {
             // Refresh bypasses the verdict skip even on the known content.
             QueueAddRequest {
                 path_hash: Some(path_hash),
-                stamp: Some(stamp),
+                identity: Some(identity),
+                timestamp_reliability: crate::TimestampReliability::Reliable,
                 intent: AnalysisIntent::Refresh,
                 ..add_request(QueueItemId(4), "known-again.mkv")
             },
@@ -4891,10 +5215,8 @@ fn adopted_verdicts_apply_only_by_content_identity() {
     assert!(!crate::verdict_applies(
         &adopted_converted,
         None,
-        Some(&FileStamp {
-            size: 4_000,
-            modified_ns: Some(FileTimeNs(1)),
-        })
+        Some(&destructive("adopted-output", 4_000)),
+        crate::TimestampReliability::Reliable,
     ));
     let adopted_not_worthwhile = crate::Verdict {
         kind: crate::VerdictKind::NotWorthwhile {
@@ -4904,5 +5226,10 @@ fn adopted_verdicts_apply_only_by_content_identity() {
         source_run: None,
         decided_at: UnixMillis(1_000),
     };
-    assert!(crate::verdict_applies(&adopted_not_worthwhile, None, None));
+    assert!(crate::verdict_applies(
+        &adopted_not_worthwhile,
+        None,
+        None,
+        crate::TimestampReliability::Unknown,
+    ));
 }

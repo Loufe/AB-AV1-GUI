@@ -17,7 +17,7 @@ use crfty_core::{
     AnalysisAttempt, AnalysisIntent, AnalysisProfile, AnalysisResult, ArtifactIdentity, AudioCodec,
     AudioStreamMeta, ClaimId, CompletionEvidence, ConflictKind, ContentKey, Crf, DecodeMode,
     DecodePreference, DestructiveIdentity, DiagnosticTail, DurableDelta, DurableState, DurationMs,
-    ExecutionSettings, FailureFacts, FailureKind, FileStamp, FileSystemId, FileTimeNs, ImportPath,
+    ExecutionSettings, FailureFacts, FailureKind, FileSystemId, FileTimeNs, ImportPath,
     ImportedHistoryRecord, ItemOutcome, JobAction, JobPhase, JobSpec, MediaContainer,
     MediaObservation, Operation, OutputDelta, OutputState, OutputTarget, OutputTransaction,
     OverwriteDecision, ParkedStatus, PathBinding, PathHash, PhaseSpan, QueueItem, QueueItemId,
@@ -86,6 +86,12 @@ fn moved(id: u64, before: Option<u64>) -> DurableDelta {
     DurableDelta::QueueMoved {
         item_id: QueueItemId(id),
         before: before.map(QueueItemId),
+    }
+}
+
+fn reordered(pending_order: &[u64]) -> DurableDelta {
+    DurableDelta::QueueReordered {
+        pending_order: pending_order.iter().copied().map(QueueItemId).collect(),
     }
 }
 
@@ -195,7 +201,11 @@ fn observed(path: &str, key: &str, duration_ms: u64) -> DurableDelta {
         observation: Box::new(MediaObservation {
             path_hash: PathHash(path.to_owned()),
             binding: PathBinding {
-                stamp: FileStamp {
+                identity: DestructiveIdentity {
+                    file_id: FileSystemId::Unix {
+                        device: 1,
+                        inode: duration_ms,
+                    },
                     size: 3_000_000,
                     modified_ns: Some(FileTimeNs(1_000_000)),
                 },
@@ -453,6 +463,11 @@ fn scenarios() -> Vec<Scenario> {
             "queue_moved_missing_item",
             vec![added(1), added(2)],
             vec![moved(9, Some(1))],
+        ),
+        scenario(
+            "queue_reordered_pending",
+            vec![added(1), added(2), added(3)],
+            vec![reordered(&[3, 1, 2])],
         ),
         scenario(
             // The retried item resets to Queued and moves to the end.

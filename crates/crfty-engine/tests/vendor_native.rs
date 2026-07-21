@@ -96,7 +96,8 @@ fn managed_tools_execute_from_a_spaces_and_unicode_vendor_root() {
                 item_id: QueueItemId(1),
                 input: input.clone(),
                 path_hash: None,
-                stamp: None,
+                identity: None,
+                timestamp_reliability: crfty_core::TimestampReliability::Unknown,
                 operation: Operation::Convert,
                 intent: AnalysisIntent::ReuseIfFresh,
                 output_target: OutputTarget::Suffix {

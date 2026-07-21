@@ -10,6 +10,8 @@
     "format": "oxfmt",
     "format:check": "oxfmt --check",
     "test": "vitest run",
+    "test:node": "vitest run --project node",
+    "test:browser": "vitest run --project browser",
     "typecheck": "tsc -b",
     "preview": "vite preview",
     "tauri:dev": "cd .. && tauri dev --config crates/crfty-shell/tauri.conf.json",
@@ -38,11 +40,14 @@
     "@types/react": "^19.2.17",
     "@types/react-dom": "^19.2.3",
     "@vitejs/plugin-react": "^6.0.3",
+    "@vitest/browser-playwright": "4.1.10",
     "oxfmt": "0.59.0",
     "oxlint": "^1.71.0",
+    "playwright": "1.61.1",
     "typescript": "~6.0.2",
     "vite": "^8.1.1",
-    "vitest": "^4.1.10"
+    "vitest": "4.1.10",
+    "vitest-browser-react": "2.2.0"
   },
   "packageManager": "pnpm@11.15.0"
 }

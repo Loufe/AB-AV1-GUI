@@ -6,9 +6,9 @@ use std::{
 use serde::{Deserialize, Serialize};
 
 use crate::{
-    AnalysisAttempt, AnalysisIntent, AnalysisResult, ContentKey, DecodeMode, DurationMs,
-    FailureFacts, FileRecord, ImportPath, ImportedHistoryRecord, ImportedProvenance, JobPhase,
-    JobSpec, MediaObservation, Operation, OutputDelta, OutputTarget, OverwriteDecision,
+    AnalysisAttempt, AnalysisIntent, AnalysisResult, AnalysisSnapshot, ContentKey, DecodeMode,
+    DurationMs, FailureFacts, FileRecord, ImportPath, ImportedHistoryRecord, ImportedProvenance,
+    JobPhase, JobSpec, MediaObservation, Operation, OutputDelta, OutputTarget, OverwriteDecision,
     PathBinding, PathHash, ReservedJob, Settings, SkipReason, ToolRevisions, UnixMillis, Verdict,
     VerdictKind,
 };
@@ -205,6 +205,11 @@ pub enum DurableDelta {
         item_id: QueueItemId,
         before: Option<QueueItemId>,
     },
+    /// Atomically replaces the order of the complete queued tail. Finished
+    /// and active items keep their positions in the frozen prefix.
+    QueueReordered {
+        pending_order: Vec<QueueItemId>,
+    },
     /// A finished item goes around again: state resets to `Queued` and the
     /// item moves to the end of the queue, preserving the
     /// finished < active < queued shape invariant. The old run's lineage is
@@ -293,6 +298,9 @@ pub struct DurableState {
 pub struct AppState {
     pub durable: DurableState,
     pub settings: Settings,
+    /// Current Analysis read model. Standing and reducer-owned, but never
+    /// journaled or included in [`AppSnapshot`].
+    pub analysis: AnalysisSnapshot,
     pub session: SessionState,
     pub aggregates: SessionAggregates,
     pub telemetry: BTreeMap<RunId, Telemetry>,
@@ -427,6 +435,9 @@ pub fn fold(state: &mut DurableState, delta: &DurableDelta) {
         }
         DurableDelta::QueueMoved { item_id, before } => {
             move_item(&mut state.queue, *item_id, *before)
+        }
+        DurableDelta::QueueReordered { pending_order } => {
+            reorder_pending(&mut state.queue, pending_order)
         }
         DurableDelta::QueueRequeued { item_id } => {
             if let Some(source) = state.queue.iter().position(|item| item.id == *item_id) {
@@ -682,4 +693,53 @@ fn move_item(queue: &mut Vec<QueueItem>, item_id: QueueItemId, before: Option<Qu
         .and_then(|before_id| queue.iter().position(|entry| entry.id == before_id))
         .unwrap_or(queue.len());
     queue.insert(destination, item);
+}
+
+pub(crate) fn validate_pending_order(
+    queue: &[QueueItem],
+    pending_order: &[QueueItemId],
+) -> Result<(), &'static str> {
+    let submitted = pending_order.iter().copied().collect::<BTreeSet<_>>();
+    if submitted.len() != pending_order.len() {
+        return Err("pending order contains duplicate item ids");
+    }
+
+    for item_id in pending_order {
+        let Some(item) = queue.iter().find(|item| item.id == *item_id) else {
+            return Err("pending order contains an unknown item");
+        };
+        if !matches!(item.state, QueueItemState::Queued) {
+            return Err("pending order contains a non-pending item");
+        }
+    }
+
+    let pending_count = queue
+        .iter()
+        .filter(|item| matches!(item.state, QueueItemState::Queued))
+        .count();
+    if pending_order.len() != pending_count {
+        return Err("pending order omits a queued item");
+    }
+
+    Ok(())
+}
+
+fn reorder_pending(queue: &mut Vec<QueueItem>, pending_order: &[QueueItemId]) {
+    let mut frozen = Vec::with_capacity(queue.len());
+    let mut pending = Vec::new();
+    for item in std::mem::take(queue) {
+        if matches!(item.state, QueueItemState::Queued) {
+            pending.push(item);
+        } else {
+            frozen.push(item);
+        }
+    }
+
+    for item_id in pending_order {
+        if let Some(source) = pending.iter().position(|item| item.id == *item_id) {
+            frozen.push(pending.remove(source));
+        }
+    }
+    frozen.append(&mut pending);
+    *queue = frozen;
 }

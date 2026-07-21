@@ -4,8 +4,8 @@ use crate::{
     AnalysisIntent, AnalysisProfile, AnalysisResult, DEFAULT_VMAF_TARGET, DecodeMode,
     DestructiveIdentity, DurableState, ExecutionSettings, FileRecord, FileStamp,
     IMPORT_MTIME_TOLERANCE_NS, ImportedHistoryRecord, JobAction, MIN_VMAF_FALLBACK_TARGET,
-    MediaContainer, MediaObservation, Operation, ParkedStatus, PathHash, RunId, Verdict,
-    VerdictKind, VideoCodec, VideoMeta,
+    MediaContainer, MediaObservation, Operation, ParkedStatus, PathHash, RunId,
+    TimestampReliability, Verdict, VerdictKind, VideoCodec, VideoMeta,
 };
 
 pub const MIN_VIDEO_PIXELS: u64 = 921_600;
@@ -21,7 +21,7 @@ pub enum SkipReason {
     AlreadyAv1Matroska,
     OutputExists,
     /// Enqueue-time only: the file at the candidate path is recognized by
-    /// stamp as the settled output of `source_run` (replace-mode output at
+    /// full destructive identity as the settled output of `source_run` (replace-mode output at
     /// the input path).
     AlreadyConverted {
         source_run: Option<RunId>,
@@ -96,16 +96,6 @@ pub fn select_analysis(
         })
 }
 
-/// The single stamp-equality rule shared by every freshness tier: enqueue
-/// disposition, verdict recognition, and (once #42 lands) discovery joins.
-/// Size and modification time must both match — an unknown mtime only
-/// matches an unknown mtime. Filesystem-granularity tolerance, if it is ever
-/// needed, lands here and nowhere else.
-#[must_use]
-pub fn stamp_matches(current: &FileStamp, known: &FileStamp) -> bool {
-    current.size == known.size && current.modified_ns == known.modified_ns
-}
-
 /// Whether a decided verdict still describes the file that would be enqueued,
 /// without ffprobe.
 ///
@@ -115,11 +105,13 @@ pub fn stamp_matches(current: &FileStamp, known: &FileStamp) -> bool {
 /// from the binding. It comes from the settled output identity instead:
 /// `settled_output` is the final identity from
 /// `outputs[verdict.source_run].state` (Committed or Retired), and
-/// `current_stamp` is a cheap stat of the file now at the candidate path.
+/// `current_identity` is a cheap stat-derived identity of the file now at the
+/// candidate path.
 ///
 /// - `Converted`/`Remuxed` apply while the file on disk IS the produced
-///   output: stamp equality (size and modification time, both or neither
-///   known) against the settled identity. A missing file, a changed file, or
+///   output: engine-confirmed reliable time plus exact file id, size, and
+///   known modification time equality against the settled identity. A
+///   missing file, a changed file, or
 ///   a pruned/unsettled transaction means the verdict no longer answers for
 ///   the path.
 /// - `NotWorthwhile` is a judgment about input content. Callers resolve the
@@ -136,20 +128,18 @@ pub fn stamp_matches(current: &FileStamp, known: &FileStamp) -> bool {
 pub fn verdict_applies(
     verdict: &Verdict,
     settled_output: Option<&DestructiveIdentity>,
-    current_stamp: Option<&FileStamp>,
+    current_identity: Option<&DestructiveIdentity>,
+    timestamp_reliability: TimestampReliability,
 ) -> bool {
     match &verdict.kind {
         VerdictKind::Converted { .. } | VerdictKind::Remuxed { .. } => {
-            let (Some(identity), Some(stamp)) = (settled_output, current_stamp) else {
+            if timestamp_reliability != TimestampReliability::Reliable {
+                return false;
+            }
+            let (Some(settled), Some(current)) = (settled_output, current_identity) else {
                 return false;
             };
-            stamp_matches(
-                stamp,
-                &FileStamp {
-                    size: identity.size,
-                    modified_ns: identity.modified_ns,
-                },
-            )
+            current.modified_ns.is_some() && current == settled
         }
         VerdictKind::NotWorthwhile { .. } => true,
     }
@@ -187,7 +177,7 @@ pub fn resolve_parked(
     parked: &ImportedHistoryRecord,
     observation: &MediaObservation,
 ) -> ParkedResolution {
-    if parked_stamp_matches(parked, &observation.binding.stamp) {
+    if parked_stamp_matches(parked, &observation.binding.stamp()) {
         let verdict = match parked.status {
             ParkedStatus::Converted => Some(converted_verdict(parked)),
             ParkedStatus::NotWorthwhile => Some(not_worthwhile_verdict(parked)),
@@ -260,8 +250,9 @@ pub fn settled_output_identity(
 
 /// Disposition of one add request, decided before a queue item exists.
 /// `None` accepts; `Some(reason)` counts into the add summary and never
-/// creates an item. All I/O facts (`path_hash`, `stamp`) arrive as command
-/// payload — core cannot stat or hash paths.
+/// creates an item. All I/O facts (`path_hash`, `identity`, timestamp
+/// reliability) arrive as command payload — core cannot stat, hash paths, or
+/// consult a clock.
 ///
 /// Deliberate divergences from the V2 app (ADR-013):
 /// - Analyze adds are never filtered on cached analyses: claim-time reuse
@@ -274,7 +265,8 @@ pub fn settled_output_identity(
 pub fn evaluate_enqueue(
     durable: &DurableState,
     path_hash: &PathHash,
-    stamp: Option<&FileStamp>,
+    identity: Option<&DestructiveIdentity>,
+    timestamp_reliability: TimestampReliability,
     operation: Operation,
     intent: AnalysisIntent,
 ) -> Option<SkipReason> {
@@ -284,7 +276,7 @@ pub fn evaluate_enqueue(
     // Recognize the replace-mode output at the input path first. The binding
     // is stale by construction there — it still names the ORIGINAL content —
     // so this check must not require binding freshness; `verdict_applies`
-    // matches the stamp against the settled output identity instead.
+    // matches the live destructive identity against the settled output instead.
     if intent == AnalysisIntent::ReuseIfFresh
         && let Some(verdict) = &record.verdict
         && matches!(
@@ -296,7 +288,8 @@ pub fn evaluate_enqueue(
             verdict
                 .source_run
                 .and_then(|run| settled_output_identity(durable, run)),
-            stamp,
+            identity,
+            timestamp_reliability,
         )
     {
         return Some(SkipReason::AlreadyConverted {
@@ -305,9 +298,12 @@ pub fn evaluate_enqueue(
     }
 
     // Every remaining judgment rides on cached facts about the path's
-    // content, so it needs a fresh binding: the stamp taken now must equal
-    // the stamp under which the content key was recorded.
-    if !stamp.is_some_and(|current| stamp_matches(current, &binding.stamp)) {
+    // content, so it needs a fresh binding: the destructive identity taken now
+    // must equal the identity under which the content key was recorded.
+    if timestamp_reliability != TimestampReliability::Reliable
+        || !identity
+            .is_some_and(|current| current.modified_ns.is_some() && current == &binding.identity)
+    {
         return None;
     }
     if intent == AnalysisIntent::ReuseIfFresh

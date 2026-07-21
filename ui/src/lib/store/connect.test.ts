@@ -10,6 +10,7 @@ import type {
 } from "@/lib/bindings";
 
 import { appStore, initialAppState } from "./app-store";
+import { analysisStore, emptyAnalysisState } from "./analysis-store";
 import { applyPayload, hasSequenceGap, resetAbnormalShutdownReport } from "./connect";
 import { emptySessionAggregates, progressStore } from "./progress-store";
 
@@ -121,6 +122,7 @@ function snapshot(item: QueueItem): StreamPayload_Deserialize {
 beforeEach(() => {
   appStore.setState(initialAppState(), true);
   progressStore.setState({ telemetry: {}, aggregates: emptySessionAggregates() }, true);
+  analysisStore.setState(emptyAnalysisState(), true);
   resetAbnormalShutdownReport();
   vi.clearAllMocks();
 });
@@ -167,6 +169,71 @@ describe("applyPayload", () => {
     applyPayload({ Ephemeral: { SessionChanged: "Running" } });
     expect(appStore.getState().session).toBe("Running");
     expect(progressStore.getState().telemetry).toEqual({});
+  });
+
+  it("routes standing Analysis deltas to the isolated normalized store", () => {
+    const before = appStore.getState();
+    applyPayload({
+      Ephemeral: {
+        Analysis: {
+          Reset: {
+            snapshot: {
+              current: {
+                id: 12,
+                root: { text: "/videos", lossy: false },
+                activity: "Discovering",
+                rows: [],
+              },
+            },
+          },
+        },
+      },
+    });
+    applyPayload({
+      Ephemeral: {
+        Analysis: {
+          RowsUpserted: {
+            generation: 12,
+            rows: [
+              {
+                id: 3,
+                parent: null,
+                kind: "File",
+                display_name: { text: "movie.mkv", lossy: false },
+                display_path: { text: "/videos/movie.mkv", lossy: false },
+              },
+            ],
+          },
+        },
+      },
+    });
+
+    expect(analysisStore.getState().current?.rows[3]?.display_name.text).toBe("movie.mkv");
+    expect(appStore.getState()).toBe(before);
+  });
+
+  it("clears a stale Analysis generation when a new durable snapshot arrives", () => {
+    applyPayload({
+      Ephemeral: {
+        Analysis: {
+          Reset: {
+            snapshot: {
+              current: {
+                id: 7,
+                root: { text: "/old", lossy: false },
+                activity: "Ready",
+                rows: [],
+              },
+            },
+          },
+        },
+      },
+    });
+    expect(analysisStore.getState().current?.id).toBe(7);
+
+    applyPayload(snapshot(queueItem(1)));
+
+    expect(analysisStore.getState()).toEqual(emptyAnalysisState());
   });
 
   it("routes telemetry to the progress store without touching the app store", () => {
