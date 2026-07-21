@@ -2,9 +2,9 @@
 //! file defined in `docs/HISTORY_IMPORT.md`, and the path normalization that
 //! lets a parked record meet the real file it describes.
 //!
-//! The app knows nothing about any older history format. A converter script
-//! shipped with the V2 app (`tools/export_history_v3.py` on `main`) does all
-//! source-format interpretation and emits this schema; anything malformed
+//! The app knows nothing about any older history format. The standalone
+//! converter script shipped in this repository (`tools/export_history_v3.py`)
+//! does all source-format interpretation and emits this schema; anything malformed
 //! here is a converter or version-skew problem, so parsing rejects the whole
 //! file rather than salvaging records.
 
@@ -24,7 +24,7 @@ pub const IMPORT_SCHEMA_VERSION: u32 = 1;
 pub const MAX_IMPORT_BYTES: u64 = 256 * 1024 * 1024;
 
 const CONVERTER_HINT: &str =
-    "produce the file with the V2 app's converter script (tools/export_history_v3.py)";
+    "produce the file with the bundled converter script (tools/export_history_v3.py)";
 
 #[derive(Debug, PartialEq, Eq)]
 pub enum ImportError {
