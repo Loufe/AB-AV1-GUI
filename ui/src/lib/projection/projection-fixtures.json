@@ -9,7 +9,8 @@
         "records": {},
         "outputs": {},
         "conversion_runs": {},
-        "parked": {}
+        "parked": {},
+        "adopted_imports": []
       },
       "expected_rows": []
     },
@@ -153,11 +154,15 @@
             ]
           }
         },
-        "parked": {}
+        "parked": {},
+        "adopted_imports": []
       },
       "expected_rows": [
         {
-          "content_key": "content-0001",
+          "key": {
+            "kind": "Content",
+            "value": "content-0001"
+          },
           "status": "Converted",
           "source_run": 1,
           "happened_at": 1728003600000,
@@ -174,6 +179,7 @@
           ],
           "input_size_bytes": 10000000,
           "output_size_bytes": 4000000,
+          "encoding_time_ms": 240000,
           "vmaf": 9512,
           "crf": 24000
         }
@@ -343,11 +349,15 @@
             ]
           }
         },
-        "parked": {}
+        "parked": {},
+        "adopted_imports": []
       },
       "expected_rows": [
         {
-          "content_key": "content-0001",
+          "key": {
+            "kind": "Content",
+            "value": "content-0001"
+          },
           "status": "Converted",
           "source_run": 1,
           "happened_at": 1728003600000,
@@ -364,6 +374,7 @@
           ],
           "input_size_bytes": 8000000,
           "output_size_bytes": 3000000,
+          "encoding_time_ms": 240000,
           "vmaf": 9512,
           "crf": 24000
         }
@@ -419,11 +430,15 @@
         },
         "outputs": {},
         "conversion_runs": {},
-        "parked": {}
+        "parked": {},
+        "adopted_imports": []
       },
       "expected_rows": [
         {
-          "content_key": "adopted",
+          "key": {
+            "kind": "Content",
+            "value": "adopted"
+          },
           "status": "Converted",
           "source_run": 77,
           "happened_at": 1728003600000,
@@ -440,8 +455,256 @@
           ],
           "input_size_bytes": 5000000,
           "output_size_bytes": null,
+          "encoding_time_ms": null,
           "vmaf": null,
           "crf": null
+        }
+      ]
+    },
+    {
+      "name": "parked_imported_history",
+      "state": {
+        "queue": [],
+        "paths": {},
+        "records": {},
+        "outputs": {},
+        "conversion_runs": {},
+        "parked": {
+          "c:/history/analyzed.mkv": {
+            "status": "Analyzed",
+            "size": 3000000,
+            "modified_ns": "1000000",
+            "video_codec": "Hevc",
+            "width": 1280,
+            "height": 720,
+            "duration_ms": 120000,
+            "output_size": 1000000,
+            "encoding_time": 88000,
+            "crf": 30000,
+            "vmaf": 9550,
+            "target": 95,
+            "requested_target": 94,
+            "floor_target": 91,
+            "decided_at": 1728003600000
+          },
+          "c:/history/converted.mkv": {
+            "status": "Converted",
+            "size": 3000000,
+            "modified_ns": "1000000",
+            "video_codec": "H264",
+            "width": 1280,
+            "height": 720,
+            "duration_ms": 120000,
+            "output_size": 1000000,
+            "encoding_time": 88000,
+            "crf": 30000,
+            "vmaf": 9550,
+            "target": 95,
+            "requested_target": 94,
+            "floor_target": 91,
+            "decided_at": 1728003600000
+          },
+          "c:/history/declined.mkv": {
+            "status": "NotWorthwhile",
+            "size": 3000000,
+            "modified_ns": "1000000",
+            "video_codec": null,
+            "width": 1280,
+            "height": 720,
+            "duration_ms": 120000,
+            "output_size": 1000000,
+            "encoding_time": 88000,
+            "crf": 30000,
+            "vmaf": 9550,
+            "target": 95,
+            "requested_target": 94,
+            "floor_target": 91,
+            "decided_at": 1728003600000
+          },
+          "c:/history/scanned.mkv": {
+            "status": "Scanned",
+            "size": 3000000,
+            "modified_ns": "1000000",
+            "video_codec": null,
+            "width": 1280,
+            "height": 720,
+            "duration_ms": 120000,
+            "output_size": 1000000,
+            "encoding_time": 88000,
+            "crf": 30000,
+            "vmaf": 9550,
+            "target": 95,
+            "requested_target": 94,
+            "floor_target": 91,
+            "decided_at": 1728003600000
+          }
+        },
+        "adopted_imports": []
+      },
+      "expected_rows": [
+        {
+          "key": {
+            "kind": "Parked",
+            "value": "c:/history/analyzed.mkv"
+          },
+          "status": "Analyzed",
+          "source_run": null,
+          "happened_at": 1728003600000,
+          "codec": "Hevc",
+          "container": null,
+          "width": 1280,
+          "height": 720,
+          "duration_ms": 120000,
+          "audio": null,
+          "input_size_bytes": 3000000,
+          "output_size_bytes": 1000000,
+          "encoding_time_ms": 88000,
+          "vmaf": 9550,
+          "crf": 30000
+        },
+        {
+          "key": {
+            "kind": "Parked",
+            "value": "c:/history/converted.mkv"
+          },
+          "status": "Converted",
+          "source_run": null,
+          "happened_at": 1728003600000,
+          "codec": "H264",
+          "container": null,
+          "width": 1280,
+          "height": 720,
+          "duration_ms": 120000,
+          "audio": null,
+          "input_size_bytes": 3000000,
+          "output_size_bytes": 1000000,
+          "encoding_time_ms": 88000,
+          "vmaf": 9550,
+          "crf": 30000
+        },
+        {
+          "key": {
+            "kind": "Parked",
+            "value": "c:/history/declined.mkv"
+          },
+          "status": {
+            "NotWorthwhile": {
+              "requested": 94,
+              "floor": 91
+            }
+          },
+          "source_run": null,
+          "happened_at": 1728003600000,
+          "codec": null,
+          "container": null,
+          "width": 1280,
+          "height": 720,
+          "duration_ms": 120000,
+          "audio": null,
+          "input_size_bytes": 3000000,
+          "output_size_bytes": 1000000,
+          "encoding_time_ms": 88000,
+          "vmaf": 9550,
+          "crf": 30000
+        }
+      ]
+    },
+    {
+      "name": "adopted_imported_history",
+      "state": {
+        "queue": [],
+        "paths": {},
+        "records": {
+          "adopted-import": {
+            "metadata": {
+              "codec": "Av1",
+              "container": "Matroska",
+              "width": 1920,
+              "height": 1080,
+              "rotation_degrees": 0,
+              "duration_ms": 600000,
+              "size_bytes": 1000000,
+              "audio": [
+                {
+                  "codec": "Aac",
+                  "channels": 6
+                },
+                {
+                  "codec": {
+                    "Other": "wmav2"
+                  },
+                  "channels": 2
+                }
+              ],
+              "subtitle_count": 1
+            },
+            "analyses": [],
+            "verdict": {
+              "kind": {
+                "Converted": {
+                  "output_content_key": null,
+                  "input_size": 3000000,
+                  "output_size": 1000000,
+                  "encoding_time": 88000,
+                  "crf": 30000,
+                  "vmaf": 9550,
+                  "target": 95
+                }
+              },
+              "source_run": null,
+              "decided_at": 1728003600000
+            },
+            "imported": {
+              "import_path": "c:/history/adopted.mkv",
+              "record": {
+                "status": "Converted",
+                "size": 3000000,
+                "modified_ns": "1000000",
+                "video_codec": "H264",
+                "width": 1280,
+                "height": 720,
+                "duration_ms": 120000,
+                "output_size": 1000000,
+                "encoding_time": 88000,
+                "crf": 30000,
+                "vmaf": 9550,
+                "target": 95,
+                "requested_target": 94,
+                "floor_target": 91,
+                "decided_at": 1728003600000
+              }
+            }
+          }
+        },
+        "outputs": {},
+        "conversion_runs": {},
+        "parked": {},
+        "adopted_imports": [
+          "c:/history/adopted.mkv",
+          "c:/history/collision-copy.mkv",
+          "c:/history/second-collision-copy.mkv"
+        ]
+      },
+      "expected_rows": [
+        {
+          "key": {
+            "kind": "Content",
+            "value": "adopted-import"
+          },
+          "status": "Converted",
+          "source_run": null,
+          "happened_at": 1728003600000,
+          "codec": "H264",
+          "container": null,
+          "width": 1280,
+          "height": 720,
+          "duration_ms": 120000,
+          "audio": null,
+          "input_size_bytes": 3000000,
+          "output_size_bytes": 1000000,
+          "encoding_time_ms": 88000,
+          "vmaf": 9550,
+          "crf": 30000
         }
       ]
     },
@@ -549,11 +812,15 @@
             ]
           }
         },
-        "parked": {}
+        "parked": {},
+        "adopted_imports": []
       },
       "expected_rows": [
         {
-          "content_key": "remuxed",
+          "key": {
+            "kind": "Content",
+            "value": "remuxed"
+          },
           "status": "Remuxed",
           "source_run": 50,
           "happened_at": 1728003600000,
@@ -570,6 +837,7 @@
           ],
           "input_size_bytes": 9000000,
           "output_size_bytes": 8900000,
+          "encoding_time_ms": 240000,
           "vmaf": null,
           "crf": null
         }
@@ -700,11 +968,15 @@
             ]
           }
         },
-        "parked": {}
+        "parked": {},
+        "adopted_imports": []
       },
       "expected_rows": [
         {
-          "content_key": "declined",
+          "key": {
+            "kind": "Content",
+            "value": "declined"
+          },
           "status": {
             "NotWorthwhile": {
               "requested": 95,
@@ -726,6 +998,7 @@
           ],
           "input_size_bytes": 5000000,
           "output_size_bytes": null,
+          "encoding_time_ms": 240000,
           "vmaf": null,
           "crf": null
         }
@@ -1087,11 +1360,15 @@
             ]
           }
         },
-        "parked": {}
+        "parked": {},
+        "adopted_imports": []
       },
       "expected_rows": [
         {
-          "content_key": "content-0001",
+          "key": {
+            "kind": "Content",
+            "value": "content-0001"
+          },
           "status": "Converted",
           "source_run": 1,
           "happened_at": 1728003600000,
@@ -1108,11 +1385,15 @@
           ],
           "input_size_bytes": 10000000,
           "output_size_bytes": 4000000,
+          "encoding_time_ms": 240000,
           "vmaf": 9512,
           "crf": 24000
         },
         {
-          "content_key": "fresh-failed",
+          "key": {
+            "kind": "Content",
+            "value": "fresh-failed"
+          },
           "status": {
             "Failed": {
               "kind": "SearchRun",
@@ -1134,11 +1415,15 @@
           ],
           "input_size_bytes": 7000000,
           "output_size_bytes": null,
+          "encoding_time_ms": null,
           "vmaf": null,
           "crf": null
         },
         {
-          "content_key": "fresh-stopped",
+          "key": {
+            "kind": "Content",
+            "value": "fresh-stopped"
+          },
           "status": "Stopped",
           "source_run": 4,
           "happened_at": 1728003600000,
@@ -1155,6 +1440,7 @@
           ],
           "input_size_bytes": 6000000,
           "output_size_bytes": null,
+          "encoding_time_ms": null,
           "vmaf": null,
           "crf": null
         }
@@ -1347,7 +1633,8 @@
             ]
           }
         },
-        "parked": {}
+        "parked": {},
+        "adopted_imports": []
       },
       "expected_rows": []
     },
@@ -1455,11 +1742,15 @@
         },
         "outputs": {},
         "conversion_runs": {},
-        "parked": {}
+        "parked": {},
+        "adopted_imports": []
       },
       "expected_rows": [
         {
-          "content_key": "orphaned",
+          "key": {
+            "kind": "Content",
+            "value": "orphaned"
+          },
           "status": "Analyzed",
           "source_run": null,
           "happened_at": null,
@@ -1476,6 +1767,7 @@
           ],
           "input_size_bytes": 4000000,
           "output_size_bytes": null,
+          "encoding_time_ms": null,
           "vmaf": 9520,
           "crf": 25000
         }
@@ -1553,11 +1845,15 @@
         },
         "outputs": {},
         "conversion_runs": {},
-        "parked": {}
+        "parked": {},
+        "adopted_imports": []
       },
       "expected_rows": [
         {
-          "content_key": "portrait",
+          "key": {
+            "kind": "Content",
+            "value": "portrait"
+          },
           "status": {
             "NotWorthwhile": {
               "requested": 95,
@@ -1579,6 +1875,7 @@
           ],
           "input_size_bytes": 2000000,
           "output_size_bytes": null,
+          "encoding_time_ms": null,
           "vmaf": null,
           "crf": null
         }

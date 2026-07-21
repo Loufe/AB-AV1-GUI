@@ -1,12 +1,16 @@
-use std::{collections::BTreeMap, path::PathBuf};
+use std::{
+    collections::{BTreeMap, BTreeSet},
+    path::PathBuf,
+};
 
 use serde::{Deserialize, Serialize};
 
 use crate::{
     AnalysisAttempt, AnalysisIntent, AnalysisResult, ContentKey, DecodeMode, DurationMs,
-    FailureFacts, FileRecord, ImportPath, JobPhase, JobSpec, MediaObservation, Operation,
-    OutputDelta, OutputTarget, OverwriteDecision, ParkedRecord, PathBinding, PathHash, ReservedJob,
-    Settings, SkipReason, ToolRevisions, UnixMillis, Verdict, VerdictKind,
+    FailureFacts, FileRecord, ImportPath, ImportedHistoryRecord, ImportedProvenance, JobPhase,
+    JobSpec, MediaObservation, Operation, OutputDelta, OutputTarget, OverwriteDecision,
+    PathBinding, PathHash, ReservedJob, Settings, SkipReason, ToolRevisions, UnixMillis, Verdict,
+    VerdictKind,
 };
 
 macro_rules! numeric_id {
@@ -249,7 +253,7 @@ pub enum DurableDelta {
     /// import; the reducer has already dropped keys that are parked or
     /// adopted.
     HistoryImported {
-        records: Vec<(ImportPath, ParkedRecord)>,
+        records: Vec<(ImportPath, ImportedHistoryRecord)>,
     },
     /// A parked record matched the observed file: the parked entry leaves
     /// the inbox, the content record gains import provenance, and — when the
@@ -257,6 +261,7 @@ pub enum DurableDelta {
     ParkedAdopted {
         import_path: ImportPath,
         content_key: ContentKey,
+        imported: ImportedHistoryRecord,
         verdict: Option<Verdict>,
     },
     /// A parked record no longer describes the file at its path: stale
@@ -277,7 +282,11 @@ pub struct DurableState {
     /// Imported history records not yet matched to a real file. The inbox
     /// empties itself: prepare-time adoption or retirement removes entries;
     /// nothing else writes here after an import.
-    pub parked: BTreeMap<ImportPath, ParkedRecord>,
+    pub parked: BTreeMap<ImportPath, ImportedHistoryRecord>,
+    /// Every successfully adopted normalized path. This is the complete
+    /// re-import guard; collision losers remain here even though a content
+    /// record retains only one imported summary.
+    pub adopted_imports: BTreeSet<ImportPath>,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -599,11 +608,23 @@ pub fn fold(state: &mut DurableState, delta: &DurableDelta) {
         DurableDelta::ParkedAdopted {
             import_path,
             content_key,
+            imported,
             verdict,
         } => {
             state.parked.remove(import_path);
+            state.adopted_imports.insert(import_path.clone());
             if let Some(record) = state.records.get_mut(content_key) {
-                record.imported = Some(import_path.clone());
+                let candidate = ImportedProvenance {
+                    import_path: import_path.clone(),
+                    record: imported.clone(),
+                };
+                if record
+                    .imported
+                    .as_ref()
+                    .is_none_or(|current| candidate.outranks(current))
+                {
+                    record.imported = Some(candidate);
+                }
                 if let Some(verdict) = verdict {
                     record.verdict = Some(verdict.clone());
                 }

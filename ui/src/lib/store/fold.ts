@@ -17,6 +17,7 @@ import type {
   EphemeralDelta,
   ExecutionSettings,
   FileRecord_Deserialize,
+  ImportedProvenance,
   ItemOutcome,
   JobAction,
   MediaObservation,
@@ -36,7 +37,15 @@ import type {
 } from "@/lib/bindings";
 
 export function emptyDurableState(): DurableState_Deserialize {
-  return { queue: [], paths: {}, records: {}, outputs: {}, conversion_runs: {}, parked: {} };
+  return {
+    queue: [],
+    paths: {},
+    records: {},
+    outputs: {},
+    conversion_runs: {},
+    parked: {},
+    adopted_imports: [],
+  };
 }
 
 export function foldDurable(
@@ -140,22 +149,27 @@ export function foldDurable(
     return { ...state, parked };
   }
   if ("ParkedAdopted" in delta && delta.ParkedAdopted !== undefined) {
-    const { import_path, content_key, verdict } = delta.ParkedAdopted;
+    const { import_path, content_key, imported, verdict } = delta.ParkedAdopted;
     const parked = { ...state.parked };
     delete parked[import_path];
+    const adoptedImports = Array.from(new Set([...state.adopted_imports, import_path])).sort();
     let records = state.records;
     const record = state.records[content_key];
     if (record !== undefined) {
+      const candidate: ImportedProvenance = { import_path, record: imported };
       records = {
         ...state.records,
         [content_key]: {
           ...record,
-          imported: import_path,
+          imported:
+            record.imported === null || importedProvenanceOutranks(candidate, record.imported)
+              ? candidate
+              : record.imported,
           verdict: verdict ?? record.verdict,
         },
       };
     }
-    return { ...state, parked, records };
+    return { ...state, parked, adopted_imports: adoptedImports, records };
   }
   if ("ParkedRetired" in delta && delta.ParkedRetired !== undefined) {
     const parked = { ...state.parked };
@@ -163,6 +177,33 @@ export function foldDurable(
     return { ...state, parked };
   }
   return state;
+}
+
+function importedProvenanceOutranks(
+  candidate: ImportedProvenance,
+  current: ImportedProvenance,
+): boolean {
+  if (candidate.record.decided_at !== current.record.decided_at) {
+    return candidate.record.decided_at > current.record.decided_at;
+  }
+  const candidateRank = parkedStatusRank(candidate.record.status);
+  const currentRank = parkedStatusRank(current.record.status);
+  return candidateRank !== currentRank
+    ? candidateRank > currentRank
+    : candidate.import_path < current.import_path;
+}
+
+function parkedStatusRank(status: ImportedProvenance["record"]["status"]): number {
+  switch (status) {
+    case "Scanned":
+      return 0;
+    case "Analyzed":
+      return 1;
+    case "NotWorthwhile":
+      return 2;
+    case "Converted":
+      return 3;
+  }
 }
 
 export function foldConfig(_settings: Settings | null, delta: ConfigDelta): Settings {

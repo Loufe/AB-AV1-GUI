@@ -16,10 +16,11 @@
 //!   its pinned quartile fixtures are re-pinned in the tests here.
 //!
 //! Convert estimates use encoding time, analyze estimates use CRF-search
-//! time. Rate samples come from [`StatFact`]s — so future parked legacy
-//! records feed estimation the moment they map into facts — plus
-//! analyzed-only runs, whose search time V2 also learned from but which
-//! produce no verdict and therefore no fact.
+//! time. Rate samples come from [`StatFact`]s. Parked imported records are
+//! deliberately excluded because they have no content identity; an adopted
+//! Converted verdict can contribute through the ordinary fact path. Imported
+//! Analyzed summaries remain display-only. Native analyzed-only runs also
+//! supply search samples despite producing no verdict and therefore no fact.
 
 use std::collections::BTreeMap;
 

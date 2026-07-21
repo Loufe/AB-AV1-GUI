@@ -20,8 +20,8 @@ use serde::Serialize;
 
 use crate::{
     AnalysisResult, AudioCodec, CompletionEvidence, ContentKey, ConversionRun, Crf, DurableState,
-    FailureKind, FileRecord, ItemOutcome, JobPhase, MediaContainer, OutputState, RunId, UnixMillis,
-    VerdictKind, VideoCodec, VmafScore, VmafTarget,
+    FailureKind, FileRecord, ImportedHistoryRecord, ItemOutcome, JobPhase, MediaContainer,
+    OutputState, ParkedStatus, RunId, UnixMillis, VerdictKind, VideoCodec, VmafScore, VmafTarget,
 };
 
 const MILLIS_PER_DAY: i128 = 86_400_000;
@@ -311,8 +311,8 @@ pub struct StatisticsPayload {
     /// Converted facts whose output grew — represented here, never clamped
     /// into the first bin.
     pub grew_count: u32,
-    /// Source codecs of converted facts, most frequent first; ties keep the
-    /// deterministic content-key iteration order.
+    /// Source codecs of converted facts, most frequent first; ties use the
+    /// codec enum's ascending canonical order.
     pub codecs: Vec<CodecCount>,
     pub cumulative_savings: Vec<CumulativeSavingsPoint>,
     #[specta(type = Option<crate::JsNumber>)]
@@ -326,110 +326,27 @@ pub struct StatisticsPayload {
 #[must_use]
 pub fn statistics(state: &DurableState, utc_offset_minutes: i32) -> StatisticsPayload {
     let facts = collect_stat_facts(state);
-
-    let mut converted_files = 0u32;
-    let mut sized_converted_files = 0u32;
-    let mut remuxed_files = 0u32;
-    let mut not_worthwhile_files = 0u32;
-    let mut total_input: u128 = 0;
-    let mut total_output: u128 = 0;
-    let mut remux_saved: i128 = 0;
-    let mut total_time_ms = 0u64;
-    let mut reductions = Vec::new();
-    let mut vmaf_values = Vec::new();
-    let mut crf_values = Vec::new();
-    let mut reduction_bins = vec![0u32; REDUCTION_BIN_COUNT];
-    let mut grew_count = 0u32;
-    let mut codecs: Vec<CodecCount> = Vec::new();
-    let mut daily_savings: BTreeMap<i64, i128> = BTreeMap::new();
-    let mut first_epoch_day = None;
-    let mut last_epoch_day = None;
-
+    let mut accumulator = StatisticsAccumulator::new(utc_offset_minutes);
     for fact in &facts {
-        match fact.kind {
-            StatFactKind::Converted => {}
-            StatFactKind::Remuxed => {
-                remuxed_files = remuxed_files.saturating_add(1);
-                if let Some(saved) = fact.saved_bytes() {
-                    remux_saved = remux_saved.saturating_add(saved);
-                }
-                continue;
-            }
-            StatFactKind::NotWorthwhile { .. } => {
-                not_worthwhile_files = not_worthwhile_files.saturating_add(1);
-                continue;
-            }
-        }
-
-        converted_files = converted_files.saturating_add(1);
-        total_time_ms = total_time_ms
-            .saturating_add(fact.analyzing_ms)
-            .saturating_add(fact.encoding_ms);
-        if let Some(score) = fact.vmaf {
-            vmaf_values.push(f64::from(score.0) / f64::from(crate::VMAF_SCORE_FIXED_SCALE));
-        }
-        if let Some(crf) = fact.crf {
-            crf_values.push(f64::from(crf.0) / f64::from(crate::CRF_FIXED_SCALE));
-        }
-
-        let day = local_epoch_day(fact.finished_at, utc_offset_minutes);
-        first_epoch_day = Some(first_epoch_day.map_or(day, |first: i64| first.min(day)));
-        last_epoch_day = Some(last_epoch_day.map_or(day, |last: i64| last.max(day)));
-
-        let (Some(input), Some(output)) = (fact.input_size_bytes, fact.output_size_bytes) else {
+        let imported = state
+            .records
+            .get(&fact.content_key)
+            .and_then(|record| record.imported.as_ref());
+        if fact.source_run.is_none()
+            && let Some(imported) = imported
+            && matches!(
+                imported.record.status,
+                ParkedStatus::Converted | ParkedStatus::NotWorthwhile
+            )
+        {
+            accumulator.add_imported(&imported.record);
             continue;
-        };
-        sized_converted_files = sized_converted_files.saturating_add(1);
-        total_input += u128::from(input);
-        total_output += u128::from(output);
-        let saved = i128::from(input) - i128::from(output);
-        let entry = daily_savings.entry(day).or_default();
-        *entry = entry.saturating_add(saved);
-
-        if let Some(percent) = fact.reduction_percent() {
-            reductions.push(percent);
-            if percent < 0.0 {
-                grew_count = grew_count.saturating_add(1);
-            } else {
-                let bin =
-                    ((percent / REDUCTION_BIN_WIDTH_PERCENT) as usize).min(REDUCTION_BIN_COUNT - 1);
-                if let Some(slot) = reduction_bins.get_mut(bin) {
-                    *slot = slot.saturating_add(1);
-                }
-            }
         }
-
-        match codecs.iter_mut().find(|entry| entry.codec == fact.codec) {
-            Some(entry) => entry.count = entry.count.saturating_add(1),
-            None => codecs.push(CodecCount {
-                codec: fact.codec.clone(),
-                count: 1,
-            }),
-        }
+        accumulator.add_native(fact);
     }
-
-    codecs.sort_by_key(|entry| std::cmp::Reverse(entry.count));
-
-    let total_saved = i128::try_from(total_input).unwrap_or(i128::MAX)
-        - i128::try_from(total_output).unwrap_or(i128::MAX);
-    let mut cumulative_savings = Vec::with_capacity(daily_savings.len());
-    let mut running: i128 = 0;
-    for (day, saved) in &daily_savings {
-        running = running.saturating_add(*saved);
-        cumulative_savings.push(CumulativeSavingsPoint {
-            epoch_day: *day,
-            cumulative_saved_bytes: clamp_to_i64(running),
-        });
+    for imported in state.parked.values() {
+        accumulator.add_imported(imported);
     }
-
-    let gigabytes_per_hour = if total_time_ms > 0 && total_input > 0 {
-        let gib = u64::try_from(total_input).unwrap_or(u64::MAX) as f64 / BYTES_PER_GIB;
-        let hours = total_time_ms as f64 / MILLIS_PER_HOUR;
-        Some(gib / hours)
-    } else {
-        None
-    };
-
     let mut runs = RunTotals::default();
     for run in state.conversion_runs.values() {
         match &run.outcome {
@@ -446,28 +363,208 @@ pub fn statistics(state: &DurableState, utc_offset_minutes: i32) -> StatisticsPa
         }
     }
 
-    StatisticsPayload {
-        utc_offset_minutes,
-        converted_files,
-        sized_converted_files,
-        remuxed_files,
-        not_worthwhile_files,
-        total_input_bytes: u64::try_from(total_input).unwrap_or(u64::MAX),
-        total_output_bytes: u64::try_from(total_output).unwrap_or(u64::MAX),
-        total_saved_bytes: clamp_to_i64(total_saved),
-        remux_saved_bytes: clamp_to_i64(remux_saved),
-        total_time_ms,
-        gigabytes_per_hour,
-        reduction_percent: spread(&reductions),
-        vmaf: spread(&vmaf_values),
-        crf: spread(&crf_values),
-        reduction_bins,
-        grew_count,
-        codecs,
-        cumulative_savings,
-        first_epoch_day,
-        last_epoch_day,
-        runs,
+    accumulator.finish(runs)
+}
+
+struct StatisticsAccumulator {
+    utc_offset_minutes: i32,
+    converted_files: u32,
+    sized_converted_files: u32,
+    remuxed_files: u32,
+    not_worthwhile_files: u32,
+    total_input: u128,
+    total_output: u128,
+    remux_saved: i128,
+    total_time_ms: u64,
+    reductions: Vec<f64>,
+    vmaf_values: Vec<f64>,
+    crf_values: Vec<f64>,
+    reduction_bins: Vec<u32>,
+    grew_count: u32,
+    codecs: BTreeMap<VideoCodec, u32>,
+    daily_savings: BTreeMap<i64, i128>,
+    first_epoch_day: Option<i64>,
+    last_epoch_day: Option<i64>,
+}
+
+impl StatisticsAccumulator {
+    fn new(utc_offset_minutes: i32) -> Self {
+        Self {
+            utc_offset_minutes,
+            converted_files: 0,
+            sized_converted_files: 0,
+            remuxed_files: 0,
+            not_worthwhile_files: 0,
+            total_input: 0,
+            total_output: 0,
+            remux_saved: 0,
+            total_time_ms: 0,
+            reductions: Vec::new(),
+            vmaf_values: Vec::new(),
+            crf_values: Vec::new(),
+            reduction_bins: vec![0; REDUCTION_BIN_COUNT],
+            grew_count: 0,
+            codecs: BTreeMap::new(),
+            daily_savings: BTreeMap::new(),
+            first_epoch_day: None,
+            last_epoch_day: None,
+        }
+    }
+
+    fn add_native(&mut self, fact: &StatFact) {
+        match fact.kind {
+            StatFactKind::Converted => self.add_converted(
+                fact.finished_at,
+                Some(&fact.codec),
+                fact.input_size_bytes,
+                fact.output_size_bytes,
+                fact.analyzing_ms.saturating_add(fact.encoding_ms),
+                fact.vmaf,
+                fact.crf,
+            ),
+            StatFactKind::Remuxed => {
+                self.remuxed_files = self.remuxed_files.saturating_add(1);
+                if let Some(saved) = fact.saved_bytes() {
+                    self.remux_saved = self.remux_saved.saturating_add(saved);
+                }
+            }
+            StatFactKind::NotWorthwhile { .. } => {
+                self.not_worthwhile_files = self.not_worthwhile_files.saturating_add(1);
+            }
+        }
+    }
+
+    fn add_imported(&mut self, imported: &ImportedHistoryRecord) {
+        match imported.status {
+            ParkedStatus::Converted => self.add_converted(
+                imported.decided_at,
+                imported.video_codec.as_ref(),
+                imported.size,
+                imported.output_size,
+                imported.encoding_time.map_or(0, |duration| duration.0),
+                imported.vmaf,
+                imported.crf,
+            ),
+            ParkedStatus::NotWorthwhile => {
+                self.not_worthwhile_files = self.not_worthwhile_files.saturating_add(1);
+            }
+            ParkedStatus::Scanned | ParkedStatus::Analyzed => {}
+        }
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn add_converted(
+        &mut self,
+        finished_at: UnixMillis,
+        codec: Option<&VideoCodec>,
+        input: Option<u64>,
+        output: Option<u64>,
+        time_ms: u64,
+        vmaf: Option<VmafScore>,
+        crf: Option<Crf>,
+    ) {
+        self.converted_files = self.converted_files.saturating_add(1);
+        self.total_time_ms = self.total_time_ms.saturating_add(time_ms);
+        if let Some(codec) = codec {
+            let count = self.codecs.entry(codec.clone()).or_default();
+            *count = count.saturating_add(1);
+        }
+        if let Some(score) = vmaf {
+            self.vmaf_values
+                .push(f64::from(score.0) / f64::from(crate::VMAF_SCORE_FIXED_SCALE));
+        }
+        if let Some(crf) = crf {
+            self.crf_values
+                .push(f64::from(crf.0) / f64::from(crate::CRF_FIXED_SCALE));
+        }
+
+        let day = local_epoch_day(finished_at, self.utc_offset_minutes);
+        self.first_epoch_day = Some(self.first_epoch_day.map_or(day, |first| first.min(day)));
+        self.last_epoch_day = Some(self.last_epoch_day.map_or(day, |last| last.max(day)));
+
+        let (Some(input), Some(output)) = (input, output) else {
+            return;
+        };
+        self.sized_converted_files = self.sized_converted_files.saturating_add(1);
+        self.total_input = self.total_input.saturating_add(u128::from(input));
+        self.total_output = self.total_output.saturating_add(u128::from(output));
+        let saved = i128::from(input) - i128::from(output);
+        let entry = self.daily_savings.entry(day).or_default();
+        *entry = entry.saturating_add(saved);
+
+        if input == 0 {
+            return;
+        }
+        let percent = 100.0 * saved as f64 / input as f64;
+        self.reductions.push(percent);
+        if percent < 0.0 {
+            self.grew_count = self.grew_count.saturating_add(1);
+        } else {
+            let bin =
+                ((percent / REDUCTION_BIN_WIDTH_PERCENT) as usize).min(REDUCTION_BIN_COUNT - 1);
+            if let Some(slot) = self.reduction_bins.get_mut(bin) {
+                *slot = slot.saturating_add(1);
+            }
+        }
+    }
+
+    fn finish(self, runs: RunTotals) -> StatisticsPayload {
+        let total_saved = i128::try_from(self.total_input).unwrap_or(i128::MAX)
+            - i128::try_from(self.total_output).unwrap_or(i128::MAX);
+        let mut running = 0i128;
+        let cumulative_savings = self
+            .daily_savings
+            .iter()
+            .map(|(day, saved)| {
+                running = running.saturating_add(*saved);
+                CumulativeSavingsPoint {
+                    epoch_day: *day,
+                    cumulative_saved_bytes: clamp_to_i64(running),
+                }
+            })
+            .collect();
+        let gigabytes_per_hour = if self.total_time_ms > 0 && self.total_input > 0 {
+            let gib = u64::try_from(self.total_input).unwrap_or(u64::MAX) as f64 / BYTES_PER_GIB;
+            let hours = self.total_time_ms as f64 / MILLIS_PER_HOUR;
+            Some(gib / hours)
+        } else {
+            None
+        };
+        let mut codecs: Vec<CodecCount> = self
+            .codecs
+            .into_iter()
+            .map(|(codec, count)| CodecCount { codec, count })
+            .collect();
+        codecs.sort_by(|left, right| {
+            right
+                .count
+                .cmp(&left.count)
+                .then_with(|| left.codec.cmp(&right.codec))
+        });
+
+        StatisticsPayload {
+            utc_offset_minutes: self.utc_offset_minutes,
+            converted_files: self.converted_files,
+            sized_converted_files: self.sized_converted_files,
+            remuxed_files: self.remuxed_files,
+            not_worthwhile_files: self.not_worthwhile_files,
+            total_input_bytes: u64::try_from(self.total_input).unwrap_or(u64::MAX),
+            total_output_bytes: u64::try_from(self.total_output).unwrap_or(u64::MAX),
+            total_saved_bytes: clamp_to_i64(total_saved),
+            remux_saved_bytes: clamp_to_i64(self.remux_saved),
+            total_time_ms: self.total_time_ms,
+            gigabytes_per_hour,
+            reduction_percent: spread(&self.reductions),
+            vmaf: spread(&self.vmaf_values),
+            crf: spread(&self.crf_values),
+            reduction_bins: self.reduction_bins,
+            grew_count: self.grew_count,
+            codecs,
+            cumulative_savings,
+            first_epoch_day: self.first_epoch_day,
+            last_epoch_day: self.last_epoch_day,
+            runs,
+        }
     }
 }
 
@@ -523,27 +620,40 @@ pub enum HistoryStatus {
     Stopped,
 }
 
-/// One History row per content with something to report. Facts only — units,
-/// prefixes, and labels are presentation. Width and height are post-rotation.
-/// Bitrate is derived in views from size and duration, matching the
-/// [`crate::VideoMeta`] contract.
+/// Stable identity for either an observed content row or an unresolved
+/// imported path row.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, specta::Type)]
+#[serde(tag = "kind", content = "value")]
+pub enum HistoryRowKey {
+    Content(ContentKey),
+    Parked(crate::ImportPath),
+}
+
+/// One History row per native/adopted content or reportable parked import.
+/// Facts only — units, prefixes, and labels are presentation. Native width
+/// and height are post-rotation. Bitrate is derived in views from size and
+/// duration, matching the [`crate::VideoMeta`] contract.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, specta::Type)]
 pub struct HistoryRow {
-    pub content_key: ContentKey,
+    pub key: HistoryRowKey,
     pub status: HistoryStatus,
     pub source_run: Option<RunId>,
     pub happened_at: Option<UnixMillis>,
-    pub codec: VideoCodec,
-    pub container: MediaContainer,
-    pub width: u32,
-    pub height: u32,
-    #[specta(type = crate::JsNumber)]
-    pub duration_ms: u64,
-    pub audio: Vec<AudioCodec>,
-    #[specta(type = crate::JsNumber)]
-    pub input_size_bytes: u64,
+    pub codec: Option<VideoCodec>,
+    pub container: Option<MediaContainer>,
+    pub width: Option<u32>,
+    pub height: Option<u32>,
+    #[specta(type = Option<crate::JsNumber>)]
+    pub duration_ms: Option<u64>,
+    /// `None` means the source did not record audio metadata; `Some([])`
+    /// means probing established that the file has no audio streams.
+    pub audio: Option<Vec<AudioCodec>>,
+    #[specta(type = Option<crate::JsNumber>)]
+    pub input_size_bytes: Option<u64>,
     #[specta(type = Option<crate::JsNumber>)]
     pub output_size_bytes: Option<u64>,
+    #[specta(type = Option<crate::JsNumber>)]
+    pub encoding_time_ms: Option<u64>,
     pub vmaf: Option<VmafScore>,
     pub crf: Option<Crf>,
 }
@@ -579,7 +689,18 @@ pub fn history_rows(state: &DurableState) -> Vec<HistoryRow> {
     let mut rows = Vec::new();
     for (content_key, record) in &state.records {
         let row = if let Some(verdict) = &record.verdict {
-            verdict_row(content_key, record, verdict, state)
+            if verdict.source_run.is_none()
+                && let Some(imported) = &record.imported
+                && let Some(status) = imported_status(&imported.record)
+            {
+                imported_row(
+                    HistoryRowKey::Content(content_key.clone()),
+                    &imported.record,
+                    status,
+                )
+            } else {
+                verdict_row(content_key, record, verdict, state)
+            }
         } else if let Some((run_id, run)) = latest_interruption.get(content_key) {
             interruption_row(content_key, record, *run_id, run)
         } else if !record.analyses.is_empty() {
@@ -588,10 +709,27 @@ pub fn history_rows(state: &DurableState) -> Vec<HistoryRow> {
                 record,
                 latest_analysis.get(content_key).copied(),
             )
+        } else if let Some(imported) = &record.imported
+            && let Some(status) = imported_status(&imported.record)
+        {
+            imported_row(
+                HistoryRowKey::Content(content_key.clone()),
+                &imported.record,
+                status,
+            )
         } else {
             continue;
         };
         rows.push(row);
+    }
+    for (import_path, imported) in &state.parked {
+        if let Some(status) = imported_status(imported) {
+            rows.push(imported_row(
+                HistoryRowKey::Parked(import_path.clone()),
+                imported,
+                status,
+            ));
+        }
     }
     rows
 }
@@ -599,23 +737,26 @@ pub fn history_rows(state: &DurableState) -> Vec<HistoryRow> {
 fn base_row(content_key: &ContentKey, record: &FileRecord, status: HistoryStatus) -> HistoryRow {
     let (width, height) = record.metadata.post_rotation_dimensions();
     HistoryRow {
-        content_key: content_key.clone(),
+        key: HistoryRowKey::Content(content_key.clone()),
         status,
         source_run: None,
         happened_at: None,
-        codec: record.metadata.codec.clone(),
-        container: record.metadata.container.clone(),
-        width,
-        height,
-        duration_ms: record.metadata.duration_ms,
-        audio: record
-            .metadata
-            .audio
-            .iter()
-            .map(|stream| stream.codec.clone())
-            .collect(),
-        input_size_bytes: record.metadata.size_bytes,
+        codec: Some(record.metadata.codec.clone()),
+        container: Some(record.metadata.container.clone()),
+        width: Some(width),
+        height: Some(height),
+        duration_ms: Some(record.metadata.duration_ms),
+        audio: Some(
+            record
+                .metadata
+                .audio
+                .iter()
+                .map(|stream| stream.codec.clone())
+                .collect(),
+        ),
+        input_size_bytes: Some(record.metadata.size_bytes),
         output_size_bytes: None,
+        encoding_time_ms: None,
         vmaf: None,
         crf: None,
     }
@@ -643,9 +784,14 @@ fn verdict_row(
         .and_then(|run| run.analysis.as_ref())
         .map(|analysis| &analysis.measurement)
         .filter(|_| status == HistoryStatus::Converted);
-    let (carried_crf, carried_vmaf) = match &verdict.kind {
-        VerdictKind::Converted { crf, vmaf, .. } => (*crf, *vmaf),
-        VerdictKind::Remuxed { .. } | VerdictKind::NotWorthwhile { .. } => (None, None),
+    let (carried_time, carried_crf, carried_vmaf) = match &verdict.kind {
+        VerdictKind::Converted {
+            encoding_time,
+            crf,
+            vmaf,
+            ..
+        } => (*encoding_time, *crf, *vmaf),
+        VerdictKind::Remuxed { .. } | VerdictKind::NotWorthwhile { .. } => (None, None, None),
     };
     let mut row = base_row(content_key, record, status);
     row.source_run = verdict.source_run;
@@ -653,10 +799,11 @@ fn verdict_row(
         run.and_then(|run| run.finished_at)
             .unwrap_or(verdict.decided_at),
     );
-    if let Some(input_size) = input_size {
-        row.input_size_bytes = input_size;
-    }
+    row.input_size_bytes = input_size;
     row.output_size_bytes = output_size;
+    row.encoding_time_ms = run
+        .map(|run| phase_totals(Some(run)).1)
+        .or(carried_time.map(|duration| duration.0));
     row.vmaf = measurement
         .map(|measurement| measurement.score)
         .or(carried_vmaf);
@@ -708,6 +855,46 @@ fn analyzed_row(
     row
 }
 
+fn imported_status(imported: &ImportedHistoryRecord) -> Option<HistoryStatus> {
+    match imported.status {
+        ParkedStatus::Converted => Some(HistoryStatus::Converted),
+        ParkedStatus::NotWorthwhile => Some(HistoryStatus::NotWorthwhile {
+            requested: imported
+                .requested_target
+                .unwrap_or(crate::DEFAULT_VMAF_TARGET),
+            floor: imported
+                .floor_target
+                .unwrap_or(crate::MIN_VMAF_FALLBACK_TARGET),
+        }),
+        ParkedStatus::Analyzed => Some(HistoryStatus::Analyzed),
+        ParkedStatus::Scanned => None,
+    }
+}
+
+fn imported_row(
+    key: HistoryRowKey,
+    imported: &ImportedHistoryRecord,
+    status: HistoryStatus,
+) -> HistoryRow {
+    HistoryRow {
+        key,
+        status,
+        source_run: None,
+        happened_at: Some(imported.decided_at),
+        codec: imported.video_codec.clone(),
+        container: None,
+        width: imported.width,
+        height: imported.height,
+        duration_ms: imported.duration_ms,
+        audio: None,
+        input_size_bytes: imported.size,
+        output_size_bytes: imported.output_size,
+        encoding_time_ms: imported.encoding_time.map(|duration| duration.0),
+        vmaf: imported.vmaf,
+        crf: imported.crf,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use std::path::PathBuf;
@@ -717,11 +904,12 @@ mod tests {
     use super::*;
     use crate::{
         AnalysisProfile, AnalysisResult, ArtifactIdentity, AudioStreamMeta, ClaimId,
-        CompletionEvidence, ContentKey, ConversionRun, Crf, DestructiveIdentity, DurableState,
-        DurationMs, ExecutionSettings, FailureFacts, FileRecord, FileSystemId, ItemOutcome,
-        JobAction, JobPhase, JobSpec, MediaContainer, Operation, OutputState, OutputTarget,
-        OutputTransaction, PhaseSpan, QueueItemId, Replacement, RunId, SearchMeasurement,
-        UnixMillis, Verdict, VerdictKind, VideoCodec, VideoMeta, VmafScore, VmafTarget,
+        CompletionEvidence, ContentKey, ConversionRun, Crf, DestructiveIdentity, DurableDelta,
+        DurableState, DurationMs, ExecutionSettings, FailureFacts, FileRecord, FileSystemId,
+        FileTimeNs, ImportPath, ImportedHistoryRecord, ItemOutcome, JobAction, JobPhase, JobSpec,
+        MediaContainer, Operation, OutputState, OutputTarget, OutputTransaction, ParkedStatus,
+        PhaseSpan, QueueItemId, Replacement, RunId, SearchMeasurement, UnixMillis, Verdict,
+        VerdictKind, VideoCodec, VideoMeta, VmafScore, VmafTarget,
     };
 
     const DAY_MS: u64 = 86_400_000;
@@ -829,6 +1017,42 @@ mod tests {
         }
     }
 
+    fn imported(status: ParkedStatus, codec: Option<VideoCodec>) -> ImportedHistoryRecord {
+        ImportedHistoryRecord {
+            status,
+            size: Some(10_000),
+            modified_ns: Some(FileTimeNs(1)),
+            video_codec: codec,
+            width: Some(1_280),
+            height: Some(720),
+            duration_ms: Some(60_000),
+            output_size: Some(4_000),
+            encoding_time: Some(DurationMs(120_000)),
+            crf: Some(Crf(30_000)),
+            vmaf: Some(VmafScore(9_512)),
+            target: Some(VmafTarget(95)),
+            requested_target: Some(VmafTarget(94)),
+            floor_target: Some(VmafTarget(91)),
+            decided_at: UnixMillis(DAY_MS * 20_000),
+        }
+    }
+
+    fn adopted_verdict(imported: &ImportedHistoryRecord) -> Verdict {
+        Verdict {
+            kind: VerdictKind::Converted {
+                output_content_key: None,
+                input_size: imported.size,
+                output_size: imported.output_size,
+                encoding_time: imported.encoding_time,
+                crf: imported.crf,
+                vmaf: imported.vmaf,
+                target: imported.target,
+            },
+            source_run: None,
+            decided_at: imported.decided_at,
+        }
+    }
+
     /// A state with one converted content per (input, output) pair, finished
     /// one day apart starting at `first_day_ms`.
     fn converted_state(sizes: &[(u64, u64)], first_day_ms: u64) -> DurableState {
@@ -889,6 +1113,159 @@ mod tests {
         assert!(payload.cumulative_savings.is_empty());
         assert_eq!(payload.first_epoch_day, None);
         assert!(history_rows(&state).is_empty());
+    }
+
+    #[test]
+    fn parked_imports_project_complete_sparse_history_and_statistics() {
+        let mut state = DurableState::default();
+        state.parked.insert(
+            ImportPath("c:/history/analyzed.mkv".to_owned()),
+            imported(ParkedStatus::Analyzed, Some(VideoCodec::Hevc)),
+        );
+        state.parked.insert(
+            ImportPath("c:/history/converted.mkv".to_owned()),
+            imported(ParkedStatus::Converted, Some(VideoCodec::H264)),
+        );
+        state.parked.insert(
+            ImportPath("c:/history/declined.mkv".to_owned()),
+            imported(ParkedStatus::NotWorthwhile, Some(VideoCodec::Vp9)),
+        );
+        state.parked.insert(
+            ImportPath("c:/history/scanned.mkv".to_owned()),
+            imported(ParkedStatus::Scanned, None),
+        );
+
+        let payload = statistics(&state, 0);
+        assert_eq!(payload.converted_files, 1);
+        assert_eq!(payload.sized_converted_files, 1);
+        assert_eq!(payload.not_worthwhile_files, 1);
+        assert_eq!(payload.total_saved_bytes, 6_000);
+        assert_eq!(payload.total_time_ms, 120_000);
+        assert_eq!(payload.runs, RunTotals::default());
+
+        let rows = history_rows(&state);
+        assert_eq!(rows.len(), 3);
+        assert!(rows.iter().all(|row| row.source_run.is_none()));
+        let analyzed = rows
+            .iter()
+            .find(|row| row.status == HistoryStatus::Analyzed)
+            .expect("parked analyzed row");
+        assert!(matches!(analyzed.key, HistoryRowKey::Parked(_)));
+        assert_eq!(analyzed.container, None);
+        assert_eq!(analyzed.audio, None);
+    }
+
+    #[test]
+    fn one_to_one_adoption_preserves_statistics_and_imported_analysis_is_display_only() {
+        let import_path = ImportPath("c:/history/movie.mkv".to_owned());
+        let converted_import = imported(ParkedStatus::Converted, Some(VideoCodec::H264));
+        let mut state = DurableState::default();
+        state
+            .parked
+            .insert(import_path.clone(), converted_import.clone());
+        let before = statistics(&state, 0);
+
+        let content_key = key("movie-content");
+        state.records.insert(
+            content_key.clone(),
+            FileRecord::new(meta(VideoCodec::H264, 10_000)),
+        );
+        crate::fold(
+            &mut state,
+            &DurableDelta::ParkedAdopted {
+                import_path: import_path.clone(),
+                content_key: content_key.clone(),
+                imported: converted_import.clone(),
+                verdict: Some(adopted_verdict(&converted_import)),
+            },
+        );
+
+        assert_eq!(statistics(&state, 0), before);
+        assert_eq!(state.adopted_imports.len(), 1);
+        assert!(state.parked.is_empty());
+        assert_eq!(
+            history_rows(&state)[0].key,
+            HistoryRowKey::Content(content_key)
+        );
+
+        let analyzed_path = ImportPath("c:/history/analyzed-only.mkv".to_owned());
+        let analyzed = imported(ParkedStatus::Analyzed, Some(VideoCodec::Hevc));
+        state.parked.insert(analyzed_path.clone(), analyzed.clone());
+        crate::fold(
+            &mut state,
+            &DurableDelta::ParkedAdopted {
+                import_path: analyzed_path,
+                content_key: key("movie-content"),
+                imported: analyzed,
+                verdict: None,
+            },
+        );
+        assert!(state.records[&key("movie-content")].analyses.is_empty());
+    }
+
+    #[test]
+    fn many_import_paths_collapsing_to_one_content_count_once_after_adoption() {
+        let path_a = ImportPath("c:/history/a.mkv".to_owned());
+        let path_b = ImportPath("c:/history/b.mkv".to_owned());
+        let mut older = imported(ParkedStatus::Converted, Some(VideoCodec::H264));
+        older.decided_at = UnixMillis(DAY_MS * 19_999);
+        let newer = imported(ParkedStatus::Converted, Some(VideoCodec::Hevc));
+        let mut state = DurableState::default();
+        state.parked.insert(path_a.clone(), older.clone());
+        state.parked.insert(path_b.clone(), newer.clone());
+        assert_eq!(statistics(&state, 0).converted_files, 2);
+
+        let content_key = key("shared-content");
+        state.records.insert(
+            content_key.clone(),
+            FileRecord::new(meta(VideoCodec::Av1, 10_000)),
+        );
+        for (path, record) in [(path_a, older), (path_b.clone(), newer.clone())] {
+            crate::fold(
+                &mut state,
+                &DurableDelta::ParkedAdopted {
+                    import_path: path,
+                    content_key: content_key.clone(),
+                    imported: record.clone(),
+                    verdict: Some(adopted_verdict(&record)),
+                },
+            );
+        }
+
+        let payload = statistics(&state, 0);
+        assert_eq!(payload.converted_files, 1);
+        assert_eq!(payload.runs, RunTotals::default());
+        assert_eq!(state.adopted_imports.len(), 2);
+        assert_eq!(
+            state.records[&content_key]
+                .imported
+                .as_ref()
+                .map(|provenance| &provenance.import_path),
+            Some(&path_b)
+        );
+    }
+
+    #[test]
+    fn codec_count_ties_use_canonical_ascending_order() {
+        let mut state = DurableState::default();
+        for (path, codec) in [
+            ("vp9.mkv", VideoCodec::Vp9),
+            ("h264.mkv", VideoCodec::H264),
+            ("av1.mkv", VideoCodec::Av1),
+        ] {
+            state.parked.insert(
+                ImportPath(path.to_owned()),
+                imported(ParkedStatus::Converted, Some(codec)),
+            );
+        }
+        assert_eq!(
+            statistics(&state, 0)
+                .codecs
+                .into_iter()
+                .map(|entry| entry.codec)
+                .collect::<Vec<_>>(),
+            vec![VideoCodec::Av1, VideoCodec::H264, VideoCodec::Vp9]
+        );
     }
 
     #[test]
@@ -983,7 +1360,7 @@ mod tests {
         let rows = history_rows(&state);
         assert_eq!(rows.len(), 1);
         assert_eq!(rows[0].status, HistoryStatus::Converted);
-        assert_eq!(rows[0].input_size_bytes, 5_000);
+        assert_eq!(rows[0].input_size_bytes, Some(5_000));
         assert_eq!(rows[0].output_size_bytes, None);
     }
 
@@ -1147,12 +1524,12 @@ mod tests {
         assert_eq!(rows.len(), 2);
         let converted_row = rows
             .iter()
-            .find(|row| row.content_key == converted_key)
+            .find(|row| row.key == HistoryRowKey::Content(converted_key.clone()))
             .unwrap();
         assert_eq!(converted_row.status, HistoryStatus::Converted);
         let failed_row = rows
             .iter()
-            .find(|row| row.content_key == fresh_key)
+            .find(|row| row.key == HistoryRowKey::Content(fresh_key.clone()))
             .unwrap();
         assert_eq!(
             failed_row.status,
@@ -1218,7 +1595,7 @@ mod tests {
         });
         state.records.insert(content_key, record);
         let rows = history_rows(&state);
-        assert_eq!((rows[0].width, rows[0].height), (1080, 1920));
+        assert_eq!((rows[0].width, rows[0].height), (Some(1080), Some(1920)));
     }
 
     proptest! {

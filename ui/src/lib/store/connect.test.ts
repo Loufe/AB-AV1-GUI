@@ -111,6 +111,7 @@ function snapshot(item: QueueItem): StreamPayload_Deserialize {
         outputs: {},
         conversion_runs: {},
         parked: {},
+        adopted_imports: [],
       },
       settings: settings(),
     },

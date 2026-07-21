@@ -1096,7 +1096,7 @@ mod tests {
 
     #[test]
     fn import_batches_flag_a_forced_compaction() {
-        let record = crfty_core::ParkedRecord {
+        let record = crfty_core::ImportedHistoryRecord {
             status: crfty_core::ParkedStatus::Scanned,
             size: None,
             modified_ns: None,

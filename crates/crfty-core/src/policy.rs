@@ -3,9 +3,9 @@ use serde::{Deserialize, Serialize};
 use crate::{
     AnalysisIntent, AnalysisProfile, AnalysisResult, DEFAULT_VMAF_TARGET, DecodeMode,
     DestructiveIdentity, DurableState, ExecutionSettings, FileRecord, FileStamp,
-    IMPORT_MTIME_TOLERANCE_NS, JobAction, MIN_VMAF_FALLBACK_TARGET, MediaContainer,
-    MediaObservation, Operation, ParkedRecord, ParkedStatus, PathHash, RunId, Verdict, VerdictKind,
-    VideoCodec, VideoMeta,
+    IMPORT_MTIME_TOLERANCE_NS, ImportedHistoryRecord, JobAction, MIN_VMAF_FALLBACK_TARGET,
+    MediaContainer, MediaObservation, Operation, ParkedStatus, PathHash, RunId, Verdict,
+    VerdictKind, VideoCodec, VideoMeta,
 };
 
 pub const MIN_VIDEO_PIXELS: u64 = 921_600;
@@ -183,7 +183,10 @@ pub enum ParkedResolution {
 /// imported record supplied. Missing NotWorthwhile targets fall back to
 /// [`DEFAULT_VMAF_TARGET`] / [`MIN_VMAF_FALLBACK_TARGET`].
 #[must_use]
-pub fn resolve_parked(parked: &ParkedRecord, observation: &MediaObservation) -> ParkedResolution {
+pub fn resolve_parked(
+    parked: &ImportedHistoryRecord,
+    observation: &MediaObservation,
+) -> ParkedResolution {
     if parked_stamp_matches(parked, &observation.binding.stamp) {
         let verdict = match parked.status {
             ParkedStatus::Converted => Some(converted_verdict(parked)),
@@ -200,7 +203,7 @@ pub fn resolve_parked(parked: &ParkedRecord, observation: &MediaObservation) -> 
     ParkedResolution::Retire
 }
 
-fn parked_stamp_matches(parked: &ParkedRecord, current: &FileStamp) -> bool {
+fn parked_stamp_matches(parked: &ImportedHistoryRecord, current: &FileStamp) -> bool {
     let (Some(size), Some(modified)) = (parked.size, parked.modified_ns) else {
         return false;
     };
@@ -212,7 +215,7 @@ fn parked_stamp_matches(parked: &ParkedRecord, current: &FileStamp) -> bool {
         .is_some_and(|now| now.0.abs_diff(modified.0) <= IMPORT_MTIME_TOLERANCE_NS)
 }
 
-fn converted_verdict(parked: &ParkedRecord) -> Verdict {
+fn converted_verdict(parked: &ImportedHistoryRecord) -> Verdict {
     Verdict {
         kind: VerdictKind::Converted {
             output_content_key: None,
@@ -228,7 +231,7 @@ fn converted_verdict(parked: &ParkedRecord) -> Verdict {
     }
 }
 
-fn not_worthwhile_verdict(parked: &ParkedRecord) -> Verdict {
+fn not_worthwhile_verdict(parked: &ImportedHistoryRecord) -> Verdict {
     Verdict {
         kind: VerdictKind::NotWorthwhile {
             requested: parked.requested_target.unwrap_or(DEFAULT_VMAF_TARGET),

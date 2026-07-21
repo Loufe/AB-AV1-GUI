@@ -910,7 +910,13 @@ fn history_import_parks_compacts_adopts_and_reimports_as_noop() {
         .records
         .get(&ContentKey("imported-movie".to_owned()))
         .expect("adopted record");
-    assert_eq!(record.imported, Some(movie_key));
+    assert_eq!(
+        record
+            .imported
+            .as_ref()
+            .map(|imported| &imported.import_path),
+        Some(&movie_key)
+    );
     let verdict = record.verdict.as_ref().expect("adopted verdict");
     assert_eq!(verdict.source_run, None);
     assert_eq!(verdict.decided_at, UnixMillis(1_700_000_000_000));
