@@ -340,6 +340,9 @@ fn validate_replayed_delta(state: &DurableState, delta: &DurableDelta) -> Result
                 return Err("queue move references an unavailable item");
             }
         }
+        DurableDelta::QueueReordered { pending_order } => {
+            crate::state::validate_pending_order(&state.queue, pending_order)?;
+        }
         DurableDelta::QueueRequeued { item_id } => {
             let finished = state.queue.iter().any(|item| {
                 item.id == *item_id && matches!(item.state, QueueItemState::Finished(_))

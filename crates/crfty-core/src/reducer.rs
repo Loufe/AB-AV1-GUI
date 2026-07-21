@@ -66,6 +66,12 @@ pub enum QueueCommand {
         item_id: QueueItemId,
         before: Option<QueueItemId>,
     },
+    /// Atomically replaces the order of every currently queued item. The
+    /// submitted ids must be an exact permutation of the pending tail, so a
+    /// stale grouped move is rejected rather than partially applied.
+    ReorderPending {
+        pending_order: Vec<QueueItemId>,
+    },
     /// Removes every `Queued` and `Finished` item. Idle-only — while a
     /// session runs, the queue's pending tail is the worker's feed. An empty
     /// result is an accepted no-op.
@@ -511,6 +517,28 @@ fn apply_queue(state: &AppState, command: QueueCommand) -> Applied {
                 item_id,
                 before: resolved,
             });
+            applied
+        }
+        QueueCommand::ReorderPending { pending_order } => {
+            if let Err(reason) =
+                crate::state::validate_pending_order(&state.durable.queue, &pending_order)
+            {
+                return Applied::rejected(reason);
+            }
+            let current_order = state
+                .durable
+                .queue
+                .iter()
+                .filter(|item| matches!(item.state, QueueItemState::Queued))
+                .map(|item| item.id)
+                .collect::<Vec<_>>();
+            if current_order == pending_order {
+                return Applied::accepted();
+            }
+            let mut applied = Applied::accepted();
+            applied
+                .durable
+                .push(DurableDelta::QueueReordered { pending_order });
             applied
         }
         QueueCommand::Clear => {

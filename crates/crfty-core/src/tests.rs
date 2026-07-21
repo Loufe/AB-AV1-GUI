@@ -760,6 +760,12 @@ fn move_command(item_id: u64, before: Option<u64>) -> Command {
     })
 }
 
+fn reorder_pending_command(pending_order: &[u64]) -> Command {
+    Command::Queue(QueueCommand::ReorderPending {
+        pending_order: pending_order.iter().copied().map(QueueItemId).collect(),
+    })
+}
+
 #[test]
 fn reorder_destinations_around_active_pending_and_finished_items() {
     struct Case {
@@ -870,6 +876,83 @@ fn reorder_destinations_around_active_pending_and_finished_items() {
         assert!(applied.durable.is_empty(), "{name}");
         assert_queue_shape(&state, &[1, 2, 3, 4, 5]);
     }
+}
+
+#[test]
+fn whole_pending_order_reorders_atomically_around_the_frozen_prefix() {
+    let mut state = reorder_fixture();
+    let applied = apply(&mut state, reorder_pending_command(&[5, 3, 4]));
+    assert_eq!(applied.reply, Reply::Accepted);
+    assert_eq!(
+        applied.durable,
+        vec![DurableDelta::QueueReordered {
+            pending_order: vec![QueueItemId(5), QueueItemId(3), QueueItemId(4)],
+        }],
+    );
+    assert_queue_shape(&state, &[1, 2, 5, 3, 4]);
+
+    let identity = apply(&mut state, reorder_pending_command(&[5, 3, 4]));
+    assert_eq!(identity.reply, Reply::Accepted);
+    assert!(identity.durable.is_empty());
+    assert_queue_shape(&state, &[1, 2, 5, 3, 4]);
+}
+
+#[test]
+fn whole_pending_order_rejects_every_non_permutation_without_mutation() {
+    let cases: [(&str, &[u64], &str); 5] = [
+        (
+            "duplicate",
+            &[3, 3, 5],
+            "pending order contains duplicate item ids",
+        ),
+        ("omitted", &[3, 4], "pending order omits a queued item"),
+        (
+            "unknown",
+            &[3, 4, 99],
+            "pending order contains an unknown item",
+        ),
+        (
+            "active",
+            &[2, 3, 4],
+            "pending order contains a non-pending item",
+        ),
+        (
+            "finished",
+            &[1, 3, 4],
+            "pending order contains a non-pending item",
+        ),
+    ];
+    for (name, order, reason) in cases {
+        let mut state = reorder_fixture();
+        let applied = apply(&mut state, reorder_pending_command(order));
+        assert_eq!(
+            applied.reply,
+            Reply::Rejected {
+                reason: reason.to_owned(),
+            },
+            "{name}",
+        );
+        assert!(applied.durable.is_empty(), "{name}");
+        assert_queue_shape(&state, &[1, 2, 3, 4, 5]);
+    }
+}
+
+#[test]
+fn whole_pending_order_rejects_a_submission_made_stale_by_a_queue_edit() {
+    let mut state = reorder_fixture();
+    let stale_order = [5, 4, 3];
+    let added = apply(&mut state, add_command(QueueItemId(6), "video-6.mkv"));
+    assert_eq!(added.reply, Reply::Accepted);
+
+    let applied = apply(&mut state, reorder_pending_command(&stale_order));
+    assert_eq!(
+        applied.reply,
+        Reply::Rejected {
+            reason: "pending order omits a queued item".to_owned(),
+        },
+    );
+    assert!(applied.durable.is_empty());
+    assert_queue_shape(&state, &[1, 2, 3, 4, 5, 6]);
 }
 
 #[test]
@@ -2069,6 +2152,49 @@ fn replay_rejects_semantically_impossible_durable_transition() {
             run_id: RunId(3),
             at: UnixMillis(1_000),
         }],
+    };
+    let replayed = replay(&encode_record(&envelope).expect("journal record"));
+    assert!(replayed.corruption.is_some());
+    assert!(replayed.state.queue.is_empty());
+}
+
+#[test]
+fn replay_applies_one_atomic_pending_order() {
+    let envelope = JournalEnvelope {
+        sequence: JournalSequence(0),
+        deltas: vec![
+            queue_added_delta(1, "one.mkv"),
+            queue_added_delta(2, "two.mkv"),
+            queue_added_delta(3, "three.mkv"),
+            DurableDelta::QueueReordered {
+                pending_order: vec![QueueItemId(3), QueueItemId(1), QueueItemId(2)],
+            },
+        ],
+    };
+    let replayed = replay(&encode_record(&envelope).expect("journal record"));
+    assert!(replayed.corruption.is_none());
+    assert_eq!(
+        replayed
+            .state
+            .queue
+            .iter()
+            .map(|item| item.id)
+            .collect::<Vec<_>>(),
+        vec![QueueItemId(3), QueueItemId(1), QueueItemId(2)],
+    );
+}
+
+#[test]
+fn replay_rejects_an_incomplete_pending_order_with_its_entire_batch() {
+    let envelope = JournalEnvelope {
+        sequence: JournalSequence(0),
+        deltas: vec![
+            queue_added_delta(1, "one.mkv"),
+            queue_added_delta(2, "two.mkv"),
+            DurableDelta::QueueReordered {
+                pending_order: vec![QueueItemId(2)],
+            },
+        ],
     };
     let replayed = replay(&encode_record(&envelope).expect("journal record"));
     assert!(replayed.corruption.is_some());
