@@ -30,6 +30,12 @@ const FIRST_RUNTIME_ID: u64 = 1;
 /// the overflow test can size its event flood relative to it.
 pub const PUBLIC_EVENT_CHANNEL_CAPACITY: usize = 1024;
 const ADAPTER_REPORT_POLL_INTERVAL: Duration = Duration::from_millis(20);
+/// How long shutdown waits for the vendor worker to observe cancellation and
+/// unwind through its own staging cleanup before abandoning the thread to
+/// process exit (#33 §12). Cancellation is observed between download chunks,
+/// so anything slower than this is a wedged network read.
+const VENDOR_SHUTDOWN_WAIT: Duration = Duration::from_secs(5);
+const VENDOR_SHUTDOWN_POLL: Duration = Duration::from_millis(25);
 const NORMALIZED_PROGRESS_MIN: f32 = 0.0;
 const NORMALIZED_PROGRESS_MAX: f32 = 1.0;
 const OUTPUT_CONTAINER_EXTENSION: &str = "mkv";
@@ -776,6 +782,7 @@ fn supervise(
     let vendor_cancelled = Arc::new(AtomicBool::new(false));
     let next_id = Arc::new(AtomicU64::new(next_runtime_id));
     let mut worker: Option<thread::JoinHandle<()>> = None;
+    let mut vendor: Option<thread::JoinHandle<()>> = None;
     while let Ok(effect) = effects.recv() {
         match effect {
             Effect::StartWorker => {
@@ -840,22 +847,28 @@ fn supervise(
             }
             Effect::KillActiveRun { run_id } => cancellation.force(Some(run_id)),
             // The reducer serializes vendor work through the activity state,
-            // so at most one install runs; the thread is detached — status
-            // flows back as commands, and shutdown only flags cancellation.
-            Effect::VendorInstall => spawn_vendor_worker(
-                &commands,
-                &config,
-                &tools_slot,
-                &vendor_cancelled,
-                VendorTask::Install,
-            ),
-            Effect::VendorCheck => spawn_vendor_worker(
-                &commands,
-                &config,
-                &tools_slot,
-                &vendor_cancelled,
-                VendorTask::Check,
-            ),
+            // so at most one runs; status flows back as commands, and the
+            // handle is kept so shutdown can join it with a bounded wait.
+            Effect::VendorInstall => {
+                reap_finished_vendor(&mut vendor);
+                vendor = spawn_vendor_worker(
+                    &commands,
+                    &config,
+                    &tools_slot,
+                    &vendor_cancelled,
+                    VendorTask::Install,
+                );
+            }
+            Effect::VendorCheck => {
+                reap_finished_vendor(&mut vendor);
+                vendor = spawn_vendor_worker(
+                    &commands,
+                    &config,
+                    &tools_slot,
+                    &vendor_cancelled,
+                    VendorTask::Check,
+                );
+            }
             Effect::WriteSettings { .. } => {
                 report_worker_crash(
                     &commands,
@@ -865,18 +878,61 @@ fn supervise(
             }
             Effect::StopDriver => {
                 cancellation.force(None);
-                // Never join a mid-download vendor thread: it observes the
-                // flag between chunks and unwinds through its own cleanup.
+                // Flag first so a mid-download vendor worker starts unwinding
+                // through its own cleanup while the session worker is joined;
+                // the bounded join below reclaims it.
                 vendor_cancelled.store(true, Ordering::Relaxed);
                 break;
             }
         }
     }
+    // Reached on StopDriver (both flags already set) or when the driver died
+    // and the effect channel disconnected. Force-flag both workers again so
+    // the joins below are winding-down waits, never an hours-long encode.
+    cancellation.force(None);
+    vendor_cancelled.store(true, Ordering::Relaxed);
     if let Some(worker) = worker
         && worker.join().is_err()
     {
         report_worker_crash(&commands, "session worker panicked during shutdown");
     }
+    if let Some(vendor) = vendor
+        && !join_within(vendor, VENDOR_SHUTDOWN_WAIT, VENDOR_SHUTDOWN_POLL)
+    {
+        tracing::warn!(
+            "vendor worker still running after {VENDOR_SHUTDOWN_WAIT:?}; abandoning it to \
+             process exit"
+        );
+    }
+}
+
+/// The reducer only schedules new vendor work after the previous worker
+/// reported a terminal activity — its last act before exiting — so this join
+/// reclaims a thread that is already unwinding.
+fn reap_finished_vendor(vendor: &mut Option<thread::JoinHandle<()>>) {
+    if let Some(previous) = vendor.take()
+        && previous.join().is_err()
+    {
+        tracing::error!("previous vendor worker panicked");
+    }
+}
+
+/// Bounded join for shutdown: std has no timed join, so completion is polled.
+/// Returns false when the thread outlived `wait` and was left detached —
+/// blocking shutdown on a wedged network read would be worse than abandoning
+/// the thread to process exit.
+fn join_within(handle: thread::JoinHandle<()>, wait: Duration, poll: Duration) -> bool {
+    let deadline = Instant::now() + wait;
+    while !handle.is_finished() {
+        if Instant::now() >= deadline {
+            return false;
+        }
+        thread::sleep(poll);
+    }
+    if handle.join().is_err() {
+        tracing::error!("thread panicked while being joined during shutdown");
+    }
+    true
 }
 
 fn report_worker_crash(commands: &CommandSender, message: &str) {
@@ -906,7 +962,7 @@ fn spawn_vendor_worker(
     tools_slot: &Arc<Mutex<Option<CurrentTools>>>,
     cancelled: &Arc<AtomicBool>,
     task: VendorTask,
-) {
+) -> Option<thread::JoinHandle<()>> {
     cancelled.store(false, Ordering::Relaxed);
     let worker_commands = commands.clone();
     let worker_config = config.clone();
@@ -933,13 +989,17 @@ fn spawn_vendor_worker(
                 );
             }
         });
-    if let Err(error) = spawned {
-        submit_vendor_activity(
-            commands,
-            VendorActivity::Failed {
-                detail: format!("failed to start the vendor worker: {error}"),
-            },
-        );
+    match spawned {
+        Ok(handle) => Some(handle),
+        Err(error) => {
+            submit_vendor_activity(
+                commands,
+                VendorActivity::Failed {
+                    detail: format!("failed to start the vendor worker: {error}"),
+                },
+            );
+            None
+        }
     }
 }
 
@@ -2452,9 +2512,11 @@ mod tests {
 
     use crfty_core::{OutputTarget, Replacement};
 
+    use std::time::Duration;
+
     use super::{
-        ActiveCancellation, ActiveJobCancellation, resolve_output_for, validate_suffix,
-        validate_windows_file_name,
+        ActiveCancellation, ActiveJobCancellation, join_within, resolve_output_for,
+        validate_suffix, validate_windows_file_name,
     };
     use crate::ab_av1::{CancelMode, CancellationHandle};
     use crfty_core::RunId;
@@ -2493,6 +2555,24 @@ mod tests {
             source_root: Some(PathBuf::from("library")),
         };
         assert!(resolve_output_for(Path::new("elsewhere/movie.mkv"), &target).is_err());
+    }
+
+    #[test]
+    fn join_within_reclaims_a_prompt_thread_and_abandons_a_wedged_one() {
+        let prompt = std::thread::spawn(|| {});
+        assert!(join_within(
+            prompt,
+            Duration::from_secs(1),
+            Duration::from_millis(1),
+        ));
+
+        // Stands in for a wedged network read: never observes cancellation.
+        let wedged = std::thread::spawn(|| std::thread::sleep(Duration::from_secs(2)));
+        assert!(!join_within(
+            wedged,
+            Duration::from_millis(20),
+            Duration::from_millis(1),
+        ));
     }
 
     #[test]

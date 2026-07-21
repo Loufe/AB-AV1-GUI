@@ -226,6 +226,14 @@ describe("applyPayload", () => {
     expect(appStore.getState()).toEqual(before);
   });
 
+  it("opens the close dialog on a deferred close request", () => {
+    expect(appStore.getState().closeRequested).toBe(false);
+    applyPayload("CloseRequested");
+    expect(appStore.getState().closeRequested).toBe(true);
+    // The quit is armed by a dialog choice, never by the request itself.
+    expect(appStore.getState().quitAfterSession).toBe(false);
+  });
+
   it("surfaces a worker crash as a toast, not state", async () => {
     const { toast } = await import("sonner");
     const before = appStore.getState();

@@ -1158,7 +1158,13 @@ export type StreamPayload_Deserialize = ({ Snapshot: AppSnapshot_Deserialize }) 
  *  clean shutdown. Durable state was already restored by the journal
  *  replay; this is informational and stands for the whole run (#33 §12).
  */
-"AbnormalShutdown";
+"AbnormalShutdown" | 
+/**
+ *  The user asked to close the window while a session was active. The
+ *  shell kept the window open; the frontend owns the prompt and re-issues
+ *  the close once the session is idle (#33 §12).
+ */
+"CloseRequested";
 
 export type StreamPayload_Serialize = ({ Snapshot: AppSnapshot_Serialize }) & { Config?: never; Degraded?: never; Durable?: never; EngineFatal?: never; EngineUnavailable?: never; Ephemeral?: never; SecondInstance?: never } | ({ Durable: DurableDelta_Serialize }) & { Config?: never; Degraded?: never; EngineFatal?: never; EngineUnavailable?: never; Ephemeral?: never; SecondInstance?: never; Snapshot?: never } | ({ Config: ConfigDelta }) & { Degraded?: never; Durable?: never; EngineFatal?: never; EngineUnavailable?: never; Ephemeral?: never; SecondInstance?: never; Snapshot?: never } | ({ Ephemeral: EphemeralDelta }) & { Config?: never; Degraded?: never; Durable?: never; EngineFatal?: never; EngineUnavailable?: never; SecondInstance?: never; Snapshot?: never } | 
 /**
@@ -1193,7 +1199,13 @@ export type StreamPayload_Serialize = ({ Snapshot: AppSnapshot_Serialize }) & { 
  *  clean shutdown. Durable state was already restored by the journal
  *  replay; this is informational and stands for the whole run (#33 §12).
  */
-"AbnormalShutdown";
+"AbnormalShutdown" | 
+/**
+ *  The user asked to close the window while a session was active. The
+ *  shell kept the window open; the frontend owns the prompt and re-issues
+ *  the close once the session is idle (#33 §12).
+ */
+"CloseRequested";
 
 export type Telemetry = {
 	run_id: RunId,

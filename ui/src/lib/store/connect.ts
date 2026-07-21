@@ -42,6 +42,10 @@ export function applyPayload(payload: StreamPayload_Deserialize): void {
     }
     return;
   }
+  if (payload === "CloseRequested") {
+    appStore.setState((state) => ({ ...state, closeRequested: true }));
+    return;
+  }
   if ("Snapshot" in payload && payload.Snapshot !== undefined) {
     const { durable, settings } = payload.Snapshot;
     appStore.setState((state) => ({

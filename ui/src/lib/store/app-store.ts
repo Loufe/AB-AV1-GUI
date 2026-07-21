@@ -48,6 +48,17 @@ export interface AppStoreState {
    * view re-requests when it needs fresh numbers.
    */
   statistics: StatisticsPayload | null;
+  /**
+   * The shell deferred a window close because a session is active (#33 §12);
+   * the close dialog is open while true.
+   */
+  closeRequested: boolean;
+  /**
+   * Quit once the session reaches Idle: set by every close-dialog choice
+   * except "keep converting". App re-issues the window close, which the
+   * shell then lets through.
+   */
+  quitAfterSession: boolean;
 }
 
 export function initialAppState(): AppStoreState {
@@ -58,6 +69,8 @@ export function initialAppState(): AppStoreState {
     health: { degraded: null, unavailable: null, fatal: null, secondInstance: null },
     tools: null,
     statistics: null,
+    closeRequested: false,
+    quitAfterSession: false,
   };
 }
 

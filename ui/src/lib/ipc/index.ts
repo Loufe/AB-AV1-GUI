@@ -1,4 +1,5 @@
 import { Channel } from "@tauri-apps/api/core";
+import { getCurrentWindow } from "@tauri-apps/api/window";
 
 import {
   commands,
@@ -116,6 +117,22 @@ export async function queueRetry(itemId: QueueItemId): Promise<void> {
 
 export async function queueEdit(itemId: QueueItemId, patch: QueueItemEdit): Promise<void> {
   expectAccepted(await commands.queueEdit(itemId, patch), "queue edit");
+}
+
+export async function stopAfterCurrent(): Promise<void> {
+  expectAccepted(await commands.stopAfterCurrent(), "stop after current");
+}
+
+export async function forceStop(): Promise<void> {
+  expectAccepted(await commands.forceStop(), "force stop");
+}
+
+/**
+ * Re-issues the window close the shell deferred. The shell re-runs its close
+ * decision, so this only actually closes once the session is idle (#33 §12).
+ */
+export async function closeAppWindow(): Promise<void> {
+  await getCurrentWindow().close();
 }
 
 /** Opens a file or folder with the operating system's default program. */

@@ -72,6 +72,10 @@ pub enum StreamPayload {
     /// clean shutdown. Durable state was already restored by the journal
     /// replay; this is informational and stands for the whole run (#33 §12).
     AbnormalShutdown,
+    /// The user asked to close the window while a session was active. The
+    /// shell kept the window open; the frontend owns the prompt and re-issues
+    /// the close once the session is idle (#33 §12).
+    CloseRequested,
 }
 
 /// Outcome of a history import: how many records were parked and how many
@@ -211,10 +215,10 @@ pub struct Bridge {
     /// crosses IPC: the frontend asks to open it, the shell opens what the
     /// engine actually fetched.
     release_url: Arc<Mutex<Option<String>>>,
-    // Kept alive for the process lifetime: dropping the runtime shuts the
-    // engine down. The Mutex only exists to make the receiver-bearing runtime
-    // Sync for managed state.
-    _engine: Mutex<Option<EngineRuntime>>,
+    // Held until [`Bridge::shutdown_engine`] takes it on `RunEvent::Exit`.
+    // The Mutex only exists to make the receiver-bearing runtime Sync for
+    // managed state.
+    engine: Mutex<Option<EngineRuntime>>,
 }
 
 impl Bridge {
@@ -236,7 +240,7 @@ impl Bridge {
                     commands: None,
                     next_item_id: Arc::new(AtomicU64::new(1)),
                     release_url: Arc::new(Mutex::new(None)),
-                    _engine: Mutex::new(None),
+                    engine: Mutex::new(None),
                 }
             }
         }
@@ -295,7 +299,7 @@ impl Bridge {
             commands: Some(runtime.commands.clone()),
             next_item_id,
             release_url: Arc::new(Mutex::new(None)),
-            _engine: Mutex::new(Some(runtime)),
+            engine: Mutex::new(Some(runtime)),
         })
     }
 
@@ -489,6 +493,36 @@ impl Bridge {
         map_reply(commands.acknowledge_corruption(signature))
     }
 
+    /// Decides a window-close request (#33 §12: closing during active work
+    /// prompts). Returns true when the close must be deferred; the request is
+    /// then forwarded to the frontend prompt, which re-issues the close once
+    /// the session is idle. That gate is what keeps engine shutdown from ever
+    /// relabeling an ordinary stop as an active-file cancellation: by the
+    /// time the close goes through, no run is live.
+    pub fn handle_close_requested(&self) -> bool {
+        let mut stream = lock_stream(&self.stream);
+        if !should_defer_close(&stream) {
+            return false;
+        }
+        stream.emit(StreamPayload::CloseRequested);
+        true
+    }
+
+    /// Joins every engine thread (driver, supervisor, session and vendor
+    /// workers, encoder runtime) on the way out. The Tauri event loop exits
+    /// the process instead of unwinding, so managed-state drops never run:
+    /// this call from `RunEvent::Exit` is the only clean-shutdown path, and
+    /// without it the crash sentinel stays armed and every next boot reports
+    /// a false abnormal shutdown.
+    pub fn shutdown_engine(&self) {
+        let engine = lock_engine(&self.engine).take();
+        if let Some(engine) = engine
+            && let Err(error) = engine.shutdown()
+        {
+            tracing::error!("engine shutdown failed: {error}");
+        }
+    }
+
     fn commands(&self) -> Result<&UserCommandSender, CommandError> {
         self.commands.as_ref().ok_or_else(|| {
             let stream = lock_stream(&self.stream);
@@ -506,6 +540,17 @@ impl Bridge {
             }
         })
     }
+}
+
+/// A close is deferred only when there is something to protect (an active
+/// session) and someone to ask (a subscribed webview over a healthy engine).
+/// A broken or unsubscribed webview must never trap the window open, and on
+/// a severed stream the session mirror is stale — the prompt could wait
+/// forever for an Idle transition it can no longer observe.
+fn should_defer_close(state: &StreamState) -> bool {
+    state.session != SessionState::Idle
+        && state.subscriber.is_some()
+        && matches!(state.health, Health::Ok)
 }
 
 fn forward(
@@ -614,6 +659,13 @@ fn lock_stream<'a>(stream: &'a Arc<Mutex<StreamState>>) -> MutexGuard<'a, Stream
 
 fn lock_slot(slot: &Mutex<Option<String>>) -> MutexGuard<'_, Option<String>> {
     match slot.lock() {
+        Ok(guard) => guard,
+        Err(poisoned) => poisoned.into_inner(),
+    }
+}
+
+fn lock_engine(engine: &Mutex<Option<EngineRuntime>>) -> MutexGuard<'_, Option<EngineRuntime>> {
+    match engine.lock() {
         Ok(guard) => guard,
         Err(poisoned) => poisoned.into_inner(),
     }
@@ -741,6 +793,30 @@ mod tests {
             matches!(state.health, Health::Fatal { .. }),
             "expected fatal health after the stream disconnect"
         );
+    }
+
+    #[test]
+    fn a_close_is_deferred_only_for_an_active_session_with_a_subscribed_webview() {
+        let mut state = StreamState::new(Health::Ok);
+        // Idle session: nothing to protect, the close goes through.
+        assert!(!should_defer_close(&state));
+
+        state.session = SessionState::Running;
+        // Active but no webview to run the prompt: deferring would trap the
+        // window open with no way to ever release it.
+        assert!(!should_defer_close(&state));
+
+        state.subscriber = Some(Channel::new(|_response| Ok(())));
+        assert!(should_defer_close(&state));
+        state.session = SessionState::StopAfterCurrent;
+        assert!(should_defer_close(&state));
+
+        // On a severed stream the session mirror is stale and the prompt
+        // could never observe the session going idle.
+        state.health = Health::Fatal {
+            message: "lost the engine event stream".to_owned(),
+        };
+        assert!(!should_defer_close(&state));
     }
 
     #[test]
