@@ -17,11 +17,12 @@ use std::{
 };
 
 use crfty_core::{
-    AnalysisIntent, AnalysisProfile, AppSnapshot, ConfigDelta, CorruptionReport,
-    CorruptionSignature, DurableDelta, DurableState, EphemeralDelta, ExecutionSettings, Operation,
-    OutputTarget, OverwriteDecision, ProjectionCommand, QueueAddRequest, QueueCommand, QueueItemId,
-    Reply, RunId, SessionAggregates, SessionCommand, SessionState, Settings, SettingsCommand,
-    Telemetry, ToolsState, VendorCommand, fold, fold_config,
+    AnalysisDelta, AnalysisIntent, AnalysisProfile, AnalysisSnapshot, AppSnapshot, ConfigDelta,
+    CorruptionReport, CorruptionSignature, DurableDelta, DurableState, EphemeralDelta,
+    ExecutionSettings, Operation, OutputTarget, OverwriteDecision, ProjectionCommand,
+    QueueAddRequest, QueueCommand, QueueItemId, Reply, RunId, SessionAggregates, SessionCommand,
+    SessionState, Settings, SettingsCommand, Telemetry, ToolsState, VendorCommand, fold,
+    fold_analysis, fold_config,
 };
 use crfty_engine::{
     coordinator::{EngineConfig, EngineRuntime, ToolsConfig, UserCommandSender},
@@ -157,6 +158,9 @@ enum Health {
 
 struct StreamState {
     model: AppSnapshot,
+    /// Standing mirror of core's non-durable Analysis read model. Replayed as
+    /// one complete Reset after the durable snapshot on every subscription.
+    analysis: AnalysisSnapshot,
     session: SessionState,
     tools: ToolsState,
     /// Latest session aggregates, mirroring `AppState::aggregates` in the
@@ -180,6 +184,7 @@ impl StreamState {
     fn new(health: Health) -> Self {
         Self {
             model: AppSnapshot::default(),
+            analysis: AnalysisSnapshot::default(),
             session: SessionState::Idle,
             tools: ToolsState::default(),
             aggregates: SessionAggregates::default(),
@@ -204,6 +209,46 @@ impl StreamState {
             tracing::warn!("dropping stream subscriber after failed send: {error}");
             self.subscriber = None;
         }
+    }
+
+    fn replay_payloads(&self) -> Vec<StreamPayload> {
+        let mut payloads = vec![
+            StreamPayload::Snapshot(self.model.clone()),
+            StreamPayload::Ephemeral(EphemeralDelta::Analysis(AnalysisDelta::Reset {
+                snapshot: Box::new(self.analysis.clone()),
+            })),
+            StreamPayload::Ephemeral(EphemeralDelta::SessionChanged(self.session.clone())),
+            StreamPayload::Ephemeral(EphemeralDelta::ToolsChanged(self.tools.clone())),
+            StreamPayload::Ephemeral(EphemeralDelta::SessionAggregates(self.aggregates)),
+        ];
+        payloads.extend(
+            self.telemetry
+                .values()
+                .cloned()
+                .map(EphemeralDelta::Telemetry)
+                .map(StreamPayload::Ephemeral),
+        );
+        if self.abnormal_shutdown {
+            payloads.push(StreamPayload::AbnormalShutdown);
+        }
+        match &self.health {
+            Health::Ok => {}
+            Health::Unavailable { reason } => payloads.push(StreamPayload::EngineUnavailable {
+                reason: reason.clone(),
+            }),
+            Health::Degraded { report } => {
+                payloads.push(StreamPayload::Degraded(report.clone()));
+            }
+            Health::Fatal { message } => payloads.push(StreamPayload::EngineFatal {
+                message: message.clone(),
+            }),
+            Health::SecondInstance { lock_path } => {
+                payloads.push(StreamPayload::SecondInstance {
+                    lock_path: lock_path.clone(),
+                });
+            }
+        }
+        payloads
     }
 }
 
@@ -304,45 +349,17 @@ impl Bridge {
     }
 
     /// Installs the webview's channel and replays current state into it:
-    /// snapshot first, then the session state, tool availability, and session
-    /// aggregates (which a fresh connection would otherwise only learn on
-    /// their next transition), then any standing degradation. All under the
-    /// stream lock, so no delta interleaves.
+    /// snapshot first, then the complete Analysis replacement, session state,
+    /// tool availability, and session aggregates (which a fresh connection
+    /// would otherwise only learn on their next transition), then any
+    /// standing degradation. All under the stream lock, so no delta
+    /// interleaves.
     pub fn subscribe(&self, channel: Channel<ShellEvent>) {
         let mut stream = lock_stream(&self.stream);
         stream.subscriber = Some(channel);
         stream.seq = 0;
-        let snapshot = stream.model.clone();
-        stream.emit(StreamPayload::Snapshot(snapshot));
-        let session = stream.session.clone();
-        stream.emit(StreamPayload::Ephemeral(EphemeralDelta::SessionChanged(
-            session,
-        )));
-        let tools = stream.tools.clone();
-        stream.emit(StreamPayload::Ephemeral(EphemeralDelta::ToolsChanged(
-            tools,
-        )));
-        let aggregates = stream.aggregates;
-        stream.emit(StreamPayload::Ephemeral(EphemeralDelta::SessionAggregates(
-            aggregates,
-        )));
-        let telemetry: Vec<Telemetry> = stream.telemetry.values().cloned().collect();
-        for value in telemetry {
-            stream.emit(StreamPayload::Ephemeral(EphemeralDelta::Telemetry(value)));
-        }
-        if stream.abnormal_shutdown {
-            stream.emit(StreamPayload::AbnormalShutdown);
-        }
-        match stream.health.clone() {
-            Health::Ok => {}
-            Health::Unavailable { reason } => {
-                stream.emit(StreamPayload::EngineUnavailable { reason });
-            }
-            Health::Degraded { report } => stream.emit(StreamPayload::Degraded(report)),
-            Health::Fatal { message } => stream.emit(StreamPayload::EngineFatal { message }),
-            Health::SecondInstance { lock_path } => {
-                stream.emit(StreamPayload::SecondInstance { lock_path });
-            }
+        for payload in stream.replay_payloads() {
+            stream.emit(payload);
         }
     }
 
@@ -356,7 +373,7 @@ impl Bridge {
     }
 
     /// Expands files and folders into one `AddMany` batch carrying real
-    /// enqueue facts (path hash + stamp, best-effort). The scan-extension
+    /// enqueue facts (path hash + destructive identity, best-effort). The scan-extension
     /// filter comes from the settings read model; for `SeparateFolder`
     /// targets, each folder-discovered file gets its originating folder as
     /// `source_root` so the output tree mirrors the source tree.
@@ -389,7 +406,8 @@ impl Bridge {
                     item_id: self.allocate_item_id(),
                     input: file.path,
                     path_hash: file.path_hash,
-                    stamp: file.stamp,
+                    identity: file.identity,
+                    timestamp_reliability: file.timestamp_reliability,
                     operation,
                     intent,
                     output_target,
@@ -583,7 +601,13 @@ fn absorb(state: &mut StreamState, event: DriverEvent, next_item_id: &AtomicU64)
         DriverEvent::Snapshot(model) => {
             seed_item_ids(next_item_id, &model.durable);
             state.model = model.clone();
+            state.analysis = AnalysisSnapshot::default();
             state.emit(StreamPayload::Snapshot(model));
+            state.emit(StreamPayload::Ephemeral(EphemeralDelta::Analysis(
+                AnalysisDelta::Reset {
+                    snapshot: Box::new(AnalysisSnapshot::default()),
+                },
+            )));
         }
         DriverEvent::Durable(delta) => {
             fold(&mut state.model.durable, &delta);
@@ -598,6 +622,7 @@ fn absorb(state: &mut StreamState, event: DriverEvent, next_item_id: &AtomicU64)
         }
         DriverEvent::Ephemeral(delta) => {
             match &delta {
+                EphemeralDelta::Analysis(delta) => fold_analysis(&mut state.analysis, delta),
                 EphemeralDelta::SessionChanged(session) => state.session = session.clone(),
                 EphemeralDelta::SessionAggregates(aggregates) => state.aggregates = *aggregates,
                 EphemeralDelta::ToolsChanged(tools) => state.tools = tools.clone(),
@@ -678,19 +703,25 @@ fn map_reply(reply: Result<Reply, crfty_engine::driver::SubmitError>) -> Result<
         Ok(Reply::DurabilityUnknown { reason }) => {
             Err(CommandError::new("durability_unknown", reason))
         }
-        Ok(Reply::Reserved(_) | Reply::Claimed(_) | Reply::Imported { .. }) => {
-            Err(CommandError::new(
-                "internal",
-                "driver returned a worker reply to a user command",
-            ))
-        }
+        Ok(
+            Reply::AnalysisStarted { .. }
+            | Reply::Reserved(_)
+            | Reply::Claimed(_)
+            | Reply::Imported { .. },
+        ) => Err(CommandError::new(
+            "internal",
+            "driver returned a worker reply to a user command",
+        )),
         Err(error) => Err(CommandError::engine_unavailable(error.to_string())),
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use crfty_core::{JobPhase, JobProgress};
+    use crfty_core::{
+        AnalysisActivity, AnalysisDisplayText, AnalysisEntryKind, AnalysisGeneration,
+        AnalysisGenerationId, AnalysisRow, AnalysisRowId, JobPhase, JobProgress,
+    };
 
     use super::*;
 
@@ -707,6 +738,106 @@ mod tests {
 
     fn ephemeral(delta: EphemeralDelta) -> DriverEvent {
         DriverEvent::Ephemeral(delta)
+    }
+
+    fn analysis_snapshot(generation: u64) -> AnalysisSnapshot {
+        AnalysisSnapshot {
+            current: Some(AnalysisGeneration {
+                id: AnalysisGenerationId(generation),
+                root: AnalysisDisplayText {
+                    text: "root".to_owned(),
+                    lossy: false,
+                },
+                activity: AnalysisActivity::Discovering,
+                rows: BTreeMap::new(),
+            }),
+        }
+    }
+
+    fn analysis_row(id: u64) -> AnalysisRow {
+        AnalysisRow {
+            id: AnalysisRowId(id),
+            parent: None,
+            kind: AnalysisEntryKind::File,
+            display_name: AnalysisDisplayText {
+                text: format!("row-{id}"),
+                lossy: false,
+            },
+            display_path: AnalysisDisplayText {
+                text: format!("root/row-{id}"),
+                lossy: false,
+            },
+        }
+    }
+
+    #[test]
+    fn reconnect_replay_places_the_complete_analysis_reset_after_snapshot() {
+        let mut state = StreamState::new(Health::Ok);
+        state.analysis = analysis_snapshot(7);
+        fold_analysis(
+            &mut state.analysis,
+            &AnalysisDelta::RowsUpserted {
+                generation: AnalysisGenerationId(7),
+                rows: vec![analysis_row(3)],
+            },
+        );
+
+        let payloads = state.replay_payloads();
+        assert!(matches!(payloads.first(), Some(StreamPayload::Snapshot(_))));
+        let Some(StreamPayload::Ephemeral(EphemeralDelta::Analysis(AnalysisDelta::Reset {
+            snapshot,
+        }))) = payloads.get(1)
+        else {
+            panic!("second reconnect payload must be the Analysis reset");
+        };
+        assert_eq!(snapshot.as_ref(), &state.analysis);
+        assert_eq!(
+            snapshot
+                .current
+                .as_ref()
+                .expect("generation")
+                .rows
+                .get(&AnalysisRowId(3)),
+            Some(&analysis_row(3))
+        );
+    }
+
+    #[test]
+    fn absorb_tracks_analysis_and_a_new_snapshot_clears_it() {
+        let ids = AtomicU64::new(1);
+        let mut state = StreamState::new(Health::Ok);
+        absorb(
+            &mut state,
+            ephemeral(EphemeralDelta::Analysis(AnalysisDelta::Reset {
+                snapshot: Box::new(analysis_snapshot(4)),
+            })),
+            &ids,
+        );
+        absorb(
+            &mut state,
+            ephemeral(EphemeralDelta::Analysis(AnalysisDelta::RowsUpserted {
+                generation: AnalysisGenerationId(4),
+                rows: vec![analysis_row(1)],
+            })),
+            &ids,
+        );
+        assert_eq!(
+            state
+                .analysis
+                .current
+                .as_ref()
+                .expect("generation")
+                .rows
+                .len(),
+            1
+        );
+
+        absorb(
+            &mut state,
+            DriverEvent::Snapshot(AppSnapshot::default()),
+            &ids,
+        );
+        assert_eq!(state.analysis, AnalysisSnapshot::default());
     }
 
     #[test]

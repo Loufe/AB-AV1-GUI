@@ -1,7 +1,7 @@
 //! Filesystem discovery for queue adds.
 //!
 //! Expands user-selected files and folders into concrete video files plus
-//! their enqueue facts (path hash and freshness stamp). This is the seed of
+//! their enqueue facts (path hash and destructive identity). This is the seed of
 //! #42's generation-scoped discovery: keep it a plain breadth-first pass with
 //! no caching, watching, or media inspection.
 
@@ -12,7 +12,7 @@ use std::{
     path::{Path, PathBuf},
 };
 
-use crfty_core::{FileStamp, PathHash, VideoExtension};
+use crfty_core::{DestructiveIdentity, PathHash, TimestampReliability, VideoExtension};
 
 use crate::media;
 
@@ -23,7 +23,8 @@ use crate::media;
 pub struct ScannedFile {
     pub path: PathBuf,
     pub path_hash: Option<PathHash>,
-    pub stamp: Option<FileStamp>,
+    pub identity: Option<DestructiveIdentity>,
+    pub timestamp_reliability: TimestampReliability,
     /// The added folder this file was discovered under; `None` for files
     /// passed directly. Feeds `OutputTarget::SeparateFolder`'s
     /// relative-tree layout.
@@ -111,17 +112,23 @@ fn scanned(path: PathBuf, source_root: Option<PathBuf>) -> ScannedFile {
             None
         }
     };
-    let stamp = match media::stamp(&path) {
-        Ok(stamp) => Some(stamp),
+    let identity = match media::destructive_identity(&path) {
+        Ok(identity) => Some(identity),
         Err(error) => {
-            tracing::warn!("failed to stamp file {}: {error}", path.display());
+            tracing::warn!("failed to identify file {}: {error}", path.display());
             None
         }
     };
+    let timestamp_reliability = identity
+        .as_ref()
+        .map_or(TimestampReliability::Unknown, |identity| {
+            media::timestamp_reliability(identity, std::time::SystemTime::now())
+        });
     ScannedFile {
         path,
         path_hash,
-        stamp,
+        identity,
+        timestamp_reliability,
         source_root,
     }
 }
@@ -189,7 +196,7 @@ mod tests {
         }
         let sizes: Vec<_> = files
             .iter()
-            .map(|file| file.stamp.as_ref().expect("stamp").size)
+            .map(|file| file.identity.as_ref().expect("identity").size)
             .collect();
         assert_eq!(sizes, vec![2, 1, 4, 3]);
         fs::remove_dir_all(root).expect("remove fixture directory");
@@ -222,7 +229,7 @@ mod tests {
         assert_eq!(scanned.path, file);
         assert_eq!(scanned.source_root, None);
         assert!(scanned.path_hash.is_some());
-        assert_eq!(scanned.stamp.as_ref().expect("stamp").size, 4);
+        assert_eq!(scanned.identity.as_ref().expect("identity").size, 4);
         fs::remove_dir_all(root).expect("remove fixture directory");
     }
 
