@@ -14,6 +14,11 @@ name = "crfty-contract-fixture"
 path = "tests/support/contract_fixture.rs"
 required-features = ["contract-test-fixture"]
 
+[[bin]]
+name = "crfty-process-fixture"
+path = "tests/support/process_fixture.rs"
+required-features = ["contract-test-fixture"]
+
 [dependencies]
 ab-av1 = { version = "=0.11.4", git = "https://github.com/Loufe/ab-av1.git", rev = "8bde51723f6f95945792f58a94c08f59171047d7", default-features = false, features = ["library"] }
 blake2 = { version = "=0.10.6", default-features = false }
