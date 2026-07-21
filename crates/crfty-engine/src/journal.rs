@@ -248,15 +248,20 @@ impl JournalWriter {
         recovered_at: UnixMillis,
     ) -> Result<PathBuf, JournalError> {
         let archive = corrupt_archive_path(&self.path)?;
-        let mut source = File::open(&self.path)
-            .map_err(|error| JournalError::new("failed to open journal for archival", error))?;
-        let mut destination = File::create(&archive)
-            .map_err(|error| JournalError::new("failed to create corruption archive", error))?;
-        io::copy(&mut source, &mut destination)
-            .map_err(|error| JournalError::new("failed to copy corruption archive", error))?;
-        destination.sync_all().map_err(|error| {
-            JournalError::new("failed to synchronize corruption archive", error)
-        })?;
+        // Windows refuses to replace a file another handle has open, so the
+        // archival copy's handles must close before `compact` swaps the
+        // snapshot over the journal path.
+        {
+            let mut source = File::open(&self.path)
+                .map_err(|error| JournalError::new("failed to open journal for archival", error))?;
+            let mut destination = File::create(&archive)
+                .map_err(|error| JournalError::new("failed to create corruption archive", error))?;
+            io::copy(&mut source, &mut destination)
+                .map_err(|error| JournalError::new("failed to copy corruption archive", error))?;
+            destination.sync_all().map_err(|error| {
+                JournalError::new("failed to synchronize corruption archive", error)
+            })?;
+        }
         sync_parent(&self.path)
             .map_err(|error| JournalError::new("failed to synchronize journal directory", error))?;
         self.compact(state, app_version, recovered_at)?;
