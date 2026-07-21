@@ -4,12 +4,14 @@ import { Toaster } from "sonner";
 import { ErrorBoundary } from "@/components/error-boundary";
 import { Sidebar } from "@/components/layout/sidebar";
 import type { DevViewId, ViewId } from "@/components/layout/views";
+import { SecondInstanceScreen } from "@/components/second-instance";
 import { AnalysisView } from "@/features/analysis";
 import { HistoryView } from "@/features/history";
 import { QueueView } from "@/features/queue";
 import { SettingsView } from "@/features/settings";
 import { StatisticsView } from "@/features/statistics";
 import { fetchAppVersion, isTauri } from "@/lib/ipc";
+import { useAppStore } from "@/lib/store/app-store";
 import { connectStream } from "@/lib/store/connect";
 import { getTheme, setTheme, watchSystemTheme, type Theme } from "@/lib/theme";
 
@@ -47,6 +49,7 @@ export default function App() {
   const [activeView, setActiveView] = useState<AppView>("queue");
   const [theme, setThemeState] = useState<Theme>(getTheme);
   const [appVersion, setAppVersion] = useState<string | null>(null);
+  const secondInstance = useAppStore((state) => state.health.secondInstance);
 
   useEffect(() => watchSystemTheme(), []);
 
@@ -70,6 +73,12 @@ export default function App() {
     setTheme(next);
     setThemeState(next);
   };
+
+  // A duplicate instance must not present a working app over state it cannot
+  // touch: replace everything with the explicit already-running screen.
+  if (secondInstance !== null) {
+    return <SecondInstanceScreen lockPath={secondInstance} />;
+  }
 
   return (
     <div className="flex h-full">

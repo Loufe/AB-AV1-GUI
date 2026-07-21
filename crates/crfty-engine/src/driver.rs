@@ -18,6 +18,7 @@ use crate::{
     config::ConfigStore,
     journal::{DurabilityToken, JournalError, JournalWriter},
     lock::{DataLock, DataLockError},
+    sentinel::CrashSentinel,
 };
 
 const DRIVER_CHANNEL_CAPACITY: usize = 64;
@@ -38,6 +39,10 @@ pub enum DriverEvent {
     /// An acknowledged corruption was archived and compacted away; the
     /// journal is a fresh healthy generation and mutation is accepted again.
     Recovered,
+    /// The previous run left the crash sentinel behind: it died without a
+    /// clean driver shutdown. Durable state was already restored by the
+    /// journal replay; this is the boot-scoped report of that fact (#33 §12).
+    AbnormalShutdown,
     Fatal {
         message: String,
     },
@@ -95,6 +100,10 @@ struct DriverPersistence {
     /// Held for the driver's lifetime; releasing it is what allows the next
     /// instance to start (ADR-008).
     _lock: DataLock,
+    /// Armed for the driver's lifetime and disarmed only on clean exit; a
+    /// leftover sentinel is what the next boot reports as an abnormal
+    /// shutdown (#33 §12).
+    sentinel: CrashSentinel,
 }
 
 #[derive(Clone)]
@@ -169,6 +178,10 @@ impl DriverHandle {
                 DriverStartError::Failed(format!("failed to lock data directory: {error}"))
             }
         })?;
+        // Armed while holding the lock and before any durable state is
+        // touched (#33 §12): whatever happens from here on, dying without a
+        // clean shutdown leaves the sentinel for the next boot to report.
+        let sentinel = CrashSentinel::arm(data_dir);
         let config = ConfigStore::new(config_path.as_ref().to_path_buf());
         let loaded = config.load().map_err(|error| {
             DriverStartError::Failed(format!("failed to load settings: {error}"))
@@ -204,6 +217,7 @@ impl DriverHandle {
                         journal: writer,
                         config,
                         _lock: lock,
+                        sentinel,
                     },
                     degraded,
                     command_rx,
@@ -277,13 +291,16 @@ fn run_driver(
     if let Some(report) = &degraded {
         let _result = events.send(DriverEvent::Degraded(report.clone()));
     }
+    if persistence.sentinel.previous_run_abnormal() {
+        let _result = events.send(DriverEvent::AbnormalShutdown);
+    }
     let mut compaction_backoff: u32 = 0;
     // A history import must not linger as journal deltas: the parked records
     // carry cleartext paths, and adoption semantics assume the inbox state is
     // the snapshot. Imports therefore force a compaction at the next idle
     // tick, retried until one actually lands.
     let mut force_compact_pending = false;
-    loop {
+    'running: loop {
         let first = match receiver.recv_timeout(DRIVER_TICK) {
             Ok(envelope) => envelope,
             Err(mpsc::RecvTimeoutError::Timeout) => {
@@ -304,7 +321,7 @@ fn run_driver(
                 }
                 continue;
             }
-            Err(mpsc::RecvTimeoutError::Disconnected) => break,
+            Err(mpsc::RecvTimeoutError::Disconnected) => break 'running,
         };
         emit_latest_telemetry(&state, &events, &telemetry);
         let mut batch = vec![first];
@@ -321,10 +338,14 @@ fn run_driver(
             );
             force_compact_pending = force_compact_pending || outcome.imported_history;
             if outcome.should_stop {
-                return;
+                break 'running;
             }
         }
     }
+    // Reached only when the loop exits normally (shutdown command or every
+    // sender dropped) — a driver panic unwinds past this and leaves the
+    // sentinel for the next boot to report.
+    persistence.sentinel.disarm();
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -804,6 +825,7 @@ mod tests {
         config::ConfigStore,
         journal::{DurabilityToken, JournalWriter},
         lock::DataLock,
+        sentinel::CrashSentinel,
     };
 
     struct FailingJournal;
@@ -1166,6 +1188,7 @@ mod tests {
             journal,
             config: ConfigStore::new(directory.path().join("config.json")),
             _lock: DataLock::acquire(directory.path()).expect("data lock"),
+            sentinel: CrashSentinel::arm(directory.path()),
         };
         let before = std::fs::read(&journal_path).expect("journal bytes");
 

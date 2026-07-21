@@ -68,6 +68,10 @@ pub enum StreamPayload {
     SecondInstance {
         lock_path: String,
     },
+    /// The previous run left the crash sentinel behind: it died without a
+    /// clean shutdown. Durable state was already restored by the journal
+    /// replay; this is informational and stands for the whole run (#33 §12).
+    AbnormalShutdown,
 }
 
 /// Outcome of a history import: how many records were parked and how many
@@ -160,6 +164,10 @@ struct StreamState {
     /// instead of waiting for the next update.
     telemetry: BTreeMap<RunId, Telemetry>,
     health: Health,
+    /// The boot carried an abnormal-shutdown report. Standing (not one-shot)
+    /// because the webview subscribes after the driver emits it, and every
+    /// reconnect must replay it.
+    abnormal_shutdown: bool,
     subscriber: Option<Channel<ShellEvent>>,
     seq: u32,
 }
@@ -173,6 +181,7 @@ impl StreamState {
             aggregates: SessionAggregates::default(),
             telemetry: BTreeMap::new(),
             health,
+            abnormal_shutdown: false,
             subscriber: None,
             seq: 0,
         }
@@ -316,6 +325,9 @@ impl Bridge {
         let telemetry: Vec<Telemetry> = stream.telemetry.values().cloned().collect();
         for value in telemetry {
             stream.emit(StreamPayload::Ephemeral(EphemeralDelta::Telemetry(value)));
+        }
+        if stream.abnormal_shutdown {
+            stream.emit(StreamPayload::AbnormalShutdown);
         }
         match stream.health.clone() {
             Health::Ok => {}
@@ -509,7 +521,7 @@ fn forward(
     // subscriber-drop contract) — the engine itself keeps running, but this
     // mirror can no longer observe it and every later snapshot replay would
     // be silently stale. Surface the cut instead of freezing quietly.
-    eprintln!("engine event stream disconnected; marking the bridge fatal");
+    tracing::error!("engine event stream disconnected; marking the bridge fatal");
     let message = "lost the engine event stream; restart CRFty to reconnect".to_owned();
     let mut state = lock_stream(stream);
     state.health = Health::Fatal {
@@ -574,6 +586,10 @@ fn absorb(state: &mut StreamState, event: DriverEvent, next_item_id: &AtomicU64)
         DriverEvent::Recovered => {
             state.health = Health::Ok;
             state.emit(StreamPayload::Recovered);
+        }
+        DriverEvent::AbnormalShutdown => {
+            state.abnormal_shutdown = true;
+            state.emit(StreamPayload::AbnormalShutdown);
         }
         DriverEvent::Fatal { message } => {
             state.health = Health::Fatal {
@@ -725,6 +741,18 @@ mod tests {
             matches!(state.health, Health::Fatal { .. }),
             "expected fatal health after the stream disconnect"
         );
+    }
+
+    #[test]
+    fn an_abnormal_shutdown_report_stands_for_replay() {
+        let ids = AtomicU64::new(1);
+        let mut state = StreamState::new(Health::Ok);
+        assert!(!state.abnormal_shutdown);
+        absorb(&mut state, DriverEvent::AbnormalShutdown, &ids);
+        // Standing, not one-shot: the webview subscribes after the driver
+        // emits this at boot, so the subscribe replay is how it ever arrives.
+        assert!(state.abnormal_shutdown);
+        assert!(matches!(state.health, Health::Ok));
     }
 
     #[test]

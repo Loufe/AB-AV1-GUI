@@ -318,7 +318,7 @@ impl EngineRuntime {
                         // consumer observes the disconnect once it drains the
                         // buffered tail and recovers by reconnecting.
                         Err(mpsc::TrySendError::Full(_)) => {
-                            eprintln!(
+                            tracing::error!(
                                 "public event channel overflowed \
                                  ({PUBLIC_EVENT_CHANNEL_CAPACITY} events buffered, consumer \
                                  not draining); severing the event stream"

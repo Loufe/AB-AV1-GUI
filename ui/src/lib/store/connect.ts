@@ -18,10 +18,28 @@ export function hasSequenceGap(last: number | null, next: number): boolean {
   return next !== 0 && next !== (last === null ? 0 : last + 1);
 }
 
+// The abnormal-shutdown report is standing shell-side state replayed on every
+// resubscribe; one notification per webview lifetime is enough.
+let abnormalShutdownReported = false;
+
+/** Test-only: forget that the abnormal-shutdown toast was shown. */
+export function resetAbnormalShutdownReport(): void {
+  abnormalShutdownReported = false;
+}
+
 export function applyPayload(payload: StreamPayload_Deserialize): void {
   // String variants first: the `in` checks below would throw on a primitive.
   if (payload === "Recovered") {
     appStore.setState((state) => ({ ...state, health: { ...state.health, degraded: null } }));
+    return;
+  }
+  if (payload === "AbnormalShutdown") {
+    if (!abnormalShutdownReported) {
+      abnormalShutdownReported = true;
+      toast.warning(
+        "CRFty didn't shut down cleanly last time. The queue and history were restored from the journal.",
+      );
+    }
     return;
   }
   if ("Snapshot" in payload && payload.Snapshot !== undefined) {

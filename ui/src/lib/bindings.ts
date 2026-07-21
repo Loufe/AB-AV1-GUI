@@ -1152,7 +1152,13 @@ export type StreamPayload_Deserialize = ({ Snapshot: AppSnapshot_Deserialize }) 
  */
 ({ SecondInstance: {
 	lock_path: string,
-} }) & { Config?: never; Degraded?: never; Durable?: never; EngineFatal?: never; EngineUnavailable?: never; Ephemeral?: never; Snapshot?: never };
+} }) & { Config?: never; Degraded?: never; Durable?: never; EngineFatal?: never; EngineUnavailable?: never; Ephemeral?: never; Snapshot?: never } | 
+/**
+ *  The previous run left the crash sentinel behind: it died without a
+ *  clean shutdown. Durable state was already restored by the journal
+ *  replay; this is informational and stands for the whole run (#33 §12).
+ */
+"AbnormalShutdown";
 
 export type StreamPayload_Serialize = ({ Snapshot: AppSnapshot_Serialize }) & { Config?: never; Degraded?: never; Durable?: never; EngineFatal?: never; EngineUnavailable?: never; Ephemeral?: never; SecondInstance?: never } | ({ Durable: DurableDelta_Serialize }) & { Config?: never; Degraded?: never; EngineFatal?: never; EngineUnavailable?: never; Ephemeral?: never; SecondInstance?: never; Snapshot?: never } | ({ Config: ConfigDelta }) & { Degraded?: never; Durable?: never; EngineFatal?: never; EngineUnavailable?: never; Ephemeral?: never; SecondInstance?: never; Snapshot?: never } | ({ Ephemeral: EphemeralDelta }) & { Config?: never; Degraded?: never; Durable?: never; EngineFatal?: never; EngineUnavailable?: never; SecondInstance?: never; Snapshot?: never } | 
 /**
@@ -1181,7 +1187,13 @@ export type StreamPayload_Serialize = ({ Snapshot: AppSnapshot_Serialize }) & { 
  */
 ({ SecondInstance: {
 	lock_path: string,
-} }) & { Config?: never; Degraded?: never; Durable?: never; EngineFatal?: never; EngineUnavailable?: never; Ephemeral?: never; Snapshot?: never };
+} }) & { Config?: never; Degraded?: never; Durable?: never; EngineFatal?: never; EngineUnavailable?: never; Ephemeral?: never; Snapshot?: never } | 
+/**
+ *  The previous run left the crash sentinel behind: it died without a
+ *  clean shutdown. Durable state was already restored by the journal
+ *  replay; this is informational and stands for the whole run (#33 §12).
+ */
+"AbnormalShutdown";
 
 export type Telemetry = {
 	run_id: RunId,

@@ -353,6 +353,73 @@ fn journal_group_commit_is_one_atomic_replay_record() {
 }
 
 #[test]
+fn crash_sentinel_reports_an_abnormal_previous_run_and_only_that_run() {
+    let directory = TestDirectory::new("sentinel");
+    let path = directory.path().join("state.jsonl");
+    let config_path = directory.path().join("config.json");
+    let sentinel_path = directory
+        .path()
+        .join(crfty_engine::sentinel::SENTINEL_FILE_NAME);
+
+    // First boot on a clean directory: no report; the sentinel exists while
+    // running and is gone after a clean shutdown.
+    let driver = DriverHandle::start(&path, &config_path).expect("driver");
+    assert!(matches!(
+        driver
+            .events()
+            .expect("event receiver")
+            .recv()
+            .expect("snapshot"),
+        DriverEvent::Snapshot(_)
+    ));
+    assert!(sentinel_path.exists());
+    // The report is emitted before any command processing, so a processed
+    // command proves its absence: the next event is the command's, not a
+    // stale AbnormalShutdown.
+    let reply = driver
+        .commands
+        .submit(add(QueueItemId(1)))
+        .expect("driver reply");
+    assert_eq!(reply, Reply::Accepted);
+    assert!(matches!(
+        driver
+            .events()
+            .expect("event receiver")
+            .recv()
+            .expect("first post-snapshot event"),
+        DriverEvent::Ephemeral(EphemeralDelta::QueueAddSummary { .. })
+    ));
+    driver.shutdown().expect("driver shutdown");
+    assert!(!sentinel_path.exists());
+
+    // A crash: the previous process died with its sentinel still armed.
+    fs::write(&sentinel_path, b"crfty 0.0.0 pid 0\n").expect("leftover sentinel");
+    let recovered = DriverHandle::start(&path, &config_path).expect("driver after crash");
+    assert!(matches!(
+        recovered
+            .events()
+            .expect("event receiver")
+            .recv()
+            .expect("snapshot"),
+        DriverEvent::Snapshot(_)
+    ));
+    assert!(matches!(
+        recovered
+            .events()
+            .expect("event receiver")
+            .recv()
+            .expect("abnormal-shutdown report"),
+        DriverEvent::AbnormalShutdown
+    ));
+    recovered
+        .shutdown()
+        .expect("clean shutdown after crash boot");
+    // The report is boot-scoped: the clean shutdown disarmed the sentinel,
+    // so the next start reports nothing.
+    assert!(!sentinel_path.exists());
+}
+
+#[test]
 fn driver_persists_before_emitting_and_replays_after_restart() {
     let directory = TestDirectory::new("driver");
     let path = directory.path().join("state.jsonl");

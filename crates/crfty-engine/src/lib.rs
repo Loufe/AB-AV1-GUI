@@ -24,6 +24,7 @@ pub mod rate;
 pub mod release;
 pub mod remux;
 pub mod scan;
+pub mod sentinel;
 pub mod vendor;
 
 mod failure;
