@@ -1,7 +1,10 @@
+import { Activity, useState } from "react";
 import { page, userEvent } from "vitest/browser";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 import App from "@/App";
+import { ErrorBoundary } from "@/components/error-boundary";
+import { Button } from "@/components/ui/button";
 import type { Settings } from "@/lib/bindings";
 import { renderApp } from "@/test/browser/render";
 
@@ -22,6 +25,51 @@ function settings(): Settings {
     },
     log_folder: null,
   };
+}
+
+interface FailureGate {
+  armed: boolean;
+}
+
+function CrashableView({ failure }: { failure: FailureGate }) {
+  const [revision, setRevision] = useState(0);
+  if (failure.armed) {
+    throw new Error("view A failed");
+  }
+  return (
+    <Button
+      onClick={() => {
+        failure.armed = true;
+        setRevision((current) => current + 1);
+      }}
+    >
+      Crash view A ({revision})
+    </Button>
+  );
+}
+
+function ErrorIsolationFixture({ failure }: { failure: FailureGate }) {
+  const [active, setActive] = useState<"a" | "b">("a");
+  const [viewBCount, setViewBCount] = useState(0);
+  return (
+    <>
+      <Button onClick={() => setActive("a")}>Show view A</Button>
+      <Button onClick={() => setActive("b")}>Show view B</Button>
+      <Button onClick={() => (failure.armed = false)}>Repair view A</Button>
+      <Activity mode={active === "a" ? "visible" : "hidden"}>
+        <ErrorBoundary label="A test view">
+          <CrashableView failure={failure} />
+        </ErrorBoundary>
+      </Activity>
+      <Activity mode={active === "b" ? "visible" : "hidden"}>
+        <ErrorBoundary label="B test view">
+          <Button onClick={() => setViewBCount((current) => current + 1)}>
+            View B count {viewBCount}
+          </Button>
+        </ErrorBoundary>
+      </Activity>
+    </>
+  );
 }
 
 describe("application view lifecycle", () => {
@@ -75,5 +123,34 @@ describe("application view lifecycle", () => {
     await expect
       .element(page.getByRole("heading", { name: "Kitchen sink" }))
       .not.toBeInTheDocument();
+  });
+
+  it("isolates a retained view crash without resetting another view", async () => {
+    const failure: FailureGate = { armed: false };
+    const consoleError = vi.spyOn(console, "error").mockImplementation(() => undefined);
+    try {
+      await renderApp(<ErrorIsolationFixture failure={failure} />, {
+        createRootOptions: { onCaughtError: () => undefined },
+      });
+
+      await page.getByRole("button", { name: "Crash view A (0)" }).click();
+      await expect
+        .element(page.getByText("Something went wrong in the A test view."))
+        .toBeVisible();
+
+      await page.getByRole("button", { name: "Show view B" }).click();
+      await page.getByRole("button", { name: "View B count 0" }).click();
+      await expect.element(page.getByRole("button", { name: "View B count 1" })).toBeVisible();
+
+      await page.getByRole("button", { name: "Show view A" }).click();
+      await page.getByRole("button", { name: "Repair view A" }).click();
+      await page.getByRole("button", { name: "Reload view" }).click();
+      await expect.element(page.getByRole("button", { name: "Crash view A (0)" })).toBeVisible();
+
+      await page.getByRole("button", { name: "Show view B" }).click();
+      await expect.element(page.getByRole("button", { name: "View B count 1" })).toBeVisible();
+    } finally {
+      consoleError.mockRestore();
+    }
   });
 });

@@ -1,4 +1,5 @@
 import type { ReactNode } from "react";
+import type { RootOptions } from "react-dom/client";
 import { Toaster } from "sonner";
 import { render, type RenderResult } from "vitest-browser-react";
 
@@ -16,6 +17,7 @@ export interface RenderAppOptions {
   appState?: Partial<AppStoreState>;
   progressState?: Partial<ProgressStoreState>;
   theme?: Exclude<Theme, "system">;
+  createRootOptions?: RootOptions;
 }
 
 /** Restore both production stores to independent, deterministic test state. */
@@ -41,7 +43,7 @@ export function resetTestStores(
  */
 export async function renderApp(
   component: ReactNode,
-  { appState = {}, progressState = {}, theme = "light" }: RenderAppOptions = {},
+  { appState = {}, progressState = {}, theme = "light", createRootOptions }: RenderAppOptions = {},
 ): Promise<RenderResult> {
   resetTestStores(appState, progressState);
   setTheme(theme);
@@ -53,6 +55,7 @@ export async function renderApp(
       </ErrorBoundary>
       <Toaster position="bottom-right" theme={theme} />
     </>,
+    { createRootOptions },
   );
   // Match the desktop root's `html, body, #root { height: 100% }` contract so
   // full-height application layouts have a real scroll viewport in Chromium.
