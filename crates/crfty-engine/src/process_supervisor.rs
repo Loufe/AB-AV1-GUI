@@ -266,19 +266,18 @@ pub fn run(
             }
         }
 
-        if let Some(status) = exit_status
-            && stdout_reader.is_finished()
-            && stderr_reader.is_finished()
-        {
+        if let Some(status) = exit_status {
             let terminal = if status.success() {
                 ProcessTerminal::Success(status)
             } else {
                 ProcessTerminal::ToolFailed(status)
             };
-            // `try_wait` can observe the group leader after a descendant has
-            // detached its inherited pipes. Terminate the containment unit
-            // even on natural leader exit so no silent descendant outlives
-            // the report or its caller-owned concurrency permit.
+            // The directly spawned leader defines the invocation's terminal
+            // status. Any descendants still in its containment unit are
+            // cleanup, regardless of whether they retained or replaced the
+            // leader's pipe handles. This keeps pipe inheritance from changing
+            // success into a timeout and prevents silent descendants from
+            // outliving the caller-owned concurrency permit.
             return terminate_and_finish(&mut child, terminal, stdout_reader, stderr_reader);
         }
 

@@ -51,9 +51,9 @@ fn dispatch() -> Result<(), Box<dyn Error>> {
             let marker = arguments.next().ok_or("heartbeat path is missing")?;
             let _child = Command::new(env::current_exe()?)
                 .arg("heartbeat")
-                .arg(marker)
+                .arg(&marker)
                 .spawn()?;
-            Ok(())
+            wait_for_file(Path::new(&marker))
         }
         Some(command) if command == "orphan-closed-pipes" => {
             let marker = arguments.next().ok_or("heartbeat path is missing")?;

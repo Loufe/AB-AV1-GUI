@@ -104,9 +104,9 @@ fn timeout_terminates_the_process_group() {
 }
 
 #[test]
-fn leader_exit_does_not_hide_a_live_descendant_from_timeout_cleanup() {
+fn natural_leader_exit_cleans_a_descendant_that_kept_its_pipes() {
     let fixture = fixture();
-    let directory = test_directory("orphan-timeout");
+    let directory = test_directory("orphan-kept-pipes");
     fs::create_dir_all(&directory).expect("create process supervisor test directory");
     let heartbeat = directory.join("heartbeat");
     let report = run(
@@ -114,14 +114,18 @@ fn leader_exit_does_not_hide_a_live_descendant_from_timeout_cleanup() {
             .arg("orphan-heartbeat")
             .arg(&heartbeat),
         &ProcessCancellation::new(),
-        limits(Some(Duration::from_millis(300))),
+        limits(Some(Duration::from_secs(5))),
     );
 
-    assert_eq!(report.terminal, ProcessTerminal::TimedOut);
-    let stopped_value = fs::read(&heartbeat).expect("read orphan heartbeat after timeout");
+    assert!(
+        matches!(report.terminal, ProcessTerminal::Success(_)),
+        "unexpected terminal: {:?}",
+        report.terminal
+    );
+    let stopped_value = fs::read(&heartbeat).expect("read heartbeat after leader exit");
     thread::sleep(Duration::from_millis(200));
     assert_eq!(
-        fs::read(&heartbeat).expect("read stopped orphan heartbeat"),
+        fs::read(&heartbeat).expect("read stopped inherited-pipe heartbeat"),
         stopped_value
     );
     fs::remove_dir_all(directory).expect("remove process supervisor test directory");
