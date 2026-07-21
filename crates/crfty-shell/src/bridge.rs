@@ -87,6 +87,14 @@ pub struct ScrubSummary {
     pub failed: u32,
 }
 
+/// Outcome of a manual update check against the GitHub releases API.
+#[derive(Debug, Clone, Serialize, specta::Type)]
+pub struct ReleaseSummary {
+    pub current: String,
+    pub latest: String,
+    pub update_available: bool,
+}
+
 #[derive(Debug, Clone, Serialize, specta::Type)]
 pub struct CommandError {
     pub code: String,
@@ -94,7 +102,7 @@ pub struct CommandError {
 }
 
 impl CommandError {
-    fn new(code: &str, message: impl Into<String>) -> Self {
+    pub(crate) fn new(code: &str, message: impl Into<String>) -> Self {
         Self {
             code: code.to_owned(),
             message: message.into(),
@@ -190,6 +198,10 @@ pub struct Bridge {
     stream: Arc<Mutex<StreamState>>,
     commands: Option<UserCommandSender>,
     next_item_id: Arc<AtomicU64>,
+    /// Release page from the last successful update check. The URL never
+    /// crosses IPC: the frontend asks to open it, the shell opens what the
+    /// engine actually fetched.
+    release_url: Arc<Mutex<Option<String>>>,
     // Kept alive for the process lifetime: dropping the runtime shuts the
     // engine down. The Mutex only exists to make the receiver-bearing runtime
     // Sync for managed state.
@@ -214,6 +226,7 @@ impl Bridge {
                     stream: Arc::new(Mutex::new(StreamState::new(health))),
                     commands: None,
                     next_item_id: Arc::new(AtomicU64::new(1)),
+                    release_url: Arc::new(Mutex::new(None)),
                     _engine: Mutex::new(None),
                 }
             }
@@ -272,6 +285,7 @@ impl Bridge {
             stream,
             commands: Some(runtime.commands.clone()),
             next_item_id,
+            release_url: Arc::new(Mutex::new(None)),
             _engine: Mutex::new(Some(runtime)),
         })
     }
@@ -420,6 +434,38 @@ impl Bridge {
             .map_err(|message| CommandError::new("scrub_failed", message))
     }
 
+    /// The slot the blocking update check writes its release page into.
+    /// Cloned out so the check can run on a worker thread without borrowing
+    /// the bridge.
+    pub fn release_url_slot(&self) -> Arc<Mutex<Option<String>>> {
+        Arc::clone(&self.release_url)
+    }
+
+    /// Runs the one-shot update check and records the release page for
+    /// [`Bridge::open_release_page`]. Blocks on the network — callers run it
+    /// off the UI thread.
+    pub fn check_for_update(slot: &Mutex<Option<String>>) -> Result<ReleaseSummary, CommandError> {
+        let check = crfty_engine::release::check_latest_release(env!("CARGO_PKG_VERSION"))
+            .map_err(|message| CommandError::new("update_check_failed", message))?;
+        *lock_slot(slot) = Some(check.html_url);
+        Ok(ReleaseSummary {
+            current: check.current,
+            latest: check.latest,
+            update_available: check.update_available,
+        })
+    }
+
+    /// Opens the release page recorded by the last successful update check.
+    pub fn open_release_page(&self) -> Result<(), CommandError> {
+        let url = lock_slot(&self.release_url).clone().ok_or_else(|| {
+            CommandError::new(
+                "no_release_page",
+                "no release page is known; run an update check first",
+            )
+        })?;
+        Ok(crfty_engine::os_actions::open_url(&url)?)
+    }
+
     /// Passes through while degraded by design: acknowledgement is the one
     /// mutation a corrupt journal accepts, and the driver verifies the
     /// signature itself.
@@ -545,6 +591,13 @@ fn seed_item_ids(next_item_id: &AtomicU64, model: &DurableState) {
 
 fn lock_stream<'a>(stream: &'a Arc<Mutex<StreamState>>) -> MutexGuard<'a, StreamState> {
     match stream.lock() {
+        Ok(guard) => guard,
+        Err(poisoned) => poisoned.into_inner(),
+    }
+}
+
+fn lock_slot(slot: &Mutex<Option<String>>) -> MutexGuard<'_, Option<String>> {
+    match slot.lock() {
         Ok(guard) => guard,
         Err(poisoned) => poisoned.into_inner(),
     }

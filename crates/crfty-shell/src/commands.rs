@@ -8,7 +8,9 @@ use serde::Serialize;
 use tauri::{State, ipc::Channel};
 use tauri_specta::{Builder, collect_commands};
 
-use crate::bridge::{Bridge, CommandError, ImportSummary, ScrubSummary, ShellEvent};
+use crate::bridge::{
+    Bridge, CommandError, ImportSummary, ReleaseSummary, ScrubSummary, ShellEvent,
+};
 
 #[derive(Debug, Clone, Serialize, specta::Type)]
 pub struct AppInfo {
@@ -155,6 +157,31 @@ fn scrub_logs(bridge: State<'_, Bridge>) -> Result<ScrubSummary, CommandError> {
     bridge.scrub_logs()
 }
 
+/// One-shot manual check of the GitHub releases API (#33 §12: no background
+/// checking exists). Async so the blocking network call never runs on the
+/// main thread; the release page URL stays shell-side — open it with
+/// `open_release_page`.
+#[tauri::command]
+#[specta::specta]
+async fn check_for_update(bridge: State<'_, Bridge>) -> Result<ReleaseSummary, CommandError> {
+    let slot = bridge.release_url_slot();
+    tauri::async_runtime::spawn_blocking(move || Bridge::check_for_update(&slot))
+        .await
+        .map_err(|error| {
+            CommandError::new(
+                "update_check_failed",
+                format!("the update check task failed: {error}"),
+            )
+        })?
+}
+
+/// Open the release page recorded by the last successful `check_for_update`.
+#[tauri::command]
+#[specta::specta]
+fn open_release_page(bridge: State<'_, Bridge>) -> Result<(), CommandError> {
+    bridge.open_release_page()
+}
+
 /// Consent to discard a corrupt journal tail. The signature must echo the
 /// one delivered on the `Degraded` payload — the driver rejects anything
 /// else, so a stale acknowledgement can never discard fresher bytes.
@@ -217,6 +244,8 @@ pub fn specta_builder() -> Builder<tauri::Wry> {
             request_statistics,
             import_history,
             scrub_logs,
+            check_for_update,
+            open_release_page,
             acknowledge_corruption,
             open_path,
             reveal_in_file_manager,

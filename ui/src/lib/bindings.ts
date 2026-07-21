@@ -43,6 +43,15 @@ export const commands = {
 	 */
 	scrubLogs: () => typedError<ScrubSummary, CommandError>(__TAURI_INVOKE("scrub_logs")),
 	/**
+	 *  One-shot manual check of the GitHub releases API (#33 §12: no background
+	 *  checking exists). Async so the blocking network call never runs on the
+	 *  main thread; the release page URL stays shell-side — open it with
+	 *  `open_release_page`.
+	 */
+	checkForUpdate: () => typedError<ReleaseSummary, CommandError>(__TAURI_INVOKE("check_for_update")),
+	/**  Open the release page recorded by the last successful `check_for_update`. */
+	openReleasePage: () => typedError<null, CommandError>(__TAURI_INVOKE("open_release_page")),
+	/**
 	 *  Consent to discard a corrupt journal tail. The signature must echo the
 	 *  one delivered on the `Degraded` payload — the driver rejects anything
 	 *  else, so a stale acknowledgement can never discard fresher bytes.
@@ -925,6 +934,13 @@ export type QueueItemState = "Queued" | ({ Reserved: {
 	claim_id: ClaimId,
 	run_id: RunId,
 } }) & { Claimed?: never; Finished?: never; Reserved?: never } | ({ Finished: ItemOutcome }) & { Claimed?: never; Reserved?: never; Running?: never };
+
+/**  Outcome of a manual update check against the GitHub releases API. */
+export type ReleaseSummary = {
+	current: string,
+	latest: string,
+	update_available: boolean,
+};
 
 export type Replacement = "KeepOriginal" | "RetireOriginal";
 

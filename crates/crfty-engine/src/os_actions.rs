@@ -29,6 +29,18 @@ pub fn reveal_path(path: &Path) -> Result<(), OsActionError> {
     opener::reveal(path).map_err(|error| failed("reveal", path, &error))
 }
 
+/// Opens a URL in the default browser. Callers pass engine-known URLs (the
+/// GitHub release page) — never webview-chosen ones — so no existence or
+/// scheme check applies.
+pub fn open_url(url: &str) -> Result<(), OsActionError> {
+    opener::open(url).map_err(|error| {
+        tracing::warn!("failed to open {url}: {error}");
+        OsActionError::Failed {
+            message: format!("failed to open {url}: {error}"),
+        }
+    })
+}
+
 fn checked(path: &Path) -> Result<(), OsActionError> {
     if path.exists() {
         Ok(())
@@ -40,7 +52,7 @@ fn checked(path: &Path) -> Result<(), OsActionError> {
 }
 
 fn failed(action: &str, path: &Path, error: &opener::OpenError) -> OsActionError {
-    eprintln!("failed to {action} {}: {error}", path.display());
+    tracing::warn!("failed to {action} {}: {error}", path.display());
     OsActionError::Failed {
         message: format!("failed to {action} {}: {error}", path.display()),
     }
