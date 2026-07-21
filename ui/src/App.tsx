@@ -1,10 +1,12 @@
-import { lazy, Suspense, useEffect, useState } from "react";
+import { Activity, lazy, Suspense, useEffect, useState } from "react";
 import { Toaster } from "sonner";
 
 import { CloseDialog } from "@/components/close-dialog";
 import { ErrorBoundary } from "@/components/error-boundary";
 import { Sidebar } from "@/components/layout/sidebar";
+import { ViewActiveContext } from "@/components/layout/view-activity";
 import type { DevViewId, ViewId } from "@/components/layout/views";
+import { VIEWS } from "@/components/layout/views";
 import { SecondInstanceScreen } from "@/components/second-instance";
 import { AnalysisView } from "@/features/analysis";
 import { HistoryView } from "@/features/history";
@@ -48,6 +50,12 @@ function isDevView(view: AppView): view is DevViewId {
 
 export default function App() {
   const [activeView, setActiveView] = useState<AppView>("queue");
+  // Activity preserves a production view after its first visit. Keeping the
+  // visited set explicit prevents hidden views from eagerly rendering or
+  // starting work during application startup.
+  const [visitedViews, setVisitedViews] = useState<ReadonlySet<ViewId>>(
+    () => new Set<ViewId>(["queue"]),
+  );
   const [theme, setThemeState] = useState<Theme>(getTheme);
   const [appVersion, setAppVersion] = useState<string | null>(null);
   const secondInstance = useAppStore((state) => state.health.secondInstance);
@@ -88,6 +96,21 @@ export default function App() {
     setThemeState(next);
   };
 
+  const selectView = (view: AppView) => {
+    setActiveView(view);
+    if (isDevView(view)) {
+      return;
+    }
+    setVisitedViews((visited) => {
+      if (visited.has(view)) {
+        return visited;
+      }
+      const next = new Set(visited);
+      next.add(view);
+      return next;
+    });
+  };
+
   // A duplicate instance must not present a working app over state it cannot
   // touch: replace everything with the explicit already-running screen.
   if (secondInstance !== null) {
@@ -98,33 +121,53 @@ export default function App() {
     <div className="flex h-full">
       <Sidebar
         activeView={activeView}
-        onSelectView={setActiveView}
+        onSelectView={selectView}
         theme={theme}
         onCycleTheme={cycleTheme}
         showDevViews={DEV_COMPONENTS !== null}
         appVersion={appVersion}
       />
-      <main className="flex-1 overflow-y-auto">
-        {isDevView(activeView)
-          ? DEV_COMPONENTS !== null &&
-            (() => {
-              const { label, Component } = DEV_COMPONENTS[activeView];
-              return (
+      <main className="min-w-0 flex-1 overflow-hidden">
+        {VIEWS.map(({ id }) => {
+          if (!visitedViews.has(id)) {
+            return null;
+          }
+          const { label, Component } = VIEW_COMPONENTS[id];
+          const active = activeView === id;
+          return (
+            <Activity key={id} mode={active ? "visible" : "hidden"}>
+              <section
+                id={`view-panel-${id}`}
+                aria-labelledby={`view-nav-${id}`}
+                className="h-full overflow-y-auto"
+              >
+                <ViewActiveContext value={active}>
+                  <ErrorBoundary label={label}>
+                    <Component />
+                  </ErrorBoundary>
+                </ViewActiveContext>
+              </section>
+            </Activity>
+          );
+        })}
+        {isDevView(activeView) &&
+          DEV_COMPONENTS !== null &&
+          (() => {
+            const { label, Component } = DEV_COMPONENTS[activeView];
+            return (
+              <section
+                id={`view-panel-${activeView}`}
+                aria-labelledby={`view-nav-${activeView}`}
+                className="h-full overflow-y-auto"
+              >
                 <ErrorBoundary key={activeView} label={label}>
                   <Suspense fallback={null}>
                     <Component />
                   </Suspense>
                 </ErrorBoundary>
-              );
-            })()
-          : (() => {
-              const { label, Component } = VIEW_COMPONENTS[activeView];
-              return (
-                <ErrorBoundary key={activeView} label={label}>
-                  <Component />
-                </ErrorBoundary>
-              );
-            })()}
+              </section>
+            );
+          })()}
       </main>
       <CloseDialog />
       <Toaster position="bottom-right" theme={theme} />

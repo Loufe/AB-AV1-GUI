@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
 
 import { Button } from "@/components/ui/button";
@@ -50,9 +50,23 @@ function optionalPath(value: string): string | null {
 export function SettingsView() {
   const committed = useSettings();
   const [draft, setDraft] = useState<Settings | null>(committed);
+  const lastCommitted = useRef(committed);
   const [saving, setSaving] = useState(false);
 
-  useEffect(() => setDraft(committed), [committed]);
+  useEffect(() => {
+    // Activity recreates effects when a hidden view becomes visible. Only a
+    // real acknowledged settings change replaces the draft; navigation alone
+    // must not discard unsaved edits.
+    const previous = lastCommitted.current;
+    if (previous === committed) {
+      return;
+    }
+    lastCommitted.current = committed;
+    if (previous !== null && committed !== null && settingsEqual(previous, committed)) {
+      return;
+    }
+    setDraft(committed);
+  }, [committed]);
 
   if (committed === null || draft === null) {
     return (

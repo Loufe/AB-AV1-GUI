@@ -46,7 +46,7 @@ export async function renderApp(
   resetTestStores(appState, progressState);
   setTheme(theme);
 
-  return render(
+  const rendered = await render(
     <>
       <ErrorBoundary label="test view">
         <TooltipProvider>{component}</TooltipProvider>
@@ -54,4 +54,8 @@ export async function renderApp(
       <Toaster position="bottom-right" theme={theme} />
     </>,
   );
+  // Match the desktop root's `html, body, #root { height: 100% }` contract so
+  // full-height application layouts have a real scroll viewport in Chromium.
+  rendered.container.style.height = "100vh";
+  return rendered;
 }
