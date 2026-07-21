@@ -23,6 +23,12 @@ use crfty_core::{
 };
 
 const FIRST_RUNTIME_ID: u64 = 1;
+/// Depth of the public event channel. A healthy consumer drains continuously,
+/// so occupancy stays near zero; the bound only bites once the consumer has
+/// stopped, and must comfortably exceed the startup burst (snapshot plus
+/// drained ephemerals) that is buffered before any consumer exists. Public so
+/// the overflow test can size its event flood relative to it.
+pub const PUBLIC_EVENT_CHANNEL_CAPACITY: usize = 1024;
 const ADAPTER_REPORT_POLL_INTERVAL: Duration = Duration::from_millis(20);
 const NORMALIZED_PROGRESS_MIN: f32 = 0.0;
 const NORMALIZED_PROGRESS_MAX: f32 = 1.0;
@@ -217,9 +223,12 @@ impl EngineRuntime {
         let runtime = Arc::new(AbAv1Runtime::start().map_err(|error| {
             EngineStartError::Failed(format!("failed to start encoder: {error}"))
         })?);
-        // Unbounded by design for now: the supervisor loop feeds effects back
-        // into itself, so a bound risks deadlock. Capping belongs to the
-        // backpressure semantics owned by #41.
+        // Unbounded by design: effects form a cycle — the driver emits them,
+        // the supervisor turns them into commands submitted back into the
+        // driver's bounded command channel — so a bound here could deadlock
+        // the driver against its own supervisor. Depth is governed by the
+        // reducer, which serializes work through the session and vendor
+        // activity states and dedups effects per batch, never by event rate.
         let (effect_tx, effect_rx) = mpsc::channel();
         let mut driver =
             DriverHandle::start_with_effects(&config.journal_path, &config.config_path, effect_tx)
@@ -275,11 +284,16 @@ impl EngineRuntime {
             initial.durable,
         );
         let next_runtime_id = next_runtime_id(&recovered)?;
-        // Unbounded by design for now; capping consumer lag is part of the
-        // backpressure semantics owned by #41.
-        let (public_event_tx, public_event_rx) = mpsc::channel();
+        // Bounded: telemetry can outrun a stalled consumer for hours, and an
+        // unbounded buffer would turn that stall into unbounded memory. On
+        // overflow the forwarder below severs the stream instead of blocking
+        // or dropping individual events — a gap-riddled stream would silently
+        // corrupt every downstream fold, while a severed one is observable.
+        // The journal, not the stream, holds the truth, so the recovery is a
+        // reconnect that folds from a fresh snapshot.
+        let (public_event_tx, public_event_rx) = mpsc::sync_channel(PUBLIC_EVENT_CHANNEL_CAPACITY);
         public_event_tx
-            .send(DriverEvent::Snapshot(AppSnapshot {
+            .try_send(DriverEvent::Snapshot(AppSnapshot {
                 durable: recovered,
                 settings: initial.settings,
             }))
@@ -288,7 +302,7 @@ impl EngineRuntime {
             })?;
         for pending in driver_events.try_iter() {
             if !matches!(pending, DriverEvent::Durable(_)) {
-                public_event_tx.send(pending).map_err(|error| {
+                public_event_tx.try_send(pending).map_err(|error| {
                     EngineStartError::Failed(format!("failed to emit startup event: {error}"))
                 })?;
             }
@@ -297,8 +311,21 @@ impl EngineRuntime {
             .name("crfty-event-forwarder".to_owned())
             .spawn(move || {
                 while let Ok(event) = driver_events.recv() {
-                    if public_event_tx.send(event).is_err() {
-                        break;
+                    match public_event_tx.try_send(event) {
+                        Ok(()) => {}
+                        // The consumer stopped draining. Dropping the sender
+                        // keeps the driver unblocked and memory bounded; the
+                        // consumer observes the disconnect once it drains the
+                        // buffered tail and recovers by reconnecting.
+                        Err(mpsc::TrySendError::Full(_)) => {
+                            eprintln!(
+                                "public event channel overflowed \
+                                 ({PUBLIC_EVENT_CHANNEL_CAPACITY} events buffered, consumer \
+                                 not draining); severing the event stream"
+                            );
+                            break;
+                        }
+                        Err(mpsc::TrySendError::Disconnected(_)) => break,
                     }
                 }
             })

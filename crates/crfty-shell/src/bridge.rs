@@ -396,6 +396,17 @@ fn forward(
         let mut state = lock_stream(stream);
         absorb(&mut state, event, next_item_id);
     }
+    // The engine severs this stream only on public-channel overflow (its
+    // subscriber-drop contract) — the engine itself keeps running, but this
+    // mirror can no longer observe it and every later snapshot replay would
+    // be silently stale. Surface the cut instead of freezing quietly.
+    eprintln!("engine event stream disconnected; marking the bridge fatal");
+    let message = "lost the engine event stream; restart CRFty to reconnect".to_owned();
+    let mut state = lock_stream(stream);
+    state.health = Health::Fatal {
+        message: message.clone(),
+    };
+    state.emit(StreamPayload::EngineFatal { message });
 }
 
 /// Folds one driver event into the read model and emits its wire payload.
@@ -568,6 +579,30 @@ mod tests {
         assert_eq!(state.session, SessionState::Running);
         assert_eq!(state.tools, tools);
         assert!(state.telemetry.is_empty());
+    }
+
+    #[test]
+    fn a_severed_engine_stream_marks_the_bridge_fatal() {
+        let ids = AtomicU64::new(1);
+        let stream = Arc::new(Mutex::new(StreamState::new(Health::Ok)));
+        let (sender, receiver) = mpsc::channel();
+        sender
+            .send(ephemeral(EphemeralDelta::SessionChanged(
+                SessionState::Running,
+            )))
+            .expect("send fixture event");
+        drop(sender);
+
+        forward(receiver, &stream, &ids);
+
+        let state = lock_stream(&stream);
+        // Events before the cut were absorbed; the cut itself became fatal
+        // instead of a silently frozen mirror.
+        assert_eq!(state.session, SessionState::Running);
+        assert!(
+            matches!(state.health, Health::Fatal { .. }),
+            "expected fatal health after the stream disconnect"
+        );
     }
 
     #[test]
