@@ -104,10 +104,25 @@ impl JournalWriter {
                     io::Error::from(io::ErrorKind::InvalidData),
                 )
             })?;
-            file.set_len(prefix)
+            // `set_len` needs write access, and Windows append-mode handles
+            // carry only FILE_APPEND_DATA — truncate through a dedicated
+            // write handle, then reopen for appending.
+            drop(file);
+            let truncate = OpenOptions::new()
+                .write(true)
+                .open(&path)
+                .map_err(|error| {
+                    JournalError::new("failed to open journal for truncation", error)
+                })?;
+            truncate
+                .set_len(prefix)
                 .map_err(|error| JournalError::new("failed to truncate torn tail", error))?;
-            file.sync_all()
+            truncate
+                .sync_all()
                 .map_err(|error| JournalError::new("failed to synchronize truncation", error))?;
+            drop(truncate);
+            file = open_append(&path)
+                .map_err(|error| JournalError::new("failed to reopen truncated journal", error))?;
             bytes_len = prefix;
         }
         let writer = Self {
