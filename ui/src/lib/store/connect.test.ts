@@ -10,10 +10,12 @@ import type {
 } from "@/lib/bindings";
 
 import { appStore, initialAppState } from "./app-store";
-import { applyPayload, hasSequenceGap } from "./connect";
+import { applyPayload, hasSequenceGap, resetAbnormalShutdownReport } from "./connect";
 import { emptySessionAggregates, progressStore } from "./progress-store";
 
-vi.mock("sonner", () => ({ toast: Object.assign(vi.fn(), { error: vi.fn() }) }));
+vi.mock("sonner", () => ({
+  toast: Object.assign(vi.fn(), { error: vi.fn(), warning: vi.fn() }),
+}));
 vi.mock("@/lib/ipc", () => ({ subscribeStream: vi.fn() }));
 
 function settings(): Settings {
@@ -118,6 +120,7 @@ function snapshot(item: QueueItem): StreamPayload_Deserialize {
 beforeEach(() => {
   appStore.setState(initialAppState(), true);
   progressStore.setState({ telemetry: {}, aggregates: emptySessionAggregates() }, true);
+  resetAbnormalShutdownReport();
   vi.clearAllMocks();
 });
 
@@ -211,6 +214,24 @@ describe("applyPayload", () => {
     expect(toast).toHaveBeenCalledWith("Added 4");
     expect(appStore.getState()).toBe(before);
     expect(progressStore.getState().telemetry).toEqual({});
+  });
+
+  it("surfaces the abnormal-shutdown report as one toast even when replayed", async () => {
+    const { toast } = await import("sonner");
+    const before = appStore.getState();
+    applyPayload("AbnormalShutdown");
+    // A resubscribe replays the standing report; the user is told once.
+    applyPayload("AbnormalShutdown");
+    expect(toast.warning).toHaveBeenCalledTimes(1);
+    expect(appStore.getState()).toEqual(before);
+  });
+
+  it("opens the close dialog on a deferred close request", () => {
+    expect(appStore.getState().closeRequested).toBe(false);
+    applyPayload("CloseRequested");
+    expect(appStore.getState().closeRequested).toBe(true);
+    // The quit is armed by a dialog choice, never by the request itself.
+    expect(appStore.getState().quitAfterSession).toBe(false);
   });
 
   it("surfaces a worker crash as a toast, not state", async () => {

@@ -85,7 +85,7 @@ impl Drop for ContainedChild {
             return;
         }
         if let Err(error) = self.terminate_and_wait() {
-            eprintln!("failed to terminate contained child process group: {error}");
+            tracing::error!("failed to terminate contained child process group: {error}");
         }
     }
 }

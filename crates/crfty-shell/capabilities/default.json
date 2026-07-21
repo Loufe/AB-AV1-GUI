@@ -2,5 +2,5 @@
   "identifier": "default",
   "description": "Baseline capability for the main window",
   "windows": ["main"],
-  "permissions": ["core:default"]
+  "permissions": ["core:default", "core:window:allow-close"]
 }

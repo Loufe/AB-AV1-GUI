@@ -48,7 +48,7 @@ pub fn expand_inputs(
             Ok(metadata) if metadata.is_dir() => expand_folder(input, extensions, &mut files),
             Ok(_) => files.push(scanned(input.clone(), None)),
             Err(error) => {
-                eprintln!("skipping unreadable input {}: {error}", input.display());
+                tracing::warn!("skipping unreadable input {}: {error}", input.display());
             }
         }
     }
@@ -61,7 +61,7 @@ fn expand_folder(root: &Path, extensions: &BTreeSet<VideoExtension>, files: &mut
         let entries = match fs::read_dir(&directory) {
             Ok(entries) => entries,
             Err(error) => {
-                eprintln!(
+                tracing::warn!(
                     "skipping unreadable directory {}: {error}",
                     directory.display()
                 );
@@ -73,7 +73,7 @@ fn expand_folder(root: &Path, extensions: &BTreeSet<VideoExtension>, files: &mut
             match entry.and_then(|entry| Ok((entry.path(), entry.file_type()?))) {
                 Ok(child) => children.push(child),
                 Err(error) => {
-                    eprintln!(
+                    tracing::warn!(
                         "skipping unreadable entry in {}: {error}",
                         directory.display()
                     );
@@ -107,14 +107,14 @@ fn scanned(path: PathBuf, source_root: Option<PathBuf>) -> ScannedFile {
     let path_hash = match media::path_hash(&path) {
         Ok(hash) => Some(hash),
         Err(error) => {
-            eprintln!("failed to hash path {}: {error}", path.display());
+            tracing::warn!("failed to hash path {}: {error}", path.display());
             None
         }
     };
     let stamp = match media::stamp(&path) {
         Ok(stamp) => Some(stamp),
         Err(error) => {
-            eprintln!("failed to stamp file {}: {error}", path.display());
+            tracing::warn!("failed to stamp file {}: {error}", path.display());
             None
         }
     };

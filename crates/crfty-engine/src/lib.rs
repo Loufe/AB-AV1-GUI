@@ -16,14 +16,18 @@ pub mod driver;
 pub mod history_import;
 pub mod journal;
 pub mod lock;
+pub mod logging;
 pub mod media;
 pub mod os_actions;
 pub mod output;
 pub mod rate;
+pub mod release;
 pub mod remux;
 pub mod scan;
+pub mod sentinel;
 pub mod vendor;
 
 mod failure;
 mod filesystem;
+mod power;
 mod process;

@@ -1,15 +1,18 @@
 import { lazy, Suspense, useEffect, useState } from "react";
 import { Toaster } from "sonner";
 
+import { CloseDialog } from "@/components/close-dialog";
 import { ErrorBoundary } from "@/components/error-boundary";
 import { Sidebar } from "@/components/layout/sidebar";
 import type { DevViewId, ViewId } from "@/components/layout/views";
+import { SecondInstanceScreen } from "@/components/second-instance";
 import { AnalysisView } from "@/features/analysis";
 import { HistoryView } from "@/features/history";
 import { QueueView } from "@/features/queue";
 import { SettingsView } from "@/features/settings";
 import { StatisticsView } from "@/features/statistics";
-import { fetchAppVersion, isTauri } from "@/lib/ipc";
+import { closeAppWindow, fetchAppVersion, isTauri } from "@/lib/ipc";
+import { useAppStore } from "@/lib/store/app-store";
 import { connectStream } from "@/lib/store/connect";
 import { getTheme, setTheme, watchSystemTheme, type Theme } from "@/lib/theme";
 
@@ -47,8 +50,22 @@ export default function App() {
   const [activeView, setActiveView] = useState<AppView>("queue");
   const [theme, setThemeState] = useState<Theme>(getTheme);
   const [appVersion, setAppVersion] = useState<string | null>(null);
+  const secondInstance = useAppStore((state) => state.health.secondInstance);
+  const session = useAppStore((state) => state.session);
+  const quitAfterSession = useAppStore((state) => state.quitAfterSession);
 
   useEffect(() => watchSystemTheme(), []);
+
+  // A close-dialog choice armed the quit; with the session idle, the shell
+  // now lets the re-issued close through (#33 §12).
+  useEffect(() => {
+    if (!isTauri() || !quitAfterSession || session !== "Idle") {
+      return;
+    }
+    closeAppWindow().catch((error: unknown) => {
+      console.error("failed to close the window", error);
+    });
+  }, [quitAfterSession, session]);
 
   // Under Tauri, connect the stores to the shell's ordered event stream and
   // show the shell version. connectStream is idempotent, so StrictMode's
@@ -70,6 +87,12 @@ export default function App() {
     setTheme(next);
     setThemeState(next);
   };
+
+  // A duplicate instance must not present a working app over state it cannot
+  // touch: replace everything with the explicit already-running screen.
+  if (secondInstance !== null) {
+    return <SecondInstanceScreen lockPath={secondInstance} />;
+  }
 
   return (
     <div className="flex h-full">
@@ -103,6 +126,7 @@ export default function App() {
               );
             })()}
       </main>
+      <CloseDialog />
       <Toaster position="bottom-right" theme={theme} />
     </div>
   );

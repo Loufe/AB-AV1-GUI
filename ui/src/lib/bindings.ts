@@ -38,6 +38,20 @@ export const commands = {
 	 */
 	importHistory: (path: string) => typedError<ImportSummary, CommandError>(__TAURI_INVOKE("import_history", { path })),
 	/**
+	 *  Anonymize every existing log file in place (Settings tab "Scrub Logs").
+	 *  Irreversible; runs even when the anonymize-logs toggle is off.
+	 */
+	scrubLogs: () => typedError<ScrubSummary, CommandError>(__TAURI_INVOKE("scrub_logs")),
+	/**
+	 *  One-shot manual check of the GitHub releases API (#33 §12: no background
+	 *  checking exists). Async so the blocking network call never runs on the
+	 *  main thread; the release page URL stays shell-side — open it with
+	 *  `open_release_page`.
+	 */
+	checkForUpdate: () => typedError<ReleaseSummary, CommandError>(__TAURI_INVOKE("check_for_update")),
+	/**  Open the release page recorded by the last successful `check_for_update`. */
+	openReleasePage: () => typedError<null, CommandError>(__TAURI_INVOKE("open_release_page")),
+	/**
 	 *  Consent to discard a corrupt journal tail. The signature must echo the
 	 *  one delivered on the `Degraded` payload — the driver rejects anything
 	 *  else, so a stale acknowledgement can never discard fresher bytes.
@@ -921,6 +935,13 @@ export type QueueItemState = "Queued" | ({ Reserved: {
 	run_id: RunId,
 } }) & { Claimed?: never; Finished?: never; Reserved?: never } | ({ Finished: ItemOutcome }) & { Claimed?: never; Reserved?: never; Running?: never };
 
+/**  Outcome of a manual update check against the GitHub releases API. */
+export type ReleaseSummary = {
+	current: string,
+	latest: string,
+	update_available: boolean,
+};
+
 export type Replacement = "KeepOriginal" | "RetireOriginal";
 
 export type ReservedJob = {
@@ -946,6 +967,16 @@ export type RunTotals = {
 	not_worthwhile: number,
 	stopped: number,
 	skipped: number,
+	failed: number,
+};
+
+/**
+ *  Outcome of a retroactive log scrub: how many log files were examined, how
+ *  many were rewritten with anonymized content, and how many failed.
+ */
+export type ScrubSummary = {
+	total: number,
+	modified: number,
 	failed: number,
 };
 
@@ -1121,7 +1152,19 @@ export type StreamPayload_Deserialize = ({ Snapshot: AppSnapshot_Deserialize }) 
  */
 ({ SecondInstance: {
 	lock_path: string,
-} }) & { Config?: never; Degraded?: never; Durable?: never; EngineFatal?: never; EngineUnavailable?: never; Ephemeral?: never; Snapshot?: never };
+} }) & { Config?: never; Degraded?: never; Durable?: never; EngineFatal?: never; EngineUnavailable?: never; Ephemeral?: never; Snapshot?: never } | 
+/**
+ *  The previous run left the crash sentinel behind: it died without a
+ *  clean shutdown. Durable state was already restored by the journal
+ *  replay; this is informational and stands for the whole run (#33 §12).
+ */
+"AbnormalShutdown" | 
+/**
+ *  The user asked to close the window while a session was active. The
+ *  shell kept the window open; the frontend owns the prompt and re-issues
+ *  the close once the session is idle (#33 §12).
+ */
+"CloseRequested";
 
 export type StreamPayload_Serialize = ({ Snapshot: AppSnapshot_Serialize }) & { Config?: never; Degraded?: never; Durable?: never; EngineFatal?: never; EngineUnavailable?: never; Ephemeral?: never; SecondInstance?: never } | ({ Durable: DurableDelta_Serialize }) & { Config?: never; Degraded?: never; EngineFatal?: never; EngineUnavailable?: never; Ephemeral?: never; SecondInstance?: never; Snapshot?: never } | ({ Config: ConfigDelta }) & { Degraded?: never; Durable?: never; EngineFatal?: never; EngineUnavailable?: never; Ephemeral?: never; SecondInstance?: never; Snapshot?: never } | ({ Ephemeral: EphemeralDelta }) & { Config?: never; Degraded?: never; Durable?: never; EngineFatal?: never; EngineUnavailable?: never; SecondInstance?: never; Snapshot?: never } | 
 /**
@@ -1150,7 +1193,19 @@ export type StreamPayload_Serialize = ({ Snapshot: AppSnapshot_Serialize }) & { 
  */
 ({ SecondInstance: {
 	lock_path: string,
-} }) & { Config?: never; Degraded?: never; Durable?: never; EngineFatal?: never; EngineUnavailable?: never; Ephemeral?: never; Snapshot?: never };
+} }) & { Config?: never; Degraded?: never; Durable?: never; EngineFatal?: never; EngineUnavailable?: never; Ephemeral?: never; Snapshot?: never } | 
+/**
+ *  The previous run left the crash sentinel behind: it died without a
+ *  clean shutdown. Durable state was already restored by the journal
+ *  replay; this is informational and stands for the whole run (#33 §12).
+ */
+"AbnormalShutdown" | 
+/**
+ *  The user asked to close the window while a session was active. The
+ *  shell kept the window open; the frontend owns the prompt and re-issues
+ *  the close once the session is idle (#33 §12).
+ */
+"CloseRequested";
 
 export type Telemetry = {
 	run_id: RunId,

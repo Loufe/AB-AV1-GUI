@@ -34,6 +34,7 @@ use tauri::{Manager, ipc::Channel};
 const JOURNAL_FILE_NAME: &str = "journal.jsonl";
 const CONFIG_FILE_NAME: &str = "config.json";
 const VENDOR_DIR_NAME: &str = "vendor";
+const LOG_DIR_NAME: &str = "logs";
 
 #[derive(Debug, Clone, Serialize, specta::Type)]
 pub struct ShellEvent {
@@ -67,6 +68,14 @@ pub enum StreamPayload {
     SecondInstance {
         lock_path: String,
     },
+    /// The previous run left the crash sentinel behind: it died without a
+    /// clean shutdown. Durable state was already restored by the journal
+    /// replay; this is informational and stands for the whole run (#33 §12).
+    AbnormalShutdown,
+    /// The user asked to close the window while a session was active. The
+    /// shell kept the window open; the frontend owns the prompt and re-issues
+    /// the close once the session is idle (#33 §12).
+    CloseRequested,
 }
 
 /// Outcome of a history import: how many records were parked and how many
@@ -77,6 +86,23 @@ pub struct ImportSummary {
     pub skipped: u32,
 }
 
+/// Outcome of a retroactive log scrub: how many log files were examined, how
+/// many were rewritten with anonymized content, and how many failed.
+#[derive(Debug, Clone, Copy, Serialize, specta::Type)]
+pub struct ScrubSummary {
+    pub total: u32,
+    pub modified: u32,
+    pub failed: u32,
+}
+
+/// Outcome of a manual update check against the GitHub releases API.
+#[derive(Debug, Clone, Serialize, specta::Type)]
+pub struct ReleaseSummary {
+    pub current: String,
+    pub latest: String,
+    pub update_available: bool,
+}
+
 #[derive(Debug, Clone, Serialize, specta::Type)]
 pub struct CommandError {
     pub code: String,
@@ -84,7 +110,7 @@ pub struct CommandError {
 }
 
 impl CommandError {
-    fn new(code: &str, message: impl Into<String>) -> Self {
+    pub(crate) fn new(code: &str, message: impl Into<String>) -> Self {
         Self {
             code: code.to_owned(),
             message: message.into(),
@@ -142,6 +168,10 @@ struct StreamState {
     /// instead of waiting for the next update.
     telemetry: BTreeMap<RunId, Telemetry>,
     health: Health,
+    /// The boot carried an abnormal-shutdown report. Standing (not one-shot)
+    /// because the webview subscribes after the driver emits it, and every
+    /// reconnect must replay it.
+    abnormal_shutdown: bool,
     subscriber: Option<Channel<ShellEvent>>,
     seq: u32,
 }
@@ -155,6 +185,7 @@ impl StreamState {
             aggregates: SessionAggregates::default(),
             telemetry: BTreeMap::new(),
             health,
+            abnormal_shutdown: false,
             subscriber: None,
             seq: 0,
         }
@@ -170,7 +201,7 @@ impl StreamState {
         };
         self.seq = self.seq.wrapping_add(1);
         if let Err(error) = channel.send(event) {
-            eprintln!("dropping stream subscriber after failed send: {error}");
+            tracing::warn!("dropping stream subscriber after failed send: {error}");
             self.subscriber = None;
         }
     }
@@ -180,10 +211,14 @@ pub struct Bridge {
     stream: Arc<Mutex<StreamState>>,
     commands: Option<UserCommandSender>,
     next_item_id: Arc<AtomicU64>,
-    // Kept alive for the process lifetime: dropping the runtime shuts the
-    // engine down. The Mutex only exists to make the receiver-bearing runtime
-    // Sync for managed state.
-    _engine: Mutex<Option<EngineRuntime>>,
+    /// Release page from the last successful update check. The URL never
+    /// crosses IPC: the frontend asks to open it, the shell opens what the
+    /// engine actually fetched.
+    release_url: Arc<Mutex<Option<String>>>,
+    // Held until [`Bridge::shutdown_engine`] takes it on `RunEvent::Exit`.
+    // The Mutex only exists to make the receiver-bearing runtime Sync for
+    // managed state.
+    engine: Mutex<Option<EngineRuntime>>,
 }
 
 impl Bridge {
@@ -193,16 +228,19 @@ impl Bridge {
             Err(health) => {
                 match &health {
                     Health::SecondInstance { lock_path } => {
-                        eprintln!("another instance holds the data lock at {lock_path}");
+                        tracing::error!("another instance holds the data lock at {lock_path}");
                     }
-                    Health::Unavailable { reason } => eprintln!("engine unavailable: {reason}"),
+                    Health::Unavailable { reason } => {
+                        tracing::error!("engine unavailable: {reason}")
+                    }
                     Health::Ok | Health::Degraded { .. } | Health::Fatal { .. } => {}
                 }
                 Self {
                     stream: Arc::new(Mutex::new(StreamState::new(health))),
                     commands: None,
                     next_item_id: Arc::new(AtomicU64::new(1)),
-                    _engine: Mutex::new(None),
+                    release_url: Arc::new(Mutex::new(None)),
+                    engine: Mutex::new(None),
                 }
             }
         }
@@ -219,6 +257,14 @@ impl Bridge {
                 "failed to create application data directory: {error}"
             ))
         })?;
+        // Tracing comes up before the engine so lock contention and journal
+        // recovery are captured; the privacy scrubber inside the sink is
+        // configured from a read-only settings peek, so no line is written
+        // unfiltered.
+        crfty_engine::logging::init(
+            &data_dir.join(LOG_DIR_NAME),
+            &data_dir.join(CONFIG_FILE_NAME),
+        );
         // Discovery runs inside the engine and is infallible: missing tools
         // become typed availability state on the stream, never a startup
         // failure that would hide the queue, history, or settings.
@@ -252,7 +298,8 @@ impl Bridge {
             stream,
             commands: Some(runtime.commands.clone()),
             next_item_id,
-            _engine: Mutex::new(Some(runtime)),
+            release_url: Arc::new(Mutex::new(None)),
+            engine: Mutex::new(Some(runtime)),
         })
     }
 
@@ -282,6 +329,9 @@ impl Bridge {
         let telemetry: Vec<Telemetry> = stream.telemetry.values().cloned().collect();
         for value in telemetry {
             stream.emit(StreamPayload::Ephemeral(EphemeralDelta::Telemetry(value)));
+        }
+        if stream.abnormal_shutdown {
+            stream.emit(StreamPayload::AbnormalShutdown);
         }
         match stream.health.clone() {
             Health::Ok => {}
@@ -384,6 +434,54 @@ impl Bridge {
             .map_err(|message| CommandError::new("import_failed", message))
     }
 
+    /// Anonymizes every log file under the active log directory in place,
+    /// including rolled files from earlier launches. Runs regardless of the
+    /// anonymize-logs toggle and is irreversible. Gated on a healthy engine
+    /// so a second instance can never rewrite files the lock holder is
+    /// actively writing.
+    pub fn scrub_logs(&self) -> Result<ScrubSummary, CommandError> {
+        self.commands()?;
+        crfty_engine::logging::scrub_log_files()
+            .map(|outcome| ScrubSummary {
+                total: outcome.total,
+                modified: outcome.modified,
+                failed: outcome.failed,
+            })
+            .map_err(|message| CommandError::new("scrub_failed", message))
+    }
+
+    /// The slot the blocking update check writes its release page into.
+    /// Cloned out so the check can run on a worker thread without borrowing
+    /// the bridge.
+    pub fn release_url_slot(&self) -> Arc<Mutex<Option<String>>> {
+        Arc::clone(&self.release_url)
+    }
+
+    /// Runs the one-shot update check and records the release page for
+    /// [`Bridge::open_release_page`]. Blocks on the network — callers run it
+    /// off the UI thread.
+    pub fn check_for_update(slot: &Mutex<Option<String>>) -> Result<ReleaseSummary, CommandError> {
+        let check = crfty_engine::release::check_latest_release(env!("CARGO_PKG_VERSION"))
+            .map_err(|message| CommandError::new("update_check_failed", message))?;
+        *lock_slot(slot) = Some(check.html_url);
+        Ok(ReleaseSummary {
+            current: check.current,
+            latest: check.latest,
+            update_available: check.update_available,
+        })
+    }
+
+    /// Opens the release page recorded by the last successful update check.
+    pub fn open_release_page(&self) -> Result<(), CommandError> {
+        let url = lock_slot(&self.release_url).clone().ok_or_else(|| {
+            CommandError::new(
+                "no_release_page",
+                "no release page is known; run an update check first",
+            )
+        })?;
+        Ok(crfty_engine::os_actions::open_url(&url)?)
+    }
+
     /// Passes through while degraded by design: acknowledgement is the one
     /// mutation a corrupt journal accepts, and the driver verifies the
     /// signature itself.
@@ -393,6 +491,36 @@ impl Bridge {
     ) -> Result<(), CommandError> {
         let commands = self.commands()?;
         map_reply(commands.acknowledge_corruption(signature))
+    }
+
+    /// Decides a window-close request (#33 §12: closing during active work
+    /// prompts). Returns true when the close must be deferred; the request is
+    /// then forwarded to the frontend prompt, which re-issues the close once
+    /// the session is idle. That gate is what keeps engine shutdown from ever
+    /// relabeling an ordinary stop as an active-file cancellation: by the
+    /// time the close goes through, no run is live.
+    pub fn handle_close_requested(&self) -> bool {
+        let mut stream = lock_stream(&self.stream);
+        if !should_defer_close(&stream) {
+            return false;
+        }
+        stream.emit(StreamPayload::CloseRequested);
+        true
+    }
+
+    /// Joins every engine thread (driver, supervisor, session and vendor
+    /// workers, encoder runtime) on the way out. The Tauri event loop exits
+    /// the process instead of unwinding, so managed-state drops never run:
+    /// this call from `RunEvent::Exit` is the only clean-shutdown path, and
+    /// without it the crash sentinel stays armed and every next boot reports
+    /// a false abnormal shutdown.
+    pub fn shutdown_engine(&self) {
+        let engine = lock_engine(&self.engine).take();
+        if let Some(engine) = engine
+            && let Err(error) = engine.shutdown()
+        {
+            tracing::error!("engine shutdown failed: {error}");
+        }
     }
 
     fn commands(&self) -> Result<&UserCommandSender, CommandError> {
@@ -414,6 +542,17 @@ impl Bridge {
     }
 }
 
+/// A close is deferred only when there is something to protect (an active
+/// session) and someone to ask (a subscribed webview over a healthy engine).
+/// A broken or unsubscribed webview must never trap the window open, and on
+/// a severed stream the session mirror is stale — the prompt could wait
+/// forever for an Idle transition it can no longer observe.
+fn should_defer_close(state: &StreamState) -> bool {
+    state.session != SessionState::Idle
+        && state.subscriber.is_some()
+        && matches!(state.health, Health::Ok)
+}
+
 fn forward(
     events: mpsc::Receiver<DriverEvent>,
     stream: &Arc<Mutex<StreamState>>,
@@ -427,7 +566,7 @@ fn forward(
     // subscriber-drop contract) — the engine itself keeps running, but this
     // mirror can no longer observe it and every later snapshot replay would
     // be silently stale. Surface the cut instead of freezing quietly.
-    eprintln!("engine event stream disconnected; marking the bridge fatal");
+    tracing::error!("engine event stream disconnected; marking the bridge fatal");
     let message = "lost the engine event stream; restart CRFty to reconnect".to_owned();
     let mut state = lock_stream(stream);
     state.health = Health::Fatal {
@@ -493,6 +632,10 @@ fn absorb(state: &mut StreamState, event: DriverEvent, next_item_id: &AtomicU64)
             state.health = Health::Ok;
             state.emit(StreamPayload::Recovered);
         }
+        DriverEvent::AbnormalShutdown => {
+            state.abnormal_shutdown = true;
+            state.emit(StreamPayload::AbnormalShutdown);
+        }
         DriverEvent::Fatal { message } => {
             state.health = Health::Fatal {
                 message: message.clone(),
@@ -509,6 +652,20 @@ fn seed_item_ids(next_item_id: &AtomicU64, model: &DurableState) {
 
 fn lock_stream<'a>(stream: &'a Arc<Mutex<StreamState>>) -> MutexGuard<'a, StreamState> {
     match stream.lock() {
+        Ok(guard) => guard,
+        Err(poisoned) => poisoned.into_inner(),
+    }
+}
+
+fn lock_slot(slot: &Mutex<Option<String>>) -> MutexGuard<'_, Option<String>> {
+    match slot.lock() {
+        Ok(guard) => guard,
+        Err(poisoned) => poisoned.into_inner(),
+    }
+}
+
+fn lock_engine(engine: &Mutex<Option<EngineRuntime>>) -> MutexGuard<'_, Option<EngineRuntime>> {
+    match engine.lock() {
         Ok(guard) => guard,
         Err(poisoned) => poisoned.into_inner(),
     }
@@ -636,6 +793,42 @@ mod tests {
             matches!(state.health, Health::Fatal { .. }),
             "expected fatal health after the stream disconnect"
         );
+    }
+
+    #[test]
+    fn a_close_is_deferred_only_for_an_active_session_with_a_subscribed_webview() {
+        let mut state = StreamState::new(Health::Ok);
+        // Idle session: nothing to protect, the close goes through.
+        assert!(!should_defer_close(&state));
+
+        state.session = SessionState::Running;
+        // Active but no webview to run the prompt: deferring would trap the
+        // window open with no way to ever release it.
+        assert!(!should_defer_close(&state));
+
+        state.subscriber = Some(Channel::new(|_response| Ok(())));
+        assert!(should_defer_close(&state));
+        state.session = SessionState::StopAfterCurrent;
+        assert!(should_defer_close(&state));
+
+        // On a severed stream the session mirror is stale and the prompt
+        // could never observe the session going idle.
+        state.health = Health::Fatal {
+            message: "lost the engine event stream".to_owned(),
+        };
+        assert!(!should_defer_close(&state));
+    }
+
+    #[test]
+    fn an_abnormal_shutdown_report_stands_for_replay() {
+        let ids = AtomicU64::new(1);
+        let mut state = StreamState::new(Health::Ok);
+        assert!(!state.abnormal_shutdown);
+        absorb(&mut state, DriverEvent::AbnormalShutdown, &ids);
+        // Standing, not one-shot: the webview subscribes after the driver
+        // emits this at boot, so the subscribe replay is how it ever arrives.
+        assert!(state.abnormal_shutdown);
+        assert!(matches!(state.health, Health::Ok));
     }
 
     #[test]

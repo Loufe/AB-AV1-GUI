@@ -67,7 +67,7 @@ pub(super) fn ffprobe_version(ffprobe: &Path) -> Result<String, String> {
             Ok(None) => {
                 if Instant::now() >= deadline {
                     if let Err(error) = child.terminate_and_wait() {
-                        eprintln!("failed to terminate a timed-out ffprobe probe: {error}");
+                        tracing::error!("failed to terminate a timed-out ffprobe probe: {error}");
                     }
                     let _output = reader.join();
                     return Err(format!(
@@ -79,7 +79,7 @@ pub(super) fn ffprobe_version(ffprobe: &Path) -> Result<String, String> {
             }
             Err(error) => {
                 if let Err(terminate) = child.terminate_and_wait() {
-                    eprintln!("failed to terminate a failed ffprobe probe: {terminate}");
+                    tracing::error!("failed to terminate a failed ffprobe probe: {terminate}");
                 }
                 let _output = reader.join();
                 return Err(format!(
