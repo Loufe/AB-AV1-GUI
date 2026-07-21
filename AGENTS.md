@@ -51,7 +51,10 @@ The frontend gate runs from `ui/` — see `ui/AGENTS.md`.
   retained on `main` is a read-only oracle: consult it via `git show main:<path>`,
   and freeze any semantics worth keeping as committed JSON fixtures. Fixture
   generation scripts are throwaway and never committed; once frozen, fixtures are
-  spec data maintained by hand.
+  spec data maintained by hand. Sole exception: `tools/export_history_v3.py` (and
+  its test), the user-facing V2 history converter — standalone stdlib-only Python,
+  tested via `uvx pytest tools/test_export_history_v3.py`, never imported by the
+  build.
 
 ## Zero backwards compatibility
 

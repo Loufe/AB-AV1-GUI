@@ -1,11 +1,11 @@
 # History import file (version 1)
 
 CRFty can import conversion history through a versioned JSON exchange file.
-The app knows nothing about any older history format: a converter script
-shipped with the V2 app (`tools/export_history_v3.py` on the `main` branch)
-reads the old history, performs all source-format interpretation (path
-recovery, timestamp parsing, float scrubbing, status mapping), and emits this
-schema. The app strictly parses it — a malformed or unknown-version file is
+The app knows nothing about any older history format: a standalone converter
+script shipped in this repository (`tools/export_history_v3.py`, stdlib-only
+Python run against a V2 `conversion_history.json`) reads the old history,
+performs all source-format interpretation (path recovery, timestamp parsing,
+float scrubbing, status mapping), and emits this schema. The app strictly parses it — a malformed or unknown-version file is
 rejected whole, never salvaged record by record.
 
 Reader: `crfty-engine/src/history_import.rs`. Import flow: records land in

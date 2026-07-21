@@ -19,6 +19,10 @@ Thumbs.db
 /ui/node_modules/
 /ui/dist/
 
+# Converter script test runs (the only Python in the tree)
+__pycache__/
+/.pytest_cache/
+
 # Tauri generated capability schemas
 /crates/crfty-shell/gen/
 

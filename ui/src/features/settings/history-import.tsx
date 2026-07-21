@@ -35,7 +35,7 @@ export function HistoryImport() {
     <SettingsGroup title="History">
       <SettingContainer
         label="Import history"
-        description="Import a file produced by the V2 converter script (tools/export_history_v3.py)"
+        description="Import a file produced by the bundled converter script (tools/export_history_v3.py)"
         last
       >
         <div className="flex flex-col items-end gap-1">
