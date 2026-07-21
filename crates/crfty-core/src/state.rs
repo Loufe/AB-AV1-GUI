@@ -362,6 +362,15 @@ pub struct Telemetry {
     pub sequence: u64,
     pub phase: JobPhase,
     pub progress: JobProgress,
+    /// Smoothed live throughput in hundredths of a frame per second, from the
+    /// engine's ~3 s sliding window (#33 §11). Absent until the window has a
+    /// sample and for phases with no frame rate (remux) — never a sentinel.
+    pub fps_centi: Option<u32>,
+    /// Estimated milliseconds until the current phase completes, from the
+    /// window's progress velocity. Absent during the engine's warm-up and
+    /// whenever the remaining work is unknown (#33 §11) — never a sentinel.
+    #[specta(type = Option<crate::JsNumber>)]
+    pub eta_ms: Option<u64>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, specta::Type)]

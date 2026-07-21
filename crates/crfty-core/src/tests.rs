@@ -568,6 +568,8 @@ fn reducer_enforces_session_claim_and_terminal_ordering() {
                 sequence: 20,
                 phase: JobPhase::Encoding,
                 progress: JobProgress::OutputPositionMs(100),
+                fps_centi: None,
+                eta_ms: None,
             }),
         }),
     );

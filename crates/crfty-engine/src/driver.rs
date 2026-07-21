@@ -887,6 +887,8 @@ mod tests {
                     sequence: 7,
                     phase: JobPhase::Finalizing,
                     progress: JobProgress::OutputPositionMs(100),
+                    fps_centi: None,
+                    eta_ms: None,
                 }),
             }),
             reply: reply_tx,

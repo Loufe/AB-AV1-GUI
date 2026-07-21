@@ -485,6 +485,8 @@ mod tests {
             sequence,
             phase: JobPhase::Encoding,
             progress: JobProgress::OutputPositionMs(position_ms),
+            fps_centi: None,
+            eta_ms: None,
         }
     }
 

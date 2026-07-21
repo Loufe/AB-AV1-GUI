@@ -47,7 +47,14 @@ function queueItem(id: number): QueueItem {
 }
 
 function telemetry(runId: number): Telemetry {
-  return { run_id: runId, sequence: 1, phase: "Encoding", progress: "Phase" };
+  return {
+    run_id: runId,
+    sequence: 1,
+    phase: "Encoding",
+    progress: "Phase",
+    fps_centi: null,
+    eta_ms: null,
+  };
 }
 
 function corruptionReport(): CorruptionReport {

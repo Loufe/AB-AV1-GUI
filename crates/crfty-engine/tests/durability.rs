@@ -698,6 +698,8 @@ fn telemetry_pressure_coalesces_and_terminal_value_wins() {
             sequence,
             phase: JobPhase::Encoding,
             progress: JobProgress::OutputPositionMs(sequence),
+            fps_centi: None,
+            eta_ms: None,
         });
     }
     std::thread::sleep(Duration::from_millis(30));
@@ -717,6 +719,8 @@ fn telemetry_pressure_coalesces_and_terminal_value_wins() {
                     sequence: terminal_sequence,
                     phase: JobPhase::Finalizing,
                     progress: JobProgress::OutputPositionMs(100),
+                    fps_centi: None,
+                    eta_ms: None,
                 }),
             }))
             .expect("terminal reply"),
@@ -780,6 +784,8 @@ fn terminal_publishes_final_telemetry_and_clear_before_item_finished() {
                     sequence: final_sequence,
                     phase: JobPhase::Finalizing,
                     progress: JobProgress::OutputPositionMs(100),
+                    fps_centi: None,
+                    eta_ms: None,
                 }),
             }))
             .expect("terminal reply"),
@@ -861,6 +867,8 @@ fn restart_after_fsynced_terminal_folds_to_finished_snapshot() {
                 sequence: 9,
                 phase: JobPhase::Finalizing,
                 progress: JobProgress::OutputPositionMs(100),
+                fps_centi: None,
+                eta_ms: None,
             }),
         }),
     ] {

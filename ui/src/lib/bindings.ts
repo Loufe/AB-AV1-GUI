@@ -884,6 +884,18 @@ export type Telemetry = {
 	sequence: number,
 	phase: JobPhase,
 	progress: JobProgress,
+	/**
+	 *  Smoothed live throughput in hundredths of a frame per second, from the
+	 *  engine's ~3 s sliding window (#33 §11). Absent until the window has a
+	 *  sample and for phases with no frame rate (remux) — never a sentinel.
+	 */
+	fps_centi: number | null,
+	/**
+	 *  Estimated milliseconds until the current phase completes, from the
+	 *  window's progress velocity. Absent during the engine's warm-up and
+	 *  whenever the remaining work is unknown (#33 §11) — never a sentinel.
+	 */
+	eta_ms: number | null,
 };
 
 /**

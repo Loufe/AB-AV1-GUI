@@ -79,7 +79,14 @@ const ROWS: QueueRowData[] = [
     preciseCrf: true,
     status: deriveRowStatus(
       { Running: { claim_id: 2, run_id: 2 } },
-      { run_id: 2, sequence: 41, phase: "Encoding", progress: { OutputPositionMs: 74_400 } },
+      {
+        run_id: 2,
+        sequence: 41,
+        phase: "Encoding",
+        progress: { OutputPositionMs: 74_400 },
+        fps_centi: 4_650,
+        eta_ms: 3_082_000,
+      },
       ENCODE_DURATION_MS,
       null,
     ),

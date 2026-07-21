@@ -17,6 +17,7 @@ pub mod journal;
 pub mod lock;
 pub mod media;
 pub mod output;
+pub mod rate;
 pub mod remux;
 pub mod scan;
 pub mod vendor;
