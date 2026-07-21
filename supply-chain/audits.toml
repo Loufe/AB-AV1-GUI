@@ -1,6 +1,12 @@
 
 # cargo-vet audits file
 
+[[audits.opener]]
+who = "Claude Code"
+criteria = "safe-to-deploy"
+version = "0.8.5"
+notes = "Reviewed all 658 lines of source. The crate hands a caller-supplied path to platform openers and nothing else: no network, no filesystem writes, no persistence, no env reads on CRFty's code paths (BROWSER is consulted only by open_browser, which CRFty does not call). Process launches pass the path as a separate argv entry with no shell interpolation; the embedded xdg-open fallback is a POSIX script fed via stdin with the path as a positional argument. Unsafe code is Windows-only and narrow: ShellExecuteW for open, and COM ILCreateFromPathW/SHOpenFolderAndSelectItems on a dedicated thread for reveal, with NUL-byte validation before wide-string conversion and HRESULT/null checks on every call. Linux reveal goes through zbus to FileManager1 with an OpenURI-portal fallback, then falls back to opening the parent directory. WSL/Docker detection reads /proc metadata only."
+
 [[audits.tempfile]]
 who = "OpenAI Codex"
 criteria = "safe-to-deploy"

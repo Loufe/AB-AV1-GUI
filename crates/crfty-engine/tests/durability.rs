@@ -7,6 +7,7 @@ use std::{
     sync::{
         Mutex,
         atomic::{AtomicU64, Ordering},
+        mpsc,
     },
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
@@ -16,14 +17,14 @@ use crfty_core::{
     AudioStreamMeta, ClaimId, Command, ContentKey, Crf, DestructiveIdentity, DurableDelta,
     DurableState, EphemeralDelta, ExecutionSettings, FailureFacts, FailureKind, FileStamp,
     FileTimeNs, HistoryCommand, ItemOutcome, JobPhase, JobProgress, MediaContainer,
-    MediaObservation, Operation, OutputDelta, OutputTarget, PathBinding, PathHash, QueueCommand,
-    QueueItemId, Replacement, Reply, RunId, SearchMeasurement, SessionCommand, Settings,
-    SettingsCommand, SystemCommand, Telemetry, ToolAvailability, ToolRevisions, ToolSource,
-    UnixMillis, VerdictKind, VideoCodec, VideoMeta, VmafScore, VmafTarget, WorkerCommand, apply,
-    corruption_signature, fold, replay,
+    MediaObservation, Operation, OutputDelta, OutputTarget, OverwriteDecision, PathBinding,
+    PathHash, QueueAddRequest, QueueCommand, QueueItemId, Replacement, Reply, RunId,
+    SearchMeasurement, SessionCommand, Settings, SettingsCommand, SystemCommand, Telemetry,
+    ToolAvailability, ToolRevisions, ToolSource, UnixMillis, VerdictKind, VideoCodec, VideoMeta,
+    VmafScore, VmafTarget, WorkerCommand, apply, corruption_signature, fold, replay,
 };
 use crfty_engine::{
-    coordinator::{EngineConfig, EngineRuntime, ToolsConfig},
+    coordinator::{EngineConfig, EngineRuntime, PUBLIC_EVENT_CHANNEL_CAPACITY, ToolsConfig},
     driver::{DriverEvent, DriverHandle, DriverStartError},
     journal::JournalWriter,
     output::{ArtifactInspector, FixtureByteInspector, OutputManager},
@@ -68,12 +69,21 @@ fn fixture_available() -> ToolAvailability {
 }
 
 fn add(item_id: QueueItemId) -> Command {
-    Command::Queue(QueueCommand::Add {
-        item_id,
-        input: PathBuf::from("video.mkv"),
-        operation: Operation::Convert,
-        intent: AnalysisIntent::ReuseIfFresh,
-        output_target: OutputTarget::Replace,
+    add_input(item_id, PathBuf::from(format!("video-{}.mkv", item_id.0)))
+}
+
+fn add_input(item_id: QueueItemId, input: PathBuf) -> Command {
+    Command::Queue(QueueCommand::AddMany {
+        requests: vec![QueueAddRequest {
+            item_id,
+            input,
+            path_hash: None,
+            stamp: None,
+            operation: Operation::Convert,
+            intent: AnalysisIntent::ReuseIfFresh,
+            output_target: OutputTarget::Replace,
+            overwrite: OverwriteDecision::FollowSettings,
+        }],
     })
 }
 
@@ -135,6 +145,7 @@ fn journal_records_replay() {
             operation: Operation::Convert,
             intent: AnalysisIntent::ReuseIfFresh,
             output_target: OutputTarget::Replace,
+            overwrite: OverwriteDecision::FollowSettings,
             state: crfty_core::QueueItemState::Queued,
         },
     };
@@ -153,6 +164,7 @@ fn queue_added(id: QueueItemId) -> DurableDelta {
             operation: Operation::Convert,
             intent: AnalysisIntent::ReuseIfFresh,
             output_target: OutputTarget::Replace,
+            overwrite: OverwriteDecision::FollowSettings,
             state: crfty_core::QueueItemState::Queued,
         },
     }
@@ -325,6 +337,7 @@ fn journal_group_commit_is_one_atomic_replay_record() {
                 operation: Operation::Convert,
                 intent: AnalysisIntent::ReuseIfFresh,
                 output_target: OutputTarget::Replace,
+                overwrite: OverwriteDecision::FollowSettings,
                 state: crfty_core::QueueItemState::Queued,
             },
         })
@@ -358,6 +371,16 @@ fn driver_persists_before_emitting_and_replays_after_restart() {
         .submit(add(QueueItemId(7)))
         .expect("driver reply");
     assert_eq!(reply, Reply::Accepted);
+    // Per-command emit order: ephemerals precede the durable deltas they
+    // summarize, matching the reducer's Applied partitions.
+    assert!(matches!(
+        driver
+            .events()
+            .expect("event receiver")
+            .recv()
+            .expect("summary event"),
+        DriverEvent::Ephemeral(EphemeralDelta::QueueAddSummary { added: 1, .. })
+    ));
     assert!(matches!(
         driver
             .events()
@@ -948,6 +971,8 @@ fn telemetry_pressure_coalesces_and_terminal_value_wins() {
             sequence,
             phase: JobPhase::Encoding,
             progress: JobProgress::OutputPositionMs(sequence),
+            fps_centi: None,
+            eta_ms: None,
         });
     }
     std::thread::sleep(Duration::from_millis(30));
@@ -967,6 +992,8 @@ fn telemetry_pressure_coalesces_and_terminal_value_wins() {
                     sequence: terminal_sequence,
                     phase: JobPhase::Finalizing,
                     progress: JobProgress::OutputPositionMs(100),
+                    fps_centi: None,
+                    eta_ms: None,
                 }),
             }))
             .expect("terminal reply"),
@@ -1031,6 +1058,8 @@ fn terminal_publishes_final_telemetry_and_clear_before_item_finished() {
                     sequence: final_sequence,
                     phase: JobPhase::Finalizing,
                     progress: JobProgress::OutputPositionMs(100),
+                    fps_centi: None,
+                    eta_ms: None,
                 }),
             }))
             .expect("terminal reply"),
@@ -1113,6 +1142,8 @@ fn restart_after_fsynced_terminal_folds_to_finished_snapshot() {
                 sequence: 9,
                 phase: JobPhase::Finalizing,
                 progress: JobProgress::OutputPositionMs(100),
+                fps_centi: None,
+                eta_ms: None,
             }),
         }),
     ] {
@@ -1310,13 +1341,7 @@ fn journal_active_output_run(
     let settings = execution();
     let run_id = transaction.run_id;
     let mut commands = vec![
-        Command::Queue(QueueCommand::Add {
-            item_id: QueueItemId(1),
-            input: input.to_path_buf(),
-            operation: Operation::Convert,
-            intent: AnalysisIntent::ReuseIfFresh,
-            output_target: OutputTarget::Replace,
-        }),
+        add_input(QueueItemId(1), input.to_path_buf()),
         Command::System(SystemCommand::ToolsDiscovered {
             availability: fixture_available(),
             update_available: false,
@@ -1470,6 +1495,96 @@ fn engine_startup_removes_staging_left_before_staging_created_was_durable() {
     engine.shutdown().expect("engine shutdown");
 }
 
+#[test]
+fn public_event_overflow_severs_the_stream_without_blocking_the_driver() {
+    let _serial = ENGINE_GUARD.lock().expect("engine guard");
+    let directory = TestDirectory::new("event-overflow");
+    let executable = std::env::current_exe().expect("test executable");
+    let config = EngineConfig {
+        journal_path: directory.path().join("state.jsonl"),
+        config_path: directory.path().join("config.json"),
+        vendor_root: directory.path().join("vendor"),
+        tools: fixture_tools(MediaTools {
+            ffmpeg: executable.clone(),
+            ffprobe: executable,
+        }),
+        execution: execution(),
+    };
+    let mut engine = EngineRuntime::start(config.clone()).expect("engine start");
+    // A consumer that stopped: hold the receiver alive without draining it.
+    let events = std::mem::replace(&mut engine.events, mpsc::channel().1);
+
+    // One accepted batch whose events far exceed the channel's depth.
+    let flood = 2 * PUBLIC_EVENT_CHANNEL_CAPACITY as u64;
+    let requests = (1..=flood).map(overflow_request).collect();
+    let reply = engine
+        .commands
+        .submit_queue(QueueCommand::AddMany { requests })
+        .expect("flood submit");
+    assert!(
+        matches!(reply, Reply::Accepted),
+        "flood rejected: {reply:?}"
+    );
+
+    // The overflow is the forwarder's problem, never the driver's: with the
+    // stream saturated it still accepts and journals further work.
+    let reply = engine
+        .commands
+        .submit_queue(QueueCommand::AddMany {
+            requests: vec![overflow_request(flood + 1)],
+        })
+        .expect("post-overflow submit");
+    assert!(
+        matches!(reply, Reply::Accepted),
+        "post-overflow add rejected: {reply:?}"
+    );
+
+    // Joins the event forwarder, which by then must have hit the full
+    // channel (the flood dwarfs the capacity and nothing ever drained).
+    engine.shutdown().expect("engine shutdown");
+
+    // The subscriber side was dropped, not buffered without bound: exactly
+    // one channel's worth of events survives, starting with the startup
+    // snapshot, and then the disconnect is observable.
+    let buffered: Vec<DriverEvent> = events.iter().collect();
+    assert_eq!(buffered.len(), PUBLIC_EVENT_CHANNEL_CAPACITY);
+    assert!(
+        matches!(buffered.first(), Some(DriverEvent::Snapshot(_))),
+        "expected the startup snapshot first"
+    );
+
+    // The journal, not the stream, is the source of truth: a reconnect folds
+    // a snapshot containing every add, including the ones whose stream
+    // events were severed.
+    let engine = EngineRuntime::start(config).expect("engine restart");
+    let DriverEvent::Snapshot(snapshot) = engine.events.recv().expect("restart snapshot") else {
+        panic!("expected the restart snapshot first");
+    };
+    assert_eq!(snapshot.durable.queue.len() as u64, flood + 1);
+    assert!(
+        snapshot
+            .durable
+            .queue
+            .iter()
+            .all(|item| matches!(item.state, crfty_core::QueueItemState::Queued)),
+        "expected every recovered item to still be queued"
+    );
+    engine.shutdown().expect("engine restart shutdown");
+}
+
+fn overflow_request(id: u64) -> QueueAddRequest {
+    QueueAddRequest {
+        item_id: QueueItemId(id),
+        input: PathBuf::from(format!("video-{id}.mkv")),
+        path_hash: None,
+        stamp: None,
+        operation: Operation::Convert,
+        intent: AnalysisIntent::ReuseIfFresh,
+        output_target: OutputTarget::Replace,
+        overwrite: OverwriteDecision::FollowSettings,
+    }
+}
+
 fn assert_no_staging_leftovers(directory: &Path) {
     let leftovers = fs::read_dir(directory)
         .expect("read output directory")
@@ -1526,12 +1641,17 @@ fn settled_success_journal(
     let mut state = AppState::default();
     let mut durable = Vec::new();
     let mut commands = vec![
-        Command::Queue(QueueCommand::Add {
-            item_id: QueueItemId(1),
-            input: input.clone(),
-            operation: Operation::Convert,
-            intent: AnalysisIntent::ReuseIfFresh,
-            output_target,
+        Command::Queue(QueueCommand::AddMany {
+            requests: vec![QueueAddRequest {
+                item_id: QueueItemId(1),
+                input: input.clone(),
+                path_hash: None,
+                stamp: None,
+                operation: Operation::Convert,
+                intent: AnalysisIntent::ReuseIfFresh,
+                output_target,
+                overwrite: OverwriteDecision::FollowSettings,
+            }],
         }),
         Command::System(SystemCommand::ToolsDiscovered {
             availability: fixture_available(),

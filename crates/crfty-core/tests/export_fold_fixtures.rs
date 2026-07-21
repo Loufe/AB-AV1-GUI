@@ -19,10 +19,10 @@ use crfty_core::{
     DecodePreference, DestructiveIdentity, DiagnosticTail, DurableDelta, DurableState, DurationMs,
     ExecutionSettings, FailureFacts, FailureKind, FileStamp, FileSystemId, FileTimeNs, ImportPath,
     ItemOutcome, JobAction, JobPhase, JobSpec, MediaContainer, MediaObservation, Operation,
-    OutputDelta, OutputState, OutputTarget, OutputTransaction, ParkedRecord, ParkedStatus,
-    PathBinding, PathHash, PhaseSpan, QueueItem, QueueItemId, QueueItemState, Replacement,
-    ReservedJob, RunId, SearchMeasurement, SkipReason, StreamByteSizes, UnixMillis, Verdict,
-    VerdictKind, VideoCodec, VideoMeta, VmafScore, VmafTarget, fold,
+    OutputDelta, OutputState, OutputTarget, OutputTransaction, OverwriteDecision, ParkedRecord,
+    ParkedStatus, PathBinding, PathHash, PhaseSpan, QueueItem, QueueItemId, QueueItemState,
+    Replacement, ReservedJob, RunId, SearchMeasurement, SkipReason, StreamByteSizes, UnixMillis,
+    Verdict, VerdictKind, VideoCodec, VideoMeta, VmafScore, VmafTarget, fold,
 };
 use serde::Serialize;
 
@@ -58,6 +58,10 @@ fn scenario(name: &'static str, prelude: Vec<DurableDelta>, deltas: Vec<DurableD
 }
 
 fn added(id: u64) -> DurableDelta {
+    added_with_overwrite(id, OverwriteDecision::FollowSettings)
+}
+
+fn added_with_overwrite(id: u64, overwrite: OverwriteDecision) -> DurableDelta {
     DurableDelta::QueueAdded {
         item: QueueItem {
             id: QueueItemId(id),
@@ -65,6 +69,7 @@ fn added(id: u64) -> DurableDelta {
             operation: Operation::Convert,
             intent: AnalysisIntent::ReuseIfFresh,
             output_target: OutputTarget::Replace,
+            overwrite,
             state: QueueItemState::Queued,
         },
     }
@@ -80,6 +85,24 @@ fn moved(id: u64, before: Option<u64>) -> DurableDelta {
     DurableDelta::QueueMoved {
         item_id: QueueItemId(id),
         before: before.map(QueueItemId),
+    }
+}
+
+fn requeued(id: u64) -> DurableDelta {
+    DurableDelta::QueueRequeued {
+        item_id: QueueItemId(id),
+    }
+}
+
+fn edited(id: u64) -> DurableDelta {
+    DurableDelta::QueueEdited {
+        item_id: QueueItemId(id),
+        operation: Operation::Analyze,
+        intent: AnalysisIntent::Refresh,
+        output_target: OutputTarget::Suffix {
+            suffix: "_edited".to_owned(),
+        },
+        overwrite: OverwriteDecision::Allow,
     }
 }
 
@@ -397,6 +420,14 @@ fn scenarios() -> Vec<Scenario> {
     vec![
         scenario("queue_added", vec![], vec![added(1), added(2)]),
         scenario(
+            "queue_added_overwrite_decisions",
+            vec![],
+            vec![
+                added_with_overwrite(1, OverwriteDecision::Allow),
+                added_with_overwrite(2, OverwriteDecision::Deny),
+            ],
+        ),
+        scenario(
             "queue_removed",
             vec![added(1), added(2), added(3)],
             vec![removed(2)],
@@ -422,6 +453,28 @@ fn scenarios() -> Vec<Scenario> {
             vec![added(1), added(2)],
             vec![moved(9, Some(1))],
         ),
+        scenario(
+            // The retried item resets to Queued and moves to the end.
+            "queue_requeued_resets_and_moves_to_end",
+            vec![
+                added(1),
+                added(2),
+                added(3),
+                finished(1, 10, 100, ItemOutcome::Stopped),
+            ],
+            vec![requeued(1)],
+        ),
+        scenario(
+            "queue_requeued_missing_item",
+            vec![added(1)],
+            vec![requeued(9)],
+        ),
+        scenario(
+            "queue_edited_rewrites_the_job_tuple",
+            vec![added(1), added(2)],
+            vec![edited(2)],
+        ),
+        scenario("queue_edited_missing_item", vec![added(1)], vec![edited(9)]),
         scenario(
             "media_observed_new",
             vec![],

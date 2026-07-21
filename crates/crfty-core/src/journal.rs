@@ -340,6 +340,23 @@ fn validate_replayed_delta(state: &DurableState, delta: &DurableDelta) -> Result
                 return Err("queue move references an unavailable item");
             }
         }
+        DurableDelta::QueueRequeued { item_id } => {
+            let finished = state.queue.iter().any(|item| {
+                item.id == *item_id && matches!(item.state, QueueItemState::Finished(_))
+            });
+            if !finished {
+                return Err("requeued item does not exist or is not finished");
+            }
+        }
+        DurableDelta::QueueEdited { item_id, .. } => {
+            let queued = state
+                .queue
+                .iter()
+                .any(|item| item.id == *item_id && matches!(item.state, QueueItemState::Queued));
+            if !queued {
+                return Err("edited item does not exist or is not queued");
+            }
+        }
         DurableDelta::ItemReserved { job } => {
             let matches_item = state.queue.iter().any(|item| {
                 item.id == job.item_id

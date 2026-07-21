@@ -8,6 +8,7 @@
 
 use std::{
     collections::BTreeMap,
+    path::PathBuf,
     sync::{
         Arc, Mutex, MutexGuard,
         atomic::{AtomicU64, Ordering},
@@ -16,14 +17,16 @@ use std::{
 };
 
 use crfty_core::{
-    AnalysisProfile, AppSnapshot, ConfigDelta, CorruptionReport, CorruptionSignature, DurableDelta,
-    DurableState, EphemeralDelta, ExecutionSettings, ProjectionCommand, QueueCommand, QueueItemId,
-    Reply, RunId, SessionCommand, SessionState, Settings, SettingsCommand, Telemetry, ToolsState,
-    VendorCommand, fold, fold_config,
+    AnalysisIntent, AnalysisProfile, AppSnapshot, ConfigDelta, CorruptionReport,
+    CorruptionSignature, DurableDelta, DurableState, EphemeralDelta, ExecutionSettings, Operation,
+    OutputTarget, OverwriteDecision, ProjectionCommand, QueueAddRequest, QueueCommand, QueueItemId,
+    Reply, RunId, SessionAggregates, SessionCommand, SessionState, Settings, SettingsCommand,
+    Telemetry, ToolsState, VendorCommand, fold, fold_config,
 };
 use crfty_engine::{
     coordinator::{EngineConfig, EngineRuntime, ToolsConfig, UserCommandSender},
     driver::DriverEvent,
+    os_actions::OsActionError,
 };
 use serde::Serialize;
 use tauri::{Manager, ipc::Channel};
@@ -103,6 +106,19 @@ impl CommandError {
     }
 }
 
+/// A missing path is the caller's mistake (a stale row) — `rejected`; a
+/// desktop that refused or failed the action is ours to surface — `internal`.
+impl From<OsActionError> for CommandError {
+    fn from(error: OsActionError) -> Self {
+        match error {
+            OsActionError::Missing { path } => {
+                Self::new("rejected", format!("{} does not exist", path.display()))
+            }
+            OsActionError::Failed { message } => Self::new("internal", message),
+        }
+    }
+}
+
 #[derive(Debug, Clone)]
 enum Health {
     Ok,
@@ -127,6 +143,10 @@ struct StreamState {
     model: AppSnapshot,
     session: SessionState,
     tools: ToolsState,
+    /// Latest session aggregates, mirroring `AppState::aggregates` in the
+    /// reducer. Aggregates are never journaled, so the subscribe replay is
+    /// the only way a mid-session reconnect learns the running totals.
+    aggregates: SessionAggregates,
     /// Latest telemetry per active run, mirroring `AppState::telemetry` in
     /// the reducer so a reconnecting webview sees live progress immediately
     /// instead of waiting for the next update.
@@ -142,6 +162,7 @@ impl StreamState {
             model: AppSnapshot::default(),
             session: SessionState::Idle,
             tools: ToolsState::default(),
+            aggregates: SessionAggregates::default(),
             telemetry: BTreeMap::new(),
             health,
             subscriber: None,
@@ -256,10 +277,10 @@ impl Bridge {
     }
 
     /// Installs the webview's channel and replays current state into it:
-    /// snapshot first, then the session state and tool availability (which a
-    /// fresh connection would otherwise only learn on their next transition),
-    /// then any standing degradation. All under the stream lock, so no delta
-    /// interleaves.
+    /// snapshot first, then the session state, tool availability, and session
+    /// aggregates (which a fresh connection would otherwise only learn on
+    /// their next transition), then any standing degradation. All under the
+    /// stream lock, so no delta interleaves.
     pub fn subscribe(&self, channel: Channel<ShellEvent>) {
         let mut stream = lock_stream(&self.stream);
         stream.subscriber = Some(channel);
@@ -273,6 +294,10 @@ impl Bridge {
         let tools = stream.tools.clone();
         stream.emit(StreamPayload::Ephemeral(EphemeralDelta::ToolsChanged(
             tools,
+        )));
+        let aggregates = stream.aggregates;
+        stream.emit(StreamPayload::Ephemeral(EphemeralDelta::SessionAggregates(
+            aggregates,
         )));
         let telemetry: Vec<Telemetry> = stream.telemetry.values().cloned().collect();
         for value in telemetry {
@@ -298,6 +323,51 @@ impl Bridge {
     pub fn submit_queue(&self, command: QueueCommand) -> Result<(), CommandError> {
         let commands = self.commands()?;
         map_reply(commands.submit_queue(command))
+    }
+
+    /// Expands files and folders into one `AddMany` batch carrying real
+    /// enqueue facts (path hash + stamp, best-effort). The scan-extension
+    /// filter comes from the settings read model; for `SeparateFolder`
+    /// targets, each folder-discovered file gets its originating folder as
+    /// `source_root` so the output tree mirrors the source tree.
+    pub fn queue_add_paths(
+        &self,
+        inputs: Vec<PathBuf>,
+        operation: Operation,
+        intent: AnalysisIntent,
+        output_target: OutputTarget,
+    ) -> Result<(), CommandError> {
+        let commands = self.commands()?;
+        let extensions = lock_stream(&self.stream)
+            .model
+            .settings
+            .scan_extensions
+            .clone();
+        let requests = crfty_engine::scan::expand_inputs(&inputs, &extensions)
+            .into_iter()
+            .map(|file| {
+                let output_target = match (&output_target, file.source_root) {
+                    (OutputTarget::SeparateFolder { directory, .. }, Some(root)) => {
+                        OutputTarget::SeparateFolder {
+                            directory: directory.clone(),
+                            source_root: Some(root),
+                        }
+                    }
+                    _ => output_target.clone(),
+                };
+                QueueAddRequest {
+                    item_id: self.allocate_item_id(),
+                    input: file.path,
+                    path_hash: file.path_hash,
+                    stamp: file.stamp,
+                    operation,
+                    intent,
+                    output_target,
+                    overwrite: OverwriteDecision::FollowSettings,
+                }
+            })
+            .collect();
+        map_reply(commands.submit_queue(QueueCommand::AddMany { requests }))
     }
 
     pub fn submit_session(&self, command: SessionCommand) -> Result<(), CommandError> {
@@ -389,6 +459,17 @@ fn forward(
         let mut state = lock_stream(stream);
         absorb(&mut state, event, next_item_id);
     }
+    // The engine severs this stream only on public-channel overflow (its
+    // subscriber-drop contract) — the engine itself keeps running, but this
+    // mirror can no longer observe it and every later snapshot replay would
+    // be silently stale. Surface the cut instead of freezing quietly.
+    eprintln!("engine event stream disconnected; marking the bridge fatal");
+    let message = "lost the engine event stream; restart CRFty to reconnect".to_owned();
+    let mut state = lock_stream(stream);
+    state.health = Health::Fatal {
+        message: message.clone(),
+    };
+    state.emit(StreamPayload::EngineFatal { message });
 }
 
 /// Folds one driver event into the read model and emits its wire payload.
@@ -415,6 +496,7 @@ fn absorb(state: &mut StreamState, event: DriverEvent, next_item_id: &AtomicU64)
         DriverEvent::Ephemeral(delta) => {
             match &delta {
                 EphemeralDelta::SessionChanged(session) => state.session = session.clone(),
+                EphemeralDelta::SessionAggregates(aggregates) => state.aggregates = *aggregates,
                 EphemeralDelta::ToolsChanged(tools) => state.tools = tools.clone(),
                 EphemeralDelta::Telemetry(telemetry) => {
                     state.telemetry.insert(telemetry.run_id, telemetry.clone());
@@ -427,7 +509,8 @@ fn absorb(state: &mut StreamState, event: DriverEvent, next_item_id: &AtomicU64)
                 // re-requests instead.
                 EphemeralDelta::Statistics(_)
                 | EphemeralDelta::WorkerCrashed { .. }
-                | EphemeralDelta::CommandRejected { .. } => {}
+                | EphemeralDelta::CommandRejected { .. }
+                | EphemeralDelta::QueueAddSummary { .. } => {}
             }
             state.emit(StreamPayload::Ephemeral(delta));
         }
@@ -496,6 +579,8 @@ mod tests {
             sequence,
             phase: JobPhase::Encoding,
             progress: JobProgress::OutputPositionMs(position_ms),
+            fps_centi: None,
+            eta_ms: None,
         }
     }
 
@@ -563,5 +648,57 @@ mod tests {
         assert_eq!(state.session, SessionState::Running);
         assert_eq!(state.tools, tools);
         assert!(state.telemetry.is_empty());
+    }
+
+    #[test]
+    fn a_severed_engine_stream_marks_the_bridge_fatal() {
+        let ids = AtomicU64::new(1);
+        let stream = Arc::new(Mutex::new(StreamState::new(Health::Ok)));
+        let (sender, receiver) = mpsc::channel();
+        sender
+            .send(ephemeral(EphemeralDelta::SessionChanged(
+                SessionState::Running,
+            )))
+            .expect("send fixture event");
+        drop(sender);
+
+        forward(receiver, &stream, &ids);
+
+        let state = lock_stream(&stream);
+        // Events before the cut were absorbed; the cut itself became fatal
+        // instead of a silently frozen mirror.
+        assert_eq!(state.session, SessionState::Running);
+        assert!(
+            matches!(state.health, Health::Fatal { .. }),
+            "expected fatal health after the stream disconnect"
+        );
+    }
+
+    #[test]
+    fn absorb_mirrors_the_latest_session_aggregates() {
+        let ids = AtomicU64::new(1);
+        let mut state = StreamState::new(Health::Ok);
+        let first = SessionAggregates {
+            completed: 1,
+            input_bytes: 1_000,
+            output_bytes: 400,
+            ..SessionAggregates::default()
+        };
+        absorb(
+            &mut state,
+            ephemeral(EphemeralDelta::SessionAggregates(first)),
+            &ids,
+        );
+        assert_eq!(state.aggregates, first);
+
+        // The zeroed emission at session start replaces the standing totals.
+        absorb(
+            &mut state,
+            ephemeral(EphemeralDelta::SessionAggregates(
+                SessionAggregates::default(),
+            )),
+            &ids,
+        );
+        assert_eq!(state.aggregates, SessionAggregates::default());
     }
 }

@@ -39,7 +39,8 @@ pub use failure::{DIAGNOSTIC_TAIL_MAX_BYTES, DiagnosticTail, FailureFacts, Failu
 pub use job::{
     AnalysisAttempt, AnalysisIntent, AnalysisProfile, AnalysisResult, ClaimedJob, Crf, DecodeMode,
     DecodePreference, ExecutionSettings, HardwareDecoder, JobAction, JobPhase, JobSpec, Operation,
-    OutputTarget, ReservedJob, SearchMeasurement, ToolRevisions, VmafScore, VmafTarget,
+    OutputTarget, OverwriteDecision, ReservedJob, SearchMeasurement, ToolRevisions, VmafScore,
+    VmafTarget,
 };
 pub use journal::{
     COMPACTION_HARD_LIMIT_BYTES, COMPACTION_IDLE_MIN_JOURNAL_BYTES, COMPACTION_IDLE_MIN_RATIO,
@@ -59,7 +60,8 @@ pub use output::{
 };
 pub use policy::{
     Eligibility, MIN_VIDEO_PIXELS, ParkedResolution, SkipReason, evaluate_eligibility,
-    permitted_profiles, resolve_parked, select_analysis, select_job_action, verdict_applies,
+    evaluate_enqueue, permitted_profiles, resolve_parked, select_analysis, select_job_action,
+    settled_output_identity, stamp_matches, verdict_applies,
 };
 pub use projection::{
     CodecCount, CumulativeSavingsPoint, HistoryRow, HistoryStatus, RunTotals, StatFact,
@@ -67,8 +69,9 @@ pub use projection::{
     local_epoch_day, statistics,
 };
 pub use reducer::{
-    Applied, Command, Effect, EphemeralDelta, HistoryCommand, ProjectionCommand, QueueCommand,
-    Reply, SessionCommand, SettingsCommand, SystemCommand, VendorCommand, WorkerCommand, apply,
+    Applied, Command, Effect, EphemeralDelta, HistoryCommand, ProjectionCommand, QueueAddRequest,
+    QueueCommand, QueueItemEdit, Reply, SessionCommand, SettingsCommand, SystemCommand,
+    VendorCommand, WorkerCommand, apply,
 };
 pub use settings::{
     DEFAULT_OUTPUT_SUFFIX, DefaultOutputMode, OutputSettings, PrivacySettings, Settings,
@@ -77,8 +80,8 @@ pub use settings::{
 pub use state::{
     AppSnapshot, AppState, ClaimId, CompletionEvidence, ConfigDelta, ConversionRun, DurableDelta,
     DurableState, ItemOutcome, JobProgress, JournalSequence, MediaTool, PhaseSpan, QueueItem,
-    QueueItemId, QueueItemState, RunId, SessionState, StreamByteSizes, Telemetry, ToolAvailability,
-    ToolSource, ToolsState, VendorActivity, fold, fold_config,
+    QueueItemId, QueueItemState, RunId, SessionAggregates, SessionState, StreamByteSizes,
+    Telemetry, ToolAvailability, ToolSource, ToolsState, VendorActivity, fold, fold_config,
 };
 pub use time::{DurationMs, FileTimeNs, UnixMillis};
 

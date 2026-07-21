@@ -18,8 +18,11 @@ pub mod journal;
 pub mod lock;
 pub mod logging;
 pub mod media;
+pub mod os_actions;
 pub mod output;
+pub mod rate;
 pub mod remux;
+pub mod scan;
 pub mod vendor;
 
 mod failure;

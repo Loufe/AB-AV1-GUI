@@ -9,7 +9,7 @@ import type { ShellEvent_Deserialize, StreamPayload_Deserialize } from "@/lib/bi
 import { subscribeStream } from "@/lib/ipc";
 import { appStore } from "@/lib/store/app-store";
 import { foldConfig, foldDurable, foldSession, foldTelemetry } from "@/lib/store/fold";
-import { progressStore } from "@/lib/store/progress-store";
+import { emptySessionAggregates, progressStore } from "@/lib/store/progress-store";
 
 // The transport is ordered by construction; seq is a tripwire, not a recovery
 // protocol (#33 §11). Each connection's numbering starts at 0, so a fresh
@@ -35,8 +35,10 @@ export function applyPayload(payload: StreamPayload_Deserialize): void {
       statistics: null,
     }));
     // Telemetry for pre-snapshot runs never gets a TelemetryCleared on this
-    // connection; the snapshot is the fresh baseline.
-    progressStore.setState({ telemetry: {} });
+    // connection; the snapshot is the fresh baseline. The shell replays the
+    // latest aggregates right after each snapshot, so zeroing here never
+    // sticks past the replay.
+    progressStore.setState({ telemetry: {}, aggregates: emptySessionAggregates() });
     return;
   }
   if ("Durable" in payload && payload.Durable !== undefined) {
@@ -55,6 +57,11 @@ export function applyPayload(payload: StreamPayload_Deserialize): void {
       appStore.setState((state) => ({ ...state, session: foldSession(state.session, delta) }));
       return;
     }
+    if ("SessionAggregates" in delta && delta.SessionAggregates !== undefined) {
+      const aggregates = delta.SessionAggregates;
+      progressStore.setState((state) => ({ ...state, aggregates }));
+      return;
+    }
     if ("WorkerCrashed" in delta && delta.WorkerCrashed !== undefined) {
       toast.error(`Worker crashed: ${delta.WorkerCrashed.message}`);
       return;
@@ -63,6 +70,13 @@ export function applyPayload(payload: StreamPayload_Deserialize): void {
       // Command results already surface rejections at the call site; this is
       // the observability backstop, not a user-facing notification (#33 §11).
       console.warn("command rejected by the engine", delta.CommandRejected.reason);
+      return;
+    }
+    if ("QueueAddSummary" in delta && delta.QueueAddSummary !== undefined) {
+      // Routine outcome of every add, not an error: one neutral line.
+      const { added, skipped } = delta.QueueAddSummary;
+      const skippedCount = skipped.reduce((total, [, count]) => total + count, 0);
+      toast(skippedCount > 0 ? `Added ${added} · Skipped ${skippedCount}` : `Added ${added}`);
       return;
     }
     if ("ToolsChanged" in delta && delta.ToolsChanged !== undefined) {

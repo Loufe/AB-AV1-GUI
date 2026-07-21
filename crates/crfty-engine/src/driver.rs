@@ -636,9 +636,10 @@ impl JournalSink for JournalWriter {
 /// Publishes each applied command in fold order as config, then ephemeral,
 /// then durable deltas, followed by its reply. Ephemerals precede durables so
 /// terminal state is never followed by stale progress: a finishing item is
-/// observed as final telemetry, telemetry-cleared, then `ItemFinished`. A
-/// future ephemeral that needs post-durable semantics would force revisiting
-/// this contract. Durable publication still requires the token minted by the
+/// observed as final telemetry, telemetry-cleared, then `ItemFinished`. The
+/// one exception is `SessionAggregates`, which summarizes a finish and is
+/// published after the durables so its counts never lead the `ItemFinished`
+/// they include. Durable publication still requires the token minted by the
 /// journal fsync, so nothing observable can outrun durability.
 fn emit_batch(
     durability: Option<DurabilityToken>,
@@ -652,11 +653,18 @@ fn emit_batch(
         for delta in applied.config {
             let _result = events.send(DriverEvent::Config(delta));
         }
-        for delta in applied.ephemeral {
+        let (aggregates, ephemerals): (Vec<_>, Vec<_>) = applied
+            .ephemeral
+            .into_iter()
+            .partition(|delta| matches!(delta, EphemeralDelta::SessionAggregates(_)));
+        for delta in ephemerals {
             let _result = events.send(DriverEvent::Ephemeral(delta));
         }
         if let Some(token) = &durability {
             emit_durable(token, &applied.durable, events);
+        }
+        for delta in aggregates {
+            let _result = events.send(DriverEvent::Ephemeral(delta));
         }
         effects.extend(applied.effects);
         let _result = reply.send(applied.reply);
@@ -767,10 +775,25 @@ mod tests {
     use crfty_core::{
         AnalysisIntent, AnalysisProfile, ClaimId, Command, ConfigDelta, DurableDelta, Effect,
         EphemeralDelta, ExecutionSettings, ItemOutcome, JobPhase, JobProgress, Operation,
-        OutputTarget, QueueCommand, QueueItemId, Reply, RunId, SessionCommand, SessionState,
-        Settings, SettingsCommand, SystemCommand, Telemetry, ToolAvailability, ToolRevisions,
-        UnixMillis, WorkerCommand, apply,
+        OutputTarget, OverwriteDecision, QueueAddRequest, QueueCommand, QueueItemId, Reply, RunId,
+        SessionCommand, SessionState, Settings, SettingsCommand, SystemCommand, Telemetry,
+        ToolAvailability, ToolRevisions, UnixMillis, WorkerCommand, apply,
     };
+
+    fn add_command(id: u64, input: &str) -> Command {
+        Command::Queue(QueueCommand::AddMany {
+            requests: vec![QueueAddRequest {
+                item_id: QueueItemId(id),
+                input: PathBuf::from(input),
+                path_hash: None,
+                stamp: None,
+                operation: Operation::Convert,
+                intent: AnalysisIntent::ReuseIfFresh,
+                output_target: OutputTarget::Replace,
+                overwrite: OverwriteDecision::FollowSettings,
+            }],
+        })
+    }
 
     use super::{
         AppState, CompactionOutcome, ConfigSink, DriverEvent, DriverPersistence, Envelope,
@@ -809,13 +832,7 @@ mod tests {
     fn journal_failure_emits_no_durable_delta_and_stops_driver() {
         let (reply_tx, reply_rx) = mpsc::sync_channel(1);
         let envelope = Envelope {
-            command: Command::Queue(QueueCommand::Add {
-                item_id: QueueItemId(1),
-                input: PathBuf::from("video.mkv"),
-                operation: Operation::Convert,
-                intent: AnalysisIntent::ReuseIfFresh,
-                output_target: OutputTarget::Replace,
-            }),
+            command: add_command(1, "video.mkv"),
             reply: reply_tx,
         };
         let (event_tx, event_rx) = mpsc::channel();
@@ -858,7 +875,7 @@ mod tests {
     }
 
     #[test]
-    fn terminal_publishes_ephemerals_before_the_durable_finish() {
+    fn terminal_orders_progress_before_and_aggregates_after_the_durable_finish() {
         let execution = {
             let mut profile = AnalysisProfile::production();
             profile.ab_av1_revision = "fixture".to_owned();
@@ -868,13 +885,7 @@ mod tests {
         };
         let mut state = AppState::default();
         for command in [
-            Command::Queue(QueueCommand::Add {
-                item_id: QueueItemId(1),
-                input: PathBuf::from("video.mkv"),
-                operation: Operation::Convert,
-                intent: AnalysisIntent::ReuseIfFresh,
-                output_target: OutputTarget::Replace,
-            }),
+            add_command(1, "video.mkv"),
             Command::System(SystemCommand::ToolsDiscovered {
                 availability: ToolAvailability::Available {
                     source: crfty_core::ToolSource::System,
@@ -921,6 +932,8 @@ mod tests {
                     sequence: 7,
                     phase: JobPhase::Finalizing,
                     progress: JobProgress::OutputPositionMs(100),
+                    fps_centi: None,
+                    eta_ms: None,
                 }),
             }),
             reply: reply_tx,
@@ -944,11 +957,12 @@ mod tests {
             .map(|event| match event {
                 DriverEvent::Ephemeral(EphemeralDelta::Telemetry(_)) => "telemetry",
                 DriverEvent::Ephemeral(EphemeralDelta::TelemetryCleared { .. }) => "cleared",
+                DriverEvent::Ephemeral(EphemeralDelta::SessionAggregates(_)) => "aggregates",
                 DriverEvent::Durable(DurableDelta::ItemFinished { .. }) => "finished",
                 _ => "other",
             })
             .collect();
-        assert_eq!(observed, ["telemetry", "cleared", "finished"]);
+        assert_eq!(observed, ["telemetry", "cleared", "finished", "aggregates"]);
     }
 
     struct RecordingConfig {
@@ -1110,13 +1124,7 @@ mod tests {
         // An ordinary durable batch does not schedule a forced compaction.
         let (reply_tx, _reply_rx) = mpsc::sync_channel(1);
         let envelope = Envelope {
-            command: Command::Queue(QueueCommand::Add {
-                item_id: QueueItemId(1),
-                input: PathBuf::from("video.mkv"),
-                operation: Operation::Convert,
-                intent: AnalysisIntent::ReuseIfFresh,
-                output_target: OutputTarget::Replace,
-            }),
+            command: add_command(1, "video.mkv"),
             reply: reply_tx,
         };
         let outcome = process_batch(
@@ -1141,16 +1149,7 @@ mod tests {
     }
 
     fn add_item(state: &mut AppState, id: u64) -> Vec<DurableDelta> {
-        let applied = apply(
-            state,
-            Command::Queue(QueueCommand::Add {
-                item_id: QueueItemId(id),
-                input: PathBuf::from(format!("video-{id}.mkv")),
-                operation: Operation::Convert,
-                intent: AnalysisIntent::ReuseIfFresh,
-                output_target: OutputTarget::Replace,
-            }),
-        );
+        let applied = apply(state, add_command(id, &format!("video-{id}.mkv")));
         assert_eq!(applied.reply, Reply::Accepted);
         applied.durable
     }
@@ -1371,13 +1370,7 @@ mod tests {
         };
         let settings = Settings::default();
         let groups = split_batch_at_settings(vec![
-            envelope(Command::Queue(QueueCommand::Add {
-                item_id: QueueItemId(1),
-                input: PathBuf::from("one.mkv"),
-                operation: Operation::Convert,
-                intent: AnalysisIntent::ReuseIfFresh,
-                output_target: OutputTarget::Replace,
-            })),
+            envelope(add_command(1, "one.mkv")),
             envelope(Command::Settings(SettingsCommand::Set {
                 settings: settings.clone(),
             })),

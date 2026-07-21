@@ -15,7 +15,8 @@ use std::{
 
 use crfty_core::{
     AnalysisIntent, AnalysisProfile, DecodeMode, DecodePreference, DurableDelta, ExecutionSettings,
-    Operation, OutputTarget, QueueCommand, QueueItemId, SessionCommand, ToolSource, VmafTarget,
+    Operation, OutputTarget, OverwriteDecision, QueueAddRequest, QueueCommand, QueueItemId,
+    SessionCommand, ToolSource, VmafTarget,
 };
 use crfty_engine::{
     coordinator::{EngineConfig, EngineRuntime, ToolsConfig},
@@ -90,14 +91,19 @@ fn managed_tools_execute_from_a_spaces_and_unicode_vendor_root() {
     let _snapshot = engine.events.recv().expect("startup snapshot");
     engine
         .commands
-        .submit_queue(QueueCommand::Add {
-            item_id: QueueItemId(1),
-            input: input.clone(),
-            operation: Operation::Convert,
-            intent: AnalysisIntent::ReuseIfFresh,
-            output_target: OutputTarget::Suffix {
-                suffix: "_av1".to_owned(),
-            },
+        .submit_queue(QueueCommand::AddMany {
+            requests: vec![QueueAddRequest {
+                item_id: QueueItemId(1),
+                input: input.clone(),
+                path_hash: None,
+                stamp: None,
+                operation: Operation::Convert,
+                intent: AnalysisIntent::ReuseIfFresh,
+                output_target: OutputTarget::Suffix {
+                    suffix: "_av1".to_owned(),
+                },
+                overwrite: OverwriteDecision::FollowSettings,
+            }],
         })
         .expect("queue command");
     engine

@@ -11,9 +11,9 @@ import type {
 
 import { appStore, initialAppState } from "./app-store";
 import { applyPayload, hasSequenceGap } from "./connect";
-import { progressStore } from "./progress-store";
+import { emptySessionAggregates, progressStore } from "./progress-store";
 
-vi.mock("sonner", () => ({ toast: { error: vi.fn() } }));
+vi.mock("sonner", () => ({ toast: Object.assign(vi.fn(), { error: vi.fn() }) }));
 vi.mock("@/lib/ipc", () => ({ subscribeStream: vi.fn() }));
 
 function settings(): Settings {
@@ -42,12 +42,20 @@ function queueItem(id: number): QueueItem {
     operation: "Convert",
     intent: "ReuseIfFresh",
     output_target: "Replace",
+    overwrite: "FollowSettings",
     state: "Queued",
   };
 }
 
 function telemetry(runId: number): Telemetry {
-  return { run_id: runId, sequence: 1, phase: "Encoding", progress: "Phase" };
+  return {
+    run_id: runId,
+    sequence: 1,
+    phase: "Encoding",
+    progress: "Phase",
+    fps_centi: null,
+    eta_ms: null,
+  };
 }
 
 function statisticsPayload(): StatisticsPayload {
@@ -109,7 +117,7 @@ function snapshot(item: QueueItem): StreamPayload_Deserialize {
 
 beforeEach(() => {
   appStore.setState(initialAppState(), true);
-  progressStore.setState({ telemetry: {} }, true);
+  progressStore.setState({ telemetry: {}, aggregates: emptySessionAggregates() }, true);
   vi.clearAllMocks();
 });
 
@@ -164,6 +172,45 @@ describe("applyPayload", () => {
     applyPayload({ Ephemeral: { TelemetryCleared: { run_id: 1 } } });
     expect(progressStore.getState().telemetry).toEqual({});
     expect(appStore.getState()).toBe(before);
+  });
+
+  it("routes session aggregates to the progress store and resets them on snapshot", () => {
+    const before = appStore.getState();
+    const aggregates = {
+      ...emptySessionAggregates(),
+      completed: 2,
+      input_bytes: 1_000,
+      output_bytes: 400,
+    };
+    applyPayload({ Ephemeral: { SessionAggregates: aggregates } });
+    expect(progressStore.getState().aggregates).toEqual(aggregates);
+    expect(appStore.getState()).toBe(before);
+
+    // The shell replays the latest aggregates right after each snapshot, so
+    // the snapshot handler resets to zero rather than guessing.
+    applyPayload(snapshot(queueItem(1)));
+    expect(progressStore.getState().aggregates).toEqual(emptySessionAggregates());
+  });
+
+  it("surfaces the add summary as one neutral toast, not state", async () => {
+    const { toast } = await import("sonner");
+    const before = appStore.getState();
+    applyPayload({
+      Ephemeral: {
+        QueueAddSummary: {
+          added: 10,
+          skipped: [
+            ["AlreadyQueued", 2],
+            [{ NotWorthwhile: { source_run: 9 } }, 1],
+          ],
+        },
+      },
+    });
+    expect(toast).toHaveBeenCalledWith("Added 10 · Skipped 3");
+    applyPayload({ Ephemeral: { QueueAddSummary: { added: 4, skipped: [] } } });
+    expect(toast).toHaveBeenCalledWith("Added 4");
+    expect(appStore.getState()).toBe(before);
+    expect(progressStore.getState().telemetry).toEqual({});
   });
 
   it("surfaces a worker crash as a toast, not state", async () => {

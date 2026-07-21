@@ -66,6 +66,18 @@ pub enum OutputTarget {
     },
 }
 
+/// Per-item override of the destination-conflict rule. `FollowSettings`
+/// resolves from the output settings as they stand when the item is claimed;
+/// `Allow` and `Deny` pin the item's behavior regardless of later settings
+/// changes. This is how an `OutputExists` skip becomes resolvable without
+/// touching an active job: edit the item to `Allow` and retry.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, specta::Type)]
+pub enum OverwriteDecision {
+    FollowSettings,
+    Allow,
+    Deny,
+}
+
 #[derive(
     Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize, specta::Type,
 )]

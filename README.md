@@ -28,7 +28,15 @@ monotonic phase spans, evidence-carrying success outcomes derived from the
 settled output ledger (including crash recovery), expanded probe metadata,
 content verdicts with derived lineage and a frozen reuse policy, per-item
 analysis intent, and the hardware→software retry ladders for search and
-encode. What remains is growing the views over the store — History,
+encode. The queue command surface is complete (issue #41): batch adds expand
+folders through the engine scanner and filter ineligible files at enqueue
+into one typed summary (ADR-013), decided verdicts and content duplicates
+short-circuit at claim as visible skipped rows, and items support per-item
+edit, retry, clear, and clear-completed. Sessions publish running aggregate
+totals and live speed/ETA telemetry, open/reveal desktop actions round out
+the shell commands, and the public event stream is bounded — on overflow it
+severs observably instead of blocking the driver, with reconnect-and-refold
+as the recovery. What remains is growing the views over the store — History,
 Statistics, Analysis, and the final Queue integration.
 
 ## Workspace
