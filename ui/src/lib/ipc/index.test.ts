@@ -2,7 +2,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import { commands, type CorruptionSignature } from "@/lib/bindings";
 
-import { acknowledgeCorruption, queueRemove, startQueue } from "./index";
+import { acknowledgeCorruption, queueRemoveMany, queueRetry, startQueue } from "./index";
 import { pickPaths } from "./path-picker";
 import { importHistory } from "./settings";
 
@@ -12,7 +12,8 @@ vi.mock("@/lib/bindings", () => ({
     acknowledgeCorruption: vi.fn(),
     importHistory: vi.fn(),
     pickPaths: vi.fn(),
-    queueRemove: vi.fn(),
+    queueRemoveMany: vi.fn(),
+    queueRetry: vi.fn(),
     start: vi.fn(),
   },
 }));
@@ -20,7 +21,8 @@ vi.mock("@/lib/bindings", () => ({
 const acknowledged = vi.mocked(commands.acknowledgeCorruption);
 const imported = vi.mocked(commands.importHistory);
 const picked = vi.mocked(commands.pickPaths);
-const removed = vi.mocked(commands.queueRemove);
+const removed = vi.mocked(commands.queueRemoveMany);
+const retried = vi.mocked(commands.queueRetry);
 const started = vi.mocked(commands.start);
 
 function signature(): CorruptionSignature {
@@ -77,12 +79,28 @@ describe("Queue command wrappers", () => {
     expect(picked).toHaveBeenCalledExactlyOnceWith("Files", "C:\\Videos");
   });
 
-  it("passes stable QueueItemId identity to remove", async () => {
+  it("passes the complete QueueItemId set to atomic removal", async () => {
     removed.mockResolvedValue({ status: "ok", data: null });
 
-    await queueRemove(42);
+    await queueRemoveMany([42, 7]);
 
-    expect(removed).toHaveBeenCalledExactlyOnceWith(42);
+    expect(removed).toHaveBeenCalledExactlyOnceWith([42, 7]);
+  });
+
+  it("distinguishes plain retry from an atomic patched retry", async () => {
+    retried.mockResolvedValue({ status: "ok", data: null });
+    const patch = {
+      operation: "Convert" as const,
+      intent: "Refresh" as const,
+      output_target: null,
+      overwrite: null,
+    };
+
+    await queueRetry(42, null);
+    await queueRetry(7, patch);
+
+    expect(retried).toHaveBeenNthCalledWith(1, 42, null);
+    expect(retried).toHaveBeenNthCalledWith(2, 7, patch);
   });
 
   it("surfaces a start rejection without changing frontend state", async () => {

@@ -198,8 +198,9 @@ pub enum DurableDelta {
     QueueAdded {
         item: QueueItem,
     },
-    QueueRemoved {
-        item_id: QueueItemId,
+    /// One atomic removal set, resolved and validated before journaling.
+    QueueItemsRemoved {
+        item_ids: Vec<QueueItemId>,
     },
     QueueMoved {
         item_id: QueueItemId,
@@ -210,12 +211,16 @@ pub enum DurableDelta {
     QueueReordered {
         pending_order: Vec<QueueItemId>,
     },
-    /// A finished item goes around again: state resets to `Queued` and the
-    /// item moves to the end of the queue, preserving the
-    /// finished < active < queued shape invariant. The old run's lineage is
-    /// untouched; fresh claim/run ids arrive at the next reservation.
-    QueueRequeued {
+    /// A finished item goes around again with the reducer-resolved complete
+    /// job tuple: state resets to `Queued` and the item moves to the end of
+    /// the queue atomically. The old run's lineage is untouched; fresh
+    /// claim/run ids arrive at the next reservation.
+    QueueRetried {
         item_id: QueueItemId,
+        operation: Operation,
+        intent: AnalysisIntent,
+        output_target: OutputTarget,
+        overwrite: OverwriteDecision,
     },
     /// A pending item's job parameters, resolved to the full tuple so the
     /// fold stays structural and replay needs no patch semantics.
@@ -430,8 +435,9 @@ pub fn fold_config(state: &mut Settings, delta: &ConfigDelta) {
 pub fn fold(state: &mut DurableState, delta: &DurableDelta) {
     match delta {
         DurableDelta::QueueAdded { item } => state.queue.push(item.clone()),
-        DurableDelta::QueueRemoved { item_id } => {
-            state.queue.retain(|item| item.id != *item_id);
+        DurableDelta::QueueItemsRemoved { item_ids } => {
+            let removed = item_ids.iter().copied().collect::<BTreeSet<_>>();
+            state.queue.retain(|item| !removed.contains(&item.id));
         }
         DurableDelta::QueueMoved { item_id, before } => {
             move_item(&mut state.queue, *item_id, *before)
@@ -439,9 +445,19 @@ pub fn fold(state: &mut DurableState, delta: &DurableDelta) {
         DurableDelta::QueueReordered { pending_order } => {
             reorder_pending(&mut state.queue, pending_order)
         }
-        DurableDelta::QueueRequeued { item_id } => {
+        DurableDelta::QueueRetried {
+            item_id,
+            operation,
+            intent,
+            output_target,
+            overwrite,
+        } => {
             if let Some(source) = state.queue.iter().position(|item| item.id == *item_id) {
                 let mut item = state.queue.remove(source);
+                item.operation = *operation;
+                item.intent = *intent;
+                item.output_target = output_target.clone();
+                item.overwrite = *overwrite;
                 item.state = QueueItemState::Queued;
                 state.queue.push(item);
             }

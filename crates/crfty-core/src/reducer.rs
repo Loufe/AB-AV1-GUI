@@ -1,3 +1,4 @@
+use std::collections::BTreeSet;
 use std::path::PathBuf;
 
 use serde::{Deserialize, Serialize};
@@ -59,12 +60,11 @@ pub enum QueueCommand {
     /// counted into one [`EphemeralDelta::QueueAddSummary`]. A single add is
     /// a one-element batch. Adds are append-only and allowed in every
     /// session state.
-    AddMany {
-        requests: Vec<QueueAddRequest>,
-    },
-    Remove {
-        item_id: QueueItemId,
-    },
+    AddMany { requests: Vec<QueueAddRequest> },
+    /// Atomically removes a non-empty, distinct set of pending or finished
+    /// items. The whole request rejects if any id is duplicate, unknown, or
+    /// active; a one-item removal uses this same surface.
+    RemoveMany { item_ids: Vec<QueueItemId> },
     Move {
         item_id: QueueItemId,
         before: Option<QueueItemId>,
@@ -72,9 +72,7 @@ pub enum QueueCommand {
     /// Atomically replaces the order of every currently queued item. The
     /// submitted ids must be an exact permutation of the pending tail, so a
     /// stale grouped move is rejected rather than partially applied.
-    ReorderPending {
-        pending_order: Vec<QueueItemId>,
-    },
+    ReorderPending { pending_order: Vec<QueueItemId> },
     /// Removes every `Queued` and `Finished` item. Idle-only — while a
     /// session runs, the queue's pending tail is the worker's feed. An empty
     /// result is an accepted no-op.
@@ -83,10 +81,15 @@ pub enum QueueCommand {
     /// until addressed (V2/HandBrake parity). Allowed while running.
     ClearCompleted,
     /// Sends a finished item around again: state resets to `Queued` in place
-    /// (no re-add) and the item moves to the end of the queue. Allowed while
-    /// running — it is a pending append, same as an add.
+    /// (no re-add) and the item moves to the end of the queue. A plain retry
+    /// is allowed while running; a patched retry is idle-only and applies its
+    /// full resolved tuple in the same durable transition as the requeue.
     Retry {
         item_id: QueueItemId,
+        /// `None` is a plain retry and stays available during a running
+        /// session. `Some`, including an empty patch, is an edit request and
+        /// therefore idle-only; the reducer resolves it before journaling.
+        patch: Option<QueueItemEdit>,
     },
     /// Rewrites a pending item's job parameters. Valid only on `Queued`
     /// items while the session is idle: a running session's rules are frozen
@@ -535,18 +538,38 @@ fn apply_queue(state: &AppState, command: QueueCommand) -> Applied {
                 .push(EphemeralDelta::QueueAddSummary { added, skipped });
             applied
         }
-        QueueCommand::Remove { item_id } => {
-            let Some(item) = find_item(state, item_id) else {
-                return Applied::rejected("queue item does not exist");
-            };
-            if !matches!(
-                item.state,
-                QueueItemState::Queued | QueueItemState::Finished(_)
-            ) {
-                return Applied::rejected("active queue item cannot be removed");
+        QueueCommand::RemoveMany { item_ids } => {
+            if item_ids.is_empty() {
+                return Applied::rejected("at least one queue item must be removed");
             }
+            let requested = item_ids.iter().copied().collect::<BTreeSet<_>>();
+            if requested.len() != item_ids.len() {
+                return Applied::rejected("queue removal contains duplicate item ids");
+            }
+            for item_id in &requested {
+                let Some(item) = find_item(state, *item_id) else {
+                    return Applied::rejected("queue item does not exist");
+                };
+                if !matches!(
+                    item.state,
+                    QueueItemState::Queued | QueueItemState::Finished(_)
+                ) {
+                    return Applied::rejected("active queue item cannot be removed");
+                }
+            }
+            // Canonical queue order makes the durable set deterministic while
+            // retaining every unselected item's relative position.
+            let item_ids = state
+                .durable
+                .queue
+                .iter()
+                .filter(|item| requested.contains(&item.id))
+                .map(|item| item.id)
+                .collect();
             let mut applied = Applied::accepted();
-            applied.durable.push(DurableDelta::QueueRemoved { item_id });
+            applied
+                .durable
+                .push(DurableDelta::QueueItemsRemoved { item_ids });
             applied
         }
         QueueCommand::Move { item_id, before } => {
@@ -613,43 +636,70 @@ fn apply_queue(state: &AppState, command: QueueCommand) -> Applied {
             if state.session != SessionState::Idle {
                 return Applied::rejected("queue can only be cleared while idle");
             }
+            let item_ids = state
+                .durable
+                .queue
+                .iter()
+                .filter(|item| {
+                    matches!(
+                        item.state,
+                        QueueItemState::Queued | QueueItemState::Finished(_)
+                    )
+                })
+                .map(|item| item.id)
+                .collect::<Vec<_>>();
             let mut applied = Applied::accepted();
-            for item in &state.durable.queue {
-                if matches!(
-                    item.state,
-                    QueueItemState::Queued | QueueItemState::Finished(_)
-                ) {
-                    applied
-                        .durable
-                        .push(DurableDelta::QueueRemoved { item_id: item.id });
-                }
+            if !item_ids.is_empty() {
+                applied
+                    .durable
+                    .push(DurableDelta::QueueItemsRemoved { item_ids });
             }
             applied
         }
         QueueCommand::ClearCompleted => {
+            let item_ids = state
+                .durable
+                .queue
+                .iter()
+                .filter(|item| {
+                    matches!(&item.state, QueueItemState::Finished(outcome)
+                        if !matches!(outcome, ItemOutcome::Failed(_)))
+                })
+                .map(|item| item.id)
+                .collect::<Vec<_>>();
             let mut applied = Applied::accepted();
-            for item in &state.durable.queue {
-                if matches!(&item.state, QueueItemState::Finished(outcome)
-                    if !matches!(outcome, ItemOutcome::Failed(_)))
-                {
-                    applied
-                        .durable
-                        .push(DurableDelta::QueueRemoved { item_id: item.id });
-                }
+            if !item_ids.is_empty() {
+                applied
+                    .durable
+                    .push(DurableDelta::QueueItemsRemoved { item_ids });
             }
             applied
         }
-        QueueCommand::Retry { item_id } => {
+        QueueCommand::Retry { item_id, patch } => {
+            if patch.is_some() && state.session != SessionState::Idle {
+                return Applied::rejected("queue items can only be edited while idle");
+            }
             let Some(item) = find_item(state, item_id) else {
                 return Applied::rejected("queue item does not exist");
             };
             if !matches!(item.state, QueueItemState::Finished(_)) {
                 return Applied::rejected("only finished items can be retried");
             }
+            let patch = patch.unwrap_or_default();
+            let operation = patch.operation.unwrap_or(item.operation);
+            let intent = patch.intent.unwrap_or(item.intent);
+            let output_target = patch
+                .output_target
+                .unwrap_or_else(|| item.output_target.clone());
+            let overwrite = patch.overwrite.unwrap_or(item.overwrite);
             let mut applied = Applied::accepted();
-            applied
-                .durable
-                .push(DurableDelta::QueueRequeued { item_id });
+            applied.durable.push(DurableDelta::QueueRetried {
+                item_id,
+                operation,
+                intent,
+                output_target,
+                overwrite,
+            });
             applied
         }
         QueueCommand::Edit { item_id, patch } => {

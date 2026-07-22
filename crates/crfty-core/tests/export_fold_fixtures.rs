@@ -76,9 +76,9 @@ fn added_with_overwrite(id: u64, overwrite: OverwriteDecision) -> DurableDelta {
     }
 }
 
-fn removed(id: u64) -> DurableDelta {
-    DurableDelta::QueueRemoved {
-        item_id: QueueItemId(id),
+fn removed(ids: &[u64]) -> DurableDelta {
+    DurableDelta::QueueItemsRemoved {
+        item_ids: ids.iter().copied().map(QueueItemId).collect(),
     }
 }
 
@@ -95,9 +95,15 @@ fn reordered(pending_order: &[u64]) -> DurableDelta {
     }
 }
 
-fn requeued(id: u64) -> DurableDelta {
-    DurableDelta::QueueRequeued {
+fn retried(id: u64) -> DurableDelta {
+    DurableDelta::QueueRetried {
         item_id: QueueItemId(id),
+        operation: Operation::Analyze,
+        intent: AnalysisIntent::Refresh,
+        output_target: OutputTarget::Suffix {
+            suffix: "_retry".to_owned(),
+        },
+        overwrite: OverwriteDecision::Allow,
     }
 }
 
@@ -439,11 +445,15 @@ fn scenarios() -> Vec<Scenario> {
             ],
         ),
         scenario(
-            "queue_removed",
+            "queue_items_removed",
             vec![added(1), added(2), added(3)],
-            vec![removed(2)],
+            vec![removed(&[1, 3])],
         ),
-        scenario("queue_removed_missing", vec![added(1)], vec![removed(9)]),
+        scenario(
+            "queue_items_removed_missing",
+            vec![added(1)],
+            vec![removed(&[9])],
+        ),
         scenario(
             "queue_moved_before",
             vec![added(1), added(2), added(3)],
@@ -471,19 +481,19 @@ fn scenarios() -> Vec<Scenario> {
         ),
         scenario(
             // The retried item resets to Queued and moves to the end.
-            "queue_requeued_resets_and_moves_to_end",
+            "queue_retried_resolves_and_moves_to_end",
             vec![
                 added(1),
                 added(2),
                 added(3),
                 finished(1, 10, 100, ItemOutcome::Stopped),
             ],
-            vec![requeued(1)],
+            vec![retried(1)],
         ),
         scenario(
-            "queue_requeued_missing_item",
+            "queue_retried_missing_item",
             vec![added(1)],
-            vec![requeued(9)],
+            vec![retried(9)],
         ),
         scenario(
             "queue_edited_rewrites_the_job_tuple",

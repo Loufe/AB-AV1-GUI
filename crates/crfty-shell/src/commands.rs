@@ -129,8 +129,11 @@ fn analysis_cancel(bridge: State<'_, Bridge>) -> Result<(), CommandError> {
 
 #[tauri::command]
 #[specta::specta]
-fn queue_remove(bridge: State<'_, Bridge>, item_id: QueueItemId) -> Result<(), CommandError> {
-    bridge.submit_queue(QueueCommand::Remove { item_id })
+fn queue_remove_many(
+    bridge: State<'_, Bridge>,
+    item_ids: Vec<QueueItemId>,
+) -> Result<(), CommandError> {
+    bridge.submit_queue(QueueCommand::RemoveMany { item_ids })
 }
 
 #[tauri::command]
@@ -168,8 +171,12 @@ fn queue_clear_completed(bridge: State<'_, Bridge>) -> Result<(), CommandError> 
 
 #[tauri::command]
 #[specta::specta]
-fn queue_retry(bridge: State<'_, Bridge>, item_id: QueueItemId) -> Result<(), CommandError> {
-    bridge.submit_queue(QueueCommand::Retry { item_id })
+fn queue_retry(
+    bridge: State<'_, Bridge>,
+    item_id: QueueItemId,
+    patch: Option<QueueItemEdit>,
+) -> Result<(), CommandError> {
+    bridge.submit_queue(QueueCommand::Retry { item_id, patch })
 }
 
 #[tauri::command]
@@ -322,7 +329,7 @@ pub fn specta_builder() -> Builder<tauri::Wry> {
             analysis_discover,
             analysis_cancel,
             queue_add_paths,
-            queue_remove,
+            queue_remove_many,
             queue_move,
             queue_reorder_pending,
             queue_clear,

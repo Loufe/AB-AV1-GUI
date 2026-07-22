@@ -9,7 +9,7 @@ import {
   queueAddPaths,
   queueClear,
   queueClearCompleted,
-  queueRemove,
+  queueRemoveMany,
   startQueue,
   stopAfterCurrent,
 } from "@/lib/ipc";
@@ -169,7 +169,7 @@ export function QueueView() {
         onAddFolder={() => addPaths("Folders", "add-folders")}
         onRemove={() => {
           if (selectedId !== null) {
-            void runAction("remove", () => queueRemove(selectedId));
+            void runAction("remove", () => queueRemoveMany([selectedId]));
           }
         }}
         onClear={() => void runAction("clear", queueClear)}

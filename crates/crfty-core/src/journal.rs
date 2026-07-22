@@ -6,7 +6,7 @@ use crate::{
     UnixMillis, fold, output::validate_output_delta, reducer::validate_terminal,
 };
 
-pub const JOURNAL_SCHEMA_VERSION: u32 = 14;
+pub const JOURNAL_SCHEMA_VERSION: u32 = 15;
 
 /// Compaction fires at an idle writer barrier when the journal is both large
 /// in absolute terms and dominated by dead upserts (#33 §10). The floor keeps
@@ -314,16 +314,28 @@ fn validate_replayed_delta(state: &DurableState, delta: &DurableDelta) -> Result
                 return Err("new queue item is not queued");
             }
         }
-        DurableDelta::QueueRemoved { item_id } => {
-            let removable = state.queue.iter().any(|item| {
-                item.id == *item_id
-                    && matches!(
-                        item.state,
-                        QueueItemState::Queued | QueueItemState::Finished(_)
-                    )
-            });
-            if !removable {
-                return Err("removed queue item does not exist or is active");
+        DurableDelta::QueueItemsRemoved { item_ids } => {
+            if item_ids.is_empty() {
+                return Err("queue removal set is empty");
+            }
+            let distinct = item_ids
+                .iter()
+                .copied()
+                .collect::<std::collections::BTreeSet<_>>();
+            if distinct.len() != item_ids.len() {
+                return Err("queue removal set contains duplicate ids");
+            }
+            for item_id in item_ids {
+                let removable = state.queue.iter().any(|item| {
+                    item.id == *item_id
+                        && matches!(
+                            item.state,
+                            QueueItemState::Queued | QueueItemState::Finished(_)
+                        )
+                });
+                if !removable {
+                    return Err("removed queue item does not exist or is active");
+                }
             }
         }
         DurableDelta::QueueMoved { item_id, before } => {
@@ -343,12 +355,12 @@ fn validate_replayed_delta(state: &DurableState, delta: &DurableDelta) -> Result
         DurableDelta::QueueReordered { pending_order } => {
             crate::state::validate_pending_order(&state.queue, pending_order)?;
         }
-        DurableDelta::QueueRequeued { item_id } => {
+        DurableDelta::QueueRetried { item_id, .. } => {
             let finished = state.queue.iter().any(|item| {
                 item.id == *item_id && matches!(item.state, QueueItemState::Finished(_))
             });
             if !finished {
-                return Err("requeued item does not exist or is not finished");
+                return Err("retried item does not exist or is not finished");
             }
         }
         DurableDelta::QueueEdited { item_id, .. } => {

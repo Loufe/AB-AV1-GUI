@@ -96,16 +96,16 @@ export async function queueClear(): Promise<void> {
   expectAccepted(await commands.queueClear(), "queue clear");
 }
 
-export async function queueRemove(itemId: QueueItemId): Promise<void> {
-  expectAccepted(await commands.queueRemove(itemId), "queue remove");
+export async function queueRemoveMany(itemIds: QueueItemId[]): Promise<void> {
+  expectAccepted(await commands.queueRemoveMany(itemIds), "queue remove");
 }
 
 export async function queueClearCompleted(): Promise<void> {
   expectAccepted(await commands.queueClearCompleted(), "clear completed");
 }
 
-export async function queueRetry(itemId: QueueItemId): Promise<void> {
-  expectAccepted(await commands.queueRetry(itemId), "queue retry");
+export async function queueRetry(itemId: QueueItemId, patch: QueueItemEdit | null): Promise<void> {
+  expectAccepted(await commands.queueRetry(itemId, patch), "queue retry");
 }
 
 export async function queueEdit(itemId: QueueItemId, patch: QueueItemEdit): Promise<void> {

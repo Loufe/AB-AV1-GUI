@@ -55,9 +55,9 @@ export function foldDurable(
   if ("QueueAdded" in delta && delta.QueueAdded !== undefined) {
     return { ...state, queue: [...state.queue, delta.QueueAdded.item] };
   }
-  if ("QueueRemoved" in delta && delta.QueueRemoved !== undefined) {
-    const { item_id } = delta.QueueRemoved;
-    return { ...state, queue: state.queue.filter((item) => item.id !== item_id) };
+  if ("QueueItemsRemoved" in delta && delta.QueueItemsRemoved !== undefined) {
+    const removed = new Set(delta.QueueItemsRemoved.item_ids);
+    return { ...state, queue: state.queue.filter((item) => !removed.has(item.id)) };
   }
   if ("QueueMoved" in delta && delta.QueueMoved !== undefined) {
     const { item_id, before } = delta.QueueMoved;
@@ -69,15 +69,15 @@ export function foldDurable(
       queue: reorderedPendingQueue(state.queue, delta.QueueReordered.pending_order),
     };
   }
-  if ("QueueRequeued" in delta && delta.QueueRequeued !== undefined) {
-    const { item_id } = delta.QueueRequeued;
+  if ("QueueRetried" in delta && delta.QueueRetried !== undefined) {
+    const { item_id, operation, intent, output_target, overwrite } = delta.QueueRetried;
     const source = state.queue.findIndex((item) => item.id === item_id);
     if (source === -1) {
       return state;
     }
     const next = [...state.queue];
     const [item] = next.splice(source, 1);
-    next.push({ ...item, state: "Queued" });
+    next.push({ ...item, operation, intent, output_target, overwrite, state: "Queued" });
     return { ...state, queue: next };
   }
   if ("QueueEdited" in delta && delta.QueueEdited !== undefined) {

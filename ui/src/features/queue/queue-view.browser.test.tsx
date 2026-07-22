@@ -316,7 +316,7 @@ describe("QueueView", () => {
 
   it("confirms remove, clear, and clear-completed before sending stable commands", async () => {
     const tauri = installTauriMock({
-      queue_remove: () => null,
+      queue_remove_many: () => null,
       queue_clear: () => null,
       queue_clear_completed: () => null,
     });
@@ -332,8 +332,8 @@ describe("QueueView", () => {
     await page.getByRole("button", { name: "Remove", exact: true }).click();
     const removeDialog = page.getByRole("alertdialog");
     await removeDialog.getByRole("button", { name: "Remove", exact: true }).click();
-    await expect.poll(() => tauri.callsFor("queue_remove").length).toBe(1);
-    expect(tauri.callsFor("queue_remove")[0]?.payload).toMatchObject({ itemId: 11 });
+    await expect.poll(() => tauri.callsFor("queue_remove_many").length).toBe(1);
+    expect(tauri.callsFor("queue_remove_many")[0]?.payload).toMatchObject({ itemIds: [11] });
 
     await page.getByRole("button", { name: "Clear Completed", exact: true }).click();
     const completedDialog = page.getByRole("alertdialog");
