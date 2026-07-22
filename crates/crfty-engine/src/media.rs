@@ -535,7 +535,9 @@ mod tests {
         VideoCodec, VideoMeta,
     };
 
-    use super::{hash_native_path, path_hash, sampled_identity, timestamp_reliability};
+    #[cfg(unix)]
+    use super::path_hash;
+    use super::{hash_native_path, sampled_identity, timestamp_reliability};
 
     static TEST_SEQUENCE: AtomicU64 = AtomicU64::new(0);
 

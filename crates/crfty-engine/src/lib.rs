@@ -20,6 +20,7 @@ pub mod logging;
 pub mod media;
 pub mod os_actions;
 pub mod output;
+pub mod process_supervisor;
 pub mod rate;
 pub mod release;
 pub mod remux;
