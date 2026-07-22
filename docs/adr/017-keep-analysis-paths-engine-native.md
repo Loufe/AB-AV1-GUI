@@ -161,3 +161,23 @@ identical.
 
 See issues #28, #42, #51, #52, #53, #55, and #56; ADR-001, ADR-004, ADR-012,
 and ADR-014.
+
+Implementation references:
+
+* Rust's [`std::fs::symlink_metadata`](https://doc.rust-lang.org/std/fs/fn.symlink_metadata.html)
+  queries an entry without following a symbolic link; Level 0 uses this at
+  traversal roots and before descending into a directory.
+* Rust's [`OsStr::to_string_lossy`](https://doc.rust-lang.org/std/ffi/struct.OsStr.html#method.to_string_lossy)
+  replaces non-Unicode data with `U+FFFD`. This is why display text carries an
+  explicit `lossy` flag and is never reused as operational identity.
+* Rust's Windows
+  [`MetadataExt::file_attributes`](https://doc.rust-lang.org/std/os/windows/fs/trait.MetadataExt.html#tymethod.file_attributes)
+  exposes native file attributes. Discovery checks
+  [`FILE_ATTRIBUTE_REPARSE_POINT`](https://learn.microsoft.com/windows/win32/fileio/file-attribute-constants#file_attribute_reparse_point)
+  so junctions and other reparse-backed directories cannot bypass the
+  no-follow rule.
+* [dua-cli](https://github.com/Byron/dua-cli#limitations) is comparable Rust
+  filesystem UI prior art: it may display symbolic-link entries but does not
+  follow them during traversal. CRFty currently takes the stricter permitted
+  option of omitting nested link/reparse entries while retaining directly
+  configured roots as typed traversal failures.

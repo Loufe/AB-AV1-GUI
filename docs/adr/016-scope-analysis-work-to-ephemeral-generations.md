@@ -160,3 +160,22 @@ prediction/confidence fields to streamed rows after Basic Scan facts land.
 See issues #42, #53, #55, #56, #57, and #59; ADR-002, ADR-004, ADR-006,
 ADR-007, and ADR-012. ADR-015 is reserved by #52 for imported-history
 projection and provenance decisions.
+
+Implementation references:
+
+* Rust's [`std::fs::read_dir`](https://doc.rust-lang.org/std/fs/fn.read_dir.html)
+  documentation specifies that entry order is platform/filesystem dependent,
+  may change between calls, and must be explicitly sorted for reproducible
+  output. It also notes that advancing the iterator can independently fail.
+* [`walkdir::WalkDir`](https://docs.rs/walkdir/latest/walkdir/struct.WalkDir.html)
+  demonstrates the standard iterator-of-results error model and link-following
+  controls, but its depth-first traversal does not provide this ADR's
+  breadth-first row-allocation contract.
+* [`ignore::WalkBuilder`](https://docs.rs/ignore/latest/ignore/struct.WalkBuilder.html)
+  is useful prior art for non-followed links and iterator/visitor traversal.
+  Its ignore-file, hidden-file, and glob semantics are intentionally not part
+  of Analysis discovery.
+* [ripgrep's deterministic-output discussion](https://github.com/BurntSushi/ripgrep/blob/master/FAQ.md#how-can-i-get-results-in-a-consistent-order)
+  documents that its sorted output disables parallel traversal. Level 0 makes
+  the same ordering-over-parallelism tradeoff because stable row IDs and
+  batches are part of the public contract.
