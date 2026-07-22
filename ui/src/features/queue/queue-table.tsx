@@ -1,4 +1,4 @@
-import { DragDropProvider, DragOverlay } from "@dnd-kit/react";
+import { DragDropProvider, DragOverlay, useDragDropManager } from "@dnd-kit/react";
 import { isSortableOperation, useSortable } from "@dnd-kit/react/sortable";
 import {
   Accessibility,
@@ -6,6 +6,7 @@ import {
   type DragOverEvent,
   type DragStartEvent,
 } from "@dnd-kit/dom";
+import { useEffect } from "react";
 
 import { TooltipProvider } from "@/components/ui";
 import type { QueueItemId } from "@/lib/bindings";
@@ -270,6 +271,17 @@ function SortableFolderHeader({
   );
 }
 
+function ActiveDragCancellation({ requested }: { requested: boolean }) {
+  const manager = useDragDropManager();
+
+  useEffect(() => {
+    if (!requested || manager?.dragOperation.source == null) return;
+    manager.actions.stop({ canceled: true });
+  }, [manager, requested]);
+
+  return null;
+}
+
 export function QueueTable({
   rows,
   grouped,
@@ -279,6 +291,7 @@ export function QueueTable({
   onDragStart,
   onDragCancel,
   onDragNoop,
+  cancelActiveDrag,
   reorderEnabled,
   actionsDisabled,
   editingAllowed,
@@ -294,6 +307,7 @@ export function QueueTable({
   onDragStart: (focus: QueueReorderFocus) => void;
   onDragCancel: () => void;
   onDragNoop: () => void;
+  cancelActiveDrag: boolean;
   reorderEnabled: boolean;
   actionsDisabled: boolean;
   editingAllowed: boolean;
@@ -514,6 +528,7 @@ export function QueueTable({
         queueMicrotask(() => onPlan(plan, focus));
       }}
     >
+      <ActiveDragCancellation requested={cancelActiveDrag} />
       {table}
       <DragOverlay dropAnimation={null}>
         {(source) => {

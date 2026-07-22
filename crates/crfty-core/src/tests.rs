@@ -2646,6 +2646,96 @@ fn replay_rejects_an_entire_semantically_invalid_batch() {
 }
 
 #[test]
+fn replay_rejects_invalid_queue_output_targets_before_folding() {
+    let invalid_target = || OutputTarget::Suffix {
+        suffix: "../escape".to_owned(),
+    };
+
+    let mut invalid_add = queue_added_delta(1, "one.mkv");
+    let DurableDelta::QueueAdded { item } = &mut invalid_add else {
+        panic!("queue fixture must add an item");
+    };
+    item.output_target = invalid_target();
+    let replayed = replay(
+        &encode_record(&JournalEnvelope {
+            sequence: JournalSequence(0),
+            deltas: vec![invalid_add],
+        })
+        .expect("invalid add record"),
+    );
+    assert!(replayed.corruption.is_some());
+    assert!(replayed.state.queue.is_empty());
+
+    let replayed = replay(
+        &encode_record(&JournalEnvelope {
+            sequence: JournalSequence(0),
+            deltas: vec![
+                queue_added_delta(1, "one.mkv"),
+                DurableDelta::QueueEdited {
+                    item_id: QueueItemId(1),
+                    operation: Operation::Convert,
+                    intent: AnalysisIntent::ReuseIfFresh,
+                    output_target: invalid_target(),
+                    overwrite: OverwriteDecision::FollowSettings,
+                },
+            ],
+        })
+        .expect("invalid edit record"),
+    );
+    assert!(replayed.corruption.is_some());
+    assert!(replayed.state.queue.is_empty());
+
+    let mut bytes = encode_record(&JournalEnvelope {
+        sequence: JournalSequence(0),
+        deltas: vec![
+            queue_added_delta(1, "one.mkv"),
+            DurableDelta::ItemReserved {
+                job: Box::new(crate::ReservedJob {
+                    item_id: QueueItemId(1),
+                    claim_id: ClaimId(2),
+                    run_id: RunId(3),
+                    input: PathBuf::from("one.mkv"),
+                    operation: Operation::Convert,
+                    intent: AnalysisIntent::ReuseIfFresh,
+                    output_target: OutputTarget::Replace,
+                }),
+            },
+            DurableDelta::ItemFinished {
+                item_id: QueueItemId(1),
+                claim_id: ClaimId(2),
+                run_id: RunId(3),
+                outcome: ItemOutcome::Stopped,
+                at: UnixMillis(1_000),
+                phase_spans: Vec::new(),
+            },
+        ],
+    })
+    .expect("finished item record");
+    bytes.extend(
+        encode_record(&JournalEnvelope {
+            sequence: JournalSequence(1),
+            deltas: vec![DurableDelta::QueueRetried {
+                item_id: QueueItemId(1),
+                operation: Operation::Convert,
+                intent: AnalysisIntent::ReuseIfFresh,
+                output_target: invalid_target(),
+                overwrite: OverwriteDecision::FollowSettings,
+            }],
+        })
+        .expect("invalid retry record"),
+    );
+    let replayed = replay(&bytes);
+    assert!(replayed.corruption.is_some());
+    assert!(
+        replayed
+            .state
+            .queue
+            .first()
+            .is_some_and(|item| matches!(item.state, QueueItemState::Finished(_)))
+    );
+}
+
+#[test]
 fn replay_rejects_adoption_when_carried_facts_do_not_match_parked_record() {
     let import_path = ImportPath("c:/videos/imported.mkv".to_owned());
     let parked = parked_record(ParkedStatus::Converted);

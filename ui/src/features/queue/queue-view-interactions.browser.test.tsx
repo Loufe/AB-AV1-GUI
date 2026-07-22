@@ -243,6 +243,38 @@ describe("QueueView interaction protocol", () => {
     expect(tauri.callsFor("queue_remove_many")).toHaveLength(1);
   });
 
+  it("restores authoritative text after empty or rejected output edits", async () => {
+    const tauri = installTauriMock();
+    tauri.rejectCommand("queue_edit", { code: "rejected", message: "invalid output target" });
+    const suffixItem = item(8, "edit.mkv");
+    await renderApp(<QueueView />, {
+      appState: { durable: durable([suffixItem]), settings: settings(), tools: tools() },
+    });
+    await page.getByRole("row", { name: /edit\.mkv/ }).click();
+
+    const suffix = page.getByRole("textbox", { name: "Output suffix" });
+    await userEvent.fill(suffix, "../escape");
+    await userEvent.tab();
+    await expect.element(page.getByRole("alert")).toHaveTextContent("invalid output target");
+    await expect.element(suffix).toHaveValue("_av1");
+
+    const folderItem: QueueItem = {
+      ...suffixItem,
+      output_target: {
+        SeparateFolder: { directory: "D:\\Old", source_root: "C:\\Videos" },
+      },
+    };
+    replaceQueue([folderItem]);
+    const folder = page.getByRole("textbox", { name: "Output folder" });
+    await userEvent.fill(folder, "D:\\Rejected");
+    await userEvent.tab();
+    await expect.element(folder).toHaveValue("D:\\Old");
+
+    await userEvent.fill(folder, "   ");
+    await userEvent.tab();
+    await expect.element(folder).toHaveValue("D:\\Old");
+  });
+
   it("preserves output facts across Analyze and edits every tri-state recovery choice", async () => {
     const tauri = installTauriMock({
       queue_edit: () => null,

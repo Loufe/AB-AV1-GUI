@@ -79,6 +79,8 @@ type ReorderInteraction =
       plan: Exclude<QueueReorderPlan, { kind: "noop" }>;
       focus: QueueReorderFocus;
       acknowledged: boolean;
+      rejection: string | null;
+      superseded: string | null;
       baselinePending: readonly QueueItemId[];
       snapshotGeneration: number;
     };
@@ -162,7 +164,7 @@ export function QueueView() {
     );
   }, [authoritativeRows]);
   useEffect(() => {
-    if (interaction.kind === "idle" || interaction.kind === "submitting") return;
+    if (interaction.kind !== "confirming") return;
     if (interaction.snapshotGeneration === snapshotGeneration) return;
     const focus = interaction.focus;
     setInteraction({ kind: "idle" });
@@ -183,17 +185,33 @@ export function QueueView() {
   }, [authoritativeRows, interaction]);
   useEffect(() => {
     if (interaction.kind !== "submitting") return;
+    if (interaction.rejection !== null) {
+      const focus = interaction.focus;
+      if (interaction.superseded === null) {
+        setActionError(interaction.rejection);
+        toast.error(interaction.rejection);
+        setAnnouncement(`Queue error: ${interaction.rejection}`);
+      }
+      setInteraction({ kind: "idle" });
+      restoreReorderFocus(focus);
+      return;
+    }
+    if (interaction.superseded !== null) {
+      if (!interaction.acknowledged) return;
+      const focus = interaction.focus;
+      setInteraction({ kind: "idle" });
+      restoreReorderFocus(focus);
+      return;
+    }
     const authoritativePending = pendingQueueIds(authoritativeRows);
     const expectedMembership = [...interaction.plan.pendingOrder].sort((a, b) => a - b);
     const actualMembership = [...authoritativePending].sort((a, b) => a - b);
     if (!sameIds(expectedMembership, actualMembership)) {
       const message = "Queue changed before the move completed; the latest order was restored.";
-      const focus = interaction.focus;
-      setInteraction({ kind: "idle" });
+      setInteraction({ ...interaction, superseded: message });
       setActionError(message);
       toast.error(message);
       setAnnouncement(`Queue error: ${message}`);
-      restoreReorderFocus(focus);
       return;
     }
     if (
@@ -201,24 +219,20 @@ export function QueueView() {
       !sameIds(authoritativePending, interaction.plan.pendingOrder)
     ) {
       const message = `Queue snapshot changed while moving ${interaction.focus.label}; the latest order was restored.`;
-      const focus = interaction.focus;
-      setInteraction({ kind: "idle" });
+      setInteraction({ ...interaction, superseded: message });
       setActionError(message);
       toast.error(message);
       setAnnouncement(message);
-      restoreReorderFocus(focus);
       return;
     }
     if (!interaction.acknowledged) return;
     if (!sameIds(authoritativePending, interaction.plan.pendingOrder)) {
       if (sameIds(authoritativePending, interaction.baselinePending)) return;
       const message = `Queue changed while moving ${interaction.focus.label}; the latest order was restored.`;
-      const focus = interaction.focus;
-      setInteraction({ kind: "idle" });
+      setInteraction({ ...interaction, superseded: message });
       setActionError(message);
       toast.error(message);
       setAnnouncement(message);
-      restoreReorderFocus(focus);
       return;
     }
     const focus = interaction.focus;
@@ -245,6 +259,7 @@ export function QueueView() {
     interaction.kind === "dragging"
       ? [...interaction.snapshot]
       : interaction.kind === "submitting" &&
+          interaction.superseded === null &&
           interaction.snapshotGeneration === snapshotGeneration &&
           submittingMembershipMatches
         ? plannedRows(authoritativeRows, interaction.plan.pendingOrder)
@@ -265,17 +280,19 @@ export function QueueView() {
   const runAction = async (
     action: Exclude<QueuePendingAction, null>,
     operation: () => Promise<void>,
-  ) => {
+  ): Promise<boolean> => {
     setActionError(null);
     setPendingAction(action);
     try {
       await operation();
+      return true;
     } catch (error: unknown) {
       console.error(`Queue action ${action} failed`, error);
       const message = error instanceof Error ? error.message : "The Queue action failed.";
       setActionError(message);
       toast.error(message);
       setAnnouncement(`Queue error: ${message}`);
+      return false;
     } finally {
       setPendingAction(null);
     }
@@ -291,6 +308,8 @@ export function QueueView() {
       plan,
       focus,
       acknowledged: false,
+      rejection: null,
+      superseded: null,
       baselinePending: pendingQueueIds(authoritativeRows),
       snapshotGeneration: planSnapshotGeneration,
     });
@@ -307,11 +326,11 @@ export function QueueView() {
         console.error("Queue reorder failed", error);
         const message =
           error instanceof Error ? error.message : "Queue order changed; try the move again.";
-        setInteraction({ kind: "idle" });
-        setActionError(message);
-        toast.error(message);
-        setAnnouncement(`Queue error: ${message}`);
-        restoreReorderFocus(focus);
+        setInteraction((current) =>
+          current.kind === "submitting" && current.plan === plan
+            ? { ...current, rejection: message }
+            : current,
+        );
       });
   };
   const handlePlan = (plan: QueueReorderPlan, focus: QueueReorderFocus) => {
@@ -360,8 +379,9 @@ export function QueueView() {
       if (paths.length > 0)
         await queueAddPaths(paths, "Convert", "ReuseIfFresh", configuredOutputTarget(settings));
     });
-  const editSelected = (patch: QueueItemEdit) => {
-    if (selected !== null) void runAction("edit", () => queueEdit(selected.item.id, patch));
+  const editSelected = async (patch: QueueItemEdit): Promise<boolean> => {
+    if (selected === null) return false;
+    return runAction("edit", () => queueEdit(selected.item.id, patch));
   };
   const recoverSelected = (operation: Operation) => {
     if (selected === null) return;
@@ -525,12 +545,17 @@ export function QueueView() {
               })
             }
             onDragCancel={() => {
+              const snapshotChanged =
+                interaction.kind === "dragging" &&
+                interaction.snapshotGeneration !== snapshotGeneration;
               if (interaction.kind === "dragging") restoreReorderFocus(interaction.focus);
               setInteraction({ kind: "idle" });
               setAnnouncement(
-                interaction.kind === "dragging"
-                  ? `Cancelled moving ${interaction.focus.label}`
-                  : "Move cancelled",
+                snapshotChanged
+                  ? `Queue snapshot changed; cancelled moving ${interaction.focus.label}`
+                  : interaction.kind === "dragging"
+                    ? `Cancelled moving ${interaction.focus.label}`
+                    : "Move cancelled",
               );
             }}
             onDragNoop={() => {
@@ -542,6 +567,10 @@ export function QueueView() {
               }
               setInteraction({ kind: "idle" });
             }}
+            cancelActiveDrag={
+              interaction.kind === "dragging" &&
+              interaction.snapshotGeneration !== snapshotGeneration
+            }
             reorderEnabled={
               healthReason === null &&
               settings !== null &&

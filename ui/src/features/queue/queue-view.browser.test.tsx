@@ -532,7 +532,9 @@ describe("QueueView", () => {
     }));
     await expect.element(page.getByRole("row", { name: /added\.mkv/ })).toBeVisible();
     await expect.element(page.getByRole("alert")).toHaveTextContent("latest order was restored");
+    await expect.element(page.getByRole("button", { name: "Group by folder" })).toBeDisabled();
     second.resolve(null);
+    await expect.element(page.getByRole("button", { name: "Group by folder" })).toBeEnabled();
   });
 
   it("uses atomic recovery and keeps Open failures local and operator-visible", async () => {

@@ -313,6 +313,7 @@ fn validate_replayed_delta(state: &DurableState, delta: &DurableDelta) -> Result
             if !matches!(item.state, QueueItemState::Queued) {
                 return Err("new queue item is not queued");
             }
+            item.output_target.validate()?;
         }
         DurableDelta::QueueItemsRemoved { item_ids } => {
             if item_ids.is_empty() {
@@ -341,15 +342,24 @@ fn validate_replayed_delta(state: &DurableState, delta: &DurableDelta) -> Result
         DurableDelta::QueueReordered { pending_order } => {
             crate::state::validate_pending_order(&state.queue, pending_order)?;
         }
-        DurableDelta::QueueRetried { item_id, .. } => {
+        DurableDelta::QueueRetried {
+            item_id,
+            output_target,
+            ..
+        } => {
             let finished = state.queue.iter().any(|item| {
                 item.id == *item_id && matches!(item.state, QueueItemState::Finished(_))
             });
             if !finished {
                 return Err("retried item does not exist or is not finished");
             }
+            output_target.validate()?;
         }
-        DurableDelta::QueueEdited { item_id, .. } => {
+        DurableDelta::QueueEdited {
+            item_id,
+            output_target,
+            ..
+        } => {
             let queued = state
                 .queue
                 .iter()
@@ -357,6 +367,7 @@ fn validate_replayed_delta(state: &DurableState, delta: &DurableDelta) -> Result
             if !queued {
                 return Err("edited item does not exist or is not queued");
             }
+            output_target.validate()?;
         }
         DurableDelta::ItemReserved { job } => {
             let matches_item = state.queue.iter().any(|item| {

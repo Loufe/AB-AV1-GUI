@@ -63,7 +63,7 @@ export function SelectionCard({
   canRetry: boolean;
   suffixDefault: string | null;
   separateFolderDefault: string | null;
-  onEdit: (patch: QueueItemEdit) => void;
+  onEdit: (patch: QueueItemEdit) => Promise<boolean>;
   onRetry: () => void;
   onRecover: (operation: Operation) => void;
   onOpen: () => void;
@@ -105,7 +105,9 @@ export function SelectionCard({
           <Select
             value={item.operation}
             disabled={!editable || busy}
-            onValueChange={(value) => onEdit({ ...emptyEdit(), operation: value as Operation })}
+            onValueChange={(value) => {
+              void onEdit({ ...emptyEdit(), operation: value as Operation });
+            }}
           >
             <SelectTrigger size="sm" aria-label="Operation">
               <SelectValue />
@@ -145,7 +147,7 @@ export function SelectionCard({
                               },
                             };
                   }
-                  onEdit({ ...emptyEdit(), output_target });
+                  void onEdit({ ...emptyEdit(), output_target });
                 }}
               >
                 <SelectTrigger size="sm" aria-label="Output target">
@@ -179,11 +181,18 @@ export function SelectionCard({
                   defaultValue={suffixTarget.suffix}
                   disabled={!editable || busy}
                   onBlur={(event) => {
-                    const suffix = event.currentTarget.value;
-                    if (suffix.length === 0 || suffix === suffixTarget.suffix) return;
-                    onEdit({
+                    const input = event.currentTarget;
+                    const suffix = input.value;
+                    if (suffix === suffixTarget.suffix) return;
+                    if (suffix.length === 0) {
+                      input.value = suffixTarget.suffix;
+                      return;
+                    }
+                    void onEdit({
                       ...emptyEdit(),
                       output_target: { Suffix: { suffix } },
+                    }).then((accepted) => {
+                      if (!accepted) input.value = suffixTarget.suffix;
                     });
                   }}
                 />
@@ -198,10 +207,14 @@ export function SelectionCard({
                   defaultValue={separateFolderTarget.directory}
                   disabled={!editable || busy}
                   onBlur={(event) => {
-                    const directory = event.currentTarget.value;
-                    if (directory.length === 0 || directory === separateFolderTarget.directory)
+                    const input = event.currentTarget;
+                    const directory = input.value;
+                    if (directory === separateFolderTarget.directory) return;
+                    if (directory.trim().length === 0) {
+                      input.value = separateFolderTarget.directory;
                       return;
-                    onEdit({
+                    }
+                    void onEdit({
                       ...emptyEdit(),
                       output_target: {
                         SeparateFolder: {
@@ -209,6 +222,8 @@ export function SelectionCard({
                           source_root: separateFolderTarget.source_root,
                         },
                       },
+                    }).then((accepted) => {
+                      if (!accepted) input.value = separateFolderTarget.directory;
                     });
                   }}
                 />
@@ -218,9 +233,9 @@ export function SelectionCard({
               <Select
                 value={item.overwrite}
                 disabled={!editable || busy}
-                onValueChange={(value) =>
-                  onEdit({ ...emptyEdit(), overwrite: value as OverwriteDecision })
-                }
+                onValueChange={(value) => {
+                  void onEdit({ ...emptyEdit(), overwrite: value as OverwriteDecision });
+                }}
               >
                 <SelectTrigger size="sm" aria-label="Overwrite decision">
                   <SelectValue />
