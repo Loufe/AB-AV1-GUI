@@ -40,10 +40,10 @@ tracing = { version = "=0.1.44", default-features = false, features = ["std"] }
 # on the same native dialog library without widening the webview's plugin
 # permissions or re-enabling that feature.
 [target.'cfg(target_os = "linux")'.dependencies]
-rfd = { version = "=0.16.0", default-features = false, features = ["gtk3"] }
+rfd = { version = "=0.17.2", default-features = false, features = ["gtk3"] }
 
 [target.'cfg(any(target_os = "macos", target_os = "windows"))'.dependencies]
-rfd = { version = "=0.16.0", default-features = false }
+rfd = { version = "=0.17.2", default-features = false }
 
 [dev-dependencies]
 specta-typescript = "=0.0.12"
