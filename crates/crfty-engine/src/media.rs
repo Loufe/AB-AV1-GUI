@@ -5,7 +5,7 @@ use std::{
     io::{self, Read, Seek, SeekFrom},
     path::{Path, PathBuf},
     process::Command,
-    time::{SystemTime, UNIX_EPOCH},
+    time::{Duration, SystemTime, UNIX_EPOCH},
 };
 
 use blake2::{
@@ -20,7 +20,10 @@ use crfty_core::{
 };
 use serde::Deserialize;
 
-use crate::process;
+use crate::{
+    process,
+    process_supervisor::{BoundedOutput, ProcessCancellation, ProcessLimits, ProcessTerminal},
+};
 
 const CONTENT_KEY_SCHEMA: &[u8] = b"ck1";
 const CONTENT_KEY_TEXT_PREFIX: &str = "ck1:";
@@ -38,6 +41,31 @@ const MILLISECONDS_PER_SECOND: f64 = 1_000.0;
 const FULL_ROTATION_DEGREES: i16 = 360;
 const NANOSECONDS_PER_SECOND: u64 = 1_000_000_000;
 const RECENT_MTIME_WINDOW_NS: u64 = 2 * NANOSECONDS_PER_SECOND;
+const BASIC_SCAN_TIMEOUT: Duration = Duration::from_secs(30);
+const BASIC_SCAN_STDOUT_BYTES: usize = 1024 * 1024;
+const BASIC_SCAN_STDERR_BYTES: usize = 4 * 1024;
+
+#[derive(Debug)]
+pub(crate) enum SupervisedMediaError {
+    Cancelled,
+    TimedOut {
+        diagnostic: BoundedOutput,
+    },
+    Rejected {
+        diagnostic: BoundedOutput,
+    },
+    InvalidOutput {
+        detail: String,
+        diagnostic: BoundedOutput,
+    },
+    Supervision {
+        detail: String,
+        diagnostic: BoundedOutput,
+    },
+    Io(io::Error),
+    ChangedAfterProbe,
+    ChangedDuringSampling,
+}
 
 #[derive(Debug, Clone)]
 pub struct MediaInspector {
@@ -93,6 +121,35 @@ impl MediaInspector {
             },
             metadata,
         })
+    }
+
+    pub(crate) fn observe_supervised(
+        &self,
+        path: &Path,
+        cancellation: &ProcessCancellation,
+    ) -> Result<MediaObservation, SupervisedMediaError> {
+        let path_hash = path_hash(path).map_err(SupervisedMediaError::Io)?;
+        let before_probe = destructive_identity(path).map_err(SupervisedMediaError::Io)?;
+        let metadata = self.probe_supervised(path, before_probe.size, cancellation)?;
+        let after_probe = destructive_identity(path).map_err(SupervisedMediaError::Io)?;
+        if before_probe != after_probe {
+            return Err(SupervisedMediaError::ChangedAfterProbe);
+        }
+        let identity = sampled_identity_cancellable(path, &metadata, cancellation)?;
+        match observation_stability(&before_probe, &after_probe, &identity.destructive) {
+            ObservationStability::Stable => Ok(MediaObservation {
+                path_hash,
+                binding: PathBinding {
+                    identity: identity.destructive,
+                    content_key: identity.content_key,
+                },
+                metadata,
+            }),
+            ObservationStability::ChangedAfterProbe => Err(SupervisedMediaError::ChangedAfterProbe),
+            ObservationStability::ChangedDuringSampling => {
+                Err(SupervisedMediaError::ChangedDuringSampling)
+            }
+        }
     }
 
     pub fn inspect_artifact(&self, path: &Path) -> io::Result<ArtifactIdentity> {
@@ -152,76 +209,136 @@ impl MediaInspector {
                 "ffprobe rejected media artifact",
             ));
         }
-        let probe: ProbeDocument = serde_json::from_slice(&output.stdout)
-            .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error))?;
-        // All streams arrive in one probe; classify by codec_type. The first
-        // video stream matches the previous `-select_streams v:0` behavior.
-        let mut video = None;
-        let mut audio = Vec::new();
-        let mut subtitle_count = 0_u32;
-        for stream in probe.streams {
-            match stream.codec_type.as_str() {
-                "video" if video.is_none() => video = Some(stream),
-                "audio" => audio.push(AudioStreamMeta {
-                    codec: audio_codec(&stream.codec_name),
-                    channels: stream.channels,
-                }),
-                "subtitle" => subtitle_count = subtitle_count.saturating_add(1),
-                _ => {}
-            }
-        }
-        let stream = video.ok_or_else(|| {
-            io::Error::new(io::ErrorKind::InvalidData, "media has no video stream")
-        })?;
-        let format = probe
-            .format
-            .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidData, "media format is missing"))?;
-        let duration = format
-            .duration
-            .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidData, "duration is missing"))?
-            .parse::<f64>()
-            .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error))?;
-        if !duration.is_finite() || duration <= 0.0 || stream.width == 0 || stream.height == 0 {
-            return Err(io::Error::new(
-                io::ErrorKind::InvalidData,
-                "media dimensions and duration must be positive and finite",
-            ));
-        }
-        let rotation = stream
-            .side_data_list
-            .iter()
-            .find_map(|data| data.rotation)
-            .or_else(|| stream.tags.and_then(|tags| tags.rotate))
-            .unwrap_or_default()
-            .rem_euclid(FULL_ROTATION_DEGREES);
-        let codec_name = stream.codec_name.to_ascii_lowercase();
-        let codec = match codec_name.as_str() {
-            "av1" => VideoCodec::Av1,
-            "h264" => VideoCodec::H264,
-            "hevc" | "h265" => VideoCodec::Hevc,
-            "vp9" => VideoCodec::Vp9,
-            _ => VideoCodec::Other(codec_name),
-        };
-        let container = if path
-            .extension()
-            .is_some_and(|extension| extension.eq_ignore_ascii_case(OsStr::new("mkv")))
-        {
-            MediaContainer::Matroska
-        } else {
-            MediaContainer::Other(format.format_name.unwrap_or_default())
-        };
-        Ok(VideoMeta {
-            codec,
-            container,
-            width: stream.width,
-            height: stream.height,
-            rotation_degrees: rotation,
-            duration_ms: (duration * MILLISECONDS_PER_SECOND).round() as u64,
-            size_bytes,
-            audio,
-            subtitle_count,
-        })
+        parse_probe_document(path, size_bytes, &output.stdout)
     }
+
+    fn probe_supervised(
+        &self,
+        path: &Path,
+        size_bytes: u64,
+        cancellation: &ProcessCancellation,
+    ) -> Result<VideoMeta, SupervisedMediaError> {
+        let mut command = Command::new(&self.ffprobe);
+        command
+            .args([
+                "-v",
+                "error",
+                "-show_entries",
+                "stream=codec_type,codec_name,width,height,channels:stream_tags=rotate:stream_side_data=rotation:format=duration,format_name",
+                "-of",
+                "json",
+            ])
+            .arg(path);
+        let report = crate::process_supervisor::run(
+            &mut command,
+            cancellation,
+            ProcessLimits::new(
+                Some(BASIC_SCAN_TIMEOUT),
+                BASIC_SCAN_STDOUT_BYTES,
+                BASIC_SCAN_STDERR_BYTES,
+            ),
+        );
+        match report.terminal {
+            ProcessTerminal::Success(_) if report.stdout.was_truncated() => {
+                Err(SupervisedMediaError::InvalidOutput {
+                    detail: "ffprobe JSON exceeded the capture limit".to_owned(),
+                    diagnostic: report.stderr_tail,
+                })
+            }
+            ProcessTerminal::Success(_) => {
+                parse_probe_document(path, size_bytes, report.stdout.as_bytes()).map_err(|error| {
+                    SupervisedMediaError::InvalidOutput {
+                        detail: error.to_string(),
+                        diagnostic: report.stderr_tail,
+                    }
+                })
+            }
+            ProcessTerminal::ToolFailed(_) => Err(SupervisedMediaError::Rejected {
+                diagnostic: report.stderr_tail,
+            }),
+            ProcessTerminal::Cancelled => Err(SupervisedMediaError::Cancelled),
+            ProcessTerminal::TimedOut => Err(SupervisedMediaError::TimedOut {
+                diagnostic: report.stderr_tail,
+            }),
+            ProcessTerminal::SpawnFailed(failure)
+            | ProcessTerminal::SupervisionFailed(failure)
+            | ProcessTerminal::CleanupFailed(failure) => Err(SupervisedMediaError::Supervision {
+                detail: failure.message,
+                diagnostic: report.stderr_tail,
+            }),
+        }
+    }
+}
+
+fn parse_probe_document(path: &Path, size_bytes: u64, bytes: &[u8]) -> io::Result<VideoMeta> {
+    let probe: ProbeDocument = serde_json::from_slice(bytes)
+        .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error))?;
+    // All streams arrive in one probe; classify by codec_type. The first
+    // video stream matches the previous `-select_streams v:0` behavior.
+    let mut video = None;
+    let mut audio = Vec::new();
+    let mut subtitle_count = 0_u32;
+    for stream in probe.streams {
+        match stream.codec_type.as_str() {
+            "video" if video.is_none() => video = Some(stream),
+            "audio" => audio.push(AudioStreamMeta {
+                codec: audio_codec(&stream.codec_name),
+                channels: stream.channels,
+            }),
+            "subtitle" => subtitle_count = subtitle_count.saturating_add(1),
+            _ => {}
+        }
+    }
+    let stream = video
+        .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidData, "media has no video stream"))?;
+    let format = probe
+        .format
+        .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidData, "media format is missing"))?;
+    let duration = format
+        .duration
+        .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidData, "duration is missing"))?
+        .parse::<f64>()
+        .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error))?;
+    if !duration.is_finite() || duration <= 0.0 || stream.width == 0 || stream.height == 0 {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            "media dimensions and duration must be positive and finite",
+        ));
+    }
+    let rotation = stream
+        .side_data_list
+        .iter()
+        .find_map(|data| data.rotation)
+        .or_else(|| stream.tags.and_then(|tags| tags.rotate))
+        .unwrap_or_default()
+        .rem_euclid(FULL_ROTATION_DEGREES);
+    let codec_name = stream.codec_name.to_ascii_lowercase();
+    let codec = match codec_name.as_str() {
+        "av1" => VideoCodec::Av1,
+        "h264" => VideoCodec::H264,
+        "hevc" | "h265" => VideoCodec::Hevc,
+        "vp9" => VideoCodec::Vp9,
+        _ => VideoCodec::Other(codec_name),
+    };
+    let container = if path
+        .extension()
+        .is_some_and(|extension| extension.eq_ignore_ascii_case(OsStr::new("mkv")))
+    {
+        MediaContainer::Matroska
+    } else {
+        MediaContainer::Other(format.format_name.unwrap_or_default())
+    };
+    Ok(VideoMeta {
+        codec,
+        container,
+        width: stream.width,
+        height: stream.height,
+        rotation_degrees: rotation,
+        duration_ms: (duration * MILLISECONDS_PER_SECOND).round() as u64,
+        size_bytes,
+        audio,
+        subtitle_count,
+    })
 }
 
 fn audio_codec(codec_name: &str) -> AudioCodec {
@@ -303,6 +420,50 @@ pub(crate) fn timestamp_reliability(
 }
 
 fn sampled_identity(path: &Path, header: &VideoMeta) -> io::Result<ArtifactIdentity> {
+    sampled_identity_with_cancel(path, header, || false).map_err(|error| match error {
+        SampleIdentityError::Io(error) => error,
+        SampleIdentityError::Cancelled => io::Error::new(io::ErrorKind::Interrupted, "cancelled"),
+        SampleIdentityError::Changed => io::Error::new(
+            io::ErrorKind::Interrupted,
+            "artifact changed while its identity was computed",
+        ),
+    })
+}
+
+fn sampled_identity_cancellable(
+    path: &Path,
+    header: &VideoMeta,
+    cancellation: &ProcessCancellation,
+) -> Result<ArtifactIdentity, SupervisedMediaError> {
+    sampled_identity_with_cancel(path, header, || cancellation.is_cancelled()).map_err(|error| {
+        match error {
+            SampleIdentityError::Io(error) => SupervisedMediaError::Io(error),
+            SampleIdentityError::Cancelled => SupervisedMediaError::Cancelled,
+            SampleIdentityError::Changed => SupervisedMediaError::ChangedDuringSampling,
+        }
+    })
+}
+
+enum SampleIdentityError {
+    Io(io::Error),
+    Cancelled,
+    Changed,
+}
+
+impl From<io::Error> for SampleIdentityError {
+    fn from(error: io::Error) -> Self {
+        Self::Io(error)
+    }
+}
+
+fn sampled_identity_with_cancel(
+    path: &Path,
+    header: &VideoMeta,
+    mut cancelled: impl FnMut() -> bool,
+) -> Result<ArtifactIdentity, SampleIdentityError> {
+    if cancelled() {
+        return Err(SampleIdentityError::Cancelled);
+    }
     let before = std::fs::metadata(path)?;
     let before_identity = identity_from_metadata(path, &before)?;
     let mut file = std::fs::File::open(path)?;
@@ -318,21 +479,38 @@ fn sampled_identity(path: &Path, header: &VideoMeta) -> io::Result<ArtifactIdent
     digest.update(&header.height.to_le_bytes());
 
     if before.len() <= WHOLE_FILE_LIMIT {
-        let mut bytes = Vec::new();
-        file.read_to_end(&mut bytes)?;
-        digest.update(&bytes);
+        let mut bytes = [0_u8; READ_BUFFER_BYTES];
+        loop {
+            if cancelled() {
+                return Err(SampleIdentityError::Cancelled);
+            }
+            let count = file.read(&mut bytes)?;
+            if count == 0 {
+                break;
+            }
+            if let Some(chunk) = bytes.get(..count) {
+                digest.update(chunk);
+            }
+        }
     } else {
-        hash_region(&mut digest, &mut file, 0, EDGE_SAMPLE)?;
+        hash_region_cancellable(&mut digest, &mut file, 0, EDGE_SAMPLE, &mut cancelled)?;
         for numerator in QUARTER_SAMPLE_NUMERATORS {
             let raw = before.len().saturating_mul(numerator) / SAMPLE_QUARTERS;
             let offset = raw / SAMPLE_ALIGNMENT_BYTES * SAMPLE_ALIGNMENT_BYTES;
-            hash_region(&mut digest, &mut file, offset, MIDDLE_SAMPLE)?;
+            hash_region_cancellable(
+                &mut digest,
+                &mut file,
+                offset,
+                MIDDLE_SAMPLE,
+                &mut cancelled,
+            )?;
         }
-        hash_region(
+        hash_region_cancellable(
             &mut digest,
             &mut file,
             before.len().saturating_sub(EDGE_SAMPLE as u64),
             EDGE_SAMPLE,
+            &mut cancelled,
         )?;
     }
     let after = std::fs::metadata(path)?;
@@ -340,10 +518,7 @@ fn sampled_identity(path: &Path, header: &VideoMeta) -> io::Result<ArtifactIdent
     if observation_stability(&before_identity, &before_identity, &after_identity)
         != ObservationStability::Stable
     {
-        return Err(io::Error::new(
-            io::ErrorKind::Interrupted,
-            "artifact changed while its identity was computed",
-        ));
+        return Err(SampleIdentityError::Changed);
     }
     Ok(ArtifactIdentity {
         content_key: ContentKey(finalize_hex(digest, CONTENT_KEY_TEXT_PREFIX)?),
@@ -416,16 +591,30 @@ fn finalize_hex(digest: Blake2bVar, prefix: &str) -> io::Result<String> {
     Ok(encoded)
 }
 
-fn hash_region(
+const READ_BUFFER_BYTES: usize = 32 * 1024;
+
+fn hash_region_cancellable(
     digest: &mut Blake2bVar,
     file: &mut std::fs::File,
     offset: u64,
     length: usize,
-) -> io::Result<()> {
+    cancelled: &mut impl FnMut() -> bool,
+) -> Result<(), SampleIdentityError> {
     file.seek(SeekFrom::Start(offset))?;
-    let mut bytes = vec![0_u8; length];
-    file.read_exact(&mut bytes)?;
-    digest.update(&bytes);
+    let mut remaining = length;
+    let mut bytes = [0_u8; READ_BUFFER_BYTES];
+    while remaining > 0 {
+        if cancelled() {
+            return Err(SampleIdentityError::Cancelled);
+        }
+        let requested = remaining.min(bytes.len());
+        let chunk = bytes
+            .get_mut(..requested)
+            .ok_or_else(|| io::Error::other("invalid hash buffer range"))?;
+        file.read_exact(chunk)?;
+        digest.update(chunk);
+        remaining -= requested;
+    }
     Ok(())
 }
 

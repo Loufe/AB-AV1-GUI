@@ -136,16 +136,17 @@ impl From<OsActionError> for CommandError {
     }
 }
 
-impl From<crfty_engine::analysis_discovery::AnalysisDiscoveryError> for CommandError {
-    fn from(error: crfty_engine::analysis_discovery::AnalysisDiscoveryError) -> Self {
+impl From<crfty_engine::analysis::AnalysisError> for CommandError {
+    fn from(error: crfty_engine::analysis::AnalysisError) -> Self {
         match error {
-            crfty_engine::analysis_discovery::AnalysisDiscoveryError::EmptyRoots
-            | crfty_engine::analysis_discovery::AnalysisDiscoveryError::Rejected(_) => {
+            crfty_engine::analysis::AnalysisError::EmptyRoots
+            | crfty_engine::analysis::AnalysisError::Rejected(_) => {
                 Self::new("rejected", error.to_string())
             }
-            crfty_engine::analysis_discovery::AnalysisDiscoveryError::ShuttingDown
-            | crfty_engine::analysis_discovery::AnalysisDiscoveryError::Submit(_)
-            | crfty_engine::analysis_discovery::AnalysisDiscoveryError::UnexpectedReply => {
+            crfty_engine::analysis::AnalysisError::MissingTools
+            | crfty_engine::analysis::AnalysisError::ShuttingDown
+            | crfty_engine::analysis::AnalysisError::Submit(_)
+            | crfty_engine::analysis::AnalysisError::UnexpectedReply => {
                 Self::engine_unavailable(error.to_string())
             }
         }
@@ -403,9 +404,18 @@ impl Bridge {
             .map_err(CommandError::from)
     }
 
-    pub fn cancel_analysis_discovery(&self) -> Result<(), CommandError> {
+    pub fn cancel_analysis(&self) -> Result<(), CommandError> {
         self.commands()?
-            .cancel_analysis_discovery()
+            .cancel_analysis()
+            .map_err(CommandError::from)
+    }
+
+    pub fn begin_analysis_basic_scan(
+        &self,
+        generation: AnalysisGenerationId,
+    ) -> Result<(), CommandError> {
+        self.commands()?
+            .begin_analysis_basic_scan(generation)
             .map_err(CommandError::from)
     }
 
@@ -742,6 +752,7 @@ fn map_reply(reply: Result<Reply, crfty_engine::driver::SubmitError>) -> Result<
         }
         Ok(
             Reply::AnalysisStarted { .. }
+            | Reply::BasicScan(_)
             | Reply::Reserved(_)
             | Reply::Claimed(_)
             | Reply::Imported { .. },
@@ -756,8 +767,8 @@ fn map_reply(reply: Result<Reply, crfty_engine::driver::SubmitError>) -> Result<
 #[cfg(test)]
 mod tests {
     use crfty_core::{
-        AnalysisActivity, AnalysisDisplayText, AnalysisEntryKind, AnalysisGeneration,
-        AnalysisGenerationId, AnalysisRow, AnalysisRowId, JobPhase, JobProgress,
+        AnalysisActivity, AnalysisDisplayText, AnalysisFileScan, AnalysisGeneration,
+        AnalysisGenerationId, AnalysisRow, AnalysisRowEntry, AnalysisRowId, JobPhase, JobProgress,
     };
 
     use super::*;
@@ -795,7 +806,9 @@ mod tests {
         AnalysisRow {
             id: AnalysisRowId(id),
             parent: None,
-            kind: AnalysisEntryKind::File,
+            entry: AnalysisRowEntry::File {
+                scan: AnalysisFileScan::Discovered,
+            },
             display_name: AnalysisDisplayText {
                 text: format!("row-{id}"),
                 lossy: false,
@@ -804,7 +817,6 @@ mod tests {
                 text: format!("root/row-{id}"),
                 lossy: false,
             },
-            directory_failure: None,
         }
     }
 

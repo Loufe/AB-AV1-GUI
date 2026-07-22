@@ -16,6 +16,7 @@ export const commands = {
 	 *  reducer-allocated generation; bounded row batches arrive on the stream.
 	 */
 	analysisDiscover: (roots: string[]) => typedError<AnalysisGenerationId, CommandError>(__TAURI_INVOKE("analysis_discover", { roots })),
+	analysisBasicScan: (generation: AnalysisGenerationId) => typedError<null, CommandError>(__TAURI_INVOKE("analysis_basic_scan", { generation })),
 	analysisCancel: () => typedError<null, CommandError>(__TAURI_INVOKE("analysis_cancel")),
 	/**
 	 *  Adds files and folders in one batch: folders expand through the engine
@@ -139,6 +140,12 @@ export type AnalysisDelta_Serialize = ({ Reset: {
 	activity: AnalysisActivity,
 } }) & { Reset?: never; RowsUpserted?: never };
 
+/**  Bounded, path-scrubbed diagnostic output from one ffprobe invocation. */
+export type AnalysisDiagnosticTail = {
+	text: string,
+	truncated: boolean,
+};
+
 /**
  *  A directory-local Level-0 failure. The generation continues after every
  *  variant: this is standing row state, not a generation-wide terminal error.
@@ -159,7 +166,23 @@ export type AnalysisDisplayText = {
 	lossy: boolean,
 };
 
-export type AnalysisEntryKind = "Folder" | "File";
+/**
+ *  Standing Level-1 result for a discovered file. Imported analyses remain
+ *  durable provenance on the selected `FileRecord`; they are intentionally
+ *  not copied into this ephemeral row as reusable evidence.
+ */
+export type AnalysisFileScan = "Discovered" | ({ Scanned: {
+	content_key: ContentKey,
+	metadata: VideoMeta,
+	refresh_failure: AnalysisScanFailure | null,
+} }) & { Failed?: never; SettledOutput?: never } | ({ SettledOutput: {
+	source_content_key: ContentKey,
+	output_content_key: ContentKey,
+	metadata: VideoMeta | null,
+	refresh_failure: AnalysisScanFailure | null,
+} }) & { Failed?: never; Scanned?: never } | ({ Failed: {
+	failure: AnalysisScanFailure,
+} }) & { Scanned?: never; SettledOutput?: never };
 
 /**
  *  One generation's standing public state. Native paths and execution
@@ -231,20 +254,43 @@ export type AnalysisResult = {
 };
 
 /**
- *  Level-0 row facts only. Media facts, applicability, predictions, and
- *  non-discovery failures extend the Analysis read model in their owning
- *  child issues.
+ *  Generation-scoped row facts. Mutually exclusive folder and file state is
+ *  represented by a tagged enum rather than nullable cross-variant fields.
  */
 export type AnalysisRow = {
 	id: AnalysisRowId,
 	parent: AnalysisRowId | null,
-	kind: AnalysisEntryKind,
+	entry: AnalysisRowEntry,
 	display_name: AnalysisDisplayText,
 	display_path: AnalysisDisplayText,
-	directory_failure: AnalysisDirectoryFailure | null,
 };
 
+export type AnalysisRowEntry = ({ Folder: {
+	failure: AnalysisDirectoryFailure | null,
+} }) & { File?: never } | ({ File: {
+	scan: AnalysisFileScan,
+} }) & { Folder?: never };
+
 export type AnalysisRowId = number;
+
+/**
+ *  A file-local Basic Scan failure. One row failing never aborts its
+ *  generation; infrastructure failures that prevent the pool from making
+ *  progress remain generation-wide failures.
+ */
+export type AnalysisScanFailure = "Missing" | ({ Unavailable: {
+	detail: string,
+} }) & { InvalidOutput?: never; Rejected?: never; Supervision?: never; TimedOut?: never } | ({ TimedOut: {
+	diagnostic: AnalysisDiagnosticTail,
+} }) & { InvalidOutput?: never; Rejected?: never; Supervision?: never; Unavailable?: never } | ({ Rejected: {
+	diagnostic: AnalysisDiagnosticTail,
+} }) & { InvalidOutput?: never; Supervision?: never; TimedOut?: never; Unavailable?: never } | ({ InvalidOutput: {
+	detail: string,
+	diagnostic: AnalysisDiagnosticTail,
+} }) & { Rejected?: never; Supervision?: never; TimedOut?: never; Unavailable?: never } | ({ Supervision: {
+	detail: string,
+	diagnostic: AnalysisDiagnosticTail,
+} }) & { InvalidOutput?: never; Rejected?: never; TimedOut?: never; Unavailable?: never } | "ChangedAfterProbe" | "ChangedDuringSampling";
 
 /**
  *  Standing Analysis state. It is reducer-owned and replayed on subscribe,

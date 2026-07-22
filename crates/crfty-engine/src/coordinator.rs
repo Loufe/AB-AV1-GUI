@@ -219,7 +219,7 @@ pub struct EngineRuntime {
     driver: Option<DriverHandle>,
     supervisor: Option<thread::JoinHandle<()>>,
     event_forwarder: Option<thread::JoinHandle<()>>,
-    analysis: Option<Arc<crate::analysis_discovery::AnalysisDiscoveryRuntime>>,
+    analysis: Option<Arc<crate::analysis::AnalysisRuntime>>,
     runtime: Option<Arc<AbAv1Runtime>>,
 }
 
@@ -364,11 +364,13 @@ impl EngineRuntime {
             .map_err(|error| {
                 EngineStartError::Failed(format!("failed to start coordinator: {error}"))
             })?;
-        let analysis =
-            crate::analysis_discovery::AnalysisDiscoveryRuntime::start(internal_commands.clone())
-                .map_err(|error| {
-                EngineStartError::Failed(format!("failed to start Analysis discovery: {error}"))
-            })?;
+        let analysis = crate::analysis::AnalysisRuntime::start(
+            internal_commands.clone(),
+            Arc::clone(&tools_slot),
+        )
+        .map_err(|error| {
+            EngineStartError::Failed(format!("failed to start Analysis discovery: {error}"))
+        })?;
         Ok(Self {
             commands: UserCommandSender {
                 inner: internal_commands,
@@ -429,7 +431,7 @@ pub struct ImportSummary {
 #[derive(Clone)]
 pub struct UserCommandSender {
     inner: CommandSender,
-    analysis: Arc<crate::analysis_discovery::AnalysisDiscoveryRuntime>,
+    analysis: Arc<crate::analysis::AnalysisRuntime>,
 }
 
 impl UserCommandSender {
@@ -437,14 +439,19 @@ impl UserCommandSender {
         &self,
         roots: Vec<PathBuf>,
         extensions: BTreeSet<VideoExtension>,
-    ) -> Result<AnalysisGenerationId, crate::analysis_discovery::AnalysisDiscoveryError> {
+    ) -> Result<AnalysisGenerationId, crate::analysis::AnalysisError> {
         self.analysis.begin(roots, extensions)
     }
 
-    pub fn cancel_analysis_discovery(
-        &self,
-    ) -> Result<(), crate::analysis_discovery::AnalysisDiscoveryError> {
+    pub fn cancel_analysis(&self) -> Result<(), crate::analysis::AnalysisError> {
         self.analysis.cancel()
+    }
+
+    pub fn begin_analysis_basic_scan(
+        &self,
+        generation: AnalysisGenerationId,
+    ) -> Result<(), crate::analysis::AnalysisError> {
+        self.analysis.begin_basic_scan(generation)
     }
 
     pub fn submit_queue(&self, command: QueueCommand) -> Result<Reply, crate::driver::SubmitError> {
@@ -495,6 +502,7 @@ impl UserCommandSender {
             Reply::Rejected { reason } | Reply::DurabilityUnknown { reason } => Err(reason),
             Reply::Accepted
             | Reply::AnalysisStarted { .. }
+            | Reply::BasicScan(_)
             | Reply::Reserved(_)
             | Reply::Claimed(_) => Err("import command returned an invalid reply".to_owned()),
         }
@@ -1195,6 +1203,7 @@ fn run_session(
             Ok(
                 Reply::Accepted
                 | Reply::AnalysisStarted { .. }
+                | Reply::BasicScan(_)
                 | Reply::Claimed(_)
                 | Reply::Imported { .. },
             ) => {
@@ -1255,6 +1264,7 @@ fn run_session(
             Ok(
                 Reply::Accepted
                 | Reply::AnalysisStarted { .. }
+                | Reply::BasicScan(_)
                 | Reply::Claimed(None)
                 | Reply::Reserved(_)
                 | Reply::Imported { .. },

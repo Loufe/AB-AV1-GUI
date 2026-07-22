@@ -37,7 +37,10 @@ totals and live speed/ETA telemetry, open/reveal desktop actions round out
 the shell commands, and the public event stream is bounded — on overflow it
 severs observably instead of blocking the driver, with reconnect-and-refold
 as the recovery. What remains is growing the views over the store — History,
-Statistics, Analysis, and the final Queue integration.
+Statistics, and the final Queue integration. Analysis already has
+generation-scoped streaming discovery plus the bounded, cancellable
+[Basic Scan pipeline](docs/ANALYSIS.md); later tiers add estimates, actions,
+and presentation over those facts.
 
 ## Workspace
 

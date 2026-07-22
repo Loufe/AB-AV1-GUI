@@ -124,7 +124,16 @@ fn analysis_discover(
 #[tauri::command]
 #[specta::specta]
 fn analysis_cancel(bridge: State<'_, Bridge>) -> Result<(), CommandError> {
-    bridge.cancel_analysis_discovery()
+    bridge.cancel_analysis()
+}
+
+#[tauri::command]
+#[specta::specta]
+fn analysis_basic_scan(
+    bridge: State<'_, Bridge>,
+    generation: AnalysisGenerationId,
+) -> Result<(), CommandError> {
+    bridge.begin_analysis_basic_scan(generation)
 }
 
 #[tauri::command]
@@ -327,6 +336,7 @@ pub fn specta_builder() -> Builder<tauri::Wry> {
             pick_paths,
             subscribe,
             analysis_discover,
+            analysis_basic_scan,
             analysis_cancel,
             queue_add_paths,
             queue_remove_many,

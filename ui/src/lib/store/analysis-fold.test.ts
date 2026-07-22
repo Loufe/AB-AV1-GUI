@@ -8,10 +8,9 @@ function row(id: number, name: string): AnalysisRow {
   return {
     id,
     parent: null,
-    kind: "File",
+    entry: { File: { scan: "Discovered" } },
     display_name: { text: name, lossy: false },
     display_path: { text: `/videos/${name}`, lossy: false },
-    directory_failure: null,
   };
 }
 

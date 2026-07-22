@@ -2,7 +2,7 @@
 //!
 //! Expands user-selected files and folders into concrete video files plus
 //! their enqueue facts (path hash and destructive identity). Analysis Level 0
-//! deliberately uses `analysis_discovery` instead: queue adds need an eager
+//! deliberately uses the generation-scoped `analysis` runtime instead: queue adds need an eager
 //! complete list and enqueue identities, while Analysis must stream native
 //! path rows without hashing.
 

@@ -202,10 +202,9 @@ describe("applyPayload", () => {
               {
                 id: 3,
                 parent: null,
-                kind: "File",
+                entry: { File: { scan: "Discovered" } },
                 display_name: { text: "movie.mkv", lossy: false },
                 display_path: { text: "/videos/movie.mkv", lossy: false },
-                directory_failure: null,
               },
             ],
           },
