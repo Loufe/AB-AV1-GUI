@@ -17,11 +17,14 @@ function row(id: number): QueueRowData {
   };
   return {
     item,
+    runId: null,
     streams: null,
     sizeBytes: null,
-    timeSec: null,
+    mediaDurationMs: null,
+    timeMs: null,
     timeConfidence: "exact",
-    preciseCrf: false,
+    crf: null,
+    vmaf: null,
     status: { kind: "queued" },
   };
 }

@@ -2,16 +2,26 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import { commands, type CorruptionSignature } from "@/lib/bindings";
 
-import { acknowledgeCorruption } from "./index";
+import { acknowledgeCorruption, queueRemove, startQueue } from "./index";
+import { pickPaths } from "./path-picker";
 import { importHistory } from "./settings";
 
 vi.mock("@tauri-apps/api/core", () => ({ Channel: class {} }));
 vi.mock("@/lib/bindings", () => ({
-  commands: { acknowledgeCorruption: vi.fn(), importHistory: vi.fn() },
+  commands: {
+    acknowledgeCorruption: vi.fn(),
+    importHistory: vi.fn(),
+    pickPaths: vi.fn(),
+    queueRemove: vi.fn(),
+    start: vi.fn(),
+  },
 }));
 
 const acknowledged = vi.mocked(commands.acknowledgeCorruption);
 const imported = vi.mocked(commands.importHistory);
+const picked = vi.mocked(commands.pickPaths);
+const removed = vi.mocked(commands.queueRemove);
+const started = vi.mocked(commands.start);
 
 function signature(): CorruptionSignature {
   return { tail_len: 24, digest: "ab12cd34" };
@@ -55,6 +65,34 @@ describe("importHistory", () => {
     });
     await expect(importHistory("history.json")).rejects.toThrow(
       "history import failed (import_failed): unsupported import file version 2",
+    );
+  });
+});
+
+describe("Queue command wrappers", () => {
+  it("passes picker intent and start directory through, including cancellation", async () => {
+    picked.mockResolvedValue({ status: "ok", data: [] });
+
+    await expect(pickPaths("Files", "C:\\Videos")).resolves.toEqual([]);
+    expect(picked).toHaveBeenCalledExactlyOnceWith("Files", "C:\\Videos");
+  });
+
+  it("passes stable QueueItemId identity to remove", async () => {
+    removed.mockResolvedValue({ status: "ok", data: null });
+
+    await queueRemove(42);
+
+    expect(removed).toHaveBeenCalledExactlyOnceWith(42);
+  });
+
+  it("surfaces a start rejection without changing frontend state", async () => {
+    started.mockResolvedValue({
+      status: "error",
+      error: { code: "rejected", message: "media tools are unavailable" },
+    });
+
+    await expect(startQueue()).rejects.toThrow(
+      "queue start failed (rejected): media tools are unavailable",
     );
   });
 });

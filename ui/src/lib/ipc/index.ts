@@ -49,6 +49,7 @@ export async function requestStatistics(utcOffsetMinutes: number): Promise<void>
     throw new Error(`statistics request failed (${result.error.code}): ${result.error.message}`);
   }
 }
+
 /**
  * Consents to discarding a corrupt journal tail. The signature must be the
  * one observed on the `Degraded` payload, echoed back verbatim — the engine
@@ -95,6 +96,10 @@ export async function queueClear(): Promise<void> {
   expectAccepted(await commands.queueClear(), "queue clear");
 }
 
+export async function queueRemove(itemId: QueueItemId): Promise<void> {
+  expectAccepted(await commands.queueRemove(itemId), "queue remove");
+}
+
 export async function queueClearCompleted(): Promise<void> {
   expectAccepted(await commands.queueClearCompleted(), "clear completed");
 }
@@ -105,6 +110,10 @@ export async function queueRetry(itemId: QueueItemId): Promise<void> {
 
 export async function queueEdit(itemId: QueueItemId, patch: QueueItemEdit): Promise<void> {
   expectAccepted(await commands.queueEdit(itemId, patch), "queue edit");
+}
+
+export async function startQueue(): Promise<void> {
+  expectAccepted(await commands.start(), "queue start");
 }
 
 export async function stopAfterCurrent(): Promise<void> {

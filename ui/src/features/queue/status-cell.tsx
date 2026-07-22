@@ -72,7 +72,14 @@ function WorkingStatus({ label, percent }: { label: string; percent: number | nu
       <span className="text-foreground">
         {label}…{percent !== null && ` ${percent}%`}
       </span>
-      <div className="h-0.5 w-full overflow-hidden rounded-full bg-muted">
+      <div
+        role="progressbar"
+        aria-label={`${label} progress`}
+        aria-valuemin={0}
+        aria-valuemax={100}
+        aria-valuenow={percent ?? undefined}
+        className="h-0.5 w-full overflow-hidden rounded-full bg-muted"
+      >
         <div
           className={cn(
             "h-full rounded-full bg-primary",
@@ -94,16 +101,28 @@ export function StatusCell({ status }: { status: RowStatus }) {
     case "working":
       return <WorkingStatus label={PHASE_LABEL[status.phase]} percent={status.percent} />;
     case "done": {
-      const label =
+      let label =
         status.outcome === "Converted"
-          ? status.savedBytes !== null
-            ? `Done · saved ${formatFileSize(status.savedBytes)}`
-            : "Done"
+          ? "Done"
           : status.outcome === "Remuxed"
             ? "Done · remuxed"
             : "Analyzed";
+      if (status.sizeDeltaBytes !== null) {
+        label +=
+          status.sizeDeltaBytes >= 0
+            ? ` · saved ${formatFileSize(status.sizeDeltaBytes)}`
+            : ` · grew ${formatFileSize(Math.abs(status.sizeDeltaBytes))}`;
+      }
       return (
-        <StatusText tone="success" icon={CircleCheck}>
+        <StatusText
+          tone="success"
+          icon={CircleCheck}
+          tooltip={
+            status.recovered
+              ? "Recovered after restart; detailed run measurements are unavailable"
+              : undefined
+          }
+        >
           {label}
         </StatusText>
       );
@@ -121,9 +140,11 @@ export function StatusCell({ status }: { status: RowStatus }) {
         <StatusText
           tone="destructive"
           icon={CircleAlert}
-          tooltip={<span className="font-mono">{status.message}</span>}
+          tooltip={
+            status.diagnostic ? <span className="font-mono">{status.diagnostic}</span> : undefined
+          }
         >
-          Error
+          Error · {status.message}
         </StatusText>
       );
   }
