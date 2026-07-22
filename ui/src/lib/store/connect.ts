@@ -54,6 +54,7 @@ export function applyPayload(payload: StreamPayload_Deserialize): void {
       ...state,
       durable,
       settings,
+      snapshotGeneration: state.snapshotGeneration + 1,
       health: { degraded: null, unavailable: null, fatal: null, secondInstance: null },
       tools: null,
       statistics: null,

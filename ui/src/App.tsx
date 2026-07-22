@@ -12,13 +12,35 @@ import { AnalysisView } from "@/features/analysis";
 import { HistoryView } from "@/features/history";
 import { QueueView } from "@/features/queue";
 import { SettingsView } from "@/features/settings";
-import { StatisticsView } from "@/features/statistics";
 import { closeAppWindow, fetchAppVersion, isTauri } from "@/lib/ipc";
 import { useAppStore } from "@/lib/store/app-store";
 import { connectStream } from "@/lib/store/connect";
 import { getTheme, setTheme, watchSystemTheme, type Theme } from "@/lib/theme";
 
 const THEME_ORDER: Theme[] = ["system", "light", "dark"];
+
+// Recharts is intentionally loaded only on the first Statistics visit. Once
+// visited, Activity retains the view and its local presentation state.
+const LazyStatisticsView = lazy(() =>
+  import("@/features/statistics").then(({ StatisticsView }) => ({ default: StatisticsView })),
+);
+
+function StatisticsRoute() {
+  return (
+    <Suspense
+      fallback={
+        <div
+          className="flex h-full items-center justify-center text-sm text-muted-foreground"
+          role="status"
+        >
+          Loading Statistics view…
+        </div>
+      }
+    >
+      <LazyStatisticsView />
+    </Suspense>
+  );
+}
 
 // Dev-only workshop (#36 D10): the DEV gate is statically replaced in
 // release builds, so the dynamic imports and their chunks are eliminated.
@@ -40,7 +62,7 @@ const VIEW_COMPONENTS: Record<ViewId, { label: string; Component: () => React.Re
   queue: { label: "Queue view", Component: QueueView },
   analysis: { label: "Analysis view", Component: AnalysisView },
   history: { label: "History view", Component: HistoryView },
-  statistics: { label: "Statistics view", Component: StatisticsView },
+  statistics: { label: "Statistics view", Component: StatisticsRoute },
   settings: { label: "Settings view", Component: SettingsView },
 };
 

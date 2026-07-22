@@ -39,6 +39,17 @@ export async function fetchAppVersion(): Promise<string> {
 }
 
 /**
+ * Ask the engine to compute Statistics using the caller's local-calendar
+ * offset. This resolves when the command is accepted; the answer arrives
+ * later on the sequenced stream and is stored by connect.ts.
+ */
+export async function requestStatistics(utcOffsetMinutes: number): Promise<void> {
+  const result = await commands.requestStatistics(utcOffsetMinutes);
+  if (result.status === "error") {
+    throw new Error(`statistics request failed (${result.error.code}): ${result.error.message}`);
+  }
+}
+/**
  * Consents to discarding a corrupt journal tail. The signature must be the
  * one observed on the `Degraded` payload, echoed back verbatim — the engine
  * rejects anything else, so a stale acknowledgement can never discard bytes

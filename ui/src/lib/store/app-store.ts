@@ -33,6 +33,8 @@ export interface AppStoreState {
   durable: DurableState_Deserialize;
   /** Null until the first snapshot arrives. */
   settings: Settings | null;
+  /** Frontend-only counter incremented for every subscribe/reconnect snapshot. */
+  snapshotGeneration: number;
   session: SessionState;
   health: Health;
   /**
@@ -65,6 +67,7 @@ export function initialAppState(): AppStoreState {
   return {
     durable: emptyDurableState(),
     settings: null,
+    snapshotGeneration: 0,
     session: "Idle",
     health: { degraded: null, unavailable: null, fatal: null, secondInstance: null },
     tools: null,
