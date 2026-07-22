@@ -1,6 +1,5 @@
 import { AnalysisSection } from "./analysis-section";
 import { D11Section } from "./d11-section";
-import { HistorySection } from "./history-section";
 import { PrimitivesSection } from "./primitives-section";
 import { TokensSection } from "./tokens-section";
 
@@ -17,7 +16,6 @@ export default function KitchenSink() {
       <PrimitivesSection />
       <D11Section />
       <AnalysisSection />
-      <HistorySection />
     </div>
   );
 }
