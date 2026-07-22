@@ -218,10 +218,7 @@ describe("History table interaction and semantics", () => {
     await userEvent.keyboard(" ");
     expect(stoppedRow.dataset.selected).toBe("true");
 
-    page
-      .getByRole("button", { name: /Sort by File/ })
-      .element()
-      .click();
+    (page.getByRole("button", { name: /Sort by File/ }).element() as HTMLButtonElement).click();
     const selectedAfterSort = page
       .getByText("stopped.mkv", { exact: true })
       .element()
@@ -230,10 +227,10 @@ describe("History table interaction and semantics", () => {
     await expect.element(selectedAfterSort as HTMLTableRowElement).toHaveFocus();
 
     const convertedFilter = page.getByRole("button", { name: "Converted · 2" });
-    convertedFilter.element().click();
+    (convertedFilter.element() as HTMLButtonElement).click();
     await expect.element(page.getByText("stopped.mkv", { exact: true })).not.toBeInTheDocument();
     await expect.element(convertedFilter).toHaveAttribute("aria-pressed", "true");
-    convertedFilter.element().click();
+    (convertedFilter.element() as HTMLButtonElement).click();
     await expect.element(page.getByText("stopped.mkv", { exact: true })).toBeVisible();
     const selectedAfterFilter = page
       .getByText("stopped.mkv", { exact: true })
