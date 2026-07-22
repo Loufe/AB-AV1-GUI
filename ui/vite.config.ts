@@ -6,6 +6,16 @@ import react from "@vitejs/plugin-react";
 import { playwright } from "@vitest/browser-playwright";
 import { defineConfig } from "vite";
 
+const DEFAULT_BROWSER_API_PORT = 63315;
+const configuredBrowserPort = Number.parseInt(
+  process.env.VITEST_BROWSER_PORT ?? String(DEFAULT_BROWSER_API_PORT),
+  10,
+);
+const browserApiPort =
+  Number.isInteger(configuredBrowserPort) && configuredBrowserPort > 0
+    ? configuredBrowserPort
+    : DEFAULT_BROWSER_API_PORT;
+
 export default defineConfig({
   plugins: [react(), tailwindcss()],
   server: {
@@ -45,6 +55,7 @@ export default defineConfig({
           browser: {
             enabled: true,
             headless: true,
+            api: { port: browserApiPort },
             screenshotFailures: false,
             provider: playwright(),
             instances: [{ browser: "chromium" }],
