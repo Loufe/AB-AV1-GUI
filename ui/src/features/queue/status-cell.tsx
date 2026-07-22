@@ -72,7 +72,14 @@ function WorkingStatus({ label, percent }: { label: string; percent: number | nu
       <span className="text-foreground">
         {label}…{percent !== null && ` ${percent}%`}
       </span>
-      <div className="h-0.5 w-full overflow-hidden rounded-full bg-muted">
+      <div
+        role="progressbar"
+        aria-label={`${label} progress`}
+        aria-valuemin={0}
+        aria-valuemax={100}
+        aria-valuenow={percent ?? undefined}
+        className="h-0.5 w-full overflow-hidden rounded-full bg-muted"
+      >
         <div
           className={cn(
             "h-full rounded-full bg-primary",

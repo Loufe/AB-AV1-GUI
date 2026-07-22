@@ -155,9 +155,15 @@ describe("QueueView", () => {
     await expect.element(page.getByText("Skipped · already AV1", { exact: true })).toBeVisible();
     await expect.element(page.getByText("Error · encoder exited", { exact: true })).toBeVisible();
 
-    await page.getByRole("row", { name: /recovered\.mkv/ }).click();
+    const recoveredRow = page.getByRole("row", { name: /recovered\.mkv/ });
+    await recoveredRow.click();
     await expect.element(page.getByText("Selection · recovered.mkv")).toBeVisible();
     await expect.element(page.getByText("—", { exact: true }).first()).toBeVisible();
+    await expect.element(recoveredRow).toHaveAttribute("aria-selected", "true");
+    const cells = recoveredRow.element().querySelectorAll(':scope > [role="cell"]');
+    expect(cells).toHaveLength(8);
+    expect(cells[1]?.textContent).toContain("recovered.mkv");
+    expect(cells[7]?.textContent).toContain("Done");
   });
 
   it("updates only live RunId facts and preserves row identity and selection", async () => {
@@ -173,12 +179,21 @@ describe("QueueView", () => {
     await expect.element(page.getByText("Selection · run.mkv")).toBeVisible();
     await expect.element(page.getByText("Analyzing… 20%", { exact: true })).toBeVisible();
     await expect
-      .element(page.getByText("VMAF 95.3 · CRF 24.25 · 2.45 fps · ETA 42s"))
+      .element(page.getByText("VMAF 95.3 · CRF 24.25 · 2.45 fps · ETA < 1m"))
       .toBeVisible();
+    await expect
+      .element(page.getByRole("progressbar", { name: "Analyzing progress" }))
+      .toHaveAttribute("aria-valuenow", "20");
+    await expect
+      .element(page.getByRole("progressbar", { name: "Analyze progress" }))
+      .toHaveAttribute("aria-valuenow", "20");
 
     progressStore.setState({ telemetry: { 9: telemetry(2, 7_800) } });
 
     await expect.element(page.getByText("Analyzing… 78%", { exact: true })).toBeVisible();
+    await expect
+      .element(page.getByRole("progressbar", { name: "Analyzing progress" }))
+      .toHaveAttribute("aria-valuenow", "78");
     await expect.element(page.getByText("Selection · run.mkv")).toBeVisible();
     expect(row.element()).toBe(rowBefore);
   });
@@ -193,6 +208,10 @@ describe("QueueView", () => {
         tools: tools(),
       },
     });
+
+    const preparing = page.getByRole("progressbar", { name: "Preparing progress" });
+    await expect.element(preparing).toBeVisible();
+    expect(preparing.element().hasAttribute("aria-valuenow")).toBe(false);
 
     await page.getByRole("button", { name: "Stop After File" }).click();
     await expect.poll(() => tauri.callsFor("stop_after_current").length).toBe(1);

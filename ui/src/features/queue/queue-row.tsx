@@ -107,28 +107,34 @@ export function QueueRow({
         isOverlay && "rounded-md border border-border bg-elevated shadow-lg",
       )}
     >
-      {handleRef ? (
-        <button
-          ref={handleRef}
-          type="button"
-          aria-label={`Reorder ${name}`}
-          className="cursor-grab justify-self-center rounded p-0.5 text-muted-foreground/50 hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none"
-        >
-          <GripVertical className="size-3.5" aria-hidden="true" />
-        </button>
-      ) : (
-        <span aria-hidden="true" />
-      )}
-      <span className="flex min-w-0 items-center gap-1.5">
+      <div role="cell" className="flex justify-center">
+        {handleRef ? (
+          <button
+            ref={handleRef}
+            type="button"
+            aria-label={`Reorder ${name}`}
+            className="cursor-grab rounded p-0.5 text-muted-foreground/50 hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none"
+          >
+            <GripVertical className="size-3.5" aria-hidden="true" />
+          </button>
+        ) : (
+          <span aria-hidden="true" />
+        )}
+      </div>
+      <div role="cell" className="flex min-w-0 items-center gap-1.5">
         <FileVideo className="size-4 shrink-0 text-muted-foreground" aria-hidden="true" />
         <span className="truncate">{name}</span>
-      </span>
-      <span className="truncate text-muted-foreground">{row.streams ?? EM_DASH}</span>
-      <span className="text-right tabular-nums">
+      </div>
+      <div role="cell" className="truncate text-muted-foreground">
+        {row.streams ?? EM_DASH}
+      </div>
+      <div role="cell" className="text-right tabular-nums">
         {row.sizeBytes !== null ? formatFileSize(row.sizeBytes) : EM_DASH}
-      </span>
-      <TimeCell durationMs={displayedTimeMs} confidence={displayedConfidence} />
-      <span className="flex items-center gap-1.5">
+      </div>
+      <div role="cell">
+        <TimeCell durationMs={displayedTimeMs} confidence={displayedConfidence} />
+      </div>
+      <div role="cell" className="flex items-center gap-1.5">
         {row.item.operation}
         {row.item.intent === "Refresh" && (
           <Tooltip>
@@ -142,11 +148,13 @@ export function QueueRow({
             <TooltipContent>Fresh analysis forced for this attempt</TooltipContent>
           </Tooltip>
         )}
-      </span>
-      <span className="text-muted-foreground">
+      </div>
+      <div role="cell" className="text-muted-foreground">
         {outputTargetLabel(row.item.operation, row.item.output_target)}
-      </span>
-      <StatusCell status={status} />
+      </div>
+      <div role="cell" className="min-w-0">
+        <StatusCell status={status} />
+      </div>
     </div>
   );
 }

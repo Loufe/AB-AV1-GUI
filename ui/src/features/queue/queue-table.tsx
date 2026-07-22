@@ -109,21 +109,23 @@ export function QueueTable({
           ),
         )}
         {/* Totals as a sticky-style footer (D11: the twin-Treeview hack dies). */}
-        <div className={cn("bg-surface py-1 text-sm font-medium", QUEUE_COLS)}>
-          <span />
-          <span>
+        <div role="row" className={cn("bg-surface py-1 text-sm font-medium", QUEUE_COLS)}>
+          <span role="cell" />
+          <span role="cell">
             Total · {rows.length} {rows.length === 1 ? "item" : "items"}
           </span>
-          <span />
-          <span className="text-right tabular-nums">
+          <span role="cell" />
+          <span role="cell" className="text-right tabular-nums">
             {totalSize > 0 ? formatFileSize(totalSize) : "—"}
           </span>
-          <span className="text-right text-muted-foreground tabular-nums">
+          <span role="cell" className="text-right text-muted-foreground tabular-nums">
             {totalTime > 0 ? formatDurationMsCompact(totalTime) : "—"}
           </span>
-          <span />
-          <span />
-          <span className="font-normal text-muted-foreground">{totalsSummary(rows)}</span>
+          <span role="cell" />
+          <span role="cell" />
+          <span role="cell" className="font-normal text-muted-foreground">
+            {totalsSummary(rows)}
+          </span>
         </div>
       </div>
     </TooltipProvider>

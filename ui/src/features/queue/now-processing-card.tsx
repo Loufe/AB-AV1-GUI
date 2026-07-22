@@ -15,7 +15,7 @@ function LabeledBar({ label, pct }: { label: string; pct: number }) {
   return (
     <div className="flex items-center gap-2">
       <span className="w-14 shrink-0 text-xs text-muted-foreground">{label}</span>
-      <Progress value={pct} className="flex-1" />
+      <Progress value={pct} aria-label={`${label} progress`} className="flex-1" />
       <span className="w-9 shrink-0 text-right text-xs tabular-nums">{pct}%</span>
     </div>
   );
