@@ -2,7 +2,8 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import { commands, type CorruptionSignature } from "@/lib/bindings";
 
-import { acknowledgeCorruption, importHistory } from "./index";
+import { acknowledgeCorruption } from "./index";
+import { importHistory } from "./settings";
 
 vi.mock("@tauri-apps/api/core", () => ({ Channel: class {} }));
 vi.mock("@/lib/bindings", () => ({
