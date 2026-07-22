@@ -11,8 +11,8 @@ function lastSeparatorIndex(path: string): number {
   return Math.max(path.lastIndexOf("/"), path.lastIndexOf("\\"));
 }
 
-function isDriveRootPrefix(prefix: string): boolean {
-  return /^(?:[\\/]{2}\?[\\/])?[A-Za-z]:$/.test(prefix);
+function isDriveRoot(parentWithSeparator: string): boolean {
+  return /^(?:[\\/]{2}\?[\\/])?[A-Za-z]:[\\/]+$/.test(parentWithSeparator);
 }
 
 function isUncShareRoot(path: string): boolean {
@@ -46,12 +46,12 @@ export function extractParentPath(input: string): ParentPath {
 
   const separator = input[separatorIndex];
   const rawPrefix = input.slice(0, separatorIndex);
+  const parentWithSeparator = input.slice(0, separatorIndex + 1);
   if (rawPrefix.length === 0) {
     return { key: separator ?? "", kind: "root", label: separator ?? "" };
   }
-  if (isDriveRootPrefix(rawPrefix)) {
-    const key = `${rawPrefix}${separator ?? ""}`;
-    return { key, kind: "root", label: key };
+  if (/^[\\/]+$/.test(rawPrefix) || isDriveRoot(parentWithSeparator)) {
+    return { key: parentWithSeparator, kind: "root", label: parentWithSeparator };
   }
 
   return {

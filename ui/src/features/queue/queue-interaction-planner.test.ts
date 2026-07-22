@@ -13,6 +13,7 @@ import {
   planSelectedMove,
   type QueueReorderPlan,
 } from "./queue-interaction-planner";
+import { applyPendingOrderToRows, fullParentRuns } from "./queue-planner.test-support";
 import type { QueueRowData } from "./queue-status";
 
 const id = (value: number) => value as QueueItemId;
@@ -146,6 +147,7 @@ describe("file and stable selected-block planning", () => {
     const plan = planPendingBlockMove(rows, ids(2), id(1), "grouped");
     expect(plan.kind).toBe("legal");
     expect(order(plan)).toEqual([id(2), id(1), id(3), id(4), id(5)]);
+    expect(fullParentRuns(applyPendingOrderToRows(rows, order(plan)))).toEqual(["/a", "/b", "/c"]);
   });
 
   it("freezes an exact ID-based cross-folder confirmation plan", () => {
@@ -153,6 +155,13 @@ describe("file and stable selected-block planning", () => {
     const plan = planPendingBlockMove(rows, selectedIds, id(4), "grouped");
     expect(plan.kind).toBe("cross-folder");
     expect(order(plan)).toEqual([id(1), id(3), id(2), id(4), id(5)]);
+    expect(fullParentRuns(applyPendingOrderToRows(rows, order(plan)))).toEqual([
+      "/a",
+      "/b",
+      "/a",
+      "/b",
+      "/c",
+    ]);
     selectedIds.add(id(5));
     expect(order(plan)).toEqual([id(1), id(3), id(2), id(4), id(5)]);
   });
@@ -166,6 +175,37 @@ describe("file and stable selected-block planning", () => {
     const plan = planPendingFileMove(repeated, id(2), null, "grouped");
     expect(plan.kind).toBe("legal");
     expect(order(plan)).toEqual([id(1), id(3), id(2)]);
+  });
+
+  it("detects fragmentation created at the frozen-prefix boundary", () => {
+    const withFrozenPrefix = [
+      row(8, "/a/frozen", { Finished: "Stopped" }),
+      row(1, "/a/1"),
+      row(2, "/b/2"),
+    ];
+    const plan = planPendingFileMove(withFrozenPrefix, id(2), id(1), "grouped");
+    expect(plan.kind).toBe("cross-folder");
+    expect(order(plan)).toEqual([id(2), id(1)]);
+    expect(fullParentRuns(applyPendingOrderToRows(withFrozenPrefix, order(plan)))).toEqual([
+      "/a",
+      "/b",
+      "/a",
+    ]);
+  });
+
+  it("allows a move that heals fragmentation at the frozen-prefix boundary", () => {
+    const withFrozenPrefix = [
+      row(8, "/a/frozen", { Finished: "Stopped" }),
+      row(1, "/b/1"),
+      row(2, "/a/2"),
+    ];
+    const plan = planPendingFileMove(withFrozenPrefix, id(2), id(1), "grouped");
+    expect(plan.kind).toBe("legal");
+    expect(order(plan)).toEqual([id(2), id(1)]);
+    expect(fullParentRuns(applyPendingOrderToRows(withFrozenPrefix, order(plan)))).toEqual([
+      "/a",
+      "/b",
+    ]);
   });
 
   it("allows a whole-parent block to move without fragmenting folders", () => {
@@ -221,20 +261,25 @@ describe("folder-run movement", () => {
       row(5, "/a/5"),
     ];
     const runs = deriveFolderRuns(rows);
-    const plan = planFolderRunMove(rows, runs[0]?.id ?? "", runs[2]?.id ?? null, "grouped");
+    const source = runs[0];
+    const target = runs[2];
+    if (source === undefined || target === undefined) throw new Error("missing test folder run");
+    const plan = planFolderRunMove(rows, source.id, target.id, "grouped");
     expect(plan.kind).toBe("legal");
     expect(order(plan)).toEqual([id(3), id(4), id(1), id(2), id(5)]);
     expect(order(plan)).not.toContain(id(8));
+    expect(fullParentRuns(applyPendingOrderToRows(rows, order(plan)))).toEqual(["/a", "/b", "/a"]);
   });
 
   it("rejects unknown and all-frozen runs", () => {
     const rows = [row(8, "/a/frozen", { Finished: "Stopped" }), row(1, "/b/1")];
     const frozenRun = deriveFolderRuns(rows)[0];
-    expect(planFolderRunMove(rows, "missing", null, "grouped")).toMatchObject({
+    expect(planFolderRunMove(rows, folderRunId("missing", id(99)), null, "grouped")).toMatchObject({
       kind: "noop",
       reason: "unknown-run",
     });
-    expect(planFolderRunMove(rows, frozenRun?.id ?? "", null, "grouped")).toMatchObject({
+    if (frozenRun === undefined) throw new Error("missing frozen test run");
+    expect(planFolderRunMove(rows, frozenRun.id, null, "grouped")).toMatchObject({
       kind: "noop",
       reason: "frozen-run",
     });

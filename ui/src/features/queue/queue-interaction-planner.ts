@@ -1,11 +1,15 @@
-import type { QueueItemId } from "@/lib/bindings";
+import type { QueueItem, QueueItemId } from "@/lib/bindings";
 
 import { extractParentPath, type ParentPath } from "./parent-path";
-import type { QueueRowData } from "./queue-status";
 
-export type FolderRunId = string;
+declare const folderRunIdBrand: unique symbol;
+export type FolderRunId = string & { readonly [folderRunIdBrand]: "FolderRunId" };
 export type QueuePresentationMode = "grouped" | "ungrouped";
 export type SelectedMoveDestination = "up" | "down" | "top" | "bottom";
+export type QueuePlannerItem = Readonly<Pick<QueueItem, "id" | "input" | "state">>;
+export interface QueuePlannerRow {
+  readonly item: QueuePlannerItem;
+}
 
 export interface FolderRun {
   id: FolderRunId;
@@ -44,16 +48,16 @@ export type QueueReorderPlan =
       movedIds: readonly QueueItemId[];
     };
 
-export function pendingQueueIds(rows: readonly QueueRowData[]): QueueItemId[] {
+export function pendingQueueIds(rows: readonly QueuePlannerRow[]): QueueItemId[] {
   return rows.filter((row) => row.item.state === "Queued").map((row) => row.item.id);
 }
 
 export function folderRunId(parentKey: string, firstItemId: QueueItemId): FolderRunId {
-  return JSON.stringify([parentKey, firstItemId]);
+  return JSON.stringify([parentKey, firstItemId]) as FolderRunId;
 }
 
 /** Derive presentation-only folder headers from contiguous authoritative rows. */
-export function deriveFolderRuns(rows: readonly QueueRowData[]): FolderRun[] {
+export function deriveFolderRuns(rows: readonly QueuePlannerRow[]): FolderRun[] {
   const runs: FolderRun[] = [];
   for (const row of rows) {
     const parent = extractParentPath(row.item.input);
@@ -80,41 +84,49 @@ function sameOrder(left: readonly QueueItemId[], right: readonly QueueItemId[]):
   return left.length === right.length && left.every((id, index) => id === right[index]);
 }
 
-function parentKeysByPendingId(rows: readonly QueueRowData[]): Map<QueueItemId, string> {
+function parentKeysById(rows: readonly QueuePlannerRow[]): Map<QueueItemId, string> {
   const keys = new Map<QueueItemId, string>();
   for (const row of rows) {
-    if (row.item.state === "Queued") {
-      keys.set(row.item.id, extractParentPath(row.item.input).key);
-    }
+    keys.set(row.item.id, extractParentPath(row.item.input).key);
   }
   return keys;
 }
 
-function parentRunCounts(
-  order: readonly QueueItemId[],
-  parentKeys: ReadonlyMap<QueueItemId, string>,
-): Map<string, number> {
+function parentRunCounts(parentSequence: readonly string[]): Map<string, number> {
   const counts = new Map<string, number>();
   let previous: string | undefined;
-  for (const id of order) {
-    const parent = parentKeys.get(id);
-    if (parent === undefined) continue;
+  for (const parent of parentSequence) {
     if (parent !== previous) counts.set(parent, (counts.get(parent) ?? 0) + 1);
     previous = parent;
   }
   return counts;
 }
 
+/** Mirror the fold: frozen relative order becomes a prefix, followed by pending order. */
+function fullParentSequence(
+  rows: readonly QueuePlannerRow[],
+  pendingOrder: readonly QueueItemId[],
+): string[] {
+  const parentKeys = parentKeysById(rows);
+  const frozenParents = rows
+    .filter((row) => row.item.state !== "Queued")
+    .map((row) => parentKeys.get(row.item.id) ?? extractParentPath(row.item.input).key);
+  const pendingParents = pendingOrder
+    .map((id) => parentKeys.get(id))
+    .filter((parent): parent is string => parent !== undefined);
+  return [...frozenParents, ...pendingParents];
+}
+
 function increasesFolderFragmentation(
+  rows: readonly QueuePlannerRow[],
   before: readonly QueueItemId[],
   after: readonly QueueItemId[],
-  parentKeys: ReadonlyMap<QueueItemId, string>,
 ): boolean {
   // Grouped presentation may already contain repeated runs of one parent.
   // A move is legal when it preserves or reduces that existing fragmentation;
   // demanding one global run here would silently turn presentation into regroup.
-  const beforeCounts = parentRunCounts(before, parentKeys);
-  const afterCounts = parentRunCounts(after, parentKeys);
+  const beforeCounts = parentRunCounts(fullParentSequence(rows, before));
+  const afterCounts = parentRunCounts(fullParentSequence(rows, after));
   for (const [parent, count] of afterCounts) {
     if (count > (beforeCounts.get(parent) ?? 0)) return true;
   }
@@ -122,17 +134,14 @@ function increasesFolderFragmentation(
 }
 
 function classifyMove(
-  rows: readonly QueueRowData[],
+  rows: readonly QueuePlannerRow[],
   before: readonly QueueItemId[],
   after: readonly QueueItemId[],
   movedIds: readonly QueueItemId[],
   mode: QueuePresentationMode,
 ): QueueReorderPlan {
   if (sameOrder(before, after)) return { kind: "noop", pendingOrder: before, reason: "identity" };
-  if (
-    mode === "grouped" &&
-    increasesFolderFragmentation(before, after, parentKeysByPendingId(rows))
-  ) {
+  if (mode === "grouped" && increasesFolderFragmentation(rows, before, after)) {
     return { kind: "cross-folder", pendingOrder: after, movedIds };
   }
   return { kind: "legal", pendingOrder: after, movedIds };
@@ -144,7 +153,7 @@ interface ValidSelection {
 }
 
 function validateSelection(
-  rows: readonly QueueRowData[],
+  rows: readonly QueuePlannerRow[],
   selectedIds: ReadonlySet<QueueItemId>,
 ): ValidSelection | QueueReorderPlan {
   const pendingOrder = pendingQueueIds(rows);
@@ -163,7 +172,7 @@ function validateSelection(
 }
 
 function moveBlockToIndex(
-  rows: readonly QueueRowData[],
+  rows: readonly QueuePlannerRow[],
   selection: ValidSelection,
   insertionIndex: number,
   mode: QueuePresentationMode,
@@ -181,7 +190,7 @@ function moveBlockToIndex(
 
 /** Plan a file or stable selected block before another pending ID, or at the end with null. */
 export function planPendingBlockMove(
-  rows: readonly QueueRowData[],
+  rows: readonly QueuePlannerRow[],
   selectedIds: ReadonlySet<QueueItemId>,
   beforeId: QueueItemId | null,
   mode: QueuePresentationMode,
@@ -201,7 +210,7 @@ export function planPendingBlockMove(
 }
 
 export function planPendingFileMove(
-  rows: readonly QueueRowData[],
+  rows: readonly QueuePlannerRow[],
   itemId: QueueItemId,
   beforeId: QueueItemId | null,
   mode: QueuePresentationMode,
@@ -211,7 +220,7 @@ export function planPendingFileMove(
 
 /** Plan click/tap Up, Down, Top, and Bottom alternatives for one stable selected block. */
 export function planSelectedMove(
-  rows: readonly QueueRowData[],
+  rows: readonly QueuePlannerRow[],
   selectedIds: ReadonlySet<QueueItemId>,
   destination: SelectedMoveDestination,
   mode: QueuePresentationMode,
@@ -237,7 +246,7 @@ export function planSelectedMove(
 
 /** Move the pending members of one contiguous presentation run as a stable block. */
 export function planFolderRunMove(
-  rows: readonly QueueRowData[],
+  rows: readonly QueuePlannerRow[],
   runId: FolderRunId,
   beforeRunId: FolderRunId | null,
   mode: QueuePresentationMode,
@@ -264,7 +273,7 @@ export function planFolderRunMove(
 }
 
 /** Folder order follows first pending appearance; within-folder order is unchanged. */
-export function planRegroupPending(rows: readonly QueueRowData[]): QueueReorderPlan {
+export function planRegroupPending(rows: readonly QueuePlannerRow[]): QueueReorderPlan {
   const pendingOrder = pendingQueueIds(rows);
   const groups = new Map<string, QueueItemId[]>();
   for (const row of rows) {
