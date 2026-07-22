@@ -1,6 +1,6 @@
 use crate::{
-    DurableDelta, DurableState, FileRecord, ImportPath, ImportedHistoryRecord, ImportedProvenance,
-    MediaObservation, ParkedResolution, resolve_parked,
+    ContentKey, DurableDelta, DurableState, FileRecord, ImportPath, ImportedHistoryRecord,
+    ImportedProvenance, MediaObservation, ParkedResolution, resolve_parked,
 };
 
 /// Parked-import effects computed while a reserved job is prepared. The
@@ -15,9 +15,11 @@ pub(crate) fn prepare_import_adoptions(
     durable: &DurableState,
     observation: Option<&MediaObservation>,
     import_paths: &[ImportPath],
+    adoption_content_key: Option<&ContentKey>,
     record: Option<&FileRecord>,
 ) -> PreparedImportAdoptions {
-    let Some(observation) = observation else {
+    let (Some(observation), Some(adoption_content_key)) = (observation, adoption_content_key)
+    else {
         return PreparedImportAdoptions {
             deltas: Vec::new(),
             effective_record: None,
@@ -70,7 +72,7 @@ pub(crate) fn prepare_import_adoptions(
                     None
                 },
                 import_path,
-                content_key: observation.binding.content_key.clone(),
+                content_key: adoption_content_key.clone(),
                 imported,
             },
             ParkedResolution::Retire => DurableDelta::ParkedRetired { import_path },
@@ -92,12 +94,12 @@ pub(crate) fn prepare_import_adoptions(
             known.verdict = Some(verdict.clone());
             Some(known)
         }
-        (Some(verdict), None) => {
+        (Some(verdict), None) if adoption_content_key == &observation.binding.content_key => {
             let mut fresh = FileRecord::new(observation.metadata.clone());
             fresh.verdict = Some(verdict.clone());
             Some(fresh)
         }
-        (None, _) => None,
+        (Some(_), None) | (None, _) => None,
     };
 
     PreparedImportAdoptions {
@@ -184,6 +186,7 @@ mod tests {
             &durable,
             Some(&observation),
             &[older, stale.clone(), newer.clone()],
+            Some(&observation.binding.content_key),
             None,
         );
 
@@ -209,7 +212,7 @@ mod tests {
     #[test]
     fn preparation_without_an_observation_has_no_import_effects() {
         let durable = DurableState::default();
-        let prepared = prepare_import_adoptions(&durable, None, &[], None);
+        let prepared = prepare_import_adoptions(&durable, None, &[], None, None);
 
         assert!(prepared.deltas.is_empty());
         assert!(prepared.effective_record.is_none());

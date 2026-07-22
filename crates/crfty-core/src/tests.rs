@@ -5,25 +5,26 @@ use proptest::prelude::*;
 use crate::reducer::validate_terminal;
 
 use crate::{
-    AnalysisActivity, AnalysisCommand, AnalysisDisplayText, AnalysisEntryKind,
-    AnalysisGenerationId, AnalysisIntent, AnalysisProfile, AnalysisResult, AnalysisRow,
-    AnalysisRowId, AppState, ArtifactIdentity, COMPACTION_HARD_LIMIT_BYTES,
-    COMPACTION_IDLE_MIN_JOURNAL_BYTES, COMPACTION_IDLE_MIN_RATIO, ClaimId, Command,
-    CompletionEvidence, ConflictKind, ContentKey, Crf, DecodeMode, DecodePreference,
-    DefaultOutputMode, DestructiveIdentity, DestructiveObservation, DurableDelta, DurationMs,
-    Effect, Eligibility, EphemeralDelta, ExecutionSettings, FailureFacts, FailureKind, FileRecord,
-    FileSystemFacts, FileSystemId, FileTimeNs, HistoryCommand, ImportPath, ImportedHistoryRecord,
-    ImportedProvenance, ItemOutcome, JOURNAL_SCHEMA_VERSION, JobAction, JobPhase, JobProgress,
-    JournalEnvelope, JournalSequence, MediaContainer, MediaObservation, Operation, OutputDelta,
-    OutputRecoveryAction, OutputState, OutputTarget, OutputTransaction, OverwriteDecision,
-    ParkedResolution, ParkedStatus, PathBinding, PathHash, PhaseSpan, ProjectionCommand,
-    QueueAddRequest, QueueCommand, QueueItemEdit, QueueItemId, QueueItemState, Replacement, Reply,
-    RunId, SearchMeasurement, SessionAggregates, SessionCommand, SessionState, Settings,
-    SettingsCommand, SkipReason, StreamByteSizes, SystemCommand, Telemetry, ToolAvailability,
-    ToolRevisions, ToolSource, ToolsState, UnixMillis, VendorActivity, VendorCommand, VideoCodec,
-    VideoMeta, VmafScore, VmafTarget, WorkerCommand, apply, compaction_due, compaction_quiescent,
-    corruption_signature, encode_record, encode_snapshot, evaluate_eligibility, permitted_profiles,
-    recover_output, replay, resolve_parked, select_analysis, select_job_action,
+    AnalysisActivity, AnalysisCommand, AnalysisDisplayText, AnalysisFileScan, AnalysisGenerationId,
+    AnalysisIntent, AnalysisProfile, AnalysisResult, AnalysisRow, AnalysisRowEntry, AnalysisRowId,
+    AnalysisScanFailure, AppState, ArtifactIdentity, BasicScanDisposition,
+    COMPACTION_HARD_LIMIT_BYTES, COMPACTION_IDLE_MIN_JOURNAL_BYTES, COMPACTION_IDLE_MIN_RATIO,
+    ClaimId, Command, CompletionEvidence, ConflictKind, ContentKey, ConversionRun, Crf,
+    CurrentFileIdentity, DecodeMode, DecodePreference, DefaultOutputMode, DestructiveIdentity,
+    DestructiveObservation, DurableDelta, DurationMs, Effect, Eligibility, EphemeralDelta,
+    ExecutionSettings, FailureFacts, FailureKind, FileRecord, FileSystemFacts, FileSystemId,
+    FileTimeNs, HistoryCommand, ImportPath, ImportedHistoryRecord, ImportedProvenance, ItemOutcome,
+    JOURNAL_SCHEMA_VERSION, JobAction, JobPhase, JobProgress, JournalEnvelope, JournalSequence,
+    MediaContainer, MediaObservation, Operation, OutputDelta, OutputRecoveryAction, OutputState,
+    OutputTarget, OutputTransaction, OverwriteDecision, ParkedResolution, ParkedStatus,
+    PathBinding, PathHash, PhaseSpan, ProjectionCommand, QueueAddRequest, QueueCommand,
+    QueueItemEdit, QueueItemId, QueueItemState, Replacement, Reply, RunId, SearchMeasurement,
+    SessionAggregates, SessionCommand, SessionState, Settings, SettingsCommand, SkipReason,
+    StreamByteSizes, SystemCommand, Telemetry, ToolAvailability, ToolRevisions, ToolSource,
+    ToolsState, UnixMillis, VendorActivity, VendorCommand, VideoCodec, VideoMeta, VmafScore,
+    VmafTarget, WorkerCommand, apply, compaction_due, compaction_quiescent, corruption_signature,
+    encode_record, encode_snapshot, evaluate_eligibility, permitted_profiles, recover_output,
+    replay, resolve_parked, select_analysis, select_job_action,
 };
 
 fn revisions() -> ToolRevisions {
@@ -72,10 +73,11 @@ fn analysis_commands_allocate_generations_and_reject_late_same_generation_work()
     let row = AnalysisRow {
         id: AnalysisRowId(1),
         parent: None,
-        kind: AnalysisEntryKind::File,
+        entry: AnalysisRowEntry::File {
+            scan: AnalysisFileScan::Discovered,
+        },
         display_name: root("movie.mkv"),
         display_path: root("first/movie.mkv"),
-        directory_failure: None,
     };
     let inserted = apply(
         &mut state,
@@ -629,6 +631,412 @@ fn media_observation(content: &str) -> MediaObservation {
             subtitle_count: 0,
         },
     }
+}
+
+fn basic_scan_state() -> AppState {
+    let mut state = AppState::default();
+    state.tools.availability = available();
+    let display = |text: &str| AnalysisDisplayText {
+        text: text.to_owned(),
+        lossy: false,
+    };
+    assert!(matches!(
+        apply(
+            &mut state,
+            Command::Analysis(AnalysisCommand::Begin {
+                roots: vec![display("root")],
+            }),
+        )
+        .reply,
+        Reply::AnalysisStarted { .. }
+    ));
+    assert_eq!(
+        apply(
+            &mut state,
+            Command::Analysis(AnalysisCommand::UpsertRows {
+                generation: AnalysisGenerationId(1),
+                rows: vec![AnalysisRow {
+                    id: AnalysisRowId(1),
+                    parent: None,
+                    entry: AnalysisRowEntry::File {
+                        scan: AnalysisFileScan::Discovered,
+                    },
+                    display_name: display("movie.mkv"),
+                    display_path: display("root/movie.mkv"),
+                }],
+            }),
+        )
+        .reply,
+        Reply::Accepted
+    );
+    assert_eq!(
+        apply(
+            &mut state,
+            Command::Analysis(AnalysisCommand::SetActivity {
+                generation: AnalysisGenerationId(1),
+                activity: AnalysisActivity::Discovered,
+            }),
+        )
+        .reply,
+        Reply::Accepted
+    );
+    assert_eq!(
+        apply(
+            &mut state,
+            Command::Analysis(AnalysisCommand::BeginBasicScan {
+                generation: AnalysisGenerationId(1),
+            }),
+        )
+        .reply,
+        Reply::Accepted
+    );
+    state
+}
+
+#[test]
+fn basic_scan_cache_hit_has_no_durable_write_and_stale_work_is_rejected() {
+    let mut state = basic_scan_state();
+    let observation = media_observation("cached");
+    crate::fold(
+        &mut state.durable,
+        &DurableDelta::MediaObserved {
+            observation: Box::new(observation.clone()),
+        },
+    );
+    let applied = apply(
+        &mut state,
+        Command::Analysis(AnalysisCommand::InspectFile {
+            generation: AnalysisGenerationId(1),
+            row_id: AnalysisRowId(1),
+            path_hash: observation.path_hash.clone(),
+            current: CurrentFileIdentity::Present(observation.binding.identity.clone()),
+            timestamp_reliability: crate::TimestampReliability::Reliable,
+            import_paths: Vec::new(),
+        }),
+    );
+    assert_eq!(
+        applied.reply,
+        Reply::BasicScan(BasicScanDisposition::Complete)
+    );
+    assert!(applied.durable.is_empty());
+    assert!(matches!(
+        state
+            .analysis
+            .current
+            .as_ref()
+            .and_then(|current| current.rows.get(&AnalysisRowId(1)))
+            .map(|row| &row.entry),
+        Some(AnalysisRowEntry::File {
+            scan: AnalysisFileScan::Scanned { content_key, .. }
+        }) if content_key == &ContentKey("cached".to_owned())
+    ));
+
+    let stale = apply(
+        &mut state,
+        Command::Analysis(AnalysisCommand::InspectFile {
+            generation: AnalysisGenerationId(2),
+            row_id: AnalysisRowId(1),
+            path_hash: observation.path_hash,
+            current: CurrentFileIdentity::Present(observation.binding.identity),
+            timestamp_reliability: crate::TimestampReliability::Reliable,
+            import_paths: Vec::new(),
+        }),
+    );
+    assert!(matches!(stale.reply, Reply::Rejected { .. }));
+}
+
+#[test]
+fn basic_scan_recognizes_reliable_settled_output_before_stale_source_binding() {
+    let mut state = basic_scan_state();
+    let source = media_observation("source-content");
+    crate::fold(
+        &mut state.durable,
+        &DurableDelta::MediaObserved {
+            observation: Box::new(source.clone()),
+        },
+    );
+    let output = identity("output-content", 4_000);
+    let run_id = RunId(9);
+    state
+        .durable
+        .records
+        .get_mut(&source.binding.content_key)
+        .expect("source record")
+        .verdict = Some(crate::Verdict {
+        kind: crate::VerdictKind::Converted {
+            output_content_key: Some(output.content_key.clone()),
+            input_size: Some(source.metadata.size_bytes),
+            output_size: Some(output.destructive.size),
+            encoding_time: None,
+            crf: None,
+            vmaf: None,
+            target: None,
+        },
+        source_run: Some(run_id),
+        decided_at: UnixMillis(1_000),
+    });
+    state.durable.conversion_runs.insert(
+        run_id,
+        ConversionRun {
+            spec: crate::JobSpec {
+                item_id: QueueItemId(1),
+                claim_id: ClaimId(2),
+                run_id,
+                input: PathBuf::from("movie.mkv"),
+                content_key: Some(source.binding.content_key.clone()),
+                operation: Operation::Convert,
+                intent: AnalysisIntent::ReuseIfFresh,
+                output_target: OutputTarget::Replace,
+                execution: execution(),
+                action: JobAction::Skip {
+                    reason: SkipReason::AlreadyAv1Matroska,
+                },
+            },
+            analysis: None,
+            output_content_key: Some(output.content_key.clone()),
+            outcome: None,
+            started_at: None,
+            finished_at: None,
+            phase_spans: Vec::new(),
+        },
+    );
+    let mut settled = transaction(OutputState::Started, Replacement::RetireOriginal);
+    settled.run_id = run_id;
+    settled.state = OutputState::Retired {
+        final_identity: output.clone(),
+    };
+    state.durable.outputs.insert(run_id, settled);
+
+    let applied = apply(
+        &mut state,
+        Command::Analysis(AnalysisCommand::InspectFile {
+            generation: AnalysisGenerationId(1),
+            row_id: AnalysisRowId(1),
+            path_hash: source.path_hash,
+            current: CurrentFileIdentity::Present(output.destructive.clone()),
+            timestamp_reliability: crate::TimestampReliability::Reliable,
+            import_paths: Vec::new(),
+        }),
+    );
+    assert_eq!(
+        applied.reply,
+        Reply::BasicScan(BasicScanDisposition::Complete)
+    );
+    assert!(applied.durable.is_empty());
+    assert!(matches!(
+        state
+            .analysis
+            .current
+            .as_ref()
+            .and_then(|current| current.rows.get(&AnalysisRowId(1)))
+            .map(|row| &row.entry),
+        Some(AnalysisRowEntry::File {
+            scan: AnalysisFileScan::SettledOutput {
+                source_content_key,
+                output_content_key,
+                metadata: None,
+                ..
+            }
+        }) if source_content_key == &source.binding.content_key
+            && output_content_key == &output.content_key
+    ));
+
+    let import_path = ImportPath("root/movie.mkv".to_owned());
+    let mut imported = parked_record(ParkedStatus::Converted);
+    imported.size = Some(output.destructive.size);
+    imported.modified_ns = output.destructive.modified_ns;
+    state.durable.parked.insert(import_path.clone(), imported);
+    let mut output_metadata = source.metadata.clone();
+    output_metadata.codec = VideoCodec::Av1;
+    output_metadata.size_bytes = output.destructive.size;
+    let observed_output = MediaObservation {
+        path_hash: PathHash("replace-path".to_owned()),
+        binding: PathBinding {
+            identity: output.destructive,
+            content_key: output.content_key.clone(),
+        },
+        metadata: output_metadata,
+    };
+    assert_eq!(
+        apply(
+            &mut state,
+            Command::Analysis(AnalysisCommand::ObserveFile {
+                generation: AnalysisGenerationId(1),
+                row_id: AnalysisRowId(1),
+                observation: Box::new(observed_output),
+                import_paths: vec![import_path],
+            }),
+        )
+        .reply,
+        Reply::BasicScan(BasicScanDisposition::Complete)
+    );
+    let source_record = state
+        .durable
+        .records
+        .get(&source.binding.content_key)
+        .expect("source record after output observation");
+    assert!(source_record.imported.is_some());
+    assert_eq!(
+        source_record
+            .verdict
+            .as_ref()
+            .and_then(|verdict| verdict.source_run),
+        Some(run_id)
+    );
+    assert!(
+        state
+            .durable
+            .records
+            .get(&output.content_key)
+            .is_some_and(|record| record.imported.is_none())
+    );
+    assert_eq!(crate::statistics(&state.durable, 0).converted_files, 1);
+}
+
+#[test]
+fn basic_scan_observation_adopts_import_after_media_write() {
+    let mut state = basic_scan_state();
+    let observation = media_observation("imported");
+    let import_path = ImportPath("root/movie.mkv".to_owned());
+    let mut parked = parked_record(ParkedStatus::Analyzed);
+    parked.size = Some(observation.metadata.size_bytes);
+    parked.modified_ns = observation.binding.identity.modified_ns;
+    parked.video_codec = Some(observation.metadata.codec.clone());
+    parked.width = Some(observation.metadata.width);
+    parked.height = Some(observation.metadata.height);
+    parked.duration_ms = Some(observation.metadata.duration_ms);
+    state
+        .durable
+        .parked
+        .insert(import_path.clone(), parked.clone());
+
+    let applied = apply(
+        &mut state,
+        Command::Analysis(AnalysisCommand::ObserveFile {
+            generation: AnalysisGenerationId(1),
+            row_id: AnalysisRowId(1),
+            observation: Box::new(observation.clone()),
+            import_paths: vec![import_path.clone()],
+        }),
+    );
+    assert_eq!(
+        applied.reply,
+        Reply::BasicScan(BasicScanDisposition::Complete)
+    );
+    assert!(matches!(
+        applied.durable.as_slice(),
+        [
+            DurableDelta::MediaObserved { .. },
+            DurableDelta::ParkedAdopted { import_path: adopted, imported, .. }
+        ] if adopted == &import_path && imported == &parked
+    ));
+    assert!(!state.durable.parked.contains_key(&import_path));
+    let record = state
+        .durable
+        .records
+        .get(&observation.binding.content_key)
+        .expect("adopted record");
+    assert_eq!(
+        record
+            .imported
+            .as_ref()
+            .map(|provenance| &provenance.record),
+        Some(&parked)
+    );
+    assert!(record.analyses.is_empty());
+}
+
+#[test]
+fn basic_scan_adopts_sparse_conversion_without_manufacturing_summary_fields() {
+    let mut state = basic_scan_state();
+    let observation = media_observation("sparse-import");
+    let import_path = ImportPath("root/movie.mkv".to_owned());
+    let mut parked = parked_record(ParkedStatus::Converted);
+    parked.output_size = None;
+    parked.encoding_time = None;
+    parked.crf = None;
+    parked.vmaf = None;
+    parked.target = None;
+    parked.video_codec = None;
+    parked.width = None;
+    parked.height = None;
+    parked.duration_ms = None;
+    state.durable.parked.insert(import_path.clone(), parked);
+
+    assert_eq!(
+        apply(
+            &mut state,
+            Command::Analysis(AnalysisCommand::ObserveFile {
+                generation: AnalysisGenerationId(1),
+                row_id: AnalysisRowId(1),
+                observation: Box::new(observation.clone()),
+                import_paths: vec![import_path],
+            }),
+        )
+        .reply,
+        Reply::BasicScan(BasicScanDisposition::Complete)
+    );
+    let verdict = state
+        .durable
+        .records
+        .get(&observation.binding.content_key)
+        .and_then(|record| record.verdict.as_ref())
+        .expect("sparse adopted verdict");
+    assert!(matches!(
+        verdict.kind,
+        crate::VerdictKind::Converted {
+            output_size: None,
+            encoding_time: None,
+            crf: None,
+            vmaf: None,
+            target: None,
+            ..
+        }
+    ));
+}
+
+#[test]
+fn basic_scan_refresh_failure_keeps_the_previous_success() {
+    let mut state = basic_scan_state();
+    let observation = media_observation("stable");
+    assert_eq!(
+        apply(
+            &mut state,
+            Command::Analysis(AnalysisCommand::ObserveFile {
+                generation: AnalysisGenerationId(1),
+                row_id: AnalysisRowId(1),
+                observation: Box::new(observation.clone()),
+                import_paths: Vec::new(),
+            }),
+        )
+        .reply,
+        Reply::BasicScan(BasicScanDisposition::Complete)
+    );
+    let failed = apply(
+        &mut state,
+        Command::Analysis(AnalysisCommand::FailFile {
+            generation: AnalysisGenerationId(1),
+            row_id: AnalysisRowId(1),
+            failure: AnalysisScanFailure::ChangedDuringSampling,
+        }),
+    );
+    assert_eq!(failed.reply, Reply::Accepted);
+    assert!(matches!(
+        state
+            .analysis
+            .current
+            .as_ref()
+            .and_then(|current| current.rows.get(&AnalysisRowId(1)))
+            .map(|row| &row.entry),
+        Some(AnalysisRowEntry::File {
+            scan: AnalysisFileScan::Scanned {
+                content_key,
+                refresh_failure: Some(failure),
+                ..
+            }
+        }) if content_key == &observation.binding.content_key
+            && failure.as_ref() == &AnalysisScanFailure::ChangedDuringSampling
+    ));
 }
 
 #[test]

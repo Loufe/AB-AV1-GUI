@@ -5,14 +5,16 @@ use serde::{Deserialize, Serialize};
 use crate::history::prepare_import_adoptions;
 use crate::state::ConversionRun;
 use crate::{
-    AnalysisCommand, AnalysisDelta, AnalysisIntent, AnalysisMutationError, AnalysisResult,
-    AppState, ClaimId, ClaimedJob, CompletionEvidence, ConfigDelta, CorruptionSignature,
-    DecodeMode, DecodePreference, DurableDelta, ExecutionSettings, ImportPath,
-    ImportedHistoryRecord, ItemOutcome, JobAction, JobSpec, MediaObservation, Operation,
-    OutputDelta, OutputTarget, OverwriteDecision, PathHash, PhaseSpan, QueueItem, QueueItemId,
-    QueueItemState, ReservedJob, RunId, SessionAggregates, SessionState, Settings, SkipReason,
-    StatisticsPayload, Telemetry, ToolAvailability, ToolsState, UnixMillis, VendorActivity,
-    apply_analysis_mutation, begin_analysis_generation, evaluate_enqueue, fold, fold_config,
+    AnalysisActivity, AnalysisCommand, AnalysisDelta, AnalysisFileScan, AnalysisIntent,
+    AnalysisMutationError, AnalysisResult, AnalysisRow, AnalysisRowEntry, AppState,
+    BasicScanDisposition, ClaimId, ClaimedJob, CompletionEvidence, ConfigDelta, ContentKey,
+    CorruptionSignature, CurrentFileIdentity, DecodeMode, DecodePreference, DurableDelta,
+    ExecutionSettings, FreshnessDecision, ImportPath, ImportedHistoryRecord, ItemOutcome,
+    JobAction, JobSpec, MediaObservation, Operation, OutputDelta, OutputState, OutputTarget,
+    OverwriteDecision, PathHash, PhaseSpan, QueueItem, QueueItemId, QueueItemState, ReservedJob,
+    RunId, SessionAggregates, SessionState, Settings, SkipReason, StatisticsPayload, Telemetry,
+    ToolAvailability, ToolsState, UnixMillis, VendorActivity, apply_analysis_mutation,
+    begin_analysis_generation, decide_freshness, evaluate_enqueue, fold, fold_config,
     select_job_action, statistics,
 };
 
@@ -279,6 +281,7 @@ pub enum Reply {
     AnalysisStarted {
         generation: crate::AnalysisGenerationId,
     },
+    BasicScan(BasicScanDisposition),
     Reserved(Option<Box<ReservedJob>>),
     Claimed(Option<Box<ClaimedJob>>),
     Imported {
@@ -410,6 +413,34 @@ pub fn apply(state: &mut AppState, command: Command) -> Applied {
 }
 
 fn apply_analysis_command(state: &AppState, command: AnalysisCommand) -> Applied {
+    match command {
+        AnalysisCommand::InspectFile {
+            generation,
+            row_id,
+            path_hash,
+            current,
+            timestamp_reliability,
+            import_paths,
+        } => inspect_analysis_file(
+            state,
+            generation,
+            row_id,
+            path_hash,
+            current,
+            timestamp_reliability,
+            &import_paths,
+        ),
+        AnalysisCommand::ObserveFile {
+            generation,
+            row_id,
+            observation,
+            import_paths,
+        } => observe_analysis_file(state, generation, row_id, *observation, &import_paths),
+        other => apply_analysis_state_command(state, other),
+    }
+}
+
+fn apply_analysis_state_command(state: &AppState, command: AnalysisCommand) -> Applied {
     let mut applied = Applied::accepted();
     let delta = match command {
         AnalysisCommand::Begin { roots } => {
@@ -444,6 +475,39 @@ fn apply_analysis_command(state: &AppState, command: AnalysisCommand) -> Applied
             generation,
             activity,
         },
+        AnalysisCommand::BeginBasicScan { generation } => {
+            if let ToolAvailability::Missing { detail, .. } = &state.tools.availability {
+                return Applied::rejected(format!("media tools are unavailable: {detail}"));
+            }
+            if vendor_worker_active(&state.tools.activity) {
+                return Applied::rejected("a vendor operation is in progress");
+            }
+            AnalysisDelta::ActivityChanged {
+                generation,
+                activity: AnalysisActivity::BasicScanning,
+            }
+        }
+        AnalysisCommand::FinishBasicScan { generation } => AnalysisDelta::ActivityChanged {
+            generation,
+            activity: AnalysisActivity::Ready,
+        },
+        AnalysisCommand::FailFile {
+            generation,
+            row_id,
+            failure,
+        } => {
+            let row = match analysis_file_with_failure(state, generation, row_id, failure) {
+                Ok(row) => row,
+                Err(reason) => return Applied::rejected(reason),
+            };
+            AnalysisDelta::RowsUpserted {
+                generation,
+                rows: vec![row],
+            }
+        }
+        AnalysisCommand::InspectFile { .. } | AnalysisCommand::ObserveFile { .. } => {
+            return Applied::rejected("Analysis scan command reached the state-only path");
+        }
     };
     let mut candidate = state.analysis.clone();
     if let Err(error) = apply_analysis_mutation(&mut candidate, &delta) {
@@ -451,6 +515,319 @@ fn apply_analysis_command(state: &AppState, command: AnalysisCommand) -> Applied
     }
     applied.ephemeral.push(EphemeralDelta::Analysis(delta));
     applied
+}
+
+fn inspect_analysis_file(
+    state: &AppState,
+    generation: crate::AnalysisGenerationId,
+    row_id: crate::AnalysisRowId,
+    path_hash: PathHash,
+    current: CurrentFileIdentity,
+    timestamp_reliability: crate::TimestampReliability,
+    import_paths: &[ImportPath],
+) -> Applied {
+    if let Err(reason) = validate_analysis_file(state, generation, row_id) {
+        return Applied::rejected(reason);
+    }
+    let settled = match &current {
+        CurrentFileIdentity::Present(identity) => {
+            settled_output_match(state, |artifact| artifact.destructive == *identity)
+        }
+        CurrentFileIdentity::Missing | CurrentFileIdentity::Unavailable => None,
+    };
+    let binding = state.durable.paths.get(&path_hash);
+    let decision = decide_freshness(
+        &current,
+        binding.map(|known| &known.identity),
+        settled
+            .as_ref()
+            .map(|(_, _, artifact)| &artifact.destructive),
+        timestamp_reliability,
+    );
+    match decision {
+        FreshnessDecision::Missing => basic_scan_reply(BasicScanDisposition::Missing),
+        FreshnessDecision::Unavailable => basic_scan_reply(BasicScanDisposition::Unavailable),
+        FreshnessDecision::Reobserve(_) => basic_scan_reply(BasicScanDisposition::Observe),
+        FreshnessDecision::RecognizeSettledOutput => {
+            // Imported stamps need real output metadata before they can be
+            // adopted honestly. Do not manufacture it from the source row.
+            if import_paths
+                .iter()
+                .any(|path| state.durable.parked.contains_key(path))
+            {
+                return basic_scan_reply(BasicScanDisposition::Observe);
+            }
+            let Some((source_content_key, output_content_key, _)) = settled else {
+                return Applied::rejected("settled output recognition lost its matching output");
+            };
+            let metadata = state
+                .durable
+                .records
+                .get(&output_content_key)
+                .map(|record| record.metadata.clone());
+            upsert_scanned_row(
+                state,
+                generation,
+                row_id,
+                AnalysisFileScan::SettledOutput {
+                    source_content_key,
+                    output_content_key,
+                    metadata,
+                    refresh_failure: None,
+                },
+                Vec::new(),
+            )
+        }
+        FreshnessDecision::ReuseObservation => {
+            let Some(binding) = binding else {
+                return Applied::rejected("fresh Analysis binding is missing");
+            };
+            let Some(record) = state.durable.records.get(&binding.content_key) else {
+                return basic_scan_reply(BasicScanDisposition::Observe);
+            };
+            let observation = MediaObservation {
+                path_hash,
+                binding: binding.clone(),
+                metadata: record.metadata.clone(),
+            };
+            let prepared = prepare_import_adoptions(
+                &state.durable,
+                Some(&observation),
+                import_paths,
+                Some(&binding.content_key),
+                Some(record),
+            );
+            upsert_scanned_row(
+                state,
+                generation,
+                row_id,
+                AnalysisFileScan::Scanned {
+                    content_key: binding.content_key.clone(),
+                    metadata: record.metadata.clone(),
+                    refresh_failure: None,
+                },
+                prepared.deltas,
+            )
+        }
+    }
+}
+
+fn observe_analysis_file(
+    state: &AppState,
+    generation: crate::AnalysisGenerationId,
+    row_id: crate::AnalysisRowId,
+    observation: MediaObservation,
+    import_paths: &[ImportPath],
+) -> Applied {
+    if let Err(reason) = validate_analysis_file(state, generation, row_id) {
+        return Applied::rejected(reason);
+    }
+    let settled = settled_output_match(state, |artifact| {
+        artifact.content_key == observation.binding.content_key
+            && artifact.destructive == observation.binding.identity
+    });
+    let adoption_content_key = settled
+        .as_ref()
+        .map_or(&observation.binding.content_key, |(source, _, _)| source);
+    let record = state.durable.records.get(adoption_content_key);
+    let prepared = prepare_import_adoptions(
+        &state.durable,
+        Some(&observation),
+        import_paths,
+        Some(adoption_content_key),
+        record,
+    );
+    let path_changed = state
+        .durable
+        .paths
+        .get(&observation.path_hash)
+        .is_none_or(|binding| binding != &observation.binding);
+    let record_changed = state
+        .durable
+        .records
+        .get(&observation.binding.content_key)
+        .is_none_or(|record| record.metadata != observation.metadata);
+    let mut durable = Vec::new();
+    if path_changed || record_changed {
+        durable.push(DurableDelta::MediaObserved {
+            observation: Box::new(observation.clone()),
+        });
+    }
+    durable.extend(prepared.deltas);
+    let scan = settled.map_or_else(
+        || AnalysisFileScan::Scanned {
+            content_key: observation.binding.content_key.clone(),
+            metadata: observation.metadata.clone(),
+            refresh_failure: None,
+        },
+        |(source_content_key, output_content_key, _)| AnalysisFileScan::SettledOutput {
+            source_content_key,
+            output_content_key,
+            metadata: Some(observation.metadata.clone()),
+            refresh_failure: None,
+        },
+    );
+    upsert_scanned_row(state, generation, row_id, scan, durable)
+}
+
+fn basic_scan_reply(disposition: BasicScanDisposition) -> Applied {
+    let mut applied = Applied::accepted();
+    applied.reply = Reply::BasicScan(disposition);
+    applied
+}
+
+fn upsert_scanned_row(
+    state: &AppState,
+    generation: crate::AnalysisGenerationId,
+    row_id: crate::AnalysisRowId,
+    scan: AnalysisFileScan,
+    durable: Vec<DurableDelta>,
+) -> Applied {
+    let row = match analysis_file_with_scan(state, generation, row_id, scan) {
+        Ok(row) => row,
+        Err(reason) => return Applied::rejected(reason),
+    };
+    let delta = AnalysisDelta::RowsUpserted {
+        generation,
+        rows: vec![row],
+    };
+    let mut candidate = state.analysis.clone();
+    if let Err(error) = apply_analysis_mutation(&mut candidate, &delta) {
+        return Applied::rejected(format!("Analysis mutation rejected: {error:?}"));
+    }
+    let mut applied = basic_scan_reply(BasicScanDisposition::Complete);
+    applied.durable = durable;
+    applied.ephemeral.push(EphemeralDelta::Analysis(delta));
+    applied
+}
+
+fn validate_analysis_file(
+    state: &AppState,
+    generation: crate::AnalysisGenerationId,
+    row_id: crate::AnalysisRowId,
+) -> Result<(), &'static str> {
+    let current = state
+        .analysis
+        .current
+        .as_ref()
+        .ok_or("no Analysis generation exists")?;
+    if current.id != generation {
+        return Err("Basic Scan names a stale Analysis generation");
+    }
+    if current.activity != AnalysisActivity::BasicScanning {
+        return Err("Analysis generation is not Basic Scanning");
+    }
+    let row = current
+        .rows
+        .get(&row_id)
+        .ok_or("Basic Scan row does not exist")?;
+    if !matches!(row.entry, AnalysisRowEntry::File { .. }) {
+        return Err("Basic Scan row is not a file");
+    }
+    Ok(())
+}
+
+fn analysis_file_with_scan(
+    state: &AppState,
+    generation: crate::AnalysisGenerationId,
+    row_id: crate::AnalysisRowId,
+    scan: AnalysisFileScan,
+) -> Result<AnalysisRow, &'static str> {
+    validate_analysis_file(state, generation, row_id)?;
+    let current = state
+        .analysis
+        .current
+        .as_ref()
+        .ok_or("no Analysis generation exists")?;
+    let mut row = current
+        .rows
+        .get(&row_id)
+        .cloned()
+        .ok_or("Basic Scan row does not exist")?;
+    row.entry = AnalysisRowEntry::File { scan };
+    Ok(row)
+}
+
+fn analysis_file_with_failure(
+    state: &AppState,
+    generation: crate::AnalysisGenerationId,
+    row_id: crate::AnalysisRowId,
+    failure: crate::AnalysisScanFailure,
+) -> Result<AnalysisRow, &'static str> {
+    validate_analysis_file(state, generation, row_id)?;
+    let current = state
+        .analysis
+        .current
+        .as_ref()
+        .ok_or("no Analysis generation exists")?;
+    let mut row = current
+        .rows
+        .get(&row_id)
+        .cloned()
+        .ok_or("Basic Scan row does not exist")?;
+    let scan = match row.entry {
+        AnalysisRowEntry::File {
+            scan:
+                AnalysisFileScan::Scanned {
+                    content_key,
+                    metadata,
+                    ..
+                },
+        } => AnalysisFileScan::Scanned {
+            content_key,
+            metadata,
+            refresh_failure: Some(Box::new(failure)),
+        },
+        AnalysisRowEntry::File {
+            scan:
+                AnalysisFileScan::SettledOutput {
+                    source_content_key,
+                    output_content_key,
+                    metadata,
+                    ..
+                },
+        } => AnalysisFileScan::SettledOutput {
+            source_content_key,
+            output_content_key,
+            metadata,
+            refresh_failure: Some(Box::new(failure)),
+        },
+        AnalysisRowEntry::File {
+            scan: AnalysisFileScan::Discovered | AnalysisFileScan::Failed { .. },
+        } => AnalysisFileScan::Failed { failure },
+        AnalysisRowEntry::Folder { .. } => return Err("Basic Scan row is not a file"),
+    };
+    row.entry = AnalysisRowEntry::File { scan };
+    Ok(row)
+}
+
+fn settled_output_match(
+    state: &AppState,
+    mut predicate: impl FnMut(&crate::ArtifactIdentity) -> bool,
+) -> Option<(ContentKey, ContentKey, crate::ArtifactIdentity)> {
+    state
+        .durable
+        .outputs
+        .iter()
+        .rev()
+        .find_map(|(run_id, transaction)| {
+            let artifact = match &transaction.state {
+                OutputState::Committed { final_identity }
+                | OutputState::Retired { final_identity } => final_identity,
+                _ => return None,
+            };
+            if !predicate(artifact) {
+                return None;
+            }
+            let source = state
+                .durable
+                .conversion_runs
+                .get(run_id)?
+                .spec
+                .content_key
+                .clone()?;
+            Some((source, artifact.content_key.clone(), artifact.clone()))
+        })
 }
 
 fn apply_settings(state: &AppState, command: SettingsCommand) -> Applied {
@@ -726,6 +1103,14 @@ fn apply_vendor(state: &AppState, command: VendorCommand) -> Applied {
     if vendor_worker_active(&state.tools.activity) {
         return Applied::rejected("a vendor operation is already in progress");
     }
+    if state
+        .analysis
+        .current
+        .as_ref()
+        .is_some_and(|generation| generation.activity == AnalysisActivity::BasicScanning)
+    {
+        return Applied::rejected("vendor operations cannot run during Basic Scan");
+    }
     match command {
         VendorCommand::Install => {
             // Idle-only swap: an install replaces the binaries a session
@@ -937,6 +1322,7 @@ fn apply_worker(state: &AppState, command: WorkerCommand) -> Applied {
                 &state.durable,
                 observation.as_deref(),
                 &import_paths,
+                content_key.as_ref(),
                 record,
             );
             let record_for_action = prepared_imports.effective_record.as_ref().or(record);

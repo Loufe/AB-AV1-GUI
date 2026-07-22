@@ -126,6 +126,15 @@ fn fake_ffprobe() -> Result<(), Box<dyn Error>> {
         stdout.write_all(b"\n")?;
         return Ok(());
     }
+    if let Some(input) = env::args_os().next_back().map(PathBuf::from)
+        && input
+            .file_name()
+            .and_then(|name| name.to_str())
+            .is_some_and(|name| name.starts_with("reject-"))
+    {
+        return Err(format!("fixture rejected {}", input.display()).into());
+    }
+    let _concurrency = fake_probe_concurrency_guard()?;
     const PROBE: &str = r#"{
         "streams": [{
             "index": 0,
@@ -189,6 +198,50 @@ fn fake_ffprobe() -> Result<(), Box<dyn Error>> {
     stdout.write_all(probe.as_bytes())?;
     stdout.write_all(b"\n")?;
     Ok(())
+}
+
+struct ProbeConcurrencyGuard {
+    marker: PathBuf,
+}
+
+impl Drop for ProbeConcurrencyGuard {
+    fn drop(&mut self) {
+        let _result = fs::remove_file(&self.marker);
+    }
+}
+
+fn fake_probe_concurrency_guard() -> Result<Option<ProbeConcurrencyGuard>, Box<dyn Error>> {
+    let Some(input) = env::args_os().next_back().map(PathBuf::from) else {
+        return Ok(None);
+    };
+    let is_slow = input
+        .file_name()
+        .and_then(|name| name.to_str())
+        .is_some_and(|name| name.starts_with("slow-"));
+    if !is_slow {
+        return Ok(None);
+    }
+    let Some(directory) = input.parent() else {
+        return Ok(None);
+    };
+    let marker = directory.join(format!(".scan-active-{}", process::id()));
+    fs::write(&marker, b"active")?;
+    let active = fs::read_dir(directory)?
+        .filter_map(Result::ok)
+        .filter(|entry| {
+            entry
+                .file_name()
+                .to_string_lossy()
+                .starts_with(".scan-active-")
+        })
+        .count();
+    let mut log = fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(directory.join("scan-concurrency.log"))?;
+    log.write_all(format!("{active}\n").as_bytes())?;
+    thread::sleep(Duration::from_millis(100));
+    Ok(Some(ProbeConcurrencyGuard { marker }))
 }
 
 fn run_coordinator_contract(

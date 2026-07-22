@@ -1,4 +1,4 @@
-//! Generation-scoped Level-0 Analysis discovery.
+//! Generation-scoped Analysis discovery and Basic Scan execution.
 //!
 //! One dedicated worker owns traversal order. New requests replace any
 //! pending request and cancel the active one, while the core reducer remains
@@ -13,36 +13,49 @@ use std::{
     sync::{
         Arc, Condvar, Mutex, MutexGuard,
         atomic::{AtomicBool, Ordering},
+        mpsc,
     },
     thread,
 };
 
 use crfty_core::{
-    AnalysisActivity, AnalysisCommand, AnalysisDirectoryFailure, AnalysisDisplayText,
-    AnalysisEntryKind, AnalysisGenerationId, AnalysisRow, AnalysisRowId, Command, Reply,
+    AnalysisActivity, AnalysisCommand, AnalysisDiagnosticTail, AnalysisDirectoryFailure,
+    AnalysisDisplayText, AnalysisFileScan, AnalysisGenerationId, AnalysisRow, AnalysisRowEntry,
+    AnalysisRowId, AnalysisScanFailure, BasicScanDisposition, Command, CurrentFileIdentity, Reply,
     VideoExtension,
 };
 
-use crate::driver::{CommandSender, SubmitError};
+use crate::{
+    driver::{CommandSender, SubmitError},
+    history_import,
+    media::{self, MediaInspector, SupervisedMediaError},
+    process_supervisor::ProcessCancellation,
+    vendor::discovery::CurrentTools,
+};
 
 const DISCOVERY_BATCH_SIZE: usize = 128;
+const MIN_SCAN_WORKERS: usize = 4;
+const MAX_SCAN_WORKERS: usize = 8;
+const SCAN_QUEUE_MULTIPLIER: usize = 2;
 
 #[derive(Debug)]
-pub enum AnalysisDiscoveryError {
+pub enum AnalysisError {
     EmptyRoots,
+    MissingTools,
     ShuttingDown,
     Submit(SubmitError),
     Rejected(String),
     UnexpectedReply,
 }
 
-impl fmt::Display for AnalysisDiscoveryError {
+impl fmt::Display for AnalysisError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::EmptyRoots => {
                 formatter.write_str("Analysis discovery requires at least one root")
             }
-            Self::ShuttingDown => formatter.write_str("Analysis discovery is shutting down"),
+            Self::MissingTools => formatter.write_str("ffprobe is unavailable"),
+            Self::ShuttingDown => formatter.write_str("Analysis runtime is shutting down"),
             Self::Submit(error) => write!(formatter, "failed to submit Analysis command: {error}"),
             Self::Rejected(reason) => formatter.write_str(reason),
             Self::UnexpectedReply => {
@@ -52,9 +65,9 @@ impl fmt::Display for AnalysisDiscoveryError {
     }
 }
 
-impl std::error::Error for AnalysisDiscoveryError {}
+impl std::error::Error for AnalysisError {}
 
-impl From<SubmitError> for AnalysisDiscoveryError {
+impl From<SubmitError> for AnalysisError {
     fn from(error: SubmitError) -> Self {
         Self::Submit(error)
     }
@@ -65,7 +78,13 @@ pub(crate) struct AnalysisNativeRow {
     pub(crate) path: PathBuf,
     pub(crate) source_root: PathBuf,
     pub(crate) parent: Option<AnalysisRowId>,
-    pub(crate) kind: AnalysisEntryKind,
+    pub(crate) kind: NativeEntryKind,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum NativeEntryKind {
+    Folder,
+    File,
 }
 
 #[derive(Debug)]
@@ -89,7 +108,7 @@ impl AnalysisGenerationRegistry {
         path: PathBuf,
         source_root: PathBuf,
         parent: Option<AnalysisRowId>,
-        kind: AnalysisEntryKind,
+        kind: NativeEntryKind,
     ) -> Result<AnalysisRowId, ()> {
         let id = AnalysisRowId(self.next_row_id);
         self.next_row_id = self.next_row_id.checked_add(1).ok_or(())?;
@@ -108,22 +127,22 @@ impl AnalysisGenerationRegistry {
 
 #[derive(Debug, Clone)]
 struct Cancellation {
-    cancelled: Arc<AtomicBool>,
+    process: ProcessCancellation,
 }
 
 impl Cancellation {
     fn new() -> Self {
         Self {
-            cancelled: Arc::new(AtomicBool::new(false)),
+            process: ProcessCancellation::new(),
         }
     }
 
     fn cancel(&self) {
-        self.cancelled.store(true, Ordering::Release);
+        self.process.cancel();
     }
 
     fn is_cancelled(&self) -> bool {
-        self.cancelled.load(Ordering::Acquire)
+        self.process.is_cancelled()
     }
 }
 
@@ -135,9 +154,37 @@ struct DiscoveryRequest {
     cancellation: Cancellation,
 }
 
+struct BasicScanRequest {
+    generation: AnalysisGenerationId,
+    registry: Arc<Mutex<AnalysisGenerationRegistry>>,
+    ffprobe: PathBuf,
+    cancellation: Cancellation,
+}
+
+enum AnalysisRequest {
+    Discovery(DiscoveryRequest),
+    BasicScan(BasicScanRequest),
+}
+
+impl AnalysisRequest {
+    fn generation(&self) -> AnalysisGenerationId {
+        match self {
+            Self::Discovery(request) => request.generation,
+            Self::BasicScan(request) => request.generation,
+        }
+    }
+
+    fn cancellation(&self) -> &Cancellation {
+        match self {
+            Self::Discovery(request) => &request.cancellation,
+            Self::BasicScan(request) => &request.cancellation,
+        }
+    }
+}
+
 struct ControlState {
     shutting_down: bool,
-    pending: Option<DiscoveryRequest>,
+    pending: Option<AnalysisRequest>,
     active: Option<(AnalysisGenerationId, Cancellation)>,
     current_registry: Option<Arc<Mutex<AnalysisGenerationRegistry>>>,
     cancelled_generation: Option<AnalysisGenerationId>,
@@ -151,15 +198,19 @@ struct DiscoveryControl {
 /// Owns the one discovery worker and current generation's native registry.
 /// The worker is intentionally serial: deterministic BFS row allocation is a
 /// user-visible contract, while Level 0 does no expensive media work.
-pub(crate) struct AnalysisDiscoveryRuntime {
+pub(crate) struct AnalysisRuntime {
     commands: CommandSender,
     control: Arc<DiscoveryControl>,
     start_gate: Mutex<()>,
     worker: Mutex<Option<thread::JoinHandle<()>>>,
+    tools: Arc<Mutex<Option<CurrentTools>>>,
 }
 
-impl AnalysisDiscoveryRuntime {
-    pub(crate) fn start(commands: CommandSender) -> io::Result<Arc<Self>> {
+impl AnalysisRuntime {
+    pub(crate) fn start(
+        commands: CommandSender,
+        tools: Arc<Mutex<Option<CurrentTools>>>,
+    ) -> io::Result<Arc<Self>> {
         let control = Arc::new(DiscoveryControl {
             state: Mutex::new(ControlState {
                 shutting_down: false,
@@ -180,6 +231,7 @@ impl AnalysisDiscoveryRuntime {
             control,
             start_gate: Mutex::new(()),
             worker: Mutex::new(Some(worker)),
+            tools,
         }))
     }
 
@@ -187,14 +239,14 @@ impl AnalysisDiscoveryRuntime {
         &self,
         roots: Vec<PathBuf>,
         extensions: BTreeSet<VideoExtension>,
-    ) -> Result<AnalysisGenerationId, AnalysisDiscoveryError> {
+    ) -> Result<AnalysisGenerationId, AnalysisError> {
         let _gate = lock(&self.start_gate);
         if lock(&self.control.state).shutting_down {
-            return Err(AnalysisDiscoveryError::ShuttingDown);
+            return Err(AnalysisError::ShuttingDown);
         }
         let roots = deduplicate_roots(roots);
         if roots.is_empty() {
-            return Err(AnalysisDiscoveryError::EmptyRoots);
+            return Err(AnalysisError::EmptyRoots);
         }
         let display_roots = roots
             .iter()
@@ -207,10 +259,14 @@ impl AnalysisDiscoveryRuntime {
             }))? {
             Reply::AnalysisStarted { generation } => generation,
             Reply::Rejected { reason } | Reply::DurabilityUnknown { reason } => {
-                return Err(AnalysisDiscoveryError::Rejected(reason));
+                return Err(AnalysisError::Rejected(reason));
             }
-            Reply::Accepted | Reply::Reserved(_) | Reply::Claimed(_) | Reply::Imported { .. } => {
-                return Err(AnalysisDiscoveryError::UnexpectedReply);
+            Reply::Accepted
+            | Reply::BasicScan(_)
+            | Reply::Reserved(_)
+            | Reply::Claimed(_)
+            | Reply::Imported { .. } => {
+                return Err(AnalysisError::UnexpectedReply);
             }
         };
 
@@ -224,24 +280,78 @@ impl AnalysisDiscoveryRuntime {
         };
         let mut state = lock(&self.control.state);
         if let Some(pending) = state.pending.take() {
-            pending.cancellation.cancel();
+            pending.cancellation().cancel();
         }
         if let Some((_, active)) = &state.active {
             active.cancel();
         }
         state.current_registry = Some(registry);
         state.cancelled_generation = None;
-        state.pending = Some(request);
+        state.pending = Some(AnalysisRequest::Discovery(request));
         self.control.wake.notify_one();
         Ok(generation)
     }
 
-    pub(crate) fn cancel(&self) -> Result<(), AnalysisDiscoveryError> {
+    pub(crate) fn begin_basic_scan(
+        &self,
+        generation: AnalysisGenerationId,
+    ) -> Result<(), AnalysisError> {
+        let _gate = lock(&self.start_gate);
+        if lock(&self.control.state).shutting_down {
+            return Err(AnalysisError::ShuttingDown);
+        }
+        let ffprobe = lock(&self.tools)
+            .as_ref()
+            .map(|tools| tools.media.ffprobe.clone())
+            .ok_or(AnalysisError::MissingTools)?;
+        let registry = {
+            let state = lock(&self.control.state);
+            let registry = state.current_registry.as_ref().cloned().ok_or_else(|| {
+                AnalysisError::Rejected("no Analysis generation exists".to_owned())
+            })?;
+            if lock(&registry).generation != generation {
+                return Err(AnalysisError::Rejected(
+                    "Basic Scan names a stale Analysis generation".to_owned(),
+                ));
+            }
+            registry
+        };
+        match self
+            .commands
+            .submit(Command::Analysis(AnalysisCommand::BeginBasicScan {
+                generation,
+            }))? {
+            Reply::Accepted => {}
+            Reply::Rejected { reason } | Reply::DurabilityUnknown { reason } => {
+                return Err(AnalysisError::Rejected(reason));
+            }
+            _ => return Err(AnalysisError::UnexpectedReply),
+        }
+        let request = BasicScanRequest {
+            generation,
+            registry,
+            ffprobe,
+            cancellation: Cancellation::new(),
+        };
+        let mut state = lock(&self.control.state);
+        if let Some(pending) = state.pending.take() {
+            pending.cancellation().cancel();
+        }
+        if let Some((_, active)) = &state.active {
+            active.cancel();
+        }
+        state.cancelled_generation = None;
+        state.pending = Some(AnalysisRequest::BasicScan(request));
+        self.control.wake.notify_one();
+        Ok(())
+    }
+
+    pub(crate) fn cancel(&self) -> Result<(), AnalysisError> {
         let _gate = lock(&self.start_gate);
         let generation = {
             let mut state = lock(&self.control.state);
             if state.shutting_down {
-                return Err(AnalysisDiscoveryError::ShuttingDown);
+                return Err(AnalysisError::ShuttingDown);
             }
             let generation = state
                 .current_registry
@@ -251,7 +361,7 @@ impl AnalysisDiscoveryRuntime {
                 return Ok(());
             }
             if let Some(pending) = state.pending.take() {
-                pending.cancellation.cancel();
+                pending.cancellation().cancel();
             }
             if let Some((_, active)) = &state.active {
                 active.cancel();
@@ -270,12 +380,13 @@ impl AnalysisDiscoveryRuntime {
             }))? {
             Reply::Accepted => Ok(()),
             Reply::Rejected { reason } | Reply::DurabilityUnknown { reason } => {
-                Err(AnalysisDiscoveryError::Rejected(reason))
+                Err(AnalysisError::Rejected(reason))
             }
             Reply::AnalysisStarted { .. }
+            | Reply::BasicScan(_)
             | Reply::Reserved(_)
             | Reply::Claimed(_)
-            | Reply::Imported { .. } => Err(AnalysisDiscoveryError::UnexpectedReply),
+            | Reply::Imported { .. } => Err(AnalysisError::UnexpectedReply),
         }
     }
 
@@ -285,7 +396,7 @@ impl AnalysisDiscoveryRuntime {
             let mut state = lock(&self.control.state);
             state.shutting_down = true;
             if let Some(pending) = state.pending.take() {
-                pending.cancellation.cancel();
+                pending.cancellation().cancel();
             }
             if let Some((_, active)) = &state.active {
                 active.cancel();
@@ -310,20 +421,23 @@ fn discovery_worker(control: Arc<DiscoveryControl>, commands: CommandSender) {
             let Some(request) = state.pending.take() else {
                 continue;
             };
-            state.active = Some((request.generation, request.cancellation.clone()));
+            state.active = Some((request.generation(), request.cancellation().clone()));
             request
         };
 
-        run_request(&request, &commands);
+        match &request {
+            AnalysisRequest::Discovery(request) => run_discovery_request(request, &commands),
+            AnalysisRequest::BasicScan(request) => run_basic_scan_request(request, &commands),
+        }
 
         let mut state = lock(&control.state);
-        if state.active.as_ref().map(|(generation, _)| *generation) == Some(request.generation) {
+        if state.active.as_ref().map(|(generation, _)| *generation) == Some(request.generation()) {
             state.active = None;
         }
     }
 }
 
-fn run_request(request: &DiscoveryRequest, commands: &CommandSender) {
+fn run_discovery_request(request: &DiscoveryRequest, commands: &CommandSender) {
     let Some(batch_size) = NonZeroUsize::new(DISCOVERY_BATCH_SIZE) else {
         return;
     };
@@ -387,6 +501,329 @@ fn run_request(request: &DiscoveryRequest, commands: &CommandSender) {
     }
 }
 
+#[derive(Clone)]
+struct BasicScanTask {
+    row_id: AnalysisRowId,
+    path: PathBuf,
+}
+
+fn run_basic_scan_request(request: &BasicScanRequest, commands: &CommandSender) {
+    let tasks: Vec<BasicScanTask> = lock(&request.registry)
+        .rows
+        .iter()
+        .filter(|(_, row)| row.kind == NativeEntryKind::File)
+        .map(|(row_id, row)| BasicScanTask {
+            row_id: *row_id,
+            path: row.path.clone(),
+        })
+        .collect();
+    if tasks.is_empty() {
+        submit_scan_activity(commands, request.generation, AnalysisActivity::Ready);
+        return;
+    }
+    let available = thread::available_parallelism()
+        .map(std::num::NonZeroUsize::get)
+        .unwrap_or(MIN_SCAN_WORKERS);
+    let workers = available
+        .clamp(MIN_SCAN_WORKERS, MAX_SCAN_WORKERS)
+        .min(tasks.len());
+    let capacity = workers.saturating_mul(SCAN_QUEUE_MULTIPLIER).max(1);
+    let (task_tx, task_rx) = mpsc::sync_channel::<BasicScanTask>(capacity);
+    let task_rx = Arc::new(Mutex::new(task_rx));
+    let infrastructure_failed = Arc::new(AtomicBool::new(false));
+    let mut handles = Vec::with_capacity(workers);
+    for index in 0..workers {
+        let receiver = Arc::clone(&task_rx);
+        let worker_commands = commands.clone();
+        let cancellation = request.cancellation.clone();
+        let ffprobe = request.ffprobe.clone();
+        let failed = Arc::clone(&infrastructure_failed);
+        let generation = request.generation;
+        let spawned = thread::Builder::new()
+            .name(format!("crfty-basic-scan-{index}"))
+            .spawn(move || {
+                let inspector = MediaInspector::new(ffprobe);
+                loop {
+                    if cancellation.is_cancelled() {
+                        return;
+                    }
+                    let task = match lock(&receiver).recv() {
+                        Ok(task) => task,
+                        Err(_) => return,
+                    };
+                    if let Err(detail) = scan_one_file(
+                        &worker_commands,
+                        generation,
+                        &task,
+                        &inspector,
+                        &cancellation,
+                    ) {
+                        if !cancellation.is_cancelled() {
+                            tracing::warn!(
+                                generation = generation.0,
+                                row_id = task.row_id.0,
+                                "Basic Scan worker stopped: {detail}"
+                            );
+                            failed.store(true, Ordering::Release);
+                            cancellation.cancel();
+                        }
+                        return;
+                    }
+                }
+            });
+        match spawned {
+            Ok(handle) => handles.push(handle),
+            Err(error) => {
+                tracing::warn!("failed to start Basic Scan worker: {error}");
+                infrastructure_failed.store(true, Ordering::Release);
+                request.cancellation.cancel();
+                break;
+            }
+        }
+    }
+    let mut pending = VecDeque::from(tasks);
+    while let Some(task) = pending.pop_front() {
+        if request.cancellation.is_cancelled() {
+            break;
+        }
+        match task_tx.try_send(task) {
+            Ok(()) => {}
+            Err(mpsc::TrySendError::Full(task)) => {
+                pending.push_front(task);
+                thread::yield_now();
+            }
+            Err(mpsc::TrySendError::Disconnected(_)) => break,
+        }
+    }
+    drop(task_tx);
+    for handle in handles {
+        if handle.join().is_err() {
+            infrastructure_failed.store(true, Ordering::Release);
+            request.cancellation.cancel();
+        }
+    }
+    if infrastructure_failed.load(Ordering::Acquire) {
+        submit_scan_activity(
+            commands,
+            request.generation,
+            AnalysisActivity::Failed {
+                detail: "Basic Scan could not complete its bounded worker pool".to_owned(),
+            },
+        );
+    } else if !request.cancellation.is_cancelled() {
+        match commands.submit(Command::Analysis(AnalysisCommand::FinishBasicScan {
+            generation: request.generation,
+        })) {
+            Ok(Reply::Accepted | Reply::Rejected { .. }) => {}
+            Ok(reply) => tracing::warn!("unexpected Basic Scan completion reply: {reply:?}"),
+            Err(error) => tracing::warn!("failed to submit Basic Scan completion: {error}"),
+        }
+    }
+}
+
+fn scan_one_file(
+    commands: &CommandSender,
+    generation: AnalysisGenerationId,
+    task: &BasicScanTask,
+    inspector: &MediaInspector,
+    cancellation: &Cancellation,
+) -> Result<(), String> {
+    if cancellation.is_cancelled() {
+        return Ok(());
+    }
+    let current = match media::destructive_identity(&task.path) {
+        Ok(identity) => identity,
+        Err(error) if error.kind() == io::ErrorKind::NotFound => {
+            return submit_scan_failure(
+                commands,
+                generation,
+                task.row_id,
+                AnalysisScanFailure::Missing,
+            );
+        }
+        Err(error) => {
+            return submit_scan_failure(
+                commands,
+                generation,
+                task.row_id,
+                AnalysisScanFailure::Unavailable {
+                    detail: format!("filesystem identity is unavailable: {:?}", error.kind()),
+                },
+            );
+        }
+    };
+    let path_hash = match media::path_hash(&task.path) {
+        Ok(path_hash) => path_hash,
+        Err(error) => {
+            return submit_scan_failure(
+                commands,
+                generation,
+                task.row_id,
+                AnalysisScanFailure::Unavailable {
+                    detail: format!("path identity is unavailable: {:?}", error.kind()),
+                },
+            );
+        }
+    };
+    let import_paths = history_import::import_path_candidates(&task.path);
+    let reliability = media::timestamp_reliability(&current, std::time::SystemTime::now());
+    let disposition = match commands.submit(Command::Analysis(AnalysisCommand::InspectFile {
+        generation,
+        row_id: task.row_id,
+        path_hash,
+        current: CurrentFileIdentity::Present(current),
+        timestamp_reliability: reliability,
+        import_paths: import_paths.clone(),
+    })) {
+        Ok(Reply::BasicScan(disposition)) => disposition,
+        Ok(Reply::Rejected { reason: _ }) if cancellation.is_cancelled() => return Ok(()),
+        Ok(Reply::Rejected { reason } | Reply::DurabilityUnknown { reason }) => {
+            return Err(reason);
+        }
+        Ok(reply) => return Err(format!("unexpected Basic Scan inspection reply: {reply:?}")),
+        Err(error) => return Err(error.to_string()),
+    };
+    match disposition {
+        BasicScanDisposition::Complete => return Ok(()),
+        BasicScanDisposition::Missing => {
+            return submit_scan_failure(
+                commands,
+                generation,
+                task.row_id,
+                AnalysisScanFailure::Missing,
+            );
+        }
+        BasicScanDisposition::Unavailable => {
+            return submit_scan_failure(
+                commands,
+                generation,
+                task.row_id,
+                AnalysisScanFailure::Unavailable {
+                    detail: "file identity is unavailable".to_owned(),
+                },
+            );
+        }
+        BasicScanDisposition::Observe => {}
+    }
+    let observation = match inspector.observe_supervised(&task.path, &cancellation.process) {
+        Ok(observation) => observation,
+        Err(SupervisedMediaError::Cancelled) => return Ok(()),
+        Err(error) => {
+            return submit_scan_failure(
+                commands,
+                generation,
+                task.row_id,
+                scan_failure(error, &task.path),
+            );
+        }
+    };
+    // Canonical spelling can change along with a replaced/rebound path.
+    // Recompute candidates after the stable observation rather than adopting
+    // against the pre-probe target's spelling.
+    let import_paths = history_import::import_path_candidates(&task.path);
+    match commands.submit(Command::Analysis(AnalysisCommand::ObserveFile {
+        generation,
+        row_id: task.row_id,
+        observation: Box::new(observation),
+        import_paths,
+    })) {
+        Ok(Reply::BasicScan(BasicScanDisposition::Complete)) => Ok(()),
+        Ok(Reply::Rejected { .. }) if cancellation.is_cancelled() => Ok(()),
+        Ok(Reply::Rejected { reason } | Reply::DurabilityUnknown { reason }) => Err(reason),
+        Ok(reply) => Err(format!(
+            "unexpected Basic Scan observation reply: {reply:?}"
+        )),
+        Err(error) => Err(error.to_string()),
+    }
+}
+
+fn scan_failure(error: SupervisedMediaError, path: &Path) -> AnalysisScanFailure {
+    match error {
+        SupervisedMediaError::Cancelled => AnalysisScanFailure::Unavailable {
+            detail: "scan was cancelled".to_owned(),
+        },
+        SupervisedMediaError::TimedOut { diagnostic } => AnalysisScanFailure::TimedOut {
+            diagnostic: diagnostic_tail(diagnostic, path),
+        },
+        SupervisedMediaError::Rejected { diagnostic } => AnalysisScanFailure::Rejected {
+            diagnostic: diagnostic_tail(diagnostic, path),
+        },
+        SupervisedMediaError::InvalidOutput { detail, diagnostic } => {
+            AnalysisScanFailure::InvalidOutput {
+                detail,
+                diagnostic: diagnostic_tail(diagnostic, path),
+            }
+        }
+        SupervisedMediaError::Supervision { detail, diagnostic } => {
+            AnalysisScanFailure::Supervision {
+                detail,
+                diagnostic: diagnostic_tail(diagnostic, path),
+            }
+        }
+        SupervisedMediaError::Io(error) if error.kind() == io::ErrorKind::NotFound => {
+            AnalysisScanFailure::Missing
+        }
+        SupervisedMediaError::Io(error) => AnalysisScanFailure::Unavailable {
+            detail: format!("media observation failed: {:?}", error.kind()),
+        },
+        SupervisedMediaError::ChangedAfterProbe => AnalysisScanFailure::ChangedAfterProbe,
+        SupervisedMediaError::ChangedDuringSampling => AnalysisScanFailure::ChangedDuringSampling,
+    }
+}
+
+fn diagnostic_tail(
+    output: crate::process_supervisor::BoundedOutput,
+    path: &Path,
+) -> AnalysisDiagnosticTail {
+    let mut text = String::from_utf8_lossy(output.as_bytes()).into_owned();
+    let display_path = path.to_string_lossy();
+    if !display_path.is_empty() {
+        text = text.replace(display_path.as_ref(), "[input]");
+    }
+    if let Some(name) = path.file_name().map(|name| name.to_string_lossy())
+        && !name.is_empty()
+    {
+        text = text.replace(name.as_ref(), "[input]");
+    }
+    AnalysisDiagnosticTail {
+        text,
+        truncated: output.was_truncated(),
+    }
+}
+
+fn submit_scan_failure(
+    commands: &CommandSender,
+    generation: AnalysisGenerationId,
+    row_id: AnalysisRowId,
+    failure: AnalysisScanFailure,
+) -> Result<(), String> {
+    match commands.submit(Command::Analysis(AnalysisCommand::FailFile {
+        generation,
+        row_id,
+        failure,
+    })) {
+        Ok(Reply::Accepted) => Ok(()),
+        Ok(Reply::Rejected { reason } | Reply::DurabilityUnknown { reason }) => Err(reason),
+        Ok(reply) => Err(format!("unexpected Basic Scan failure reply: {reply:?}")),
+        Err(error) => Err(error.to_string()),
+    }
+}
+
+fn submit_scan_activity(
+    commands: &CommandSender,
+    generation: AnalysisGenerationId,
+    activity: AnalysisActivity,
+) {
+    match commands.submit(Command::Analysis(AnalysisCommand::SetActivity {
+        generation,
+        activity,
+    })) {
+        Ok(Reply::Accepted | Reply::Rejected { .. }) => {}
+        Ok(reply) => tracing::warn!("unexpected Analysis activity reply: {reply:?}"),
+        Err(error) => tracing::warn!("failed to submit Analysis activity: {error}"),
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum DiscoveryOutcome {
     Complete,
@@ -403,7 +840,7 @@ struct DirectoryTask {
 
 struct ChildEntry {
     path: PathBuf,
-    kind: AnalysisEntryKind,
+    kind: NativeEntryKind,
 }
 
 fn discover(
@@ -422,12 +859,12 @@ fn discover(
             root.clone(),
             root.clone(),
             None,
-            AnalysisEntryKind::Folder,
+            NativeEntryKind::Folder,
         ) {
             Ok(id) => id,
             Err(()) => return DiscoveryOutcome::RowIdExhausted,
         };
-        batch.push(public_row(id, None, AnalysisEntryKind::Folder, root, None));
+        batch.push(public_row(id, None, NativeEntryKind::Folder, root, None));
         pending.push_back(DirectoryTask {
             id,
             path: root.clone(),
@@ -540,7 +977,7 @@ fn discover(
                 &child.path,
                 None,
             ));
-            if child.kind == AnalysisEntryKind::Folder {
+            if child.kind == NativeEntryKind::Folder {
                 pending.push_back(DirectoryTask {
                     id,
                     path: child.path,
@@ -595,7 +1032,7 @@ fn emit_directory_failure(
     emit(vec![public_row(
         directory.id,
         directory.parent,
-        AnalysisEntryKind::Folder,
+        NativeEntryKind::Folder,
         &directory.path,
         Some(failure),
     )])
@@ -606,7 +1043,7 @@ fn insert_native_row(
     path: PathBuf,
     source_root: PathBuf,
     parent: Option<AnalysisRowId>,
-    kind: AnalysisEntryKind,
+    kind: NativeEntryKind,
 ) -> Result<AnalysisRowId, ()> {
     lock(registry).insert(path, source_root, parent, kind)
 }
@@ -614,7 +1051,7 @@ fn insert_native_row(
 fn public_row(
     id: AnalysisRowId,
     parent: Option<AnalysisRowId>,
-    kind: AnalysisEntryKind,
+    kind: NativeEntryKind,
     path: &Path,
     directory_failure: Option<AnalysisDirectoryFailure>,
 ) -> AnalysisRow {
@@ -622,10 +1059,16 @@ fn public_row(
     AnalysisRow {
         id,
         parent,
-        kind,
+        entry: match kind {
+            NativeEntryKind::Folder => AnalysisRowEntry::Folder {
+                failure: directory_failure,
+            },
+            NativeEntryKind::File => AnalysisRowEntry::File {
+                scan: AnalysisFileScan::Discovered,
+            },
+        },
         display_name: display_text(name),
         display_path: display_text(path.as_os_str()),
-        directory_failure,
     }
 }
 
@@ -648,7 +1091,7 @@ fn deduplicate_roots(roots: Vec<PathBuf>) -> Vec<PathBuf> {
 fn classify_entry(
     entry: &fs::DirEntry,
     extensions: &BTreeSet<VideoExtension>,
-) -> io::Result<Option<AnalysisEntryKind>> {
+) -> io::Result<Option<NativeEntryKind>> {
     let file_type = entry.file_type()?;
     if file_type.is_symlink() {
         return Ok(None);
@@ -658,9 +1101,9 @@ fn classify_entry(
         return Ok(None);
     }
     if file_type.is_dir() {
-        Ok(Some(AnalysisEntryKind::Folder))
+        Ok(Some(NativeEntryKind::Folder))
     } else if file_type.is_file() && matches_extension(&entry.path(), extensions) {
-        Ok(Some(AnalysisEntryKind::File))
+        Ok(Some(NativeEntryKind::File))
     } else {
         Ok(None)
     }
@@ -879,7 +1322,10 @@ mod tests {
         let rows: Vec<_> = batches.into_iter().flatten().collect();
         assert!(rows.iter().any(|row| {
             row.display_name.text == "a-doomed"
-                && row.directory_failure == Some(AnalysisDirectoryFailure::Missing)
+                && row.entry
+                    == AnalysisRowEntry::Folder {
+                        failure: Some(AnalysisDirectoryFailure::Missing),
+                    }
         }));
         assert!(rows.iter().any(|row| row.display_name.text == "movie.mkv"));
         fs::remove_dir_all(root).expect("remove fixture");
@@ -927,7 +1373,8 @@ mod tests {
             events.recv_timeout(Duration::from_secs(2)),
             Ok(DriverEvent::Snapshot(_))
         ));
-        let runtime = AnalysisDiscoveryRuntime::start(driver.commands.clone()).expect("runtime");
+        let runtime = AnalysisRuntime::start(driver.commands.clone(), Arc::new(Mutex::new(None)))
+            .expect("runtime");
         let first = runtime
             .begin(vec![first_root.clone()], extensions())
             .expect("first generation");
@@ -1021,7 +1468,7 @@ mod tests {
         let rows: Vec<_> = collect(&request, 32).into_iter().flatten().collect();
         let row = rows
             .iter()
-            .find(|row| row.kind == AnalysisEntryKind::File)
+            .find(|row| matches!(row.entry, AnalysisRowEntry::File { .. }))
             .expect("file row");
         assert!(row.display_name.lossy);
         let native = lock(&request.registry)
@@ -1090,7 +1537,10 @@ mod tests {
         let rows: Vec<_> = collect(&request, 32).into_iter().flatten().collect();
         assert!(rows.iter().any(|row| {
             row.display_name.text == "secret"
-                && row.directory_failure == Some(AnalysisDirectoryFailure::PermissionDenied)
+                && row.entry
+                    == AnalysisRowEntry::Folder {
+                        failure: Some(AnalysisDirectoryFailure::PermissionDenied),
+                    }
         }));
         fs::set_permissions(&secret, fs::Permissions::from_mode(0o755)).expect("restore");
         fs::remove_dir_all(root).expect("remove fixture");

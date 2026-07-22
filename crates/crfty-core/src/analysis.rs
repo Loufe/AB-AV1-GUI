@@ -2,7 +2,10 @@ use std::collections::BTreeMap;
 
 use serde::{Deserialize, Serialize, Serializer};
 
-use crate::{DestructiveIdentity, ExecutionSettings, FileRecord, ParkedStatus, VerdictKind};
+use crate::{
+    ContentKey, DestructiveIdentity, ExecutionSettings, FileRecord, ImportPath, MediaObservation,
+    ParkedStatus, PathHash, VerdictKind, VideoMeta,
+};
 
 #[derive(
     Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize, specta::Type,
@@ -32,12 +35,6 @@ pub struct AnalysisDisplayText {
     pub lossy: bool,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, specta::Type)]
-pub enum AnalysisEntryKind {
-    Folder,
-    File,
-}
-
 /// A directory-local Level-0 failure. The generation continues after every
 /// variant: this is standing row state, not a generation-wide terminal error.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, specta::Type)]
@@ -50,17 +47,81 @@ pub enum AnalysisDirectoryFailure {
     Unavailable { detail: String },
 }
 
-/// Level-0 row facts only. Media facts, applicability, predictions, and
-/// non-discovery failures extend the Analysis read model in their owning
-/// child issues.
+/// Bounded, path-scrubbed diagnostic output from one ffprobe invocation.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, specta::Type)]
+pub struct AnalysisDiagnosticTail {
+    pub text: String,
+    pub truncated: bool,
+}
+
+/// A file-local Basic Scan failure. One row failing never aborts its
+/// generation; infrastructure failures that prevent the pool from making
+/// progress remain generation-wide failures.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, specta::Type)]
+pub enum AnalysisScanFailure {
+    Missing,
+    Unavailable {
+        detail: String,
+    },
+    TimedOut {
+        diagnostic: AnalysisDiagnosticTail,
+    },
+    Rejected {
+        diagnostic: AnalysisDiagnosticTail,
+    },
+    InvalidOutput {
+        detail: String,
+        diagnostic: AnalysisDiagnosticTail,
+    },
+    Supervision {
+        detail: String,
+        diagnostic: AnalysisDiagnosticTail,
+    },
+    ChangedAfterProbe,
+    ChangedDuringSampling,
+}
+
+/// Standing Level-1 result for a discovered file. Imported analyses remain
+/// durable provenance on the selected `FileRecord`; they are intentionally
+/// not copied into this ephemeral row as reusable evidence.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, specta::Type)]
+pub enum AnalysisFileScan {
+    Discovered,
+    Scanned {
+        content_key: ContentKey,
+        metadata: VideoMeta,
+        refresh_failure: Option<Box<AnalysisScanFailure>>,
+    },
+    SettledOutput {
+        source_content_key: ContentKey,
+        output_content_key: ContentKey,
+        metadata: Option<VideoMeta>,
+        refresh_failure: Option<Box<AnalysisScanFailure>>,
+    },
+    Failed {
+        failure: AnalysisScanFailure,
+    },
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, specta::Type)]
+pub enum AnalysisRowEntry {
+    Folder {
+        failure: Option<AnalysisDirectoryFailure>,
+    },
+    File {
+        scan: AnalysisFileScan,
+    },
+}
+
+/// Generation-scoped row facts. Mutually exclusive folder and file state is
+/// represented by a tagged enum rather than nullable cross-variant fields.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, specta::Type)]
 pub struct AnalysisRow {
     pub id: AnalysisRowId,
     pub parent: Option<AnalysisRowId>,
-    pub kind: AnalysisEntryKind,
+    pub entry: AnalysisRowEntry,
     pub display_name: AnalysisDisplayText,
     pub display_path: AnalysisDisplayText,
-    pub directory_failure: Option<AnalysisDirectoryFailure>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, specta::Type)]
@@ -214,6 +275,39 @@ pub enum AnalysisCommand {
         generation: AnalysisGenerationId,
         activity: AnalysisActivity,
     },
+    BeginBasicScan {
+        generation: AnalysisGenerationId,
+    },
+    InspectFile {
+        generation: AnalysisGenerationId,
+        row_id: AnalysisRowId,
+        path_hash: PathHash,
+        current: CurrentFileIdentity,
+        timestamp_reliability: TimestampReliability,
+        import_paths: Vec<ImportPath>,
+    },
+    ObserveFile {
+        generation: AnalysisGenerationId,
+        row_id: AnalysisRowId,
+        observation: Box<MediaObservation>,
+        import_paths: Vec<ImportPath>,
+    },
+    FailFile {
+        generation: AnalysisGenerationId,
+        row_id: AnalysisRowId,
+        failure: AnalysisScanFailure,
+    },
+    FinishBasicScan {
+        generation: AnalysisGenerationId,
+    },
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum BasicScanDisposition {
+    Complete,
+    Observe,
+    Missing,
+    Unavailable,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -455,6 +549,10 @@ pub fn decide_freshness(
     if let Some(reason) = current_timestamp_reason {
         return FreshnessDecision::Reobserve(reason);
     }
+    // A completed replace-mode transaction carries a full destructive
+    // identity captured after settlement. It wins before the stale source
+    // binding, but only after timestamp reliability has admitted a metadata
+    // shortcut (ADR-017).
     if settled_output == Some(current) {
         return FreshnessDecision::RecognizeSettledOutput;
     }
@@ -509,10 +607,11 @@ mod tests {
         AnalysisRow {
             id: AnalysisRowId(id),
             parent: None,
-            kind: AnalysisEntryKind::File,
+            entry: AnalysisRowEntry::File {
+                scan: AnalysisFileScan::Discovered,
+            },
             display_name: display.clone(),
             display_path: display,
-            directory_failure: None,
         }
     }
 

@@ -10,7 +10,7 @@
 //! user-interface frameworks.
 
 pub mod ab_av1;
-pub mod analysis_discovery;
+pub mod analysis;
 pub mod config;
 pub mod coordinator;
 pub mod driver;
