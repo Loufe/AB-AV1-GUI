@@ -48,9 +48,10 @@ function activityLabel(activity: VendorActivity): string {
 
 function availabilityLabel(tools: ToolsState | null): string {
   if (tools === null) return "Waiting for dependency status";
-  if ("Missing" in tools.availability) {
-    const names = tools.availability.Missing.missing.join(", ");
-    return `${names || "Media dependencies"} missing. ${tools.availability.Missing.detail}`;
+  const missing = tools.availability.Missing;
+  if (missing !== undefined) {
+    const names = missing.missing.join(", ");
+    return `${names || "Media dependencies"} missing. ${missing.detail}`;
   }
   const available = tools.availability.Available;
   const revisions = available.revisions;
@@ -72,11 +73,17 @@ export function DependenciesActions() {
 
   const activity = tools?.activity ?? "Idle";
   const busy = tools === null || commandPending || isBusy(activity);
-  const missing = tools !== null && "Missing" in tools.availability;
+  const missing = tools?.availability.Missing !== undefined;
   const failed = typeof activity === "object" && "Failed" in activity;
   const showInstall = missing || tools?.update_available === true || failed;
   const installDisabled = busy || session !== "Idle" || hasActiveItem;
-  const installLabel = missing ? "Install" : tools?.update_available ? "Update" : "Retry install";
+  const installLabel = failed
+    ? "Retry install"
+    : missing
+      ? "Install"
+      : tools?.update_available
+        ? "Update"
+        : "Retry install";
 
   const run = async (operation: () => Promise<void>) => {
     setCommandPending(true);
@@ -90,8 +97,7 @@ export function DependenciesActions() {
     }
   };
 
-  const downloading = typeof activity === "object" && "Downloading" in activity;
-  const download = downloading ? activity.Downloading : null;
+  const download = typeof activity === "object" ? (activity.Downloading ?? null) : null;
   const percent =
     download?.total !== null && download?.total !== undefined && download.total > 0
       ? Math.min(100, (download.received / download.total) * 100)
@@ -121,9 +127,11 @@ export function DependenciesActions() {
           >
             <ProgressLabel>Download</ProgressLabel>
             <ProgressValue>
-              {download.total === null
-                ? formatFileSize(download.received)
-                : `${formatFileSize(download.received)} / ${formatFileSize(download.total)}`}
+              {() =>
+                download.total === null
+                  ? formatFileSize(download.received)
+                  : `${formatFileSize(download.received)} / ${formatFileSize(download.total)}`
+              }
             </ProgressValue>
           </Progress>
         ) : (
@@ -172,16 +180,30 @@ export function ApplicationUpdateAction() {
 
   return (
     <SettingsGroup title="Application">
-      <SettingContainer label="Application updates" description={status} last>
-        <div className="flex gap-2">
-          <Button variant="outline" size="sm" disabled={checking} onClick={() => void check()}>
-            {checking ? "Checking…" : "Check for updates"}
-          </Button>
-          {summary?.update_available === true && (
-            <Button size="sm" onClick={() => void open()}>
-              Open release page
+      <SettingContainer
+        label="Application updates"
+        description="Check releases manually; updates are never installed automatically"
+        last
+      >
+        <div className="flex flex-col items-end gap-1">
+          <div className="flex gap-2">
+            <Button variant="outline" size="sm" disabled={checking} onClick={() => void check()}>
+              {checking ? "Checking…" : "Check for updates"}
             </Button>
-          )}
+            {summary?.update_available === true && (
+              <Button size="sm" onClick={() => void open()}>
+                Open release page
+              </Button>
+            )}
+          </div>
+          <p
+            className={
+              error === null ? "text-xs text-muted-foreground" : "text-xs text-destructive"
+            }
+            role={error === null ? "status" : "alert"}
+          >
+            {status}
+          </p>
         </div>
       </SettingContainer>
     </SettingsGroup>
