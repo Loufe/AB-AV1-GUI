@@ -48,6 +48,18 @@ export async function saveSettings(settings: Settings): Promise<void> {
 }
 
 /**
+ * Ask the engine to compute Statistics using the caller's local-calendar
+ * offset. This resolves when the command is accepted; the answer arrives
+ * later on the sequenced stream and is stored by connect.ts.
+ */
+export async function requestStatistics(utcOffsetMinutes: number): Promise<void> {
+  const result = await commands.requestStatistics(utcOffsetMinutes);
+  if (result.status === "error") {
+    throw new Error(`statistics request failed (${result.error.code}): ${result.error.message}`);
+  }
+}
+
+/**
  * Imports a history file produced by the V2 converter script
  * (docs/HISTORY_IMPORT.md). Records are parked durably and adopted as
  * matching files are prepared; the summary reports how many were parked and
