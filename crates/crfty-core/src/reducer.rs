@@ -2,17 +2,18 @@ use std::path::PathBuf;
 
 use serde::{Deserialize, Serialize};
 
+use crate::history::prepare_import_adoptions;
 use crate::state::ConversionRun;
 use crate::{
     AnalysisCommand, AnalysisDelta, AnalysisIntent, AnalysisMutationError, AnalysisResult,
     AppState, ClaimId, ClaimedJob, CompletionEvidence, ConfigDelta, CorruptionSignature,
     DecodeMode, DecodePreference, DurableDelta, ExecutionSettings, ImportPath,
-    ImportedHistoryRecord, ImportedProvenance, ItemOutcome, JobAction, JobSpec, MediaObservation,
-    Operation, OutputDelta, OutputTarget, OverwriteDecision, ParkedResolution, PathHash, PhaseSpan,
-    QueueItem, QueueItemId, QueueItemState, ReservedJob, RunId, SessionAggregates, SessionState,
-    Settings, SkipReason, StatisticsPayload, Telemetry, ToolAvailability, ToolsState, UnixMillis,
-    VendorActivity, apply_analysis_mutation, begin_analysis_generation, evaluate_enqueue, fold,
-    fold_config, resolve_parked, select_job_action, statistics,
+    ImportedHistoryRecord, ItemOutcome, JobAction, JobSpec, MediaObservation, Operation,
+    OutputDelta, OutputTarget, OverwriteDecision, PathHash, PhaseSpan, QueueItem, QueueItemId,
+    QueueItemState, ReservedJob, RunId, SessionAggregates, SessionState, Settings, SkipReason,
+    StatisticsPayload, Telemetry, ToolAvailability, ToolsState, UnixMillis, VendorActivity,
+    apply_analysis_mutation, begin_analysis_generation, evaluate_enqueue, fold, fold_config,
+    select_job_action, statistics,
 };
 
 /// Sanity bound for a requester-supplied UTC offset: one day in minutes.
@@ -929,101 +930,16 @@ fn apply_worker(state: &AppState, command: WorkerCommand) -> Applied {
             let record = content_key
                 .as_ref()
                 .and_then(|key| state.durable.records.get(key));
-            // Parked import records resolve against the fresh observation.
-            // The adoptions are computed BEFORE the action is selected: the
-            // action must be chosen against the post-adoption record, both
-            // because an adopted "already converted" verdict is exactly what
-            // the claim-time skip exists for, and because replay validation
-            // recomputes the action after these deltas fold. A native
-            // verdict already on the record outranks an adopted one —
-            // provenance stays, the verdict does not regress.
-            let native_verdict_stands = record
-                .and_then(|known| known.verdict.as_ref())
-                .is_some_and(|existing| existing.source_run.is_some());
-            let resolutions: Vec<(ImportPath, ImportedHistoryRecord, ParkedResolution)> =
-                observation
-                    .as_ref()
-                    .map(|observation| {
-                        import_paths
-                            .iter()
-                            .filter_map(|key| {
-                                state.durable.parked.get(key).map(|parked| (key, parked))
-                            })
-                            .map(|(key, parked)| {
-                                (
-                                    key.clone(),
-                                    parked.clone(),
-                                    resolve_parked(parked, observation),
-                                )
-                            })
-                            .collect()
-                    })
-                    .unwrap_or_default();
-            let mut selected_import = record.and_then(|known| known.imported.clone());
-            for (import_path, imported, resolution) in &resolutions {
-                if !matches!(resolution, ParkedResolution::Adopt { .. }) {
-                    continue;
-                }
-                let candidate = ImportedProvenance {
-                    import_path: import_path.clone(),
-                    record: imported.clone(),
-                };
-                if selected_import
-                    .as_ref()
-                    .is_none_or(|current| candidate.outranks(current))
-                {
-                    selected_import = Some(candidate);
-                }
-            }
-            let selected_path = selected_import
-                .as_ref()
-                .map(|selected| &selected.import_path);
-            let adoptions: Vec<DurableDelta> = if let Some(adoption_content_key) = &content_key {
-                resolutions
-                    .into_iter()
-                    .map(|(import_path, imported, resolution)| match resolution {
-                        ParkedResolution::Adopt { verdict } => DurableDelta::ParkedAdopted {
-                            verdict: if !native_verdict_stands
-                                && selected_path == Some(&import_path)
-                            {
-                                verdict
-                            } else {
-                                None
-                            },
-                            import_path,
-                            content_key: adoption_content_key.clone(),
-                            imported,
-                        },
-                        ParkedResolution::Retire => DurableDelta::ParkedRetired { import_path },
-                    })
-                    .collect()
-            } else {
-                Vec::new()
-            };
-            let adopted_verdict = adoptions.iter().rev().find_map(|delta| match delta {
-                DurableDelta::ParkedAdopted {
-                    verdict: Some(verdict),
-                    ..
-                } => Some(verdict.clone()),
-                _ => None,
-            });
-            // The record as it will exist once this batch folds: adopted
-            // verdicts land on the existing record, or on the record that
-            // `MediaObserved` is about to create.
-            let effective_record: Option<crate::FileRecord> = match (&adopted_verdict, record) {
-                (Some(verdict), Some(known)) => {
-                    let mut known = known.clone();
-                    known.verdict = Some(verdict.clone());
-                    Some(known)
-                }
-                (Some(verdict), None) => observation.as_ref().map(|observed| {
-                    let mut fresh = crate::FileRecord::new(observed.metadata.clone());
-                    fresh.verdict = Some(verdict.clone());
-                    fresh
-                }),
-                (None, _) => None,
-            };
-            let record_for_action = effective_record.as_ref().or(record);
+            // Compute import effects before selecting the action: replay
+            // validation recomputes that action after these deltas fold, so
+            // the live decision must observe the same post-adoption record.
+            let prepared_imports = prepare_import_adoptions(
+                &state.durable,
+                observation.as_deref(),
+                &import_paths,
+                record,
+            );
+            let record_for_action = prepared_imports.effective_record.as_ref().or(record);
             let metadata = observation
                 .as_ref()
                 .map(|observed| &observed.metadata)
@@ -1071,7 +987,7 @@ fn apply_worker(state: &AppState, command: WorkerCommand) -> Applied {
                 }
                 // The adoption deltas land AFTER MediaObserved so the
                 // content record exists when an adoption folds.
-                applied.durable.extend(adoptions);
+                applied.durable.extend(prepared_imports.deltas);
             }
             applied.durable.push(DurableDelta::ItemPrepared {
                 spec: Box::new(spec.clone()),

@@ -1,4 +1,5 @@
 use std::{
+    future::Future,
     marker::PhantomData,
     sync::{
         Arc, Mutex,
@@ -32,12 +33,12 @@ pub enum FaultInjection {
 
 /// State of the single cancellation slot, scoped to one job's acquisition window.
 ///
-/// A job acquires by flipping `RuntimeState::active` to `true` and only then
-/// installs its `CancellationHandle`. A shutdown/force-stop racing into that
-/// window would otherwise snapshot an empty slot and silently lose the cancel.
-/// `CancelPending` records that intent so the handle is cancelled the instant it
-/// is installed. `finish_job` resets the slot to `Idle` at the job boundary, so a
-/// pending cancel can never leak into a later, unrelated job.
+/// A job acquires by setting `CancellationState::active` and only then installs
+/// its `CancellationHandle`. A shutdown racing into that window would otherwise
+/// snapshot an empty slot and silently lose the cancel. `CancelPending` records
+/// that intent so the handle is cancelled the instant it is installed. The
+/// active flag and slot share one mutex, so `finish_job` resets both atomically
+/// and a pending cancel cannot leak into a later, unrelated job.
 enum CancellationSlot {
     Idle,
     Installed(CancellationHandle),
@@ -46,53 +47,71 @@ enum CancellationSlot {
 
 struct RuntimeState {
     accepting: AtomicBool,
-    active: AtomicBool,
-    cancellation: Mutex<CancellationSlot>,
+    cancellation: Mutex<CancellationState>,
+}
+
+struct CancellationState {
+    active: bool,
+    slot: CancellationSlot,
 }
 
 impl RuntimeState {
     fn new() -> Self {
         Self {
             accepting: AtomicBool::new(true),
-            active: AtomicBool::new(false),
-            cancellation: Mutex::new(CancellationSlot::Idle),
+            cancellation: Mutex::new(CancellationState {
+                active: false,
+                slot: CancellationSlot::Idle,
+            }),
         }
     }
 
-    fn lock_slot(&self) -> std::sync::MutexGuard<'_, CancellationSlot> {
+    fn lock_cancellation(&self) -> std::sync::MutexGuard<'_, CancellationState> {
         match self.cancellation.lock() {
-            Ok(slot) => slot,
+            Ok(state) => state,
             Err(poisoned) => poisoned.into_inner(),
         }
     }
 
+    fn try_acquire(&self) -> bool {
+        let mut state = self.lock_cancellation();
+        if state.active {
+            false
+        } else {
+            state.active = true;
+            true
+        }
+    }
+
     fn finish_job(&self) {
-        *self.lock_slot() = CancellationSlot::Idle;
-        self.active.store(false, Ordering::Release);
+        let mut state = self.lock_cancellation();
+        state.active = false;
+        state.slot = CancellationSlot::Idle;
     }
 
     /// Install the acquiring job's handle. If a cancel raced in ahead of the
     /// install (`CancelPending`), the freshly installed handle is cancelled at
     /// once so the intent is not lost.
     fn install_cancellation(&self, cancellation: &CancellationHandle) {
-        let mut slot = self.lock_slot();
-        if matches!(&*slot, CancellationSlot::CancelPending) {
+        let mut state = self.lock_cancellation();
+        if matches!(&state.slot, CancellationSlot::CancelPending) {
             cancellation.cancel(CancelMode::Force);
         }
-        *slot = CancellationSlot::Installed(cancellation.clone());
+        state.slot = CancellationSlot::Installed(cancellation.clone());
     }
 
     fn cancel_active(&self) {
-        let mut slot = self.lock_slot();
-        match &*slot {
+        let mut state = self.lock_cancellation();
+        match &state.slot {
             CancellationSlot::Installed(cancellation) => cancellation.cancel(CancelMode::Force),
             // No handle installed yet: only record the intent while a job is
-            // genuinely occupying its acquisition window (`active` is set before
-            // the handle is installed and cleared with the slot in `finish_job`).
+            // genuinely occupying its acquisition window (`active` is set
+            // before the handle is installed and cleared atomically with the
+            // slot in `finish_job`).
             // Without an active job there is nothing to cancel, and arming here
             // could otherwise cancel the next job that installs its handle.
-            CancellationSlot::Idle if self.active.load(Ordering::Acquire) => {
-                *slot = CancellationSlot::CancelPending;
+            CancellationSlot::Idle if state.active => {
+                state.slot = CancellationSlot::CancelPending;
             }
             CancellationSlot::Idle | CancellationSlot::CancelPending => {}
         }
@@ -225,11 +244,11 @@ impl AbAv1Runtime {
         }
         validate_tool("ffmpeg", &tools.ffmpeg)?;
         validate_tool("ffprobe", &tools.ffprobe)?;
-        self.state
-            .active
-            .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
-            .map(|_| ())
-            .map_err(|_| StartJobError::Busy)
+        if self.state.try_acquire() {
+            Ok(())
+        } else {
+            Err(StartJobError::Busy)
+        }
     }
 
     fn send_job(&self, command: RuntimeCommand) -> Result<(), StartJobError> {
@@ -529,11 +548,9 @@ fn validate_encode_request(request: &EncodeRequest) -> Result<(), StartJobError>
     Ok(())
 }
 
-use std::future::Future;
-
 #[cfg(test)]
 mod tests {
-    use std::{path::PathBuf, sync::atomic::Ordering, time::Duration};
+    use std::{path::PathBuf, time::Duration};
 
     use crfty_core::DecodeMode;
 
@@ -546,7 +563,7 @@ mod tests {
     fn cancel_during_acquisition_window_cancels_the_installed_handle() {
         let state = RuntimeState::new();
         // Acquisition flips `active` before the handle is installed.
-        state.active.store(true, Ordering::Release);
+        assert!(state.try_acquire());
         // Shutdown races into the window: no handle to snapshot yet.
         state.cancel_active();
         let (handle, receiver) = CancellationHandle::fixture();
@@ -559,7 +576,7 @@ mod tests {
     #[test]
     fn install_then_cancel_cancels_the_active_handle() {
         let state = RuntimeState::new();
-        state.active.store(true, Ordering::Release);
+        assert!(state.try_acquire());
         let (handle, receiver) = CancellationHandle::fixture();
         state.install_cancellation(&handle);
         assert_eq!(*receiver.borrow(), None);
@@ -578,14 +595,25 @@ mod tests {
     }
 
     #[test]
+    fn acquisition_is_exclusive_until_the_job_finishes() {
+        let state = RuntimeState::new();
+        assert!(state.try_acquire());
+        assert!(!state.try_acquire());
+
+        state.finish_job();
+
+        assert!(state.try_acquire());
+    }
+
+    #[test]
     fn finish_job_clears_pending_cancel_so_it_cannot_leak() {
         let state = RuntimeState::new();
-        state.active.store(true, Ordering::Release);
+        assert!(state.try_acquire());
         state.cancel_active();
         // The job boundary must discard the pending cancel.
         state.finish_job();
         // A later acquisition installs its handle and must survive.
-        state.active.store(true, Ordering::Release);
+        assert!(state.try_acquire());
         let (handle, receiver) = CancellationHandle::fixture();
         state.install_cancellation(&handle);
         assert_eq!(*receiver.borrow(), None);

@@ -13,6 +13,7 @@ mod analysis;
 mod constants;
 mod estimation;
 mod failure;
+mod history;
 mod job;
 mod journal;
 mod media;

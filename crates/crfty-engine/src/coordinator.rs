@@ -2311,17 +2311,16 @@ fn resolve_output_for(
         .ok_or_else(|| "input has no file stem".to_owned())?;
     match output_target {
         OutputTarget::Replace => {
+            let is_matroska = input.extension().is_some_and(|extension| {
+                extension.eq_ignore_ascii_case(OUTPUT_CONTAINER_EXTENSION)
+            });
             Ok((
-                if input.extension().is_some_and(|extension| {
-                    extension.eq_ignore_ascii_case(OUTPUT_CONTAINER_EXTENSION)
-                }) {
+                if is_matroska {
                     input.to_path_buf()
                 } else {
                     input.with_extension(OUTPUT_CONTAINER_EXTENSION)
                 },
-                if input.extension().is_some_and(|extension| {
-                    extension.eq_ignore_ascii_case(OUTPUT_CONTAINER_EXTENSION)
-                }) {
+                if is_matroska {
                     crfty_core::Replacement::KeepOriginal
                 } else {
                     crfty_core::Replacement::RetireOriginal
