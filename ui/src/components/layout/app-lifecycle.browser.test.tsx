@@ -88,7 +88,7 @@ describe("application view lifecycle", () => {
     settingsPanel.scrollTop = 120;
     expect(settingsPanel.scrollTop).toBe(120);
 
-    const historyNav = page.getByRole("button", { name: "History" });
+    const historyNav = page.getByRole("button", { name: "History", exact: true });
     await historyNav.click();
 
     await expect.element(historyNav).toHaveFocus();

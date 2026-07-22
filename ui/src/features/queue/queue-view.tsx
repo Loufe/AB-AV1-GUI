@@ -6,7 +6,6 @@ import { EmptyState } from "@/components/empty-state";
 import type { OutputTarget, QueueItem, QueueItemId, Settings, ToolsState } from "@/lib/bindings";
 import {
   forceStop,
-  pickPaths,
   queueAddPaths,
   queueClear,
   queueClearCompleted,
@@ -14,6 +13,7 @@ import {
   startQueue,
   stopAfterCurrent,
 } from "@/lib/ipc";
+import { pickPaths } from "@/lib/ipc/path-picker";
 import { useAppStore } from "@/lib/store/app-store";
 import { useProgressStore } from "@/lib/store/progress-store";
 

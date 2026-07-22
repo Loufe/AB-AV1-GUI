@@ -6,13 +6,10 @@ import {
   type AnalysisIntent,
   type CommandError,
   type CorruptionSignature,
-  type ImportSummary,
   type Operation,
   type OutputTarget,
-  type PathPickerKind,
   type QueueItemEdit,
   type QueueItemId,
-  type Settings,
   type ShellEvent,
 } from "@/lib/bindings";
 
@@ -41,13 +38,6 @@ export async function fetchAppVersion(): Promise<string> {
   return info.version;
 }
 
-export async function saveSettings(settings: Settings): Promise<void> {
-  const result = await commands.setSettings(settings);
-  if (result.status === "error") {
-    throw new Error(`settings save failed (${result.error.code}): ${result.error.message}`);
-  }
-}
-
 /**
  * Ask the engine to compute Statistics using the caller's local-calendar
  * offset. This resolves when the command is accepted; the answer arrives
@@ -58,20 +48,6 @@ export async function requestStatistics(utcOffsetMinutes: number): Promise<void>
   if (result.status === "error") {
     throw new Error(`statistics request failed (${result.error.code}): ${result.error.message}`);
   }
-}
-
-/**
- * Imports a history file produced by the V2 converter script
- * (docs/HISTORY_IMPORT.md). Records are parked durably and adopted as
- * matching files are prepared; the summary reports how many were parked and
- * how many were skipped as already known.
- */
-export async function importHistory(path: string): Promise<ImportSummary> {
-  const result = await commands.importHistory(path);
-  if (result.status === "error") {
-    throw new Error(`history import failed (${result.error.code}): ${result.error.message}`);
-  }
-  return result.data;
 }
 
 /**
@@ -114,18 +90,6 @@ export async function queueAddPaths(
     await commands.queueAddPaths(inputs, operation, intent, outputTarget),
     "queue add",
   );
-}
-
-/** Opens the narrow shell-owned picker; cancellation is an accepted empty list. */
-export async function pickPaths(
-  kind: PathPickerKind,
-  startingDirectory: string | null,
-): Promise<string[]> {
-  const result = await commands.pickPaths(kind, startingDirectory);
-  if (result.status === "error") {
-    throw new Error(`path picker failed (${result.error.code}): ${result.error.message}`);
-  }
-  return result.data;
 }
 
 export async function queueClear(): Promise<void> {
