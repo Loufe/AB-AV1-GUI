@@ -128,7 +128,7 @@ beforeEach(() => {
 });
 
 describe("applyPayload", () => {
-  it("replaces durable state and settings from a snapshot and clears health and telemetry", () => {
+  it("replaces state, clears telemetry, and marks every snapshot generation", () => {
     appStore.setState((state) => ({
       ...state,
       health: {
@@ -151,7 +151,11 @@ describe("applyPayload", () => {
       fatal: null,
       secondInstance: null,
     });
+    expect(state.snapshotGeneration).toBe(1);
     expect(progressStore.getState().telemetry).toEqual({});
+
+    applyPayload(snapshot(queueItem(2)));
+    expect(appStore.getState().snapshotGeneration).toBe(2);
   });
 
   it("folds durable deltas into the app store", () => {
