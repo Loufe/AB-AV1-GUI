@@ -26,17 +26,31 @@ export function SettingsGroup({ title, children }: SettingsGroupProps) {
 interface SettingContainerProps {
   label: string;
   description?: string;
+  /** Associates the row label with a native/form control when applicable. */
+  htmlFor?: string;
   /** The control rendered on the row's trailing edge. */
   children: ReactNode;
   last?: boolean;
 }
 
-export function SettingContainer({ label, description, children, last }: SettingContainerProps) {
+export function SettingContainer({
+  label,
+  description,
+  htmlFor,
+  children,
+  last,
+}: SettingContainerProps) {
   return (
     <>
       <div className="flex items-center justify-between gap-4 px-4 py-2.5">
         <div className="min-w-0">
-          <p className="text-sm">{label}</p>
+          {htmlFor === undefined ? (
+            <p className="text-sm">{label}</p>
+          ) : (
+            <label className="text-sm" htmlFor={htmlFor}>
+              {label}
+            </label>
+          )}
           {description !== undefined && (
             <p className="text-xs text-muted-foreground">{description}</p>
           )}

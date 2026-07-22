@@ -6,12 +6,10 @@ import {
   type AnalysisIntent,
   type CommandError,
   type CorruptionSignature,
-  type ImportSummary,
   type Operation,
   type OutputTarget,
   type QueueItemEdit,
   type QueueItemId,
-  type Settings,
   type ShellEvent,
 } from "@/lib/bindings";
 
@@ -38,27 +36,6 @@ export async function subscribeStream(onEvent: (event: ShellEvent) => void): Pro
 export async function fetchAppVersion(): Promise<string> {
   const info = await commands.appInfo();
   return info.version;
-}
-
-export async function saveSettings(settings: Settings): Promise<void> {
-  const result = await commands.setSettings(settings);
-  if (result.status === "error") {
-    throw new Error(`settings save failed (${result.error.code}): ${result.error.message}`);
-  }
-}
-
-/**
- * Imports a history file produced by the V2 converter script
- * (docs/HISTORY_IMPORT.md). Records are parked durably and adopted as
- * matching files are prepared; the summary reports how many were parked and
- * how many were skipped as already known.
- */
-export async function importHistory(path: string): Promise<ImportSummary> {
-  const result = await commands.importHistory(path);
-  if (result.status === "error") {
-    throw new Error(`history import failed (${result.error.code}): ${result.error.message}`);
-  }
-  return result.data;
 }
 
 /**
