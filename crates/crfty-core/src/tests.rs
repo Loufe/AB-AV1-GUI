@@ -60,7 +60,7 @@ fn analysis_commands_allocate_generations_and_reject_late_same_generation_work()
     let started = apply(
         &mut state,
         Command::Analysis(AnalysisCommand::Begin {
-            root: root("first"),
+            roots: vec![root("first")],
         }),
     );
     assert_eq!(
@@ -75,6 +75,7 @@ fn analysis_commands_allocate_generations_and_reject_late_same_generation_work()
         kind: AnalysisEntryKind::File,
         display_name: root("movie.mkv"),
         display_path: root("first/movie.mkv"),
+        directory_failure: None,
     };
     let inserted = apply(
         &mut state,
@@ -118,7 +119,7 @@ fn analysis_commands_allocate_generations_and_reject_late_same_generation_work()
     let next = apply(
         &mut state,
         Command::Analysis(AnalysisCommand::Begin {
-            root: root("second"),
+            roots: vec![root("second")],
         }),
     );
     assert_eq!(

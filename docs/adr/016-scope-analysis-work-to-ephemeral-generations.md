@@ -8,7 +8,7 @@ date: 2026-07-21
 ## Context and Problem Statement
 
 The Analysis view must stream a large directory tree before probing finishes,
-cancel obsolete work when the selected root changes, reject late worker
+cancel obsolete work when the selected roots change, reject late worker
 results, and recover coherently when the webview reconnects. Its rows are a
 working view over filesystem observations and durable content facts, not new
 durable facts themselves. Putting the tree in the journal would persist stale
@@ -64,7 +64,7 @@ No projection or renderer performs filesystem access. Durable facts enter only
 through durable commands; a row is a projection, not another durable fact.
 
 The reducer allocates a monotonically increasing `AnalysisGenerationId` with
-`begin_analysis_generation` when a new root or explicit rescan supersedes the
+`begin_analysis_generation` when new roots or an explicit rescan supersede the
 current generation. Callers never choose a generation. Every engine batch,
 completion, failure, and row-targeted command carries the generation.
 `apply_analysis_mutation` rejects a non-next Reset and every live mutation
@@ -74,7 +74,7 @@ to discovery commands and the driver registry.
 
 | Event | Core transition | Engine action | Late/stale behavior |
 | --- | --- | --- | --- |
-| Select root / explicit rescan | Allocate next id; Reset to `Discovering` and no rows | Create native registry and cancel the prior registry | Prior-generation work may finish but mutation is rejected |
+| Select roots / explicit rescan | Allocate next id; Reset to `Discovering` and no rows | Create native registry and cancel the prior registry | Prior-generation work may finish but mutation is rejected |
 | Discovery batch | Upsert rows for current id | Retain native paths under the same row ids | Unknown/stale generation is rejected |
 | Discovery complete | `Discovering` to `Discovered` | Stop discovery workers | Repeated stale completion is rejected |
 | Start Basic Scan | `Discovered`/`Ready` to `BasicScanning` | Acquire bounded probe permits | Vendor-busy or missing-tool request is rejected before transition |

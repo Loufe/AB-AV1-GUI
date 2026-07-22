@@ -4,15 +4,15 @@ use serde::{Deserialize, Serialize};
 
 use crate::state::ConversionRun;
 use crate::{
-    AnalysisCommand, AnalysisDelta, AnalysisIntent, AnalysisResult, AppState, ClaimId, ClaimedJob,
-    CompletionEvidence, ConfigDelta, CorruptionSignature, DecodeMode, DecodePreference,
-    DurableDelta, ExecutionSettings, ImportPath, ImportedHistoryRecord, ImportedProvenance,
-    ItemOutcome, JobAction, JobSpec, MediaObservation, Operation, OutputDelta, OutputTarget,
-    OverwriteDecision, ParkedResolution, PathHash, PhaseSpan, QueueItem, QueueItemId,
-    QueueItemState, ReservedJob, RunId, SessionAggregates, SessionState, Settings, SkipReason,
-    StatisticsPayload, Telemetry, ToolAvailability, ToolsState, UnixMillis, VendorActivity,
-    apply_analysis_mutation, begin_analysis_generation, evaluate_enqueue, fold, fold_config,
-    resolve_parked, select_job_action, statistics,
+    AnalysisCommand, AnalysisDelta, AnalysisIntent, AnalysisMutationError, AnalysisResult,
+    AppState, ClaimId, ClaimedJob, CompletionEvidence, ConfigDelta, CorruptionSignature,
+    DecodeMode, DecodePreference, DurableDelta, ExecutionSettings, ImportPath,
+    ImportedHistoryRecord, ImportedProvenance, ItemOutcome, JobAction, JobSpec, MediaObservation,
+    Operation, OutputDelta, OutputTarget, OverwriteDecision, ParkedResolution, PathHash, PhaseSpan,
+    QueueItem, QueueItemId, QueueItemState, ReservedJob, RunId, SessionAggregates, SessionState,
+    Settings, SkipReason, StatisticsPayload, Telemetry, ToolAvailability, ToolsState, UnixMillis,
+    VendorActivity, apply_analysis_mutation, begin_analysis_generation, evaluate_enqueue, fold,
+    fold_config, resolve_parked, select_job_action, statistics,
 };
 
 /// Sanity bound for a requester-supplied UTC offset: one day in minutes.
@@ -411,9 +411,12 @@ pub fn apply(state: &mut AppState, command: Command) -> Applied {
 fn apply_analysis_command(state: &AppState, command: AnalysisCommand) -> Applied {
     let mut applied = Applied::accepted();
     let delta = match command {
-        AnalysisCommand::Begin { root } => {
-            let delta = match begin_analysis_generation(&state.analysis, root) {
+        AnalysisCommand::Begin { roots } => {
+            let delta = match begin_analysis_generation(&state.analysis, roots) {
                 Ok(delta) => delta,
+                Err(AnalysisMutationError::EmptyRoots) => {
+                    return Applied::rejected("Analysis discovery requires at least one root");
+                }
                 Err(_) => return Applied::rejected("Analysis generation id space is exhausted"),
             };
             let generation = match &delta {

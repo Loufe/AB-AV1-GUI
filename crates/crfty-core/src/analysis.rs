@@ -38,8 +38,21 @@ pub enum AnalysisEntryKind {
     File,
 }
 
+/// A directory-local Level-0 failure. The generation continues after every
+/// variant: this is standing row state, not a generation-wide terminal error.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, specta::Type)]
+pub enum AnalysisDirectoryFailure {
+    Missing,
+    PermissionDenied,
+    NotDirectory,
+    TraversalRefused,
+    EntriesUnavailable { count: u32, detail: String },
+    Unavailable { detail: String },
+}
+
 /// Level-0 row facts only. Media facts, applicability, predictions, and
-/// failures extend the Analysis read model in their owning child issues.
+/// non-discovery failures extend the Analysis read model in their owning
+/// child issues.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, specta::Type)]
 pub struct AnalysisRow {
     pub id: AnalysisRowId,
@@ -47,6 +60,7 @@ pub struct AnalysisRow {
     pub kind: AnalysisEntryKind,
     pub display_name: AnalysisDisplayText,
     pub display_path: AnalysisDisplayText,
+    pub directory_failure: Option<AnalysisDirectoryFailure>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, specta::Type)]
@@ -149,7 +163,7 @@ fn promote_level(current: &mut Option<AnalysisLevel>, candidate: AnalysisLevel) 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, specta::Type)]
 pub struct AnalysisGeneration {
     pub id: AnalysisGenerationId,
-    pub root: AnalysisDisplayText,
+    pub roots: Vec<AnalysisDisplayText>,
     pub activity: AnalysisActivity,
     #[serde(serialize_with = "serialize_rows")]
     #[specta(type = Vec<AnalysisRow>)]
@@ -190,7 +204,7 @@ pub enum AnalysisDelta {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum AnalysisCommand {
     Begin {
-        root: AnalysisDisplayText,
+        roots: Vec<AnalysisDisplayText>,
     },
     UpsertRows {
         generation: AnalysisGenerationId,
@@ -204,6 +218,7 @@ pub enum AnalysisCommand {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum AnalysisMutationError {
+    EmptyRoots,
     GenerationExhausted,
     InvalidActivityTransition,
     ResetIsNotNext,
@@ -215,8 +230,11 @@ pub enum AnalysisMutationError {
 /// supply their own generation id.
 pub fn begin_analysis_generation(
     state: &AnalysisSnapshot,
-    root: AnalysisDisplayText,
+    roots: Vec<AnalysisDisplayText>,
 ) -> Result<AnalysisDelta, AnalysisMutationError> {
+    if roots.is_empty() {
+        return Err(AnalysisMutationError::EmptyRoots);
+    }
     let next = state.current.as_ref().map_or(Ok(1), |current| {
         current
             .id
@@ -228,7 +246,7 @@ pub fn begin_analysis_generation(
         snapshot: Box::new(AnalysisSnapshot {
             current: Some(AnalysisGeneration {
                 id: AnalysisGenerationId(next),
-                root,
+                roots,
                 activity: AnalysisActivity::Discovering,
                 rows: BTreeMap::new(),
             }),
@@ -249,6 +267,9 @@ pub fn apply_analysis_mutation(
             let Some(next) = snapshot.current.as_ref() else {
                 return Err(AnalysisMutationError::ResetIsNotNext);
             };
+            if next.roots.is_empty() {
+                return Err(AnalysisMutationError::EmptyRoots);
+            }
             let expected = state.current.as_ref().map_or(Ok(1), |current| {
                 current
                     .id
@@ -491,6 +512,7 @@ mod tests {
             kind: AnalysisEntryKind::File,
             display_name: display.clone(),
             display_path: display,
+            directory_failure: None,
         }
     }
 
@@ -498,10 +520,10 @@ mod tests {
         AnalysisSnapshot {
             current: Some(AnalysisGeneration {
                 id: AnalysisGenerationId(generation),
-                root: AnalysisDisplayText {
+                roots: vec![AnalysisDisplayText {
                     text: "root".to_owned(),
                     lossy: false,
-                },
+                }],
                 activity: AnalysisActivity::Discovering,
                 rows: BTreeMap::new(),
             }),
@@ -604,12 +626,16 @@ mod tests {
     #[test]
     fn reducer_allocates_generations_and_rejects_stale_mutations() {
         let mut state = AnalysisSnapshot::default();
+        assert_eq!(
+            begin_analysis_generation(&state, Vec::new()),
+            Err(AnalysisMutationError::EmptyRoots)
+        );
         let first = begin_analysis_generation(
             &state,
-            AnalysisDisplayText {
+            vec![AnalysisDisplayText {
                 text: "first".to_owned(),
                 lossy: false,
-            },
+            }],
         )
         .expect("first generation");
         assert!(matches!(
@@ -621,10 +647,10 @@ mod tests {
         apply_analysis_mutation(&mut state, &first).expect("apply first generation");
         let second = begin_analysis_generation(
             &state,
-            AnalysisDisplayText {
+            vec![AnalysisDisplayText {
                 text: "second".to_owned(),
                 lossy: false,
-            },
+            }],
         )
         .expect("second generation");
         apply_analysis_mutation(&mut state, &second).expect("apply second generation");
@@ -668,13 +694,29 @@ mod tests {
             ),
             Err(AnalysisMutationError::ResetIsNotNext)
         );
+        let mut empty_roots = snapshot(3);
+        empty_roots
+            .current
+            .as_mut()
+            .expect("generation")
+            .roots
+            .clear();
+        assert_eq!(
+            apply_analysis_mutation(
+                &mut state,
+                &AnalysisDelta::Reset {
+                    snapshot: Box::new(empty_roots),
+                },
+            ),
+            Err(AnalysisMutationError::EmptyRoots)
+        );
         assert_eq!(
             begin_analysis_generation(
                 &snapshot(u64::MAX),
-                AnalysisDisplayText {
+                vec![AnalysisDisplayText {
                     text: "exhausted".to_owned(),
                     lossy: false,
-                },
+                }],
             ),
             Err(AnalysisMutationError::GenerationExhausted)
         );

@@ -184,7 +184,7 @@ describe("applyPayload", () => {
             snapshot: {
               current: {
                 id: 12,
-                root: { text: "/videos", lossy: false },
+                roots: [{ text: "/videos", lossy: false }],
                 activity: "Discovering",
                 rows: [],
               },
@@ -205,6 +205,7 @@ describe("applyPayload", () => {
                 kind: "File",
                 display_name: { text: "movie.mkv", lossy: false },
                 display_path: { text: "/videos/movie.mkv", lossy: false },
+                directory_failure: null,
               },
             ],
           },
@@ -224,7 +225,7 @@ describe("applyPayload", () => {
             snapshot: {
               current: {
                 id: 7,
-                root: { text: "/old", lossy: false },
+                roots: [{ text: "/old", lossy: false }],
                 activity: "Ready",
                 rows: [],
               },

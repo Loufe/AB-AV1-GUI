@@ -1,4 +1,5 @@
 use std::{
+    collections::BTreeSet,
     fmt,
     path::{Path, PathBuf},
     sync::{
@@ -11,7 +12,7 @@ use std::{
 };
 
 use crfty_core::{
-    AnalysisAttempt, AnalysisCommand, AnalysisResult, AppSnapshot, CRF_FIXED_SCALE, ClaimId,
+    AnalysisAttempt, AnalysisGenerationId, AnalysisResult, AppSnapshot, CRF_FIXED_SCALE, ClaimId,
     ClaimedJob, Command, CompletionEvidence, ConflictKind, CorruptionSignature, Crf, DecodeMode,
     DurableDelta, DurableState, DurationMs, Effect, ExecutionSettings, FailureFacts, FailureKind,
     HistoryCommand, ItemOutcome, JobAction, JobPhase, JobProgress, MAX_PERCENT_BASIS_POINTS,
@@ -19,7 +20,7 @@ use crfty_core::{
     PERCENT_BASIS_POINTS_SCALE, PhaseSpan, ProjectionCommand, QueueCommand, QueueItemState,
     Replacement, Reply, RunId, SearchMeasurement, SessionCommand, SettingsCommand, SkipReason,
     StreamByteSizes, SystemCommand, Telemetry, UnixMillis, VMAF_SCORE_FIXED_SCALE, VendorActivity,
-    VendorCommand, VmafScore, VmafTarget, WorkerCommand, fold,
+    VendorCommand, VideoExtension, VmafScore, VmafTarget, WorkerCommand, fold,
 };
 
 const FIRST_RUNTIME_ID: u64 = 1;
@@ -218,6 +219,7 @@ pub struct EngineRuntime {
     driver: Option<DriverHandle>,
     supervisor: Option<thread::JoinHandle<()>>,
     event_forwarder: Option<thread::JoinHandle<()>>,
+    analysis: Option<Arc<crate::analysis_discovery::AnalysisDiscoveryRuntime>>,
     runtime: Option<Arc<AbAv1Runtime>>,
 }
 
@@ -362,14 +364,21 @@ impl EngineRuntime {
             .map_err(|error| {
                 EngineStartError::Failed(format!("failed to start coordinator: {error}"))
             })?;
+        let analysis =
+            crate::analysis_discovery::AnalysisDiscoveryRuntime::start(internal_commands.clone())
+                .map_err(|error| {
+                EngineStartError::Failed(format!("failed to start Analysis discovery: {error}"))
+            })?;
         Ok(Self {
             commands: UserCommandSender {
                 inner: internal_commands,
+                analysis: Arc::clone(&analysis),
             },
             events: public_event_rx,
             driver: Some(driver),
             supervisor: Some(supervisor),
             event_forwarder: Some(event_forwarder),
+            analysis: Some(analysis),
             runtime: Some(runtime),
         })
     }
@@ -379,6 +388,11 @@ impl EngineRuntime {
     }
 
     fn stop_and_join(&mut self) -> Result<(), EngineStartError> {
+        if let Some(analysis) = self.analysis.take() {
+            analysis.shutdown().map_err(|_| {
+                EngineStartError::Failed("Analysis discovery worker panicked".to_owned())
+            })?;
+        }
         if let Some(driver) = self.driver.take() {
             driver.shutdown().map_err(map_driver_start)?;
         }
@@ -415,14 +429,22 @@ pub struct ImportSummary {
 #[derive(Clone)]
 pub struct UserCommandSender {
     inner: CommandSender,
+    analysis: Arc<crate::analysis_discovery::AnalysisDiscoveryRuntime>,
 }
 
 impl UserCommandSender {
-    pub fn submit_analysis(
+    pub fn begin_analysis_discovery(
         &self,
-        command: AnalysisCommand,
-    ) -> Result<Reply, crate::driver::SubmitError> {
-        self.inner.submit(Command::Analysis(command))
+        roots: Vec<PathBuf>,
+        extensions: BTreeSet<VideoExtension>,
+    ) -> Result<AnalysisGenerationId, crate::analysis_discovery::AnalysisDiscoveryError> {
+        self.analysis.begin(roots, extensions)
+    }
+
+    pub fn cancel_analysis_discovery(
+        &self,
+    ) -> Result<(), crate::analysis_discovery::AnalysisDiscoveryError> {
+        self.analysis.cancel()
     }
 
     pub fn submit_queue(&self, command: QueueCommand) -> Result<Reply, crate::driver::SubmitError> {

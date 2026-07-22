@@ -12,6 +12,12 @@ export const commands = {
 	pickPaths: (kind: PathPickerKind, startingDirectory: string | null) => typedError<string[], CommandError>(__TAURI_INVOKE("pick_paths", { kind, startingDirectory })),
 	subscribe: (channel: Channel<ShellEvent_Deserialize>) => typedError<null, CommandError>(__TAURI_INVOKE("subscribe", { channel })),
 	/**
+	 *  Start a new Level-0 Analysis generation. The acknowledgement returns the
+	 *  reducer-allocated generation; bounded row batches arrive on the stream.
+	 */
+	analysisDiscover: (roots: string[]) => typedError<AnalysisGenerationId, CommandError>(__TAURI_INVOKE("analysis_discover", { roots })),
+	analysisCancel: () => typedError<null, CommandError>(__TAURI_INVOKE("analysis_cancel")),
+	/**
 	 *  Adds files and folders in one batch: folders expand through the engine
 	 *  scanner (filtered by the configured scan extensions), directly selected
 	 *  files pass through unfiltered. The outcome arrives as one
@@ -129,6 +135,17 @@ export type AnalysisDelta_Serialize = ({ Reset: {
 } }) & { Reset?: never; RowsUpserted?: never };
 
 /**
+ *  A directory-local Level-0 failure. The generation continues after every
+ *  variant: this is standing row state, not a generation-wide terminal error.
+ */
+export type AnalysisDirectoryFailure = "Missing" | "PermissionDenied" | "NotDirectory" | "TraversalRefused" | ({ EntriesUnavailable: {
+	count: number,
+	detail: string,
+} }) & { Unavailable?: never } | ({ Unavailable: {
+	detail: string,
+} }) & { EntriesUnavailable?: never };
+
+/**
  *  Presentation text derived from a native path. `lossy` is explicit so the
  *  UI never mistakes a replacement-character rendering for a reversible path.
  */
@@ -153,7 +170,7 @@ export type AnalysisGenerationId = number;
  */
 export type AnalysisGeneration_Deserialize = {
 	id: AnalysisGenerationId,
-	root: AnalysisDisplayText,
+	roots: AnalysisDisplayText[],
 	activity: AnalysisActivity,
 	rows: AnalysisRow[],
 };
@@ -164,7 +181,7 @@ export type AnalysisGeneration_Deserialize = {
  */
 export type AnalysisGeneration_Serialize = {
 	id: AnalysisGenerationId,
-	root: AnalysisDisplayText,
+	roots: AnalysisDisplayText[],
 	activity: AnalysisActivity,
 	rows: AnalysisRow[],
 };
@@ -210,7 +227,8 @@ export type AnalysisResult = {
 
 /**
  *  Level-0 row facts only. Media facts, applicability, predictions, and
- *  failures extend the Analysis read model in their owning child issues.
+ *  non-discovery failures extend the Analysis read model in their owning
+ *  child issues.
  */
 export type AnalysisRow = {
 	id: AnalysisRowId,
@@ -218,6 +236,7 @@ export type AnalysisRow = {
 	kind: AnalysisEntryKind,
 	display_name: AnalysisDisplayText,
 	display_path: AnalysisDisplayText,
+	directory_failure: AnalysisDirectoryFailure | null,
 };
 
 export type AnalysisRowId = number;

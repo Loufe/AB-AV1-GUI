@@ -17,12 +17,12 @@ use std::{
 };
 
 use crfty_core::{
-    AnalysisDelta, AnalysisIntent, AnalysisProfile, AnalysisSnapshot, AppSnapshot, ConfigDelta,
-    CorruptionReport, CorruptionSignature, DurableDelta, DurableState, EphemeralDelta,
-    ExecutionSettings, Operation, OutputTarget, OverwriteDecision, ProjectionCommand,
-    QueueAddRequest, QueueCommand, QueueItemId, Reply, RunId, SessionAggregates, SessionCommand,
-    SessionState, Settings, SettingsCommand, Telemetry, ToolsState, VendorCommand, fold,
-    fold_analysis, fold_config,
+    AnalysisDelta, AnalysisGenerationId, AnalysisIntent, AnalysisProfile, AnalysisSnapshot,
+    AppSnapshot, ConfigDelta, CorruptionReport, CorruptionSignature, DurableDelta, DurableState,
+    EphemeralDelta, ExecutionSettings, Operation, OutputTarget, OverwriteDecision,
+    ProjectionCommand, QueueAddRequest, QueueCommand, QueueItemId, Reply, RunId, SessionAggregates,
+    SessionCommand, SessionState, Settings, SettingsCommand, Telemetry, ToolsState, VendorCommand,
+    fold, fold_analysis, fold_config,
 };
 use crfty_engine::{
     coordinator::{EngineConfig, EngineRuntime, ToolsConfig, UserCommandSender},
@@ -132,6 +132,22 @@ impl From<OsActionError> for CommandError {
                 Self::new("rejected", format!("{} does not exist", path.display()))
             }
             OsActionError::Failed { message } => Self::new("internal", message),
+        }
+    }
+}
+
+impl From<crfty_engine::analysis_discovery::AnalysisDiscoveryError> for CommandError {
+    fn from(error: crfty_engine::analysis_discovery::AnalysisDiscoveryError) -> Self {
+        match error {
+            crfty_engine::analysis_discovery::AnalysisDiscoveryError::EmptyRoots
+            | crfty_engine::analysis_discovery::AnalysisDiscoveryError::Rejected(_) => {
+                Self::new("rejected", error.to_string())
+            }
+            crfty_engine::analysis_discovery::AnalysisDiscoveryError::ShuttingDown
+            | crfty_engine::analysis_discovery::AnalysisDiscoveryError::Submit(_)
+            | crfty_engine::analysis_discovery::AnalysisDiscoveryError::UnexpectedReply => {
+                Self::engine_unavailable(error.to_string())
+            }
         }
     }
 }
@@ -370,6 +386,27 @@ impl Bridge {
     pub fn submit_queue(&self, command: QueueCommand) -> Result<(), CommandError> {
         let commands = self.commands()?;
         map_reply(commands.submit_queue(command))
+    }
+
+    pub fn begin_analysis_discovery(
+        &self,
+        roots: Vec<PathBuf>,
+    ) -> Result<AnalysisGenerationId, CommandError> {
+        let commands = self.commands()?;
+        let extensions = lock_stream(&self.stream)
+            .model
+            .settings
+            .scan_extensions
+            .clone();
+        commands
+            .begin_analysis_discovery(roots, extensions)
+            .map_err(CommandError::from)
+    }
+
+    pub fn cancel_analysis_discovery(&self) -> Result<(), CommandError> {
+        self.commands()?
+            .cancel_analysis_discovery()
+            .map_err(CommandError::from)
     }
 
     /// Expands files and folders into one `AddMany` batch carrying real
@@ -744,10 +781,10 @@ mod tests {
         AnalysisSnapshot {
             current: Some(AnalysisGeneration {
                 id: AnalysisGenerationId(generation),
-                root: AnalysisDisplayText {
+                roots: vec![AnalysisDisplayText {
                     text: "root".to_owned(),
                     lossy: false,
-                },
+                }],
                 activity: AnalysisActivity::Discovering,
                 rows: BTreeMap::new(),
             }),
@@ -767,6 +804,7 @@ mod tests {
                 text: format!("root/row-{id}"),
                 lossy: false,
             },
+            directory_failure: None,
         }
     }
 

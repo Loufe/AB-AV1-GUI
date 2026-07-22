@@ -11,6 +11,7 @@ function row(id: number, name: string): AnalysisRow {
     kind: "File",
     display_name: { text: name, lossy: false },
     display_path: { text: `/videos/${name}`, lossy: false },
+    directory_failure: null,
   };
 }
 
@@ -21,7 +22,7 @@ function generation(
 ): AnalysisGeneration_Deserialize {
   return {
     id,
-    root: { text: "/videos", lossy: false },
+    roots: [{ text: "/videos", lossy: false }],
     activity,
     rows,
   };

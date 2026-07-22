@@ -1,9 +1,10 @@
 //! Filesystem discovery for queue adds.
 //!
 //! Expands user-selected files and folders into concrete video files plus
-//! their enqueue facts (path hash and destructive identity). This is the seed of
-//! #42's generation-scoped discovery: keep it a plain breadth-first pass with
-//! no caching, watching, or media inspection.
+//! their enqueue facts (path hash and destructive identity). Analysis Level 0
+//! deliberately uses `analysis_discovery` instead: queue adds need an eager
+//! complete list and enqueue identities, while Analysis must stream native
+//! path rows without hashing.
 
 use std::{
     collections::{BTreeSet, VecDeque},

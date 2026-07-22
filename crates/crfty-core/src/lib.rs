@@ -33,11 +33,11 @@ mod time;
 pub type JsNumber = u32;
 
 pub use analysis::{
-    AnalysisActivity, AnalysisCommand, AnalysisDelta, AnalysisDisplayText, AnalysisEntryKind,
-    AnalysisGeneration, AnalysisGenerationId, AnalysisLevel, AnalysisLevelAssessment,
-    AnalysisMutationError, AnalysisRow, AnalysisRowId, AnalysisRowRef, AnalysisSnapshot,
-    CurrentFileIdentity, FreshnessDecision, FreshnessReason, ObservationStability,
-    TimestampReliability, apply_analysis_mutation, assess_analysis_levels,
+    AnalysisActivity, AnalysisCommand, AnalysisDelta, AnalysisDirectoryFailure,
+    AnalysisDisplayText, AnalysisEntryKind, AnalysisGeneration, AnalysisGenerationId,
+    AnalysisLevel, AnalysisLevelAssessment, AnalysisMutationError, AnalysisRow, AnalysisRowId,
+    AnalysisRowRef, AnalysisSnapshot, CurrentFileIdentity, FreshnessDecision, FreshnessReason,
+    ObservationStability, TimestampReliability, apply_analysis_mutation, assess_analysis_levels,
     begin_analysis_generation, decide_freshness, fold_analysis, observation_stability,
 };
 pub use estimation::{

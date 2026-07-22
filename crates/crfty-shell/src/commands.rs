@@ -1,8 +1,9 @@
 use std::path::PathBuf;
 
 use crfty_core::{
-    AnalysisIntent, CorruptionSignature, Operation, OutputTarget, ProjectionCommand, QueueCommand,
-    QueueItemEdit, QueueItemId, SessionCommand, Settings, VendorCommand,
+    AnalysisGenerationId, AnalysisIntent, CorruptionSignature, Operation, OutputTarget,
+    ProjectionCommand, QueueCommand, QueueItemEdit, QueueItemId, SessionCommand, Settings,
+    VendorCommand,
 };
 use serde::{Deserialize, Serialize};
 use tauri::{State, ipc::Channel};
@@ -107,6 +108,23 @@ fn queue_add_paths(
     output_target: OutputTarget,
 ) -> Result<(), CommandError> {
     bridge.queue_add_paths(inputs, operation, intent, output_target)
+}
+
+/// Start a new Level-0 Analysis generation. The acknowledgement returns the
+/// reducer-allocated generation; bounded row batches arrive on the stream.
+#[tauri::command]
+#[specta::specta]
+fn analysis_discover(
+    bridge: State<'_, Bridge>,
+    roots: Vec<PathBuf>,
+) -> Result<AnalysisGenerationId, CommandError> {
+    bridge.begin_analysis_discovery(roots)
+}
+
+#[tauri::command]
+#[specta::specta]
+fn analysis_cancel(bridge: State<'_, Bridge>) -> Result<(), CommandError> {
+    bridge.cancel_analysis_discovery()
 }
 
 #[tauri::command]
@@ -301,6 +319,8 @@ pub fn specta_builder() -> Builder<tauri::Wry> {
             app_info,
             pick_paths,
             subscribe,
+            analysis_discover,
+            analysis_cancel,
             queue_add_paths,
             queue_remove,
             queue_move,
