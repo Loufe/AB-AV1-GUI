@@ -66,6 +66,41 @@ pub enum OutputTarget {
     },
 }
 
+impl OutputTarget {
+    /// Validate the durable destination facts before they can enter the Queue.
+    pub fn validate(&self) -> Result<(), &'static str> {
+        match self {
+            Self::Replace => Ok(()),
+            Self::Suffix { suffix } => {
+                if suffix.is_empty() {
+                    return Err("output suffix cannot be empty");
+                }
+                if suffix.chars().any(|character| {
+                    character.is_control()
+                        || matches!(
+                            character,
+                            '/' | '\\' | ':' | '<' | '>' | '"' | '|' | '?' | '*'
+                        )
+                }) {
+                    return Err(
+                        "output suffix contains a path separator or invalid filename character",
+                    );
+                }
+                if suffix.ends_with(['.', ' ']) {
+                    return Err("output suffix cannot end in a dot or space");
+                }
+                Ok(())
+            }
+            Self::SeparateFolder { directory, .. } => {
+                if directory.to_string_lossy().trim().is_empty() {
+                    return Err("separate output folder must not be empty");
+                }
+                Ok(())
+            }
+        }
+    }
+}
+
 /// Per-item override of the destination-conflict rule. `FollowSettings`
 /// resolves from the output settings as they stand when the item is claimed;
 /// `Allow` and `Deny` pin the item's behavior regardless of later settings

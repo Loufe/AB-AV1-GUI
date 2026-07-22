@@ -100,6 +100,10 @@ export async function queueRemoveMany(itemIds: QueueItemId[]): Promise<void> {
   expectAccepted(await commands.queueRemoveMany(itemIds), "queue remove");
 }
 
+export async function queueReorderPending(pendingOrder: QueueItemId[]): Promise<void> {
+  expectAccepted(await commands.queueReorderPending(pendingOrder), "queue reorder");
+}
+
 export async function queueClearCompleted(): Promise<void> {
   expectAccepted(await commands.queueClearCompleted(), "clear completed");
 }

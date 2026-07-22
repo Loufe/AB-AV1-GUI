@@ -82,13 +82,6 @@ fn removed(ids: &[u64]) -> DurableDelta {
     }
 }
 
-fn moved(id: u64, before: Option<u64>) -> DurableDelta {
-    DurableDelta::QueueMoved {
-        item_id: QueueItemId(id),
-        before: before.map(QueueItemId),
-    }
-}
-
 fn reordered(pending_order: &[u64]) -> DurableDelta {
     DurableDelta::QueueReordered {
         pending_order: pending_order.iter().copied().map(QueueItemId).collect(),
@@ -453,26 +446,6 @@ fn scenarios() -> Vec<Scenario> {
             "queue_items_removed_missing",
             vec![added(1)],
             vec![removed(&[9])],
-        ),
-        scenario(
-            "queue_moved_before",
-            vec![added(1), added(2), added(3)],
-            vec![moved(3, Some(1))],
-        ),
-        scenario(
-            "queue_moved_to_end",
-            vec![added(1), added(2), added(3)],
-            vec![moved(1, None)],
-        ),
-        scenario(
-            "queue_moved_before_missing",
-            vec![added(1), added(2), added(3)],
-            vec![moved(1, Some(9))],
-        ),
-        scenario(
-            "queue_moved_missing_item",
-            vec![added(1), added(2)],
-            vec![moved(9, Some(1))],
         ),
         scenario(
             "queue_reordered_pending",

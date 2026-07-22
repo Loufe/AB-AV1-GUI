@@ -2316,6 +2316,7 @@ fn resolve_output_for(
     input: &std::path::Path,
     output_target: &OutputTarget,
 ) -> Result<(PathBuf, crfty_core::Replacement), String> {
+    output_target.validate().map_err(str::to_owned)?;
     let stem = input
         .file_stem()
         .ok_or_else(|| "input has no file stem".to_owned())?;
@@ -2338,7 +2339,6 @@ fn resolve_output_for(
             ))
         }
         OutputTarget::Suffix { suffix } => {
-            validate_suffix(suffix)?;
             let mut name = stem.to_os_string();
             name.push(suffix);
             name.push(".");
@@ -2374,27 +2374,6 @@ fn resolve_output_for(
             ))
         }
     }
-}
-
-fn validate_suffix(suffix: &str) -> Result<(), String> {
-    if suffix.is_empty() {
-        return Err("output suffix cannot be empty".to_owned());
-    }
-    if suffix.chars().any(|character| {
-        character.is_control()
-            || matches!(
-                character,
-                '/' | '\\' | ':' | '<' | '>' | '"' | '|' | '?' | '*'
-            )
-    }) {
-        return Err(
-            "output suffix contains a path separator or invalid filename character".to_owned(),
-        );
-    }
-    if suffix.ends_with(['.', ' ']) {
-        return Err("output suffix cannot end in a dot or space".to_owned());
-    }
-    Ok(())
 }
 
 fn validate_windows_file_name(name: &std::ffi::OsStr) -> Result<(), String> {
@@ -2561,7 +2540,7 @@ mod tests {
 
     use super::{
         ActiveCancellation, ActiveJobCancellation, join_within, resolve_output_for,
-        validate_suffix, validate_windows_file_name,
+        validate_windows_file_name,
     };
     use crate::ab_av1::{CancelMode, CancellationHandle};
     use crfty_core::RunId;
@@ -2577,9 +2556,22 @@ mod tests {
             "trailing.",
             "space ",
         ] {
-            assert!(validate_suffix(invalid).is_err(), "accepted {invalid:?}");
+            assert!(
+                OutputTarget::Suffix {
+                    suffix: invalid.to_owned(),
+                }
+                .validate()
+                .is_err(),
+                "accepted {invalid:?}"
+            );
         }
-        assert!(validate_suffix("_av1").is_ok());
+        assert!(
+            OutputTarget::Suffix {
+                suffix: "_av1".to_owned(),
+            }
+            .validate()
+            .is_ok()
+        );
         assert!(validate_windows_file_name(std::ffi::OsStr::new("CON.mkv")).is_err());
         assert!(validate_windows_file_name(std::ffi::OsStr::new("LPT9.mkv")).is_err());
     }

@@ -6,7 +6,7 @@ use crate::{
     UnixMillis, fold, output::validate_output_delta, reducer::validate_terminal,
 };
 
-pub const JOURNAL_SCHEMA_VERSION: u32 = 15;
+pub const JOURNAL_SCHEMA_VERSION: u32 = 16;
 
 /// Compaction fires at an idle writer barrier when the journal is both large
 /// in absolute terms and dominated by dead upserts (#33 §10). The floor keeps
@@ -336,20 +336,6 @@ fn validate_replayed_delta(state: &DurableState, delta: &DurableDelta) -> Result
                 if !removable {
                     return Err("removed queue item does not exist or is active");
                 }
-            }
-        }
-        DurableDelta::QueueMoved { item_id, before } => {
-            let movable = state
-                .queue
-                .iter()
-                .any(|item| item.id == *item_id && matches!(item.state, QueueItemState::Queued));
-            let destination = before.is_none_or(|before_id| {
-                state.queue.iter().any(|item| {
-                    item.id == before_id && matches!(item.state, QueueItemState::Queued)
-                })
-            });
-            if !movable || !destination {
-                return Err("queue move references an unavailable item");
             }
         }
         DurableDelta::QueueReordered { pending_order } => {

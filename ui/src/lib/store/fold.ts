@@ -59,10 +59,6 @@ export function foldDurable(
     const removed = new Set(delta.QueueItemsRemoved.item_ids);
     return { ...state, queue: state.queue.filter((item) => !removed.has(item.id)) };
   }
-  if ("QueueMoved" in delta && delta.QueueMoved !== undefined) {
-    const { item_id, before } = delta.QueueMoved;
-    return { ...state, queue: movedQueue(state.queue, item_id, before) };
-  }
   if ("QueueReordered" in delta && delta.QueueReordered !== undefined) {
     return {
       ...state,
@@ -238,22 +234,6 @@ export function foldTelemetry(
     return next;
   }
   return telemetry;
-}
-
-function movedQueue(
-  queue: QueueItem[],
-  itemId: QueueItemId,
-  before: QueueItemId | null,
-): QueueItem[] {
-  const source = queue.findIndex((item) => item.id === itemId);
-  if (source === -1) {
-    return queue;
-  }
-  const next = [...queue];
-  const [item] = next.splice(source, 1);
-  const target = before === null ? -1 : next.findIndex((entry) => entry.id === before);
-  next.splice(target === -1 ? next.length : target, 0, item);
-  return next;
 }
 
 function reorderedPendingQueue(queue: QueueItem[], pendingOrder: QueueItemId[]): QueueItem[] {

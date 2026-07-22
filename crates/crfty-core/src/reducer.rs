@@ -67,10 +67,6 @@ pub enum QueueCommand {
     /// items. The whole request rejects if any id is duplicate, unknown, or
     /// active; a one-item removal uses this same surface.
     RemoveMany { item_ids: Vec<QueueItemId> },
-    Move {
-        item_id: QueueItemId,
-        before: Option<QueueItemId>,
-    },
     /// Atomically replaces the order of every currently queued item. The
     /// submitted ids must be an exact permutation of the pending tail, so a
     /// stale grouped move is rejected rather than partially applied.
@@ -857,6 +853,9 @@ fn apply_queue(state: &AppState, command: QueueCommand) -> Applied {
             let mut accepted: Vec<QueueItem> = Vec::new();
             let mut skipped: Vec<(SkipReason, u32)> = Vec::new();
             for request in requests {
+                if let Err(reason) = request.output_target.validate() {
+                    return Applied::rejected(reason);
+                }
                 // Item ids are caller-allocated and unique by contract; a
                 // collision is a wiring bug that rejects the whole batch.
                 if state
@@ -949,44 +948,6 @@ fn apply_queue(state: &AppState, command: QueueCommand) -> Applied {
                 .push(DurableDelta::QueueItemsRemoved { item_ids });
             applied
         }
-        QueueCommand::Move { item_id, before } => {
-            let Some(item) = find_item(state, item_id) else {
-                return Applied::rejected("queue item does not exist");
-            };
-            if !matches!(item.state, QueueItemState::Queued) {
-                return Applied::rejected("only queued items can be reordered");
-            }
-            // The journal records where the item actually lands, so the fold
-            // stays positional: a destination above the frozen finished/active
-            // prefix resolves to the first pending slot before it is written.
-            let resolved = match before {
-                None => None,
-                Some(before_id) => {
-                    let Some(before_item) = find_item(state, before_id) else {
-                        return Applied::rejected("queue destination does not exist");
-                    };
-                    if matches!(before_item.state, QueueItemState::Queued) {
-                        Some(before_id)
-                    } else {
-                        state
-                            .durable
-                            .queue
-                            .iter()
-                            .find(|entry| matches!(entry.state, QueueItemState::Queued))
-                            .map(|entry| entry.id)
-                    }
-                }
-            };
-            if resolved == Some(item_id) {
-                return Applied::accepted();
-            }
-            let mut applied = Applied::accepted();
-            applied.durable.push(DurableDelta::QueueMoved {
-                item_id,
-                before: resolved,
-            });
-            applied
-        }
         QueueCommand::ReorderPending { pending_order } => {
             if let Err(reason) =
                 crate::state::validate_pending_order(&state.durable.queue, &pending_order)
@@ -1068,6 +1029,9 @@ fn apply_queue(state: &AppState, command: QueueCommand) -> Applied {
             let output_target = patch
                 .output_target
                 .unwrap_or_else(|| item.output_target.clone());
+            if let Err(reason) = output_target.validate() {
+                return Applied::rejected(reason);
+            }
             let overwrite = patch.overwrite.unwrap_or(item.overwrite);
             let mut applied = Applied::accepted();
             applied.durable.push(DurableDelta::QueueRetried {
@@ -1094,6 +1058,9 @@ fn apply_queue(state: &AppState, command: QueueCommand) -> Applied {
             let output_target = patch
                 .output_target
                 .unwrap_or_else(|| item.output_target.clone());
+            if let Err(reason) = output_target.validate() {
+                return Applied::rejected(reason);
+            }
             let overwrite = patch.overwrite.unwrap_or(item.overwrite);
             if operation == item.operation
                 && intent == item.intent

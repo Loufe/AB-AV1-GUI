@@ -1,5 +1,13 @@
 import { useState } from "react";
-import { FolderPlus, Play, Plus } from "lucide-react";
+import {
+  ArrowDown,
+  ArrowDownToLine,
+  ArrowUp,
+  ArrowUpToLine,
+  FolderPlus,
+  Play,
+  Plus,
+} from "lucide-react";
 
 import {
   AlertDialog,
@@ -61,6 +69,9 @@ export function QueueToolbar({
   session,
   mutationsDisabled,
   canRemove,
+  selectedCount,
+  grouped,
+  canReorder,
   canClear,
   canClearCompleted,
   canStart,
@@ -68,6 +79,9 @@ export function QueueToolbar({
   onAddFiles,
   onAddFolder,
   onRemove,
+  onGroupedChange,
+  onRegroup,
+  onMoveSelected,
   onClear,
   onClearCompleted,
   onStart,
@@ -77,6 +91,9 @@ export function QueueToolbar({
   session: SessionState;
   mutationsDisabled: boolean;
   canRemove: boolean;
+  selectedCount: number;
+  grouped: boolean;
+  canReorder: boolean;
   canClear: boolean;
   canClearCompleted: boolean;
   canStart: boolean;
@@ -84,6 +101,9 @@ export function QueueToolbar({
   onAddFiles: () => void;
   onAddFolder: () => void;
   onRemove: () => void;
+  onGroupedChange: (grouped: boolean) => void;
+  onRegroup: () => void;
+  onMoveSelected: (destination: "up" | "down" | "top" | "bottom") => void;
   onClear: () => void;
   onClearCompleted: () => void;
   onStart: () => void;
@@ -109,12 +129,73 @@ export function QueueToolbar({
           Add Folders
         </Button>
         <ConfirmAction
-          label="Remove"
-          title="Remove selected item?"
-          description="The file stays on disk. Only this Queue entry is removed."
+          label={selectedCount > 1 ? `Remove ${selectedCount}` : "Remove"}
+          title={`Remove ${selectedCount} selected ${selectedCount === 1 ? "item" : "items"}?`}
+          description="Files stay on disk. The selected Queue entries are removed atomically."
           disabled={blocked || !canRemove}
+          destructive
           onConfirm={onRemove}
         />
+        <Button
+          size="sm"
+          variant={grouped ? "secondary" : "ghost"}
+          aria-pressed={grouped}
+          disabled={blocked}
+          onClick={() => onGroupedChange(!grouped)}
+        >
+          Group by folder
+        </Button>
+        <Button
+          size="sm"
+          variant="ghost"
+          data-queue-focus="toolbar:regroup"
+          disabled={blocked || !grouped}
+          onClick={onRegroup}
+        >
+          Regroup pending items
+        </Button>
+        <div className="flex items-center" aria-label="Move selected">
+          <Button
+            size="icon-xs"
+            variant="ghost"
+            aria-label="Move selected to top"
+            data-queue-focus="toolbar:move:top"
+            disabled={blocked || !canReorder}
+            onClick={() => onMoveSelected("top")}
+          >
+            <ArrowUpToLine />
+          </Button>
+          <Button
+            size="icon-xs"
+            variant="ghost"
+            aria-label="Move selected up"
+            data-queue-focus="toolbar:move:up"
+            disabled={blocked || !canReorder}
+            onClick={() => onMoveSelected("up")}
+          >
+            <ArrowUp />
+          </Button>
+          <Button
+            size="icon-xs"
+            variant="ghost"
+            aria-label="Move selected down"
+            data-queue-focus="toolbar:move:down"
+            disabled={blocked || !canReorder}
+            onClick={() => onMoveSelected("down")}
+          >
+            <ArrowDown />
+          </Button>
+          <Button
+            size="icon-xs"
+            variant="ghost"
+            aria-label="Move selected to bottom"
+            data-queue-focus="toolbar:move:bottom"
+            disabled={blocked || !canReorder}
+            onClick={() => onMoveSelected("bottom")}
+          >
+            <ArrowDownToLine />
+          </Button>
+        </div>
         <ConfirmAction
           label="Clear"
           title="Clear the Queue?"
@@ -164,6 +245,10 @@ export type QueuePendingAction =
   | "clear"
   | "clear-completed"
   | "start"
+  | "edit"
+  | "retry"
+  | "open"
+  | "reveal"
   | "stop-after-current"
   | "force-stop"
   | null;

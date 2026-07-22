@@ -202,10 +202,6 @@ pub enum DurableDelta {
     QueueItemsRemoved {
         item_ids: Vec<QueueItemId>,
     },
-    QueueMoved {
-        item_id: QueueItemId,
-        before: Option<QueueItemId>,
-    },
     /// Atomically replaces the order of the complete queued tail. Finished
     /// and active items keep their positions in the frozen prefix.
     QueueReordered {
@@ -438,9 +434,6 @@ pub fn fold(state: &mut DurableState, delta: &DurableDelta) {
         DurableDelta::QueueItemsRemoved { item_ids } => {
             let removed = item_ids.iter().copied().collect::<BTreeSet<_>>();
             state.queue.retain(|item| !removed.contains(&item.id));
-        }
-        DurableDelta::QueueMoved { item_id, before } => {
-            move_item(&mut state.queue, *item_id, *before)
         }
         DurableDelta::QueueReordered { pending_order } => {
             reorder_pending(&mut state.queue, pending_order)
@@ -698,17 +691,6 @@ fn set_item_state(queue: &mut [QueueItem], item_id: QueueItemId, item_state: Que
     if let Some(item) = queue.iter_mut().find(|item| item.id == item_id) {
         item.state = item_state;
     }
-}
-
-fn move_item(queue: &mut Vec<QueueItem>, item_id: QueueItemId, before: Option<QueueItemId>) {
-    let Some(source) = queue.iter().position(|item| item.id == item_id) else {
-        return;
-    };
-    let item = queue.remove(source);
-    let destination = before
-        .and_then(|before_id| queue.iter().position(|entry| entry.id == before_id))
-        .unwrap_or(queue.len());
-    queue.insert(destination, item);
 }
 
 pub(crate) fn validate_pending_order(

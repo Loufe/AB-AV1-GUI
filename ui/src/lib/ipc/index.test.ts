@@ -2,7 +2,13 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import { commands, type CorruptionSignature } from "@/lib/bindings";
 
-import { acknowledgeCorruption, queueRemoveMany, queueRetry, startQueue } from "./index";
+import {
+  acknowledgeCorruption,
+  queueRemoveMany,
+  queueReorderPending,
+  queueRetry,
+  startQueue,
+} from "./index";
 import { pickPaths } from "./path-picker";
 import { importHistory } from "./settings";
 
@@ -13,6 +19,7 @@ vi.mock("@/lib/bindings", () => ({
     importHistory: vi.fn(),
     pickPaths: vi.fn(),
     queueRemoveMany: vi.fn(),
+    queueReorderPending: vi.fn(),
     queueRetry: vi.fn(),
     start: vi.fn(),
   },
@@ -22,6 +29,7 @@ const acknowledged = vi.mocked(commands.acknowledgeCorruption);
 const imported = vi.mocked(commands.importHistory);
 const picked = vi.mocked(commands.pickPaths);
 const removed = vi.mocked(commands.queueRemoveMany);
+const reordered = vi.mocked(commands.queueReorderPending);
 const retried = vi.mocked(commands.queueRetry);
 const started = vi.mocked(commands.start);
 
@@ -85,6 +93,14 @@ describe("Queue command wrappers", () => {
     await queueRemoveMany([42, 7]);
 
     expect(removed).toHaveBeenCalledExactlyOnceWith([42, 7]);
+  });
+
+  it("passes one exact whole-pending permutation to Queue reorder", async () => {
+    reordered.mockResolvedValue({ status: "ok", data: null });
+
+    await queueReorderPending([9, 3, 7]);
+
+    expect(reordered).toHaveBeenCalledExactlyOnceWith([9, 3, 7]);
   });
 
   it("distinguishes plain retry from an atomic patched retry", async () => {

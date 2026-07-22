@@ -1,4 +1,4 @@
-import { page } from "vitest/browser";
+import { page, userEvent } from "vitest/browser";
 import { describe, expect, it } from "vitest";
 
 import type {
@@ -56,6 +56,18 @@ function item(id: number, name: string, state: QueueItem["state"] = "Queued"): Q
     overwrite: "FollowSettings",
     state,
   };
+}
+
+function folderItem(id: number, folder: string, name: string): QueueItem {
+  return { ...item(id, name), input: `C:\\${folder}\\${name}` };
+}
+
+function deferred<T>() {
+  let resolve!: (value: T) => void;
+  const promise = new Promise<T>((settle) => {
+    resolve = settle;
+  });
+  return { promise, resolve };
 }
 
 function durable(queue: QueueItem[]): DurableState_Deserialize {
@@ -308,8 +320,8 @@ describe("QueueView", () => {
     await page.getByRole("button", { name: "Start Queue" }).click();
 
     await expect
-      .element(page.getByText("queue start failed (rejected): queue changed"))
-      .toBeVisible();
+      .element(page.getByRole("alert"))
+      .toHaveTextContent("queue start failed (rejected): queue changed");
     expect(appStore.getState().session).toBe("Idle");
     expect(appStore.getState().durable).toBe(state);
   });
@@ -323,17 +335,23 @@ describe("QueueView", () => {
     const state = durable([
       item(11, "selected.mkv"),
       item(12, "done.mkv", { Finished: "Analyzed" }),
+      item(13, "also-selected.mkv"),
     ]);
     await renderApp(<QueueView />, {
       appState: { durable: state, settings: settings(), tools: tools() },
     });
 
-    await page.getByRole("row", { name: /selected\.mkv/ }).click();
-    await page.getByRole("button", { name: "Remove", exact: true }).click();
+    await page.getByRole("row", { name: /Reorder selected\.mkv/ }).click();
+    page
+      .getByRole("row", { name: /Reorder also-selected\.mkv/ })
+      .element()
+      .dispatchEvent(new MouseEvent("click", { bubbles: true, ctrlKey: true }));
+    await page.getByRole("button", { name: "Remove 2", exact: true }).click();
     const removeDialog = page.getByRole("alertdialog");
-    await removeDialog.getByRole("button", { name: "Remove", exact: true }).click();
+    await expect.element(removeDialog).toHaveTextContent("Remove 2 selected items?");
+    await removeDialog.getByRole("button", { name: "Remove 2", exact: true }).click();
     await expect.poll(() => tauri.callsFor("queue_remove_many").length).toBe(1);
-    expect(tauri.callsFor("queue_remove_many")[0]?.payload).toMatchObject({ itemIds: [11] });
+    expect(tauri.callsFor("queue_remove_many")[0]?.payload).toMatchObject({ itemIds: [11, 13] });
 
     await page.getByRole("button", { name: "Clear Completed", exact: true }).click();
     const completedDialog = page.getByRole("alertdialog");
@@ -345,5 +363,232 @@ describe("QueueView", () => {
     await clearDialog.getByRole("button", { name: "Clear", exact: true }).click();
     await expect.poll(() => tauri.callsFor("queue_clear").length).toBe(1);
     expect(appStore.getState().durable).toBe(state);
+  });
+
+  it("toggles grouping without mutation and explicitly regroups one exact permutation", async () => {
+    const tauri = installTauriMock({ queue_reorder_pending: () => null });
+    await renderApp(<QueueView />, {
+      appState: {
+        durable: durable([
+          folderItem(1, "A", "one.mkv"),
+          folderItem(2, "B", "two.mkv"),
+          folderItem(3, "A", "three.mkv"),
+        ]),
+        settings: settings(),
+        tools: tools(),
+      },
+    });
+
+    await page.getByRole("button", { name: "Group by folder" }).click();
+    expect(tauri.callsFor("queue_reorder_pending")).toHaveLength(0);
+    await page.getByRole("button", { name: "Group by folder" }).click();
+    await page.getByRole("button", { name: "Regroup pending items" }).click();
+
+    await expect.poll(() => tauri.callsFor("queue_reorder_pending").length).toBe(1);
+    expect(tauri.callsFor("queue_reorder_pending")[0]?.payload).toMatchObject({
+      pendingOrder: [1, 3, 2],
+    });
+  });
+
+  it("moves folder runs and noncontiguous selections through click/tap alternatives", async () => {
+    const tauri = installTauriMock({ queue_reorder_pending: () => null });
+    await renderApp(<QueueView />, {
+      appState: {
+        durable: durable([
+          folderItem(1, "A", "one.mkv"),
+          folderItem(2, "B", "two.mkv"),
+          folderItem(3, "C", "three.mkv"),
+        ]),
+        settings: settings(),
+        tools: tools(),
+      },
+    });
+
+    await page.getByRole("button", { name: "Move B top" }).click();
+    await expect.poll(() => tauri.callsFor("queue_reorder_pending").length).toBe(1);
+    expect(tauri.callsFor("queue_reorder_pending")[0]?.payload).toMatchObject({
+      pendingOrder: [2, 1, 3],
+    });
+
+    appStore.setState((state) => ({
+      ...state,
+      durable: durable([
+        folderItem(2, "B", "two.mkv"),
+        folderItem(1, "A", "one.mkv"),
+        folderItem(3, "C", "three.mkv"),
+      ]),
+    }));
+    await expect
+      .element(page.getByRole("status").filter({ hasText: "Moved B" }))
+      .toBeInTheDocument();
+    appStore.setState((state) => ({
+      ...state,
+      durable: durable([
+        folderItem(1, "A", "one.mkv"),
+        folderItem(2, "B", "two.mkv"),
+        folderItem(3, "C", "three.mkv"),
+      ]),
+    }));
+    await page.getByRole("row", { name: /one\.mkv/ }).click();
+    page
+      .getByRole("row", { name: /three\.mkv/ })
+      .element()
+      .dispatchEvent(new MouseEvent("click", { bubbles: true, ctrlKey: true }));
+    await expect.element(page.getByRole("button", { name: "Move selected to top" })).toBeEnabled();
+    await page.getByRole("button", { name: "Move selected to top" }).click();
+    await expect.poll(() => tauri.callsFor("queue_reorder_pending").length).toBe(2);
+    expect(tauri.callsFor("queue_reorder_pending")[1]?.payload).toMatchObject({
+      pendingOrder: [1, 3, 2],
+    });
+  });
+
+  it("supports keyboard sortable movement with human announcements", async () => {
+    const tauri = installTauriMock({ queue_reorder_pending: () => null });
+    await renderApp(<QueueView />, {
+      appState: {
+        durable: durable([item(1, "one.mkv"), item(2, "two.mkv"), item(3, "three.mkv")]),
+        settings: settings(),
+        tools: tools(),
+      },
+    });
+    await page.getByRole("button", { name: "Group by folder" }).click();
+    page.getByRole("button", { name: "Reorder one.mkv" }).element().focus();
+    await userEvent.keyboard(" ");
+    await expect
+      .element(page.getByRole("status").filter({ hasText: "one.mkv, position 1." }))
+      .toBeInTheDocument();
+    await userEvent.keyboard("{ArrowDown}");
+    await userEvent.keyboard(" ");
+
+    await expect.poll(() => tauri.callsFor("queue_reorder_pending").length).toBe(1);
+    expect(tauri.callsFor("queue_reorder_pending")[0]?.payload).toMatchObject({
+      pendingOrder: [2, 1, 3],
+    });
+  });
+
+  it("retains immutable cross-folder plans across cancel and confirmation", async () => {
+    const tauri = installTauriMock({ queue_reorder_pending: () => null });
+    await renderApp(<QueueView />, {
+      appState: {
+        durable: durable([
+          folderItem(1, "A", "one.mkv"),
+          folderItem(2, "A", "two.mkv"),
+          folderItem(3, "B", "three.mkv"),
+        ]),
+        settings: settings(),
+        tools: tools(),
+      },
+    });
+    await page.getByRole("row", { name: /two\.mkv/ }).click();
+    const moveDown = page.getByRole("button", { name: "Move selected down" });
+    await moveDown.click();
+    await expect.element(page.getByRole("alertdialog")).toBeVisible();
+    await page.getByRole("button", { name: "Cancel" }).click();
+    await expect
+      .poll(() => document.activeElement?.getAttribute("aria-label"))
+      .toBe("Move selected down");
+    expect(tauri.callsFor("queue_reorder_pending")).toHaveLength(0);
+
+    await moveDown.click();
+    await page.getByRole("button", { name: "Ungroup and move" }).click();
+    await expect.poll(() => tauri.callsFor("queue_reorder_pending").length).toBe(1);
+    expect(tauri.callsFor("queue_reorder_pending")[0]?.payload).toMatchObject({
+      pendingOrder: [1, 3, 2],
+    });
+    await expect
+      .element(page.getByRole("button", { name: "Group by folder" }))
+      .toHaveAttribute("aria-pressed", "false");
+  });
+
+  it("reconciles delta-before-ack and does not hide rows added during submission", async () => {
+    const reorder = deferred<null>();
+    const tauri = installTauriMock({ queue_reorder_pending: () => reorder.promise });
+    const initial = [item(1, "one.mkv"), item(2, "two.mkv"), item(3, "three.mkv")];
+    await renderApp(<QueueView />, {
+      appState: { durable: durable(initial), settings: settings(), tools: tools() },
+    });
+    await page.getByRole("row", { name: /two\.mkv/ }).click();
+    await page.getByRole("button", { name: "Move selected to top" }).click();
+    await expect.poll(() => tauri.callsFor("queue_reorder_pending").length).toBe(1);
+
+    appStore.setState((state) => ({
+      ...state,
+      durable: durable([initial[1]!, initial[0]!, initial[2]!]),
+    }));
+    await expect
+      .element(page.getByRole("status").filter({ hasText: "Submitting Queue order" }))
+      .toBeInTheDocument();
+    reorder.resolve(null);
+    await expect
+      .element(page.getByRole("status").filter({ hasText: "Moved two.mkv to position 1 of 3" }))
+      .toBeInTheDocument();
+
+    const second = deferred<null>();
+    tauri.setCommand("queue_reorder_pending", () => second.promise);
+    await page.getByRole("button", { name: "Move selected to bottom" }).click();
+    appStore.setState((state) => ({
+      ...state,
+      durable: durable([initial[0]!, initial[2]!, initial[1]!, item(4, "added.mkv")]),
+    }));
+    await expect.element(page.getByRole("row", { name: /added\.mkv/ })).toBeVisible();
+    await expect.element(page.getByRole("alert")).toHaveTextContent("latest order was restored");
+    second.resolve(null);
+  });
+
+  it("uses atomic recovery and keeps Open failures local and operator-visible", async () => {
+    const tauri = installTauriMock({ queue_retry: () => null });
+    tauri.rejectCommand("open_path", { code: "io", message: "file is unavailable" });
+    await renderApp(<QueueView />, {
+      appState: {
+        durable: durable([item(7, "failed.mkv", { Finished: "Stopped" })]),
+        settings: settings(),
+        tools: tools(),
+      },
+    });
+    await page.getByRole("row", { name: /failed\.mkv/ }).click();
+    await page.getByRole("button", { name: "Convert anyway" }).click();
+    await expect.poll(() => tauri.callsFor("queue_retry").length).toBe(1);
+    expect(tauri.callsFor("queue_retry")[0]?.payload).toMatchObject({
+      itemId: 7,
+      patch: { operation: "Convert", intent: "Refresh" },
+    });
+
+    await page.getByRole("button", { name: "Open", exact: true }).click();
+    await expect.element(page.getByRole("alert")).toHaveTextContent("file is unavailable");
+    expect(appStore.getState().durable.queue[0]?.intent).toBe("ReuseIfFresh");
+  });
+
+  it("keeps durable actions disabled under degraded health while Open remains available", async () => {
+    const tauri = installTauriMock({ open_path: () => null });
+    await renderApp(<QueueView />, {
+      appState: {
+        durable: durable([item(7, "failed.mkv", { Finished: "Stopped" })]),
+        settings: settings(),
+        tools: tools(),
+        health: {
+          unavailable: "journal unavailable",
+          fatal: null,
+          degraded: null,
+          secondInstance: null,
+        },
+      },
+    });
+    await page.getByRole("row", { name: /failed\.mkv/ }).click();
+    await expect.element(page.getByRole("button", { name: "Retry" })).toBeDisabled();
+    await expect.element(page.getByRole("button", { name: "Convert anyway" })).toBeDisabled();
+    await page.getByRole("button", { name: "Open", exact: true }).click();
+    await expect.poll(() => tauri.callsFor("open_path").length).toBe(1);
+  });
+
+  it("renders the accepted 500-row nonvirtualized fixture", async () => {
+    const rows = Array.from({ length: 500 }, (_, index) =>
+      item(index + 1, `video-${index + 1}.mkv`),
+    );
+    await renderApp(<QueueView />, {
+      appState: { durable: durable(rows), settings: settings(), tools: tools() },
+    });
+    await page.getByRole("button", { name: "Group by folder" }).click();
+    expect(page.getByRole("row").elements()).toHaveLength(502);
+    await expect.element(page.getByRole("row", { name: /video-500\.mkv/ })).toBeInTheDocument();
   });
 });

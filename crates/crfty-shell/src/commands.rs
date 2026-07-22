@@ -145,16 +145,6 @@ fn queue_remove_many(
     bridge.submit_queue(QueueCommand::RemoveMany { item_ids })
 }
 
-#[tauri::command]
-#[specta::specta]
-fn queue_move(
-    bridge: State<'_, Bridge>,
-    item_id: QueueItemId,
-    before: Option<QueueItemId>,
-) -> Result<(), CommandError> {
-    bridge.submit_queue(QueueCommand::Move { item_id, before })
-}
-
 /// Atomically replace the complete pending Queue order. The reducer rejects
 /// stale or incomplete permutations without exposing intermediate moves.
 #[tauri::command]
@@ -340,7 +330,6 @@ pub fn specta_builder() -> Builder<tauri::Wry> {
             analysis_cancel,
             queue_add_paths,
             queue_remove_many,
-            queue_move,
             queue_reorder_pending,
             queue_clear,
             queue_clear_completed,
