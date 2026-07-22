@@ -1,91 +1,44 @@
-import {
-  Card,
-  CardContent,
-  CardHeader,
-  CardTitle,
-  Input,
-  Label,
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from "@/components/ui";
+import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui";
+import type { ReactNode } from "react";
+import { formatDurationMsCompact } from "@/lib/format/engine-values";
+import { formatFileSize } from "@/lib/format/format";
 
-import type { Operation } from "@/lib/bindings";
-
-import { basename } from "./queue-status";
+import { basename, outputTargetLabel } from "./queue-status";
 import type { QueueRowData } from "./queue-status";
 
-const NOOP = () => undefined;
+function Detail({ label, children }: { label: string; children: ReactNode }) {
+  return (
+    <div className="grid grid-cols-[5rem_minmax(0,1fr)] gap-2 text-xs">
+      <dt className="text-muted-foreground">{label}</dt>
+      <dd className="min-w-0 truncate">{children}</dd>
+    </div>
+  );
+}
 
-/**
- * Properties panel for the selected item. Output settings are display-only
- * for now (no change-output command exists); the operation select is wired
- * through `onOperationChange` and disabled for items already past Queued.
- */
-export function SelectionCard({
-  row,
-  onOperationChange = NOOP,
-}: {
-  row: QueueRowData;
-  onOperationChange?: (operation: Operation) => void;
-}) {
-  const editable = row.item.state === "Queued";
-  const isAnalyze = row.item.operation === "Analyze";
-  const target = row.item.output_target;
-  const suffix = target !== "Replace" && target.Suffix !== undefined ? target.Suffix.suffix : null;
+/** Read-only details; editing belongs to #67. */
+export function SelectionCard({ row }: { row: QueueRowData }) {
   return (
     <Card size="sm" className="gap-2">
       <CardHeader className="gap-0.5">
         <CardTitle className="text-sm">Selection · {basename(row.item.input)}</CardTitle>
       </CardHeader>
-      <CardContent className="flex flex-col gap-2">
-        <div className="flex items-center gap-2">
-          <Label className="w-20 shrink-0 text-xs text-muted-foreground">Operation</Label>
-          <Select
-            value={row.item.operation}
-            onValueChange={(value) => onOperationChange(value as Operation)}
-            disabled={!editable}
-          >
-            <SelectTrigger size="sm" className="flex-1">
-              <SelectValue />
-            </SelectTrigger>
-            <SelectContent>
-              <SelectItem value="Analyze">Analyze</SelectItem>
-              <SelectItem value="Convert">Convert</SelectItem>
-            </SelectContent>
-          </Select>
-        </div>
-        <div className="flex items-center gap-2">
-          <Label className="w-20 shrink-0 text-xs text-muted-foreground">Output</Label>
-          <Select
-            value={
-              target === "Replace" ? "replace" : target.Suffix !== undefined ? "suffix" : "folder"
-            }
-            disabled
-          >
-            <SelectTrigger size="sm" className="flex-1">
-              <SelectValue />
-            </SelectTrigger>
-            <SelectContent>
-              <SelectItem value="replace">Replace original</SelectItem>
-              <SelectItem value="suffix">Save with suffix</SelectItem>
-              <SelectItem value="folder">Separate folder</SelectItem>
-            </SelectContent>
-          </Select>
-        </div>
-        {suffix !== null && (
-          <div className="flex items-center gap-2">
-            <Label className="w-20 shrink-0 text-xs text-muted-foreground">Suffix</Label>
-            <Input value={suffix} readOnly disabled className="h-7 flex-1" />
-          </div>
-        )}
-        {isAnalyze && (
-          <p className="text-xs text-muted-foreground">
-            Analyze produces no output file — output settings are disabled.
-          </p>
-        )}
+      <CardContent>
+        <dl className="flex flex-col gap-1.5">
+          <Detail label="Path">
+            <span className="selectable" title={row.item.input}>
+              {row.item.input}
+            </span>
+          </Detail>
+          <Detail label="Operation">{row.item.operation}</Detail>
+          <Detail label="Output">
+            {outputTargetLabel(row.item.operation, row.item.output_target)}
+          </Detail>
+          <Detail label="Input">{row.streams ?? "—"}</Detail>
+          <Detail label="Size">
+            {row.sizeBytes === null ? "—" : formatFileSize(row.sizeBytes)}
+          </Detail>
+          <Detail label="Time">{formatDurationMsCompact(row.timeMs)}</Detail>
+        </dl>
       </CardContent>
     </Card>
   );

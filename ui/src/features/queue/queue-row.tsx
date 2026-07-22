@@ -1,10 +1,12 @@
-import { ChevronDown, FileVideo, GripVertical } from "lucide-react";
+import { FileVideo, GripVertical, RotateCcw } from "lucide-react";
 
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui";
-import { formatCompactTime, formatFileSize } from "@/lib/format/format";
+import { formatDurationMsCompact } from "@/lib/format/engine-values";
+import { formatFileSize } from "@/lib/format/format";
+import { useProgressStore } from "@/lib/store/progress-store";
 import { cn } from "@/lib/utils";
 
-import { basename, outputTargetLabel } from "./queue-status";
+import { basename, deriveRowStatus, outputTargetLabel } from "./queue-status";
 import type { EstimateConfidence, QueueRowData } from "./queue-status";
 import { StatusCell } from "./status-cell";
 
@@ -27,13 +29,14 @@ const CONFIDENCE_TOOLTIP: Record<Exclude<EstimateConfidence, "exact">, string> =
 };
 
 function TimeCell({
-  seconds,
+  durationMs,
   confidence,
 }: {
-  seconds: number | null;
+  durationMs: number | null;
   confidence: EstimateConfidence;
 }) {
-  const value = seconds !== null && seconds > 0 ? formatCompactTime(seconds) : EM_DASH;
+  const value =
+    durationMs !== null && durationMs > 0 ? formatDurationMsCompact(durationMs) : EM_DASH;
   const className = cn("text-right tabular-nums", CONFIDENCE_CLASS[confidence]);
   if (value === EM_DASH || confidence === "exact") {
     return <span className={className}>{value}</span>;
@@ -72,10 +75,20 @@ export function QueueRow({
 }) {
   const active = row.status.kind === "working";
   const name = basename(row.item.input);
+  const telemetry = useProgressStore((state) =>
+    row.runId === null ? null : (state.telemetry[row.runId] ?? null),
+  );
+  const status =
+    row.item.state !== "Queued" && "Running" in row.item.state
+      ? deriveRowStatus(row.item.state, telemetry, row.mediaDurationMs, null)
+      : row.status;
+  const displayedTimeMs = status.kind === "working" ? (telemetry?.eta_ms ?? null) : row.timeMs;
+  const displayedConfidence = status.kind === "working" ? "estimate" : row.timeConfidence;
   return (
     <div
       ref={ref}
       role="row"
+      aria-selected={selected}
       tabIndex={0}
       onClick={onSelect}
       onKeyDown={(event) => {
@@ -94,19 +107,18 @@ export function QueueRow({
         isOverlay && "rounded-md border border-border bg-elevated shadow-lg",
       )}
     >
-      <button
-        ref={handleRef}
-        type="button"
-        aria-label={`Reorder ${name}`}
-        className={cn(
-          "justify-self-center rounded p-0.5 text-muted-foreground/50",
-          handleRef
-            ? "cursor-grab hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none"
-            : "cursor-default",
-        )}
-      >
-        <GripVertical className="size-3.5" aria-hidden="true" />
-      </button>
+      {handleRef ? (
+        <button
+          ref={handleRef}
+          type="button"
+          aria-label={`Reorder ${name}`}
+          className="cursor-grab justify-self-center rounded p-0.5 text-muted-foreground/50 hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none"
+        >
+          <GripVertical className="size-3.5" aria-hidden="true" />
+        </button>
+      ) : (
+        <span aria-hidden="true" />
+      )}
       <span className="flex min-w-0 items-center gap-1.5">
         <FileVideo className="size-4 shrink-0 text-muted-foreground" aria-hidden="true" />
         <span className="truncate">{name}</span>
@@ -115,27 +127,26 @@ export function QueueRow({
       <span className="text-right tabular-nums">
         {row.sizeBytes !== null ? formatFileSize(row.sizeBytes) : EM_DASH}
       </span>
-      <TimeCell seconds={row.timeSec} confidence={row.timeConfidence} />
+      <TimeCell durationMs={displayedTimeMs} confidence={displayedConfidence} />
       <span className="flex items-center gap-1.5">
         {row.item.operation}
-        {row.preciseCrf && (
+        {row.item.intent === "Refresh" && (
           <Tooltip>
             <TooltipTrigger
               render={
                 <span tabIndex={0} className="-m-1 flex size-4 items-center justify-center" />
               }
             >
-              <span className="size-1.5 rounded-full bg-primary" />
+              <RotateCcw className="size-3 text-primary" aria-hidden="true" />
             </TooltipTrigger>
-            <TooltipContent>Precise CRF cached — skips the quality search</TooltipContent>
+            <TooltipContent>Fresh analysis forced for this attempt</TooltipContent>
           </Tooltip>
         )}
-        <ChevronDown className="size-3 text-muted-foreground" aria-hidden="true" />
       </span>
       <span className="text-muted-foreground">
         {outputTargetLabel(row.item.operation, row.item.output_target)}
       </span>
-      <StatusCell status={row.status} />
+      <StatusCell status={status} />
     </div>
   );
 }

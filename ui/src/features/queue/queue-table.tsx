@@ -2,7 +2,8 @@ import { DragDropProvider, DragOverlay } from "@dnd-kit/react";
 import { useSortable } from "@dnd-kit/react/sortable";
 
 import { TooltipProvider } from "@/components/ui";
-import { formatCompactTime, formatFileSize } from "@/lib/format/format";
+import { formatDurationMsCompact } from "@/lib/format/engine-values";
+import { formatFileSize } from "@/lib/format/format";
 import { cn } from "@/lib/utils";
 
 import type { QueueItemId } from "@/lib/bindings";
@@ -64,21 +65,30 @@ export function QueueTable({
   onMove?: (itemId: QueueItemId, beforeId: QueueItemId | null) => void;
 }) {
   const totalSize = rows.reduce((sum, row) => sum + (row.sizeBytes ?? 0), 0);
-  const totalTime = rows.reduce((sum, row) => sum + (row.timeSec ?? 0), 0);
+  const totalTime = rows.reduce((sum, row) => sum + (row.timeMs ?? 0), 0);
   const table = (
     <TooltipProvider>
-      <div className="overflow-hidden rounded-md border border-border">
+      <div
+        role="table"
+        aria-label="Conversion queue"
+        className="overflow-hidden rounded-md border border-border"
+      >
         <div
+          role="row"
           className={cn("border-b border-border py-1 text-xs text-muted-foreground", QUEUE_COLS)}
         >
-          <span />
-          <span>Name</span>
-          <span>Input format</span>
-          <span className="text-right">Size</span>
-          <span className="text-right">Time</span>
-          <span>Operation</span>
-          <span>Output</span>
-          <span>Status</span>
+          <span role="columnheader" />
+          <span role="columnheader">Name</span>
+          <span role="columnheader">Input format</span>
+          <span role="columnheader" className="text-right">
+            Size
+          </span>
+          <span role="columnheader" className="text-right">
+            Time
+          </span>
+          <span role="columnheader">Operation</span>
+          <span role="columnheader">Output</span>
+          <span role="columnheader">Status</span>
         </div>
         {rows.map((row, index) =>
           onMove ? (
@@ -109,7 +119,7 @@ export function QueueTable({
             {totalSize > 0 ? formatFileSize(totalSize) : "—"}
           </span>
           <span className="text-right text-muted-foreground tabular-nums">
-            {totalTime > 0 ? formatCompactTime(totalTime) : "—"}
+            {totalTime > 0 ? formatDurationMsCompact(totalTime) : "—"}
           </span>
           <span />
           <span />

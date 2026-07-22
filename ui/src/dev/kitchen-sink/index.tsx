@@ -2,8 +2,6 @@ import { AnalysisSection } from "./analysis-section";
 import { D11Section } from "./d11-section";
 import { HistorySection } from "./history-section";
 import { PrimitivesSection } from "./primitives-section";
-import { QueueComponentsSection } from "./queue-components-section";
-import { QueueSection } from "./queue-section";
 import { StatsSection } from "./stats-section";
 import { TokensSection } from "./tokens-section";
 
@@ -19,8 +17,6 @@ export default function KitchenSink() {
       <TokensSection />
       <PrimitivesSection />
       <D11Section />
-      <QueueSection />
-      <QueueComponentsSection />
       <AnalysisSection />
       <HistorySection />
       <StatsSection />
