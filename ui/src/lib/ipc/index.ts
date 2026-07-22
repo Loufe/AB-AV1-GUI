@@ -9,6 +9,7 @@ import {
   type ImportSummary,
   type Operation,
   type OutputTarget,
+  type PathPickerKind,
   type QueueItemEdit,
   type QueueItemId,
   type Settings,
@@ -115,8 +116,24 @@ export async function queueAddPaths(
   );
 }
 
+/** Opens the narrow shell-owned picker; cancellation is an accepted empty list. */
+export async function pickPaths(
+  kind: PathPickerKind,
+  startingDirectory: string | null,
+): Promise<string[]> {
+  const result = await commands.pickPaths(kind, startingDirectory);
+  if (result.status === "error") {
+    throw new Error(`path picker failed (${result.error.code}): ${result.error.message}`);
+  }
+  return result.data;
+}
+
 export async function queueClear(): Promise<void> {
   expectAccepted(await commands.queueClear(), "queue clear");
+}
+
+export async function queueRemove(itemId: QueueItemId): Promise<void> {
+  expectAccepted(await commands.queueRemove(itemId), "queue remove");
 }
 
 export async function queueClearCompleted(): Promise<void> {
@@ -129,6 +146,10 @@ export async function queueRetry(itemId: QueueItemId): Promise<void> {
 
 export async function queueEdit(itemId: QueueItemId, patch: QueueItemEdit): Promise<void> {
   expectAccepted(await commands.queueEdit(itemId, patch), "queue edit");
+}
+
+export async function startQueue(): Promise<void> {
+  expectAccepted(await commands.start(), "queue start");
 }
 
 export async function stopAfterCurrent(): Promise<void> {

@@ -1,8 +1,6 @@
 import { AnalysisSection } from "./analysis-section";
 import { D11Section } from "./d11-section";
 import { PrimitivesSection } from "./primitives-section";
-import { QueueComponentsSection } from "./queue-components-section";
-import { QueueSection } from "./queue-section";
 import { TokensSection } from "./tokens-section";
 
 /**
@@ -17,8 +15,6 @@ export default function KitchenSink() {
       <TokensSection />
       <PrimitivesSection />
       <D11Section />
-      <QueueSection />
-      <QueueComponentsSection />
       <AnalysisSection />
     </div>
   );

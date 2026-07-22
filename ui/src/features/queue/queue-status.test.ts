@@ -104,19 +104,22 @@ describe("deriveRowStatus", () => {
     ).toEqual({
       kind: "done",
       outcome: "Converted",
-      savedBytes: 512,
+      sizeDeltaBytes: 512,
+      recovered: false,
     });
     expect(
       deriveRowStatus({ Finished: { Remuxed: "RecoveredAtStartup" } }, null, null, null),
     ).toEqual({
       kind: "done",
       outcome: "Remuxed",
-      savedBytes: null,
+      sizeDeltaBytes: null,
+      recovered: true,
     });
     expect(deriveRowStatus({ Finished: "Analyzed" }, null, null, 512)).toEqual({
       kind: "done",
       outcome: "Analyzed",
-      savedBytes: null,
+      sizeDeltaBytes: null,
+      recovered: false,
     });
     expect(deriveRowStatus({ Finished: "Stopped" }, null, null, null)).toEqual({
       kind: "stopped",
@@ -128,7 +131,7 @@ describe("deriveRowStatus", () => {
         null,
         null,
       ),
-    ).toEqual({ kind: "failed", message: "boom" });
+    ).toEqual({ kind: "failed", message: "boom", diagnostic: null });
   });
 
   it("maps skip reasons to readable text", () => {

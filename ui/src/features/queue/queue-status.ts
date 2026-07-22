@@ -1,12 +1,16 @@
 import type {
+  Crf,
+  DurationMs,
   ItemOutcome,
   JobPhase,
   Operation,
   OutputTarget,
   QueueItem,
   QueueItemState,
+  RunId,
   SkipReason,
   Telemetry,
+  VmafScore,
 } from "@/lib/bindings";
 
 /** D11 confidence ramp: values step down a muted-color ramp, no tildes. */
@@ -17,23 +21,31 @@ export type RowStatus =
   | { kind: "queued" }
   | { kind: "starting" }
   | { kind: "working"; phase: JobPhase; percent: number | null }
-  | { kind: "done"; outcome: "Analyzed" | "Converted" | "Remuxed"; savedBytes: number | null }
+  | {
+      kind: "done";
+      outcome: "Analyzed" | "Converted" | "Remuxed";
+      sizeDeltaBytes: number | null;
+      recovered: boolean;
+    }
   | { kind: "skipped"; reason: string; detail: string | null }
   | { kind: "stopped" }
-  | { kind: "failed"; message: string };
+  | { kind: "failed"; message: string; diagnostic: string | null };
 
 /**
- * Display model for one queue row. The stream/size/time/preciseCrf fields
- * come from joins the wiring layer performs (media metadata, cached
- * analyses, telemetry); they are null until known.
+ * Durable display model for one queue row. Live telemetry is deliberately
+ * absent: each row subscribes to its own RunId so progress ticks do not
+ * rebuild the table or disturb selection.
  */
 export interface QueueRowData {
   item: QueueItem;
+  runId: RunId | null;
   streams: string | null;
   sizeBytes: number | null;
-  timeSec: number | null;
+  mediaDurationMs: DurationMs | null;
+  timeMs: DurationMs | null;
   timeConfidence: EstimateConfidence;
-  preciseCrf: boolean;
+  crf: Crf | null;
+  vmaf: VmafScore | null;
   status: RowStatus;
 }
 
@@ -49,7 +61,7 @@ export function deriveRowStatus(
   state: QueueItemState,
   telemetry: Telemetry | null,
   durationMs: number | null,
-  savedBytes: number | null,
+  sizeDeltaBytes: number | null,
 ): RowStatus {
   if (state === "Queued") return { kind: "queued" };
   if ("Reserved" in state || "Claimed" in state) return { kind: "starting" };
@@ -58,13 +70,13 @@ export function deriveRowStatus(
     return {
       kind: "working",
       phase: telemetry.phase,
-      percent: progressPercent(telemetry, durationMs),
+      percent: telemetryPercent(telemetry, durationMs),
     };
   }
-  return outcomeStatus(state.Finished, savedBytes);
+  return outcomeStatus(state.Finished, sizeDeltaBytes);
 }
 
-function progressPercent(telemetry: Telemetry, durationMs: number | null): number | null {
+export function telemetryPercent(telemetry: Telemetry, durationMs: number | null): number | null {
   const { progress } = telemetry;
   if (progress === "Phase") return null;
   if (progress.SearchBasisPoints !== undefined) {
@@ -78,16 +90,34 @@ function clampPercent(value: number): number {
   return Math.min(100, Math.max(0, Math.round(value)));
 }
 
-function outcomeStatus(outcome: ItemOutcome, savedBytes: number | null): RowStatus {
-  if (outcome === "Analyzed") return { kind: "done", outcome, savedBytes: null };
+function outcomeStatus(outcome: ItemOutcome, sizeDeltaBytes: number | null): RowStatus {
+  if (outcome === "Analyzed") {
+    return { kind: "done", outcome, sizeDeltaBytes: null, recovered: false };
+  }
   if (outcome === "Stopped") return { kind: "stopped" };
   if ("Converted" in outcome && outcome.Converted !== undefined) {
-    return { kind: "done", outcome: "Converted", savedBytes };
+    return {
+      kind: "done",
+      outcome: "Converted",
+      sizeDeltaBytes,
+      recovered: outcome.Converted === "RecoveredAtStartup",
+    };
   }
   if ("Remuxed" in outcome && outcome.Remuxed !== undefined) {
-    return { kind: "done", outcome: "Remuxed", savedBytes };
+    return {
+      kind: "done",
+      outcome: "Remuxed",
+      sizeDeltaBytes,
+      recovered: outcome.Remuxed === "RecoveredAtStartup",
+    };
   }
-  if (outcome.Failed !== undefined) return { kind: "failed", message: outcome.Failed.message };
+  if (outcome.Failed !== undefined) {
+    return {
+      kind: "failed",
+      message: outcome.Failed.message,
+      diagnostic: outcome.Failed.diagnostic || null,
+    };
+  }
   if (outcome.Skipped !== undefined) {
     return { kind: "skipped", ...skipReasonText(outcome.Skipped.reason) };
   }
