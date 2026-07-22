@@ -26,7 +26,7 @@ import {
   Search,
   SquareStop,
 } from "lucide-react";
-import { useCallback, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { toast } from "sonner";
 
 import {
@@ -386,9 +386,70 @@ function cellAlignment(column: Column<HistoryDisplayRow>): string {
 interface VirtualBodyProps {
   rows: Row<HistoryDisplayRow>[];
   scrollRef: React.RefObject<HTMLDivElement | null>;
+  focusedRowId: string | null;
+  onRowFocus: (rowId: string) => void;
 }
 
-function VirtualBody({ rows, scrollRef }: VirtualBodyProps) {
+interface VirtualHistoryRowProps {
+  row: Row<HistoryDisplayRow>;
+  start: number;
+  scrollRef: React.RefObject<HTMLDivElement | null>;
+  focusedRowId: string | null;
+  onRowFocus: (rowId: string) => void;
+}
+
+function VirtualHistoryRow({
+  row,
+  start,
+  scrollRef,
+  focusedRowId,
+  onRowFocus,
+}: VirtualHistoryRowProps) {
+  const rowRef = useRef<HTMLTableRowElement>(null);
+
+  useEffect(() => {
+    if (focusedRowId !== row.id) return;
+    const activeElement = document.activeElement;
+    if (activeElement === document.body || activeElement === scrollRef.current) {
+      rowRef.current?.focus({ preventScroll: true });
+    }
+  }, [focusedRowId, row.id, scrollRef]);
+
+  return (
+    <tr
+      ref={rowRef}
+      data-history-row
+      data-status={row.original.status}
+      data-selected={row.getIsSelected() ? "true" : undefined}
+      tabIndex={0}
+      className="absolute flex w-full border-b border-border/50 bg-background text-sm outline-none hover:bg-muted/50 focus-visible:z-10 focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring/70 data-[selected=true]:bg-primary/8"
+      style={{ height: `${ROW_HEIGHT}px`, transform: `translateY(${start}px)` }}
+      onFocus={(event) => {
+        if (event.target === event.currentTarget) onRowFocus(row.id);
+      }}
+      onClick={() => row.toggleSelected()}
+      onKeyDown={(event) => {
+        if (event.target !== event.currentTarget) return;
+        if (event.key === "Enter" || event.key === " ") {
+          event.preventDefault();
+          row.toggleSelected();
+        }
+      }}
+    >
+      {row.getVisibleCells().map((cell) => (
+        <td
+          key={cell.id}
+          className={cn("flex min-w-0 shrink-0 items-center px-2 py-1", cellAlignment(cell.column))}
+          style={{ width: `${cell.column.getSize()}px` }}
+        >
+          {flexRender(cell.column.columnDef.cell, cell.getContext())}
+        </td>
+      ))}
+    </tr>
+  );
+}
+
+function VirtualBody({ rows, scrollRef, focusedRowId, onRowFocus }: VirtualBodyProps) {
   const rowVirtualizer = useVirtualizer<HTMLDivElement, HTMLTableRowElement>({
     count: rows.length,
     getScrollElement: () => scrollRef.current,
@@ -406,36 +467,14 @@ function VirtualBody({ rows, scrollRef }: VirtualBodyProps) {
         const row = rows[virtualRow.index];
         if (row === undefined) return null;
         return (
-          <tr
+          <VirtualHistoryRow
             key={row.id}
-            data-history-row
-            data-status={row.original.status}
-            data-selected={row.getIsSelected() ? "true" : undefined}
-            tabIndex={0}
-            className="absolute flex w-full border-b border-border/50 bg-background text-sm outline-none hover:bg-muted/50 focus-visible:z-10 focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring/70 data-[selected=true]:bg-primary/8"
-            style={{ height: `${ROW_HEIGHT}px`, transform: `translateY(${virtualRow.start}px)` }}
-            onClick={() => row.toggleSelected()}
-            onKeyDown={(event) => {
-              if (event.target !== event.currentTarget) return;
-              if (event.key === "Enter" || event.key === " ") {
-                event.preventDefault();
-                row.toggleSelected();
-              }
-            }}
-          >
-            {row.getVisibleCells().map((cell) => (
-              <td
-                key={cell.id}
-                className={cn(
-                  "flex min-w-0 shrink-0 items-center px-2 py-1",
-                  cellAlignment(cell.column),
-                )}
-                style={{ width: `${cell.column.getSize()}px` }}
-              >
-                {flexRender(cell.column.columnDef.cell, cell.getContext())}
-              </td>
-            ))}
-          </tr>
+            row={row}
+            start={virtualRow.start}
+            scrollRef={scrollRef}
+            focusedRowId={focusedRowId}
+            onRowFocus={onRowFocus}
+          />
         );
       })}
     </tbody>
@@ -449,6 +488,7 @@ export function HistoryTable({ rows: projectedRows }: { rows: readonly HistoryDi
   const [globalFilter, setGlobalFilter] = useState("");
   const [columnFilters, setColumnFilters] = useState<ColumnFiltersState>([]);
   const [rowSelection, setRowSelection] = useState<RowSelectionState>({});
+  const [focusedRowId, setFocusedRowId] = useState<string | null>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
   const table = useReactTable({
     data,
@@ -567,7 +607,12 @@ export function HistoryTable({ rows: projectedRows }: { rows: readonly HistoryDi
                 </tr>
               ))}
             </thead>
-            <VirtualBody rows={filteredRows} scrollRef={scrollRef} />
+            <VirtualBody
+              rows={filteredRows}
+              scrollRef={scrollRef}
+              focusedRowId={focusedRowId}
+              onRowFocus={setFocusedRowId}
+            />
           </table>
           {filteredRows.length === 0 && (
             <div className="flex h-32 items-center justify-center text-sm text-muted-foreground">

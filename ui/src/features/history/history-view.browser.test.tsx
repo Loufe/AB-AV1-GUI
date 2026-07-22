@@ -218,12 +218,29 @@ describe("History table interaction and semantics", () => {
     await userEvent.keyboard(" ");
     expect(stoppedRow.dataset.selected).toBe("true");
 
-    await page.getByRole("button", { name: /Sort by File/ }).click();
+    page
+      .getByRole("button", { name: /Sort by File/ })
+      .element()
+      .click();
     const selectedAfterSort = page
       .getByText("stopped.mkv", { exact: true })
       .element()
       .closest("tr");
     expect(selectedAfterSort?.dataset.selected).toBe("true");
+    await expect.element(selectedAfterSort as HTMLTableRowElement).toHaveFocus();
+
+    const convertedFilter = page.getByRole("button", { name: "Converted · 2" });
+    convertedFilter.element().click();
+    await expect.element(page.getByText("stopped.mkv", { exact: true })).not.toBeInTheDocument();
+    await expect.element(convertedFilter).toHaveAttribute("aria-pressed", "true");
+    convertedFilter.element().click();
+    await expect.element(page.getByText("stopped.mkv", { exact: true })).toBeVisible();
+    const selectedAfterFilter = page
+      .getByText("stopped.mkv", { exact: true })
+      .element()
+      .closest("tr");
+    expect(selectedAfterFilter?.dataset.selected).toBe("true");
+    await expect.element(selectedAfterFilter as HTMLTableRowElement).toHaveFocus();
   });
 
   it("makes full paths and only meaningful parked actions keyboard reachable", async () => {
@@ -274,12 +291,20 @@ describe("History table interaction and semantics", () => {
 
     expect(document.querySelectorAll("[data-history-row]").length).toBeLessThan(100);
     const newest = page.getByText("virtual-499.mkv", { exact: true });
-    await newest.click();
-    expect(newest.element().closest("tr")?.dataset.selected).toBe("true");
+    const newestRow = newest.element().closest("tr");
+    expect(newestRow).not.toBeNull();
+    if (newestRow === null) return;
+    newestRow.focus();
+    await userEvent.keyboard(" ");
+    expect(newestRow.dataset.selected).toBe("true");
+    await expect.element(newestRow).toHaveFocus();
 
     scroll.scrollTop = scroll.scrollHeight;
     scroll.dispatchEvent(new Event("scroll"));
     await expect.element(page.getByText("virtual-000.mkv", { exact: true })).toBeVisible();
+    await expect
+      .element(page.getByText("virtual-499.mkv", { exact: true }))
+      .not.toBeInTheDocument();
     expect(document.querySelectorAll("[data-history-row]").length).toBeLessThan(100);
 
     scroll.scrollTop = 0;
@@ -288,5 +313,7 @@ describe("History table interaction and semantics", () => {
     expect(
       page.getByText("virtual-499.mkv", { exact: true }).element().closest("tr")?.dataset.selected,
     ).toBe("true");
+    const restoredRow = page.getByText("virtual-499.mkv", { exact: true }).element().closest("tr");
+    await expect.element(restoredRow as HTMLTableRowElement).toHaveFocus();
   });
 });
