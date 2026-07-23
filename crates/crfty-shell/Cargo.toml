@@ -11,11 +11,11 @@ name = "crfty_shell"
 crate-type = ["lib"]
 
 [build-dependencies]
-tauri-build = { version = "=2.6.3", features = [] }
+tauri-build = { version = "2.6.3", features = [] }
 
 [dependencies]
-crfty-core = { path = "../crfty-core", version = "=3.0.0-alpha.0" }
-crfty-engine = { path = "../crfty-engine", version = "=3.0.0-alpha.0" }
+crfty-core = { path = "../crfty-core" }
+crfty-engine = { path = "../crfty-engine" }
 serde = { workspace = true }
 specta = { workspace = true }
 # default-features re-listed minus common-controls-v6: ComCtl32 v6 linkage
@@ -23,7 +23,7 @@ specta = { workspace = true }
 # load on Windows with STATUS_ENTRYPOINT_NOT_FOUND (tauri-apps/tauri#13419).
 # Re-enable it alongside a manifest fix if native Windows dialogs ever need
 # v6 styling.
-tauri = { version = "=2.11.5", default-features = false, features = [
+tauri = { version = "2.11.5", default-features = false, features = [
     "compression",
     "dbus",
     "dynamic-acl",
@@ -31,8 +31,9 @@ tauri = { version = "=2.11.5", default-features = false, features = [
     "wry",
     "x11",
 ] }
+# Exact pin: pre-release; caret would take rc.26+ with breaking rc-to-rc changes.
 tauri-specta = { version = "=2.0.0-rc.25", features = ["derive", "typescript"] }
-tracing = { version = "=0.1.44", default-features = false, features = ["std"] }
+tracing = { version = "0.1.44", default-features = false, features = ["std"] }
 
 # The official Tauri dialog plugin enables rfd's common-controls-v6 feature,
 # which makes Windows test executables require an embedded application
@@ -40,10 +41,10 @@ tracing = { version = "=0.1.44", default-features = false, features = ["std"] }
 # on the same native dialog library without widening the webview's plugin
 # permissions or re-enabling that feature.
 [target.'cfg(target_os = "linux")'.dependencies]
-rfd = { version = "=0.17.2", default-features = false, features = ["gtk3"] }
+rfd = { version = "0.17.2", default-features = false, features = ["gtk3"] }
 
 [target.'cfg(any(target_os = "macos", target_os = "windows"))'.dependencies]
-rfd = { version = "=0.17.2", default-features = false }
+rfd = { version = "0.17.2", default-features = false }
 
 [dev-dependencies]
 specta-typescript = "=0.0.12"

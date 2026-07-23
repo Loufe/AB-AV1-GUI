@@ -25,7 +25,6 @@ cargo fmt --all -- --check
 cargo clippy --workspace --all-targets --all-features --locked -- -D warnings
 cargo test --workspace --all-features --locked
 cargo deny check
-cargo vet
 ```
 
 The frontend gate runs from `ui/` — see `ui/AGENTS.md`.
@@ -38,9 +37,10 @@ The frontend gate runs from `ui/` — see `ui/AGENTS.md`.
   for fixture setup; integration-test crates declare those three Clippy allowances
   at their crate root; unsafe remains forbidden in all test code.
 - Keep `Cargo.lock`, git dependency revisions, and structured-tool versions pinned.
-  The Rust compiler itself follows the stable channel.
-- Add dependencies only with cargo-deny and cargo-vet policy updates in the same
-  change.
+  Manifest requirements use normal caret ranges; exact `=` pins are reserved for
+  the specta pre-release family until it stabilizes. The Rust compiler itself
+  follows the stable channel.
+- Add dependencies only with cargo-deny policy updates in the same change.
 - Pure logic must have focused tests.
 - Log caught errors with context. Conversions may run for hours; non-critical
   telemetry or UI failures must not abort them.

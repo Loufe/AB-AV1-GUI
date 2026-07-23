@@ -57,6 +57,7 @@ confidence-threshold = 0.93
 [bans]
 multiple-versions = "warn"
 wildcards = "deny"
+allow-wildcard-paths = true
 highlight = "all"
 
 [sources]

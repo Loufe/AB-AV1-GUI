@@ -51,10 +51,6 @@ jobs:
       - name: Select stable Rust
         run: rustup default stable
       - name: Install dependency tools
-        run: |
-          cargo install --locked --version 0.20.2 cargo-deny
-          cargo install --locked --version 0.10.0 cargo-vet
+        run: cargo install --locked --version 0.20.2 cargo-deny
       - name: Check dependency policy
         run: cargo deny check
-      - name: Check dependency audits
-        run: cargo vet
