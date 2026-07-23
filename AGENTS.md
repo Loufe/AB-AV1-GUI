@@ -62,6 +62,20 @@ No external consumers exist. Change APIs and schemas directly, update all call
 sites in the same change, and leave no compatibility artifacts. The one-time
 Python history adoption is a product requirement, not compatibility policy.
 
+## Design discipline
+
+- Prefer the design where an invariant is unrepresentable over the design where
+  its violation is well-tested. Two implementations kept equivalent by a test
+  harness is a defect to eliminate, not a pattern to maintain.
+- No mechanism ahead of measurement. Delta streams, mirrors, caches, debouncing,
+  and concurrency tokens require an observed problem on real hardware, not an
+  anticipated one. Start boring (send the whole state, recompute on request);
+  an ADR introducing such machinery must cite the measurement.
+- Parity preserves intentional semantics only. Never freeze accidental V2
+  behavior as spec.
+- "Unused" claims require tool verification (compiler, knip, cargo-machete),
+  never text search alone; barrels and re-exports defeat grep.
+
 ## Worktrees
 
 The main checkout stays on `main` — never edit files in it. It is used only for
