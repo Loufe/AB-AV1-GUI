@@ -61,7 +61,6 @@ cargo fmt --all -- --check
 cargo clippy --workspace --all-targets --all-features --locked -- -D warnings
 cargo test --workspace --all-features --locked
 cargo deny check
-cargo vet
 ```
 
 CRFty is licensed under GPL-3.0-or-later. See [LICENSE](LICENSE).
