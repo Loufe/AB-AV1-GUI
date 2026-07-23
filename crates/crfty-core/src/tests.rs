@@ -2,28 +2,31 @@ use std::path::PathBuf;
 
 use proptest::prelude::*;
 
+use crate::journal::{
+    COMPACTION_HARD_LIMIT_BYTES, COMPACTION_IDLE_MIN_RATIO, JOURNAL_SCHEMA_VERSION,
+};
+use crate::policy::{Eligibility, evaluate_eligibility};
 use crate::reducer::validate_terminal;
 
 use crate::{
     AnalysisActivity, AnalysisCommand, AnalysisDisplayText, AnalysisFileScan, AnalysisGenerationId,
     AnalysisIntent, AnalysisProfile, AnalysisResult, AnalysisRow, AnalysisRowEntry, AnalysisRowId,
     AnalysisScanFailure, AppState, ArtifactIdentity, BasicScanDisposition,
-    COMPACTION_HARD_LIMIT_BYTES, COMPACTION_IDLE_MIN_JOURNAL_BYTES, COMPACTION_IDLE_MIN_RATIO,
-    ClaimId, Command, CompletionEvidence, ConflictKind, ContentKey, ConversionRun, Crf,
-    CurrentFileIdentity, DecodeMode, DecodePreference, DefaultOutputMode, DestructiveIdentity,
-    DestructiveObservation, DurableDelta, DurationMs, Effect, Eligibility, EphemeralDelta,
-    ExecutionSettings, FailureFacts, FailureKind, FileRecord, FileSystemFacts, FileSystemId,
-    FileTimeNs, HistoryCommand, ImportPath, ImportedHistoryRecord, ImportedProvenance, ItemOutcome,
-    JOURNAL_SCHEMA_VERSION, JobAction, JobPhase, JobProgress, JournalEnvelope, JournalSequence,
-    MediaContainer, MediaObservation, Operation, OutputDelta, OutputRecoveryAction, OutputState,
-    OutputTarget, OutputTransaction, OverwriteDecision, ParkedResolution, ParkedStatus,
-    PathBinding, PathHash, PhaseSpan, ProjectionCommand, QueueAddRequest, QueueCommand,
-    QueueItemEdit, QueueItemId, QueueItemState, Replacement, Reply, RunId, SearchMeasurement,
-    SessionAggregates, SessionCommand, SessionState, Settings, SettingsCommand, SkipReason,
-    StreamByteSizes, SystemCommand, Telemetry, ToolAvailability, ToolRevisions, ToolSource,
-    ToolsState, UnixMillis, VendorActivity, VendorCommand, VideoCodec, VideoMeta, VmafScore,
-    VmafTarget, WorkerCommand, apply, compaction_due, compaction_quiescent, corruption_signature,
-    encode_record, encode_snapshot, evaluate_eligibility, permitted_profiles, recover_output,
+    COMPACTION_IDLE_MIN_JOURNAL_BYTES, ClaimId, Command, CompletionEvidence, ConflictKind,
+    ContentKey, ConversionRun, Crf, CurrentFileIdentity, DecodeMode, DecodePreference,
+    DefaultOutputMode, DestructiveIdentity, DestructiveObservation, DurableDelta, DurationMs,
+    Effect, EphemeralDelta, ExecutionSettings, FailureFacts, FailureKind, FileRecord,
+    FileSystemFacts, FileSystemId, FileTimeNs, HistoryCommand, ImportPath, ImportedHistoryRecord,
+    ImportedProvenance, ItemOutcome, JobAction, JobPhase, JobProgress, JournalEnvelope,
+    JournalSequence, MediaContainer, MediaObservation, Operation, OutputDelta,
+    OutputRecoveryAction, OutputState, OutputTarget, OutputTransaction, OverwriteDecision,
+    ParkedResolution, ParkedStatus, PathBinding, PathHash, PhaseSpan, ProjectionCommand,
+    QueueAddRequest, QueueCommand, QueueItemEdit, QueueItemId, QueueItemState, Replacement, Reply,
+    RunId, SearchMeasurement, SessionAggregates, SessionCommand, SessionState, Settings,
+    SettingsCommand, SkipReason, StreamByteSizes, SystemCommand, Telemetry, ToolAvailability,
+    ToolRevisions, ToolSource, ToolsState, UnixMillis, VendorActivity, VendorCommand, VideoCodec,
+    VideoMeta, VmafScore, VmafTarget, WorkerCommand, apply, compaction_due, compaction_quiescent,
+    corruption_signature, encode_record, encode_snapshot, permitted_profiles, recover_output,
     replay, resolve_parked, select_analysis, select_job_action,
 };
 
@@ -1414,7 +1417,7 @@ fn policy_uses_post_rotation_pixel_floor_and_typed_av1_decisions() {
         evaluate_eligibility(&metadata, Operation::Convert),
         Eligibility::Skip(SkipReason::LowResolution {
             pixels: 640_000,
-            minimum: crate::MIN_VIDEO_PIXELS,
+            minimum: crate::policy::MIN_VIDEO_PIXELS,
         })
     );
 
@@ -3692,7 +3695,7 @@ fn claim_short_circuits_content_with_a_decisive_verdict() {
         JobAction::Skip {
             reason: SkipReason::LowResolution {
                 pixels: 640 * 480,
-                minimum: crate::MIN_VIDEO_PIXELS,
+                minimum: crate::policy::MIN_VIDEO_PIXELS,
             },
         }
     );

@@ -23,7 +23,7 @@ impl CrashSentinel {
     /// left it behind (an abnormal shutdown). The old file's contents — our
     /// own version/pid stamp, never a user path — are logged before the
     /// rewrite so the log identifies which run died.
-    pub fn arm(data_dir: &Path) -> Self {
+    pub(crate) fn arm(data_dir: &Path) -> Self {
         let path = data_dir.join(SENTINEL_FILE_NAME);
         let previous_run_abnormal = path.exists();
         if previous_run_abnormal {
@@ -62,14 +62,14 @@ impl CrashSentinel {
     }
 
     /// Whether the previous run left its sentinel behind at arm time.
-    pub fn previous_run_abnormal(&self) -> bool {
+    pub(crate) fn previous_run_abnormal(&self) -> bool {
         self.previous_run_abnormal
     }
 
     /// Removes the sentinel: this run's durable state closed cleanly. Called
     /// only on the clean shutdown path — a panic must leave the file behind
     /// for the next boot to find.
-    pub fn disarm(&mut self) {
+    pub(crate) fn disarm(&mut self) {
         if !self.armed {
             return;
         }

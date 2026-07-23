@@ -113,7 +113,7 @@ pub struct DiscoveryEnvironment {
 
 impl DiscoveryEnvironment {
     #[must_use]
-    pub fn from_process() -> Self {
+    pub(crate) fn from_process() -> Self {
         Self {
             ffmpeg_override: std::env::var_os(FFMPEG_VARIABLE),
             ffprobe_override: std::env::var_os(FFPROBE_VARIABLE),
@@ -122,7 +122,7 @@ impl DiscoveryEnvironment {
     }
 }
 
-pub fn discover(vendor_root: &Path) -> DiscoveryReport {
+pub(crate) fn discover(vendor_root: &Path) -> DiscoveryReport {
     discover_with(vendor_root, &DiscoveryEnvironment::from_process())
 }
 

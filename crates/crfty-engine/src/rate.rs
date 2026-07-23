@@ -17,7 +17,7 @@ const MILLIS_PER_SECOND: f64 = 1_000.0;
 
 /// One adapter progress update, normalized for rate tracking.
 #[derive(Debug, Clone, Copy, PartialEq)]
-pub struct RateSample {
+pub(crate) struct RateSample {
     /// Monotonic frames-encoded counter, when the phase reports one (encode).
     pub frames: Option<u64>,
     /// Adapter-reported instantaneous fps. Fallback evidence: a windowed mean
@@ -33,7 +33,7 @@ pub struct RateSample {
 /// process: a retry or fallback attempt restarts progress, so it restarts the
 /// window and the ETA warm-up with it.
 #[derive(Debug)]
-pub struct RateTracker {
+pub(crate) struct RateTracker {
     total_work: Option<f64>,
     frames: Window,
     gauge: Window,

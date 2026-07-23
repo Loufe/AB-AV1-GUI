@@ -68,11 +68,11 @@ pub(crate) enum SupervisedMediaError {
 }
 
 #[derive(Debug, Clone)]
-pub struct MediaInspector {
+pub(crate) struct MediaInspector {
     ffprobe: PathBuf,
 }
 
-pub struct DecodeResolver {
+pub(crate) struct DecodeResolver {
     ffmpeg: PathBuf,
     availability: BTreeMap<HardwareDecoder, bool>,
 }
@@ -152,11 +152,15 @@ impl MediaInspector {
         }
     }
 
-    pub fn inspect_artifact(&self, path: &Path) -> io::Result<ArtifactIdentity> {
+    pub(crate) fn inspect_artifact(&self, path: &Path) -> io::Result<ArtifactIdentity> {
         self.inspect(path).map(|(_, identity)| identity)
     }
 
-    pub fn verify_av1(&self, path: &Path, minimum_size: u64) -> io::Result<ArtifactIdentity> {
+    pub(crate) fn verify_av1(
+        &self,
+        path: &Path,
+        minimum_size: u64,
+    ) -> io::Result<ArtifactIdentity> {
         let metadata = std::fs::metadata(path)?;
         if metadata.len() < minimum_size {
             return Err(io::Error::new(

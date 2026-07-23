@@ -223,7 +223,7 @@ impl<I: ArtifactInspector> OutputManager<I> {
     /// Removes a staging file whose `StagingCreated` record could not be
     /// journaled. Best effort: if this fails, startup recovery abandons the
     /// file from the durable `OutputStarted` intent instead.
-    pub fn remove_staging(
+    pub(crate) fn remove_staging(
         &self,
         staging: &Path,
         expected: &DestructiveIdentity,
@@ -527,7 +527,7 @@ fn byte_artifact_identity(path: &Path) -> io::Result<ArtifactIdentity> {
 }
 
 #[derive(Debug, Clone)]
-pub struct MediaArtifactInspector {
+pub(crate) struct MediaArtifactInspector {
     media: MediaInspector,
 }
 

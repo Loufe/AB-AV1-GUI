@@ -40,7 +40,7 @@ impl ProcessCancellation {
     }
 
     #[must_use]
-    pub fn is_cancelled(&self) -> bool {
+    pub(crate) fn is_cancelled(&self) -> bool {
         self.cancelled.load(Ordering::Acquire)
     }
 }
@@ -84,11 +84,6 @@ impl BoundedOutput {
     #[must_use]
     pub fn as_bytes(&self) -> &[u8] {
         &self.bytes
-    }
-
-    #[must_use]
-    pub fn into_bytes(self) -> Vec<u8> {
-        self.bytes
     }
 
     #[must_use]

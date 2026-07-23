@@ -362,7 +362,10 @@ impl<T> JobHandle<T> {
 
     /// Blocks up to `timeout` for the report; `Ok(None)` means the job is
     /// still running when the timeout elapses.
-    pub fn recv_report(&mut self, timeout: Duration) -> Result<Option<JobReport<T>>, WaitError> {
+    pub(crate) fn recv_report(
+        &mut self,
+        timeout: Duration,
+    ) -> Result<Option<JobReport<T>>, WaitError> {
         match self.result.recv_timeout(timeout) {
             Ok(report) => {
                 self.cancel_on_drop = false;
