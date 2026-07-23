@@ -100,7 +100,7 @@ impl RemuxHandle {
 
     /// Blocks up to `timeout` for the report; `Ok(None)` means the remux is
     /// still running when the timeout elapses.
-    pub fn recv_report(
+    pub(crate) fn recv_report(
         &mut self,
         timeout: Duration,
     ) -> Result<Option<RemuxReport>, StartRemuxError> {

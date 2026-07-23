@@ -256,7 +256,7 @@ impl JournalWriter {
     /// loss. Copy-then-replace is also crash-safe: a crash after the copy
     /// leaves the corrupt journal in place, the next start degrades again,
     /// and the acknowledgement is simply retried.
-    pub fn recover_corrupt(
+    pub(crate) fn recover_corrupt(
         &mut self,
         state: &DurableState,
         app_version: &str,

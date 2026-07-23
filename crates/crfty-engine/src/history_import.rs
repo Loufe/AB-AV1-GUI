@@ -17,11 +17,11 @@ use crfty_core::{
 use serde::Deserialize;
 
 /// The import-file schema version this build reads.
-pub const IMPORT_SCHEMA_VERSION: u32 = 1;
+pub(crate) const IMPORT_SCHEMA_VERSION: u32 = 1;
 
 /// Refuse to read import files larger than this; the schema describes
 /// metadata, not media, and even six-figure record counts stay far below it.
-pub const MAX_IMPORT_BYTES: u64 = 256 * 1024 * 1024;
+pub(crate) const MAX_IMPORT_BYTES: u64 = 256 * 1024 * 1024;
 
 const CONVERTER_HINT: &str =
     "produce the file with the bundled converter script (tools/export_history_v3.py)";
@@ -121,7 +121,7 @@ fn strip_verbatim(raw: &str) -> String {
 /// network mounts, and import files may carry unresolved spellings). At most
 /// two, deduplicated.
 #[must_use]
-pub fn import_path_candidates(path: &Path) -> Vec<ImportPath> {
+pub(crate) fn import_path_candidates(path: &Path) -> Vec<ImportPath> {
     let mut candidates = Vec::new();
     if let Ok(canonical) = std::fs::canonicalize(path) {
         candidates.push(normalize_import_path(&canonical.to_string_lossy()));
@@ -203,7 +203,7 @@ impl From<ImportStatus> for ParkedStatus {
 /// Duplicate keys pass through — the reducer is the single dedup authority
 /// and counts them as skipped. `now` backfills records without a decision
 /// timestamp.
-pub fn parse_import(
+pub(crate) fn parse_import(
     bytes: &[u8],
     now: UnixMillis,
 ) -> Result<Vec<(ImportPath, ImportedHistoryRecord)>, ImportError> {

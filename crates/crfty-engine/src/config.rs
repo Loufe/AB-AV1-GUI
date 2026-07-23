@@ -12,7 +12,7 @@ use tempfile::NamedTempFile;
 use crate::filesystem::{parent_directory, sync_parent};
 
 #[derive(Debug)]
-pub struct ConfigError {
+pub(crate) struct ConfigError {
     context: &'static str,
     source: io::Error,
 }
@@ -36,23 +36,18 @@ impl std::error::Error for ConfigError {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct LoadedConfig {
+pub(crate) struct LoadedConfig {
     pub settings: Settings,
     pub quarantined: Option<PathBuf>,
 }
 
-pub struct ConfigStore {
+pub(crate) struct ConfigStore {
     path: PathBuf,
 }
 
 impl ConfigStore {
     pub fn new(path: impl Into<PathBuf>) -> Self {
         Self { path: path.into() }
-    }
-
-    #[must_use]
-    pub fn path(&self) -> &Path {
-        &self.path
     }
 
     pub fn load(&self) -> Result<LoadedConfig, ConfigError> {

@@ -75,19 +75,6 @@ impl StatFact {
         let output = self.output_size_bytes?;
         Some(i128::from(input) - i128::from(output))
     }
-
-    /// Size reduction as a percentage of the input when both sizes are known
-    /// and the input is nonempty. Negative when the output grew.
-    #[must_use]
-    pub fn reduction_percent(&self) -> Option<f64> {
-        let input = self.input_size_bytes?;
-        let output = self.output_size_bytes?;
-        if input == 0 {
-            return None;
-        }
-        let saved = i128::from(input) - i128::from(output);
-        Some(100.0 * saved as f64 / input as f64)
-    }
 }
 
 /// Flatten every content with a standing verdict into one [`StatFact`],

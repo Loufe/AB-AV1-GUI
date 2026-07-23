@@ -304,7 +304,7 @@ pub fn init(default_log_dir: &Path, config_path: &Path) {
 /// Applies changed privacy/log-folder settings to the live sink. A folder
 /// switch opens the new file first and only then swaps, so a failure keeps
 /// the current sink (the acceptance rule: switching can never lose it).
-pub fn reconfigure(settings: &Settings) {
+pub(crate) fn reconfigure(settings: &Settings) {
     let Some(control) = CONTROL.get() else {
         return;
     };

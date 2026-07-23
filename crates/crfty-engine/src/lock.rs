@@ -18,18 +18,17 @@ use std::{
     path::{Path, PathBuf},
 };
 
-pub const LOCK_FILE_NAME: &str = "crfty.lock";
+pub(crate) const LOCK_FILE_NAME: &str = "crfty.lock";
 
 /// Holds the exclusive data-directory lock. The OS releases the lock when
 /// this value drops (or the process dies), so ownership tracks lifetime.
 #[derive(Debug)]
-pub struct DataLock {
-    path: PathBuf,
+pub(crate) struct DataLock {
     _file: File,
 }
 
 #[derive(Debug)]
-pub enum DataLockError {
+pub(crate) enum DataLockError {
     /// Another process holds the lock: a second instance of the application.
     AlreadyHeld { path: PathBuf },
     Io {
@@ -61,7 +60,7 @@ impl std::error::Error for DataLockError {
 }
 
 impl DataLock {
-    pub fn acquire(directory: &Path) -> Result<Self, DataLockError> {
+    pub(crate) fn acquire(directory: &Path) -> Result<Self, DataLockError> {
         std::fs::create_dir_all(directory).map_err(|source| DataLockError::Io {
             context: "failed to create data directory",
             source,
@@ -77,18 +76,13 @@ impl DataLock {
                 source,
             })?;
         match file.try_lock() {
-            Ok(()) => Ok(Self { path, _file: file }),
+            Ok(()) => Ok(Self { _file: file }),
             Err(TryLockError::WouldBlock) => Err(DataLockError::AlreadyHeld { path }),
             Err(TryLockError::Error(source)) => Err(DataLockError::Io {
                 context: "failed to lock data directory",
                 source,
             }),
         }
-    }
-
-    #[must_use]
-    pub fn path(&self) -> &Path {
-        &self.path
     }
 }
 
@@ -105,8 +99,8 @@ mod tests {
             Err(DataLockError::AlreadyHeld { .. })
         ));
         drop(held);
-        let reacquired = DataLock::acquire(directory.path()).expect("reacquisition after drop");
-        assert!(reacquired.path().ends_with(super::LOCK_FILE_NAME));
+        let _reacquired = DataLock::acquire(directory.path()).expect("reacquisition after drop");
+        assert!(directory.path().join(super::LOCK_FILE_NAME).is_file());
     }
 
     #[test]

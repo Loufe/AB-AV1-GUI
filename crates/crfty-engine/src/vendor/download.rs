@@ -32,7 +32,7 @@ pub trait Fetch {
     fn fetch(&self, url: &str) -> Result<FetchStream, String>;
 }
 
-pub struct HttpFetch {
+pub(crate) struct HttpFetch {
     client: reqwest::blocking::Client,
 }
 
