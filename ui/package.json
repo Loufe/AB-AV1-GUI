@@ -13,6 +13,7 @@
     "test:node": "vitest run --project node",
     "test:browser": "vitest run --project browser",
     "typecheck": "tsc -b",
+    "knip": "knip",
     "preview": "vite preview",
     "tauri:dev": "cd .. && tauri dev --config crates/crfty-shell/tauri.conf.json",
     "tauri:build": "cd .. && tauri build --config crates/crfty-shell/tauri.conf.json"
@@ -44,6 +45,7 @@
     "@types/react-dom": "^19.2.3",
     "@vitejs/plugin-react": "^6.0.3",
     "@vitest/browser-playwright": "4.1.10",
+    "knip": "^6.27.0",
     "oxfmt": "0.59.0",
     "oxlint": "^1.71.0",
     "playwright": "1.61.1",

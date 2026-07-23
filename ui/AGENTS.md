@@ -4,7 +4,11 @@ React + TypeScript frontend, pnpm-managed. Setup, layout, and environment quirks
 (WSLg workaround, degraded mode): see README.md.
 
 Gate — every commit green, mirrored by `.github/workflows/ui.yml`:
-`pnpm lint && pnpm format:check && pnpm typecheck && pnpm test && pnpm build`
+`pnpm lint && pnpm format:check && pnpm typecheck && pnpm knip && pnpm test && pnpm build`
+
+Knip keeps the tree free of dead exports: no barrel files, no unused exports
+(de-export symbols used only in-file), no speculative "future UI" surface.
+Deleted code is recoverable from git history or the shadcn registry.
 
 - `src/lib/bindings.ts`, `src/lib/store/fold-fixtures.json`, and
   `src/lib/projection/projection-fixtures.json` are GENERATED (crfty-shell

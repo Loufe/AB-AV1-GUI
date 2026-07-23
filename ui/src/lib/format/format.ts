@@ -10,7 +10,7 @@
 export type TimeConfidence = "high" | "precise" | "medium" | "low" | "none";
 
 /** A per-hour GiB rate at or above this renders without decimals. */
-export const EFFICIENCY_DECIMAL_THRESHOLD = 10;
+const EFFICIENCY_DECIMAL_THRESHOLD = 10;
 
 const EM_DASH = "—";
 const GIB = 1024 ** 3;

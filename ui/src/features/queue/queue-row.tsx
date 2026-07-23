@@ -10,17 +10,15 @@ import {
   Trash2,
 } from "lucide-react";
 
+import { Button } from "@/components/ui/button";
 import {
-  Button,
   DropdownMenu,
   DropdownMenuContent,
   DropdownMenuItem,
   DropdownMenuSeparator,
   DropdownMenuTrigger,
-  Tooltip,
-  TooltipContent,
-  TooltipTrigger,
-} from "@/components/ui";
+} from "@/components/ui/dropdown-menu";
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { formatDurationMsCompact } from "@/lib/format/engine-values";
 import { formatFileSize } from "@/lib/format/format";
 import { useProgressStore } from "@/lib/store/progress-store";

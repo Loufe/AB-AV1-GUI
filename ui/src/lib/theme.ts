@@ -22,7 +22,7 @@ export function setTheme(theme: Theme): void {
   applyTheme(theme);
 }
 
-export function applyTheme(theme: Theme = getTheme()): void {
+function applyTheme(theme: Theme = getTheme()): void {
   const dark =
     theme === "dark" || (theme === "system" && matchMedia("(prefers-color-scheme: dark)").matches);
   document.documentElement.classList.toggle("dark", dark);

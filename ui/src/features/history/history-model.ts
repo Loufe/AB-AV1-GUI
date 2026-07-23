@@ -17,7 +17,7 @@ export const HISTORY_STATUSES = [
 ] as const;
 
 export type HistoryStatusLabel = (typeof HISTORY_STATUSES)[number];
-export type HistoryProvenance = "native" | "adopted" | "parked" | "unknown";
+type HistoryProvenance = "native" | "adopted" | "parked" | "unknown";
 
 export interface HistoryDisplayRow {
   /** Tagged domain identity. Never derived from a visible index or label. */
@@ -49,7 +49,7 @@ export function historyRowId(key: HistoryRow["key"]): string {
 }
 
 /** Last path segment while accepting both Windows and Unix separators. */
-export function historyBasename(path: string): string {
+function historyBasename(path: string): string {
   const segments = path.split(/[\\/]/).filter((segment) => segment.length > 0);
   return segments.at(-1) ?? path;
 }
@@ -194,7 +194,7 @@ export function containerLabel(container: MediaContainer | null): string {
   return "MKV";
 }
 
-export function audioCodecLabel(codec: AudioCodec): string {
+function audioCodecLabel(codec: AudioCodec): string {
   if (typeof codec === "object") return otherLabel(codec);
   const labels: Record<Exclude<AudioCodec, object>, string> = {
     Aac: "AAC",

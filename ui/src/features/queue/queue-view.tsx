@@ -11,7 +11,7 @@ import {
   AlertDialogFooter,
   AlertDialogHeader,
   AlertDialogTitle,
-} from "@/components/ui";
+} from "@/components/ui/alert-dialog";
 import { EmptyState } from "@/components/empty-state";
 import type {
   Operation,

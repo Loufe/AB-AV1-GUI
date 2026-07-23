@@ -9,7 +9,8 @@ import {
   ScanSearch,
 } from "lucide-react";
 
-import { Button, Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui";
+import { Button } from "@/components/ui/button";
+import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 import { formatCompactTime, formatFileSize } from "@/lib/format/format";
 import { cn } from "@/lib/utils";
 

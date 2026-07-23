@@ -1,19 +1,16 @@
 import type { ReactNode } from "react";
 import { ExternalLink, FolderSearch, RotateCcw } from "lucide-react";
 
+import { Button } from "@/components/ui/button";
+import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Input } from "@/components/ui/input";
 import {
-  Button,
-  Card,
-  CardContent,
-  CardHeader,
-  CardTitle,
-  Input,
   Select,
   SelectContent,
   SelectItem,
   SelectTrigger,
   SelectValue,
-} from "@/components/ui";
+} from "@/components/ui/select";
 import type { Operation, OutputTarget, OverwriteDecision, QueueItemEdit } from "@/lib/bindings";
 import { formatDurationMsCompact } from "@/lib/format/engine-values";
 import { formatFileSize } from "@/lib/format/format";

@@ -18,8 +18,8 @@ import {
   AlertDialogFooter,
   AlertDialogHeader,
   AlertDialogTitle,
-  Button,
-} from "@/components/ui";
+} from "@/components/ui/alert-dialog";
+import { Button } from "@/components/ui/button";
 import type { SessionState } from "@/lib/bindings";
 
 function ConfirmAction({

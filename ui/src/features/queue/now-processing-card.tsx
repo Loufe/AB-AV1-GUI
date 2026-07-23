@@ -1,6 +1,7 @@
 import { FileVideo } from "lucide-react";
 
-import { Card, CardContent, CardHeader, CardTitle, Progress } from "@/components/ui";
+import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Progress } from "@/components/ui/progress";
 import {
   formatDurationMsCompact,
   formatEngineCrf,
@@ -26,7 +27,7 @@ function LabeledBar({ label, pct }: { label: string; pct: number }) {
  * (VMAF/CRF/preset/output size/elapsed/ETA) assembled by the wiring layer —
  * whatever subset is actually known.
  */
-export function NowProcessingCard({
+function NowProcessingCard({
   name,
   analyzePercent,
   encodePercent,
