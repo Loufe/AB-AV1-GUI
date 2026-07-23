@@ -16,7 +16,7 @@ import type {
 import { emptyDurableState } from "@/lib/store/fold";
 
 /** Standing engine health from the stream; cleared by each snapshot. */
-export interface Health {
+interface Health {
   /**
    * Journal corruption report while mutation is rejected; its signature is
    * what an acknowledgement must echo back. Null when healthy or recovered.

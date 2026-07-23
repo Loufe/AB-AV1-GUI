@@ -3,7 +3,6 @@
 // this normalized store without making the application store's queue/history
 // subscribers rerender.
 
-import { useStore } from "zustand";
 import { createStore } from "zustand/vanilla";
 
 import type { AnalysisGeneration_Deserialize, AnalysisRow, AnalysisRowId } from "@/lib/bindings";
@@ -22,7 +21,3 @@ export function emptyAnalysisState(): AnalysisStoreState {
 }
 
 export const analysisStore = createStore<AnalysisStoreState>(emptyAnalysisState);
-
-export function useAnalysisStore<T>(selector: (state: AnalysisStoreState) => T): T {
-  return useStore(analysisStore, selector);
-}

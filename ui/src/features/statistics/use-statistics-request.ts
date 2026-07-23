@@ -5,7 +5,7 @@ import type { StatisticsPayload } from "@/lib/bindings";
 import { requestStatistics } from "@/lib/ipc";
 import { useAppStore } from "@/lib/store/app-store";
 
-export type StatisticsRequestPhase = "idle" | "loading" | "refreshing";
+type StatisticsRequestPhase = "idle" | "loading" | "refreshing";
 
 export interface StatisticsRequestState {
   payload: StatisticsPayload | null;

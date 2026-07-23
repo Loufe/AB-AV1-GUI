@@ -76,7 +76,7 @@ export function deriveRowStatus(
   return outcomeStatus(state.Finished, sizeDeltaBytes);
 }
 
-export function telemetryPercent(telemetry: Telemetry, durationMs: number | null): number | null {
+function telemetryPercent(telemetry: Telemetry, durationMs: number | null): number | null {
   const { progress } = telemetry;
   if (progress === "Phase") return null;
   if (progress.SearchBasisPoints !== undefined) {

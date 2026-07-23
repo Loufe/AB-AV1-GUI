@@ -43,6 +43,8 @@ jobs:
         run: pnpm format:check
       - name: Type check
         run: pnpm typecheck
+      - name: Check for dead code
+        run: pnpm knip
       - name: Run tests
         run: pnpm test
       - name: Build

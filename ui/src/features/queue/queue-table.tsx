@@ -8,7 +8,7 @@ import {
 } from "@dnd-kit/dom";
 import { useEffect } from "react";
 
-import { TooltipProvider } from "@/components/ui";
+import { TooltipProvider } from "@/components/ui/tooltip";
 import type { QueueItemId } from "@/lib/bindings";
 import { formatDurationMsCompact } from "@/lib/format/engine-values";
 import { formatFileSize } from "@/lib/format/format";

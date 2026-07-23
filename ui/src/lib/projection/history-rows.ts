@@ -26,7 +26,7 @@ import type {
  * `joined_sizes`). The carried tier covers adopted verdicts with no backing
  * run. Queue and analysis views share this join.
  */
-export function joinedSizes(
+function joinedSizes(
   verdict: Verdict,
   run: ConversionRun | undefined,
   state: DurableState_Deserialize,

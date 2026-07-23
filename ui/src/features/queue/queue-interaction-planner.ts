@@ -6,7 +6,7 @@ declare const folderRunIdBrand: unique symbol;
 export type FolderRunId = string & { readonly [folderRunIdBrand]: "FolderRunId" };
 export type QueuePresentationMode = "grouped" | "ungrouped";
 export type SelectedMoveDestination = "up" | "down" | "top" | "bottom";
-export type QueuePlannerItem = Readonly<Pick<QueueItem, "id" | "input" | "state">>;
+type QueuePlannerItem = Readonly<Pick<QueueItem, "id" | "input" | "state">>;
 export interface QueuePlannerRow {
   readonly item: QueuePlannerItem;
 }
@@ -19,7 +19,7 @@ export interface FolderRun {
   pendingIds: readonly QueueItemId[];
 }
 
-export type QueuePlanNoopReason =
+type QueuePlanNoopReason =
   | "empty-selection"
   | "unknown-selection"
   | "frozen-selection"

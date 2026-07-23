@@ -21,17 +21,13 @@ import {
   YAxis,
 } from "recharts";
 
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import {
-  Card,
-  CardContent,
-  CardDescription,
-  CardHeader,
-  CardTitle,
   ChartContainer,
   ChartTooltip,
   ChartTooltipContent,
   type ChartConfig,
-} from "@/components/ui";
+} from "@/components/ui/chart";
 import type { StatisticsPayload, ValueSpread } from "@/lib/bindings";
 import {
   formatDurationMsCompact,

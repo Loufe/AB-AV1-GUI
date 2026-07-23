@@ -91,7 +91,7 @@ export function runOutcomeRows(runs: RunTotals): OutcomeRow[] {
   return RUN_LABELS.map(([key, label]) => ({ label, count: runs[key] }));
 }
 
-export function formatVideoCodec(codec: VideoCodec): string {
+function formatVideoCodec(codec: VideoCodec): string {
   if (typeof codec === "object") return codec.Other;
   switch (codec) {
     case "Av1":

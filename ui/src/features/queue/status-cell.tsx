@@ -1,6 +1,6 @@
 import { CircleAlert, CircleCheck, CircleSlash } from "lucide-react";
 
-import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui";
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { formatFileSize } from "@/lib/format/format";
 import { cn } from "@/lib/utils";
 
