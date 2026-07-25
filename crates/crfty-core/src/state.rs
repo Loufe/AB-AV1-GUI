@@ -556,13 +556,9 @@ pub fn fold(state: &mut DurableState, delta: &DurableDelta) {
                 if matches!(outcome, ItemOutcome::Converted(_) | ItemOutcome::Remuxed(_))
                     && let Some(transaction) = state.outputs.get(run_id)
                 {
-                    run.output_content_key = match &transaction.state {
-                        crate::OutputState::Committed { final_identity }
-                        | crate::OutputState::Retired { final_identity } => {
-                            Some(final_identity.content_key.clone())
-                        }
-                        _ => None,
-                    };
+                    run.output_content_key = transaction
+                        .settled_identity()
+                        .map(|artifact| artifact.content_key.clone());
                 }
                 run.outcome = Some(outcome.clone());
                 run.finished_at = Some(*at);

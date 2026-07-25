@@ -302,6 +302,13 @@ fn artifact(key: &str) -> ArtifactIdentity {
 }
 
 fn output_started(run: u64) -> DurableDelta {
+    output_started_with(run, Replacement::RetireOriginal)
+}
+
+/// Replace mode only settles once the original is retired, so a scenario that
+/// stops at `Committed` and still expects a settled output must start a
+/// keep-original transaction.
+fn output_started_with(run: u64, replacement: Replacement) -> DurableDelta {
     DurableDelta::Output(OutputDelta::OutputStarted {
         transaction: Box::new(OutputTransaction {
             run_id: RunId(run),
@@ -310,7 +317,7 @@ fn output_started(run: u64) -> DurableDelta {
             staging: PathBuf::from("videos/.input-1.crfty-staging.mkv"),
             final_path: PathBuf::from("videos/input-1.mkv"),
             final_preimage: None,
-            replacement: Replacement::RetireOriginal,
+            replacement,
             state: OutputState::Started,
         }),
     })
@@ -597,7 +604,7 @@ fn scenarios() -> Vec<Scenario> {
             [
                 convert_prelude("ck-1"),
                 vec![
-                    output_started(100),
+                    output_started_with(100, Replacement::KeepOriginal),
                     output_staging_created(100),
                     output_ready(100, "ck-out"),
                     output_committed(100, "ck-out"),
@@ -658,7 +665,7 @@ fn scenarios() -> Vec<Scenario> {
             [
                 convert_prelude("ck-1"),
                 vec![
-                    output_started(100),
+                    output_started_with(100, Replacement::KeepOriginal),
                     output_ready(100, "ck-out"),
                     output_committed(100, "ck-out"),
                 ],
@@ -865,7 +872,7 @@ fn scenarios() -> Vec<Scenario> {
                 convert_prelude("ck-1"),
                 vec![
                     recorded(100, analysis(6, 95)),
-                    output_started(100),
+                    output_started_with(100, Replacement::KeepOriginal),
                     output_staging_created(100),
                     output_ready(100, "ck-out"),
                     output_committed(100, "ck-out"),

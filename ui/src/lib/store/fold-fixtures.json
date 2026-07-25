@@ -2553,7 +2553,7 @@
             "staging": "videos/.input-1.crfty-staging.mkv",
             "final_path": "videos/input-1.mkv",
             "final_preimage": null,
-            "replacement": "RetireOriginal",
+            "replacement": "KeepOriginal",
             "state": {
               "Committed": {
                 "final_identity": {
@@ -2759,7 +2759,7 @@
             "staging": "videos/.input-1.crfty-staging.mkv",
             "final_path": "videos/input-1.mkv",
             "final_preimage": null,
-            "replacement": "RetireOriginal",
+            "replacement": "KeepOriginal",
             "state": {
               "Committed": {
                 "final_identity": {
@@ -3648,7 +3648,7 @@
             "staging": "videos/.input-1.crfty-staging.mkv",
             "final_path": "videos/input-1.mkv",
             "final_preimage": null,
-            "replacement": "RetireOriginal",
+            "replacement": "KeepOriginal",
             "state": {
               "Committed": {
                 "final_identity": {
@@ -3830,7 +3830,7 @@
             "staging": "videos/.input-1.crfty-staging.mkv",
             "final_path": "videos/input-1.mkv",
             "final_preimage": null,
-            "replacement": "RetireOriginal",
+            "replacement": "KeepOriginal",
             "state": {
               "Committed": {
                 "final_identity": {
@@ -7927,7 +7927,7 @@
             "staging": "videos/.input-1.crfty-staging.mkv",
             "final_path": "videos/input-1.mkv",
             "final_preimage": null,
-            "replacement": "RetireOriginal",
+            "replacement": "KeepOriginal",
             "state": {
               "Committed": {
                 "final_identity": {
@@ -8200,7 +8200,7 @@
             "staging": "videos/.input-1.crfty-staging.mkv",
             "final_path": "videos/input-1.mkv",
             "final_preimage": null,
-            "replacement": "RetireOriginal",
+            "replacement": "KeepOriginal",
             "state": {
               "Committed": {
                 "final_identity": {

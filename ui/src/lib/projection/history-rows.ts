@@ -8,6 +8,7 @@
 
 import type {
   AnalysisResult,
+  ArtifactIdentity,
   ContentKey,
   ConversionRun,
   DurableState_Deserialize,
@@ -15,6 +16,7 @@ import type {
   HistoryRow,
   HistoryStatus,
   ImportedHistoryRecord,
+  OutputTransaction,
   RunId,
   Verdict,
   VideoMeta,
@@ -51,23 +53,36 @@ function joinedSizes(
   }
   const transaction = verdict.source_run === null ? undefined : state.outputs[verdict.source_run];
   if (transaction !== undefined) {
-    const transactionState = transaction.state;
-    if (typeof transactionState === "object") {
-      const settled =
-        "Committed" in transactionState && transactionState.Committed !== undefined
-          ? transactionState.Committed.final_identity
-          : "RetireIntent" in transactionState && transactionState.RetireIntent !== undefined
-            ? transactionState.RetireIntent.final_identity
-            : "Retired" in transactionState && transactionState.Retired !== undefined
-              ? transactionState.Retired.final_identity
-              : null;
-      if (settled !== null) {
-        return { input: transaction.input_identity.size, output: settled.destructive.size };
-      }
+    const promoted = promotedIdentity(transaction);
+    if (promoted !== null) {
+      return { input: transaction.input_identity.size, output: promoted.destructive.size };
     }
   }
   const carried = carriedSizes(verdict);
   return { input: carried.input ?? record.metadata.size_bytes, output: carried.output };
+}
+
+/**
+ * Mirrors `OutputTransaction::promoted_identity`: the artifact sits at its
+ * final path from `Committed` onward, so a pending replace-mode retirement
+ * must not blank the verdict's output size. Deliberately wider than
+ * settlement, which the fold uses for verdict and content-key decisions.
+ */
+function promotedIdentity(transaction: OutputTransaction): ArtifactIdentity | null {
+  const state = transaction.state;
+  if (typeof state !== "object") {
+    return null;
+  }
+  if ("Committed" in state && state.Committed !== undefined) {
+    return state.Committed.final_identity;
+  }
+  if ("RetireIntent" in state && state.RetireIntent !== undefined) {
+    return state.RetireIntent.final_identity;
+  }
+  if ("Retired" in state && state.Retired !== undefined) {
+    return state.Retired.final_identity;
+  }
+  return null;
 }
 
 function carriedSizes(verdict: Verdict): { input: number | null; output: number | null } {

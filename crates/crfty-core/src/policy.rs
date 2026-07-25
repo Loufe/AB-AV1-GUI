@@ -232,20 +232,19 @@ fn not_worthwhile_verdict(parked: &ImportedHistoryRecord) -> Verdict {
     }
 }
 
-/// The final artifact identity of `run_id`'s successfully settled output
-/// transaction, if any. `Committed` covers keep-original settlements,
-/// `Retired` covers replace-mode; every other state means the verdict has no
-/// artifact to answer for.
+/// The destructive identity of `run_id`'s successfully settled output
+/// transaction, if any. `OutputTransaction::settled_identity` owns what
+/// counts as settled per replacement mode.
 #[must_use]
 pub fn settled_output_identity(
     durable: &DurableState,
     run_id: RunId,
 ) -> Option<&DestructiveIdentity> {
-    match &durable.outputs.get(&run_id)?.state {
-        crate::OutputState::Committed { final_identity }
-        | crate::OutputState::Retired { final_identity } => Some(&final_identity.destructive),
-        _ => None,
-    }
+    durable
+        .outputs
+        .get(&run_id)?
+        .settled_identity()
+        .map(|artifact| &artifact.destructive)
 }
 
 /// Disposition of one add request, decided before a queue item exists.

@@ -9,6 +9,7 @@
 import type {
   AnalysisProfile,
   AnalysisResult,
+  ArtifactIdentity,
   CompletionEvidence,
   ConfigDelta,
   DecodeMode,
@@ -323,7 +324,7 @@ function foldItemFinished(
   if (successful) {
     const transaction = state.outputs[run_id];
     if (transaction !== undefined) {
-      outputContentKey = committedContentKey(transaction.state);
+      outputContentKey = settledIdentity(transaction)?.content_key ?? null;
     }
   }
   // Decisive outcomes upsert the record's verdict; the latest run wins
@@ -441,14 +442,27 @@ function encodingDuration(spans: PhaseSpan[]): number | null {
   return measured ? total : null;
 }
 
-function committedContentKey(state: OutputState): string | null {
-  if (typeof state === "object") {
-    if ("Committed" in state && state.Committed !== undefined) {
-      return state.Committed.final_identity.content_key;
-    }
-    if ("Retired" in state && state.Retired !== undefined) {
-      return state.Retired.final_identity.content_key;
-    }
+/// Mirrors `OutputTransaction::settled_identity`: which terminal state counts
+/// as settled depends on the replacement mode, so a replace-mode transaction
+/// sitting at `Committed` is still in flight and names no output.
+function settledIdentity(transaction: OutputTransaction): ArtifactIdentity | null {
+  const state = transaction.state;
+  if (typeof state !== "object") {
+    return null;
+  }
+  if (
+    transaction.replacement === "KeepOriginal" &&
+    "Committed" in state &&
+    state.Committed !== undefined
+  ) {
+    return state.Committed.final_identity;
+  }
+  if (
+    transaction.replacement === "RetireOriginal" &&
+    "Retired" in state &&
+    state.Retired !== undefined
+  ) {
+    return state.Retired.final_identity;
   }
   return null;
 }

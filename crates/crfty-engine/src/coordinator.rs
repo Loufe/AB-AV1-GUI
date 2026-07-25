@@ -671,26 +671,23 @@ fn recovered_outcome(state: &DurableState, run_id: RunId) -> ItemOutcome {
     let Some(transaction) = state.outputs.get(&run_id) else {
         return ItemOutcome::Stopped;
     };
-    match (&transaction.replacement, &transaction.state) {
-        (Replacement::KeepOriginal, OutputState::Committed { .. })
-        | (Replacement::RetireOriginal, OutputState::Retired { .. }) => {
-            match state
-                .conversion_runs
-                .get(&run_id)
-                .map(|run| &run.spec.action)
-            {
-                Some(JobAction::Remux) => {
-                    ItemOutcome::Remuxed(CompletionEvidence::RecoveredAtStartup)
-                }
-                Some(JobAction::Encode { .. }) => {
-                    ItemOutcome::Converted(CompletionEvidence::RecoveredAtStartup)
-                }
-                // Unreachable: the ledger only accepts output transactions
-                // for encode and remux runs.
-                _ => ItemOutcome::Stopped,
+    if transaction.settled_identity().is_some() {
+        return match state
+            .conversion_runs
+            .get(&run_id)
+            .map(|run| &run.spec.action)
+        {
+            Some(JobAction::Remux) => ItemOutcome::Remuxed(CompletionEvidence::RecoveredAtStartup),
+            Some(JobAction::Encode { .. }) => {
+                ItemOutcome::Converted(CompletionEvidence::RecoveredAtStartup)
             }
-        }
-        (_, OutputState::Conflict { .. }) => ItemOutcome::Failed(FailureFacts::new(
+            // Unreachable: the ledger only accepts output transactions
+            // for encode and remux runs.
+            _ => ItemOutcome::Stopped,
+        };
+    }
+    match transaction.state {
+        OutputState::Conflict { .. } => ItemOutcome::Failed(FailureFacts::new(
             FailureKind::OutputConflict,
             "output transaction settled as a conflict",
         )),
@@ -1958,9 +1955,8 @@ fn finish_successful_output(
 /// terminal outcome. Success requires the replacement-consistent settled
 /// state; a Conflict settlement becomes a structured output-conflict failure.
 fn settled_outcome(success: SuccessfulJob, transaction: &OutputTransaction) -> ItemOutcome {
-    match (&transaction.replacement, &transaction.state) {
-        (Replacement::KeepOriginal, OutputState::Committed { final_identity })
-        | (Replacement::RetireOriginal, OutputState::Retired { final_identity }) => match success {
+    if let Some(final_identity) = transaction.settled_identity() {
+        return match success {
             SuccessfulJob::Encode {
                 outcome,
                 decode_mode,
@@ -1981,8 +1977,10 @@ fn settled_outcome(success: SuccessfulJob, transaction: &OutputTransaction) -> I
                 input_size: transaction.input_identity.size,
                 output_size: final_identity.destructive.size,
             }),
-        },
-        (_, OutputState::Conflict { .. }) => ItemOutcome::Failed(FailureFacts::new(
+        };
+    }
+    match transaction.state {
+        OutputState::Conflict { .. } => ItemOutcome::Failed(FailureFacts::new(
             FailureKind::OutputConflict,
             "output transaction settled as a conflict",
         )),

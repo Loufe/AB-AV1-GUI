@@ -609,6 +609,101 @@ fn transaction(state: OutputState, replacement: Replacement) -> OutputTransactio
     }
 }
 
+#[test]
+fn settlement_depends_on_the_replacement_mode() {
+    let artifact = identity("output", 20);
+    let committed = OutputState::Committed {
+        final_identity: artifact.clone(),
+    };
+    let retired = OutputState::Retired {
+        final_identity: artifact.clone(),
+    };
+
+    let keep = transaction(committed.clone(), Replacement::KeepOriginal);
+    assert_eq!(keep.settled_identity(), Some(&artifact));
+    assert!(keep.is_settled());
+
+    // Replace mode is not done until the original is retired, so the
+    // committed artifact does not answer as a settled one.
+    let replacing = transaction(committed, Replacement::RetireOriginal);
+    assert_eq!(replacing.settled_identity(), None);
+    assert!(!replacing.is_settled());
+
+    let replaced = transaction(retired, Replacement::RetireOriginal);
+    assert_eq!(replaced.settled_identity(), Some(&artifact));
+    assert!(replaced.is_settled());
+}
+
+#[test]
+fn retire_intent_is_promoted_but_not_settled() {
+    let artifact = identity("output", 20);
+    let intent = transaction(
+        OutputState::RetireIntent {
+            final_identity: artifact.clone(),
+        },
+        Replacement::RetireOriginal,
+    );
+    assert_eq!(intent.promoted_identity(), Some(&artifact));
+    assert_eq!(intent.settled_identity(), None);
+    assert!(!intent.is_settled());
+}
+
+#[test]
+fn promotion_covers_every_state_that_placed_the_artifact() {
+    let artifact = identity("output", 20);
+    for state in [
+        OutputState::Committed {
+            final_identity: artifact.clone(),
+        },
+        OutputState::RetireIntent {
+            final_identity: artifact.clone(),
+        },
+        OutputState::Retired {
+            final_identity: artifact.clone(),
+        },
+    ] {
+        for replacement in [Replacement::KeepOriginal, Replacement::RetireOriginal] {
+            assert_eq!(
+                transaction(state.clone(), replacement).promoted_identity(),
+                Some(&artifact)
+            );
+        }
+    }
+    for state in [
+        OutputState::Started,
+        OutputState::Ready {
+            staging_identity: artifact.clone(),
+        },
+        OutputState::Abandoned,
+        OutputState::Conflict {
+            kind: ConflictKind::IdentityMismatch,
+            detail: String::new(),
+        },
+    ] {
+        assert_eq!(
+            transaction(state, Replacement::KeepOriginal).promoted_identity(),
+            None
+        );
+    }
+}
+
+#[test]
+fn abandoned_and_conflicted_transactions_settle_without_an_artifact() {
+    for state in [
+        OutputState::Abandoned,
+        OutputState::Conflict {
+            kind: ConflictKind::InspectionFailed,
+            detail: "unreadable".to_owned(),
+        },
+    ] {
+        for replacement in [Replacement::KeepOriginal, Replacement::RetireOriginal] {
+            let settled = transaction(state.clone(), replacement);
+            assert!(settled.is_settled());
+            assert_eq!(settled.settled_identity(), None);
+        }
+    }
+}
+
 fn media_observation(content: &str) -> MediaObservation {
     MediaObservation {
         path_hash: PathHash(format!("path-{content}")),

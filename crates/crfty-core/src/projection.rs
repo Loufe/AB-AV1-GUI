@@ -21,7 +21,7 @@ use serde::Serialize;
 use crate::{
     AnalysisResult, AudioCodec, CompletionEvidence, ContentKey, ConversionRun, Crf, DurableState,
     FailureKind, FileRecord, ImportedHistoryRecord, ItemOutcome, JobPhase, MediaContainer,
-    OutputState, ParkedStatus, RunId, UnixMillis, VerdictKind, VideoCodec, VmafScore, VmafTarget,
+    ParkedStatus, RunId, UnixMillis, VerdictKind, VideoCodec, VmafScore, VmafTarget,
 };
 
 const MILLIS_PER_DAY: i128 = 86_400_000;
@@ -175,12 +175,12 @@ fn joined_sizes(
     if let Some(run_id) = verdict.source_run
         && let Some(transaction) = state.outputs.get(&run_id)
     {
-        let output = match &transaction.state {
-            OutputState::Committed { final_identity }
-            | OutputState::RetireIntent { final_identity }
-            | OutputState::Retired { final_identity } => Some(final_identity.destructive.size),
-            _ => None,
-        };
+        // Promoted, not settled: the artifact is on disk at its final path
+        // even while a replace-mode retirement is still pending, and the size
+        // shown for the verdict should not blank out during that window.
+        let output = transaction
+            .promoted_identity()
+            .map(|artifact| artifact.destructive.size);
         if output.is_some() {
             return (Some(transaction.input_identity.size), output);
         }
