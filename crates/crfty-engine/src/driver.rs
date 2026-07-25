@@ -394,7 +394,7 @@ fn maybe_compact(
     match persistence.journal.compact(
         &state.durable,
         env!("CARGO_PKG_VERSION"),
-        crate::coordinator::now_millis(),
+        crate::clock::now_millis(),
     ) {
         Ok(()) => CompactionOutcome::Compacted,
         Err(error) => {
@@ -645,12 +645,8 @@ impl JournalSink for JournalWriter {
     }
 
     fn recover(&mut self, state: &DurableState) -> Result<(), JournalError> {
-        self.recover_corrupt(
-            state,
-            env!("CARGO_PKG_VERSION"),
-            crate::coordinator::now_millis(),
-        )
-        .map(|_archive| ())
+        self.recover_corrupt(state, env!("CARGO_PKG_VERSION"), crate::clock::now_millis())
+            .map(|_archive| ())
     }
 }
 
