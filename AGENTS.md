@@ -4,111 +4,19 @@ GUI application for batch converting videos to AV1 using VMAF-targeted quality e
 
 ## Tech Stack
 
-- **Python 3** with Tkinter GUI
-- **UV** for package management
-- **Ruff** for linting/formatting
-- **ty** for type checking
 - **External tools**: `ab-av1`, FFmpeg with libsvtav1 (downloaded to `vendor/` or system PATH)
 
 ## Commands
 
 ```bash
-# Run application
-python -m src.convert          # or convert.bat (Windows)
-
-# Development
-uv sync                        # Install dev dependencies
-uv run ruff check src/         # Lint
-uv run ruff check --fix src/   # Lint with auto-fix
-uv run ruff format src/        # Format
-uv run ty check src/           # Type check
-uv run pytest                  # Run unit tests
+python -m src.convert          # Run application (or convert.bat on Windows)
 ```
 
-## Project Structure
-
-```
-src/
-├── convert.py                 # Entry point
-├── main.py                    # App initialization, Tkinter setup
-├── config.py                  # Constants (VMAF targets, presets)
-├── models.py                  # Dataclasses (ProgressEvent, ConversionConfig, FileRecord, QueueItem, OperationType, etc.)
-├── estimation.py              # Time estimation from history
-├── utils.py                   # Formatting helpers, ffprobe, UI thread safety
-├── video_conversion.py        # Single-file conversion logic
-├── folder_analysis.py         # Analysis tab: scanning, estimation, file classification
-├── history_index.py           # Thread-safe O(1) cache for FileRecord lookups
-├── cache_helpers.py           # CRF cache validation and reuse logic
-├── logging_setup.py           # Logging configuration with rotating handlers
-├── platform_utils.py          # Windows subprocess hiding, power management
-├── privacy.py                 # Path anonymization (BLAKE2b hashing)
-├── hardware_accel.py          # Hardware-accelerated decoding (CUVID, QSV)
-├── video_metadata.py          # Video metadata extraction from ffprobe
-├── vendor_manager.py          # ab-av1/FFmpeg download and update management
-├── ab_av1/                    # ab-av1 wrapper package
-│   ├── wrapper.py             # High-level encode/crf-search orchestration, VMAF fallback
-│   ├── runner.py              # Subprocess lifecycle: spawn, stream output, cancel, reap
-│   ├── stats.py               # EncodeStats / CrfSearchResult dataclasses
-│   ├── parser.py              # Regex parsing of ab-av1/ffmpeg output
-│   ├── exceptions.py          # Custom exception hierarchy
-│   ├── checker.py             # ab-av1 availability check
-│   └── cleaner.py             # Temp folder cleanup
-├── conversion_engine/         # Batch conversion (no GUI imports)
-│   ├── worker.py              # Sequential worker thread
-│   ├── scanner.py             # Video file scanning/filtering
-│   └── cleanup.py             # Temp folder cleanup scheduling
-└── gui/                       # Tkinter GUI
-    ├── main_window.py         # Main window, settings persistence
-    ├── base.py                # Base GUI components (explorer, tooltips)
-    ├── constants.py           # Centralized UI colors, fonts, styling
-    ├── conversion_controller.py # Start/stop/force-stop logic, callback dispatcher
-    ├── analysis_controller.py # Analysis tab coordination/events
-    ├── queue_controller.py    # Queue tab event handling
-    ├── callback_handlers.py   # Event handlers (progress, completed, error, etc.)
-    ├── gui_updates.py         # Thread-safe UI updates
-    ├── gui_actions.py         # User interaction handlers
-    ├── analysis_scanner.py    # Incremental folder scanning with ffprobe
-    ├── analysis_tree.py       # Analysis tree display/state management
-    ├── queue_manager.py       # Queue item creation/categorization
-    ├── queue_tree.py          # Queue tree display: incremental in-place updates + full rebuild
-    ├── tree_utils.py          # Tree expand/collapse utilities
-    ├── tree_display.py        # Shared tree status formatting
-    ├── tree_formatters.py     # Time/size/efficiency formatting and parsing
-    ├── dependency_manager.py  # ab-av1/FFmpeg version checking and updates
-    ├── charts.py              # Canvas-based chart drawing (bar, pie, line)
-    ├── tabs/                  # Tab implementations
-    │   ├── analysis_tab.py    # Analysis tab UI definition
-    │   ├── convert_tab.py     # Queue tab with queue and progress
-    │   ├── history_tab.py     # History tab: sortable/filterable list of processed files
-    │   ├── settings_tab.py    # Settings tab
-    │   └── statistics_tab.py  # Statistics tab: charts and summary metrics
-    ├── dialogs/               # Modal dialog windows
-    │   └── ffmpeg_download_dialog.py  # FFmpeg download confirmation
-    └── widgets/               # Reusable UI components
-        ├── operation_dropdown.py   # In-cell operation dropdown for queue
-        └── add_to_queue_dialog.py  # Preview dialog for queue additions
-
-tools/
-└── hash_lookup.py             # Reverse lookup for anonymized file hashes
-```
+Dev tooling (ruff, ty, pytest — run via `uv run`) is declared in `pyproject.toml`.
 
 ## Architecture
 
-### Two-Phase Conversion
-
-1. **Quality Detection**: ab-av1 samples video at various CRF values to find one meeting VMAF target
-2. **Encoding**: FFmpeg encodes full video with optimal CRF
-
-### VMAF Fallback
-
-If target VMAF (default 95) is unattainable, decrements by 1 down to minimum (90), then skips as "not worthwhile".
-
-### Threading Model
-
-- **Main thread**: Tkinter event loop
-- **Worker thread**: `sequential_conversion_worker()` handles conversion
-- **Analysis threads**: `ThreadPoolExecutor` with 4-8 parallel ffprobe workers
-- **GUI updates**: All UI changes via `utils.update_ui_safely()` → `root.after()`
+The conversion pipeline (two-phase encode, VMAF fallback), threading model, callback chain, and data persistence are documented in `docs/ARCHITECTURE.md`.
 
 ### Analysis Tab (Four-Level Model)
 
@@ -160,28 +68,6 @@ The queue supports two operation types via `OperationType` enum:
 | `CONVERT` | Full encoding (includes CRF search if needed) | Video file |
 | `ANALYZE` | CRF search only | Updates history (no file) |
 
-**Queue display logic** (Operation column):
-- `ANALYZE` type → shows "Analyze"
-- `CONVERT` type + has Layer 2 data → shows "Convert"
-- `CONVERT` type + no Layer 2 data → shows "Analyze+Convert"
-
-**Analysis tab toolbar**:
-- "Basic Scan" → runs ffprobe on discovered files
-- "Add All: Analyze" → adds all files to queue with ANALYZE operation
-- "Add All: Convert" → adds all files to queue with CONVERT operation
-
-**Context menu options** (Analysis tab):
-- "Add to Queue: Convert" / "Add to Queue: Analyze" for individual files/folders
-
-**Context menu options** (Queue tab):
-- "Open File" / "Open in Explorer" for files/folders
-- Operation options: directly change between "Analyze + Convert", "Convert", "Analyze Only"
-- "Remove" to remove from queue
-
-**Properties panel behavior**:
-- CONVERT items: Show output mode, suffix, folder settings
-- ANALYZE items: Disable output settings (no output file produced)
-
 **Queue filtering** (`filter_file_for_queue`, `gui/queue_manager.py`): decided verdicts (CONVERTED / NOT_WORTHWHILE / ANALYZED) skip a file only while they still describe the content on disk — a changed file at a known path is re-queueable. The replace-mode output at the input path is recognized without ffprobe via `cache_helpers.converted_verdict_applies()` (see `docs/ARCHITECTURE.md` § Queue Filtering and Verdict Freshness).
 
 **Worker branching** (`sequential_conversion_worker`):
@@ -190,17 +76,6 @@ The queue supports two operation types via `OperationType` enum:
 - Both: no duplicate detection runs before processing — path-spelling duplicates are unrepresentable after hash-time normalization (ADR-001), and true content copies wait on the partial-hash tier (#28)
 
 **Queue tree updates** (`gui/queue_tree.py`): status/value changes, operation changes, adds, removes, and drag reorders update rows in place (folder expand state, selection, and scroll survive). Full rebuild via `refresh_queue_tree()` is reserved for structural bulk ops (startup load, clear queue, clear completed, conflict replace) and restores expand state. See `docs/ARCHITECTURE.md` § Queue Tree Updates.
-
-### Callback Flow
-
-```
-AbAv1Wrapper.auto_encode()
-  → parser.parse_line()
-  → file_callback_dispatcher()
-  → handle_* functions (progress, completed, error, skipped)
-  → gui_updates.* functions
-  → update_ui_safely() → Tkinter main thread
-```
 
 ## Code Standards
 
@@ -240,17 +115,6 @@ When refactoring:
 - **Process management**: Track PID for graceful/force stop. Use `taskkill /T` on Windows.
 - **Error handling**: `except Exception:` + `logger.exception()` is correct for non-critical ops (UI updates, cache writes, metadata extraction). Conversions can run for hours—never abort due to a progress bar glitch. Log everything, continue with safe fallbacks.
 
-## Configuration
-
-Key constants in `src/config.py`:
-
-| Constant | Default | Purpose |
-|----------|---------|---------|
-| `DEFAULT_VMAF_TARGET` | 95 | Quality target (0-100) |
-| `DEFAULT_ENCODING_PRESET` | 6 | SVT-AV1 speed preset |
-| `MIN_VMAF_FALLBACK_TARGET` | 90 | Lowest VMAF before skipping |
-| `MIN_RESOLUTION_WIDTH/HEIGHT` | 1280×720 | Minimum resolution filter |
-
 ## Stdout Parsing
 
 ab-av1 output has two phases with different formats:
@@ -259,43 +123,11 @@ ab-av1 output has two phases with different formats:
 
 `RUST_LOG` (set in `ab_av1/wrapper.py`) is the only environment variable ab-av1 reads. Encode operations use `debug,ab_av1=trace,ffmpeg=trace` (ffmpeg trace is needed to parse encoding progress); crf-search uses `debug,ab_av1=trace` (ffmpeg trace would just flood the sample runs).
 
-## Data Files
-
-| File | Purpose |
-|------|---------|
-| `ab_av1_gui_config.json` | User settings (managed via GUI) |
-| `conversion_history.json` | File records: metadata, analysis results, conversion history |
-| `logs/*.log` | Rotating log files |
-| `vendor/` | Downloaded ab-av1 and FFmpeg binaries (gitignored) |
-
-**History/Index usage**:
-- **Time estimation**: Find similar files (codec/resolution/duration) to predict encoding time
-- **Analysis cache**: Skip ffprobe for files with valid cached metadata (size + mtime match)
-- **Status tracking**: Track file states (SCANNED, CONVERTED, NOT_WORTHWHILE)
-
 ## Privacy & Security
 
 ### Path Anonymization
 
-When enabled, file paths and filenames are anonymized using BLAKE2b hashes:
-
-| Original | Anonymized |
-|----------|------------|
-| `C:\Videos\movie.mp4` | `folder_7f3a9c2b1e4d/file_8a4b2c1d3e5f.mp4` |
-| Configured input folder | `[input_folder]/file_8a4b2c1d3e5f.mp4` |
-| Configured output folder | `[output_folder]/file_1a2b3c4d5e6f.mkv` |
-
-**Implementation** (`src/privacy.py`):
-- `anonymize_file(filename)` - Hashes filename (basename only)
-- `anonymize_folder(path)` - Hashes folder path, or returns `[input_folder]`/`[output_folder]` for configured directories
-- `anonymize_path(full_path)` - Combines folder + file anonymization
-- `PathPrivacyFilter` - Log filter that proactively detects and anonymizes paths via regex
-
-**Patterns detected**:
-- Windows paths (`C:\...`, `C:/...`)
-- UNC paths (`\\server\share\...`)
-- Unix paths (`/home/...`, `/mnt/...`)
-- Video filenames (`.mp4`, `.mkv`, `.avi`, `.wmv`, `.mov`, `.webm`)
+When enabled, file paths and filenames are anonymized with BLAKE2b hashes (configured folders become `[input_folder]`/`[output_folder]` placeholders). Implementation and detection patterns live in `src/privacy.py`.
 
 **Retroactive scrubbing**: Settings tab provides "Scrub Logs" and "Scrub History" buttons to anonymize existing files (irreversible).
 
