@@ -122,15 +122,53 @@ pub enum OutputState {
 }
 
 impl OutputTransaction {
+    /// The final artifact identity of a transaction that settled successfully.
+    /// Which terminal state means "settled" depends on the replacement mode:
+    /// `KeepOriginal` finishes at `Committed`, `RetireOriginal` only once the
+    /// original is `Retired`. Every other pairing, `RetireOriginal` sitting at
+    /// `Committed` or `RetireIntent` included, is still in flight and has no
+    /// settled artifact to answer for.
+    ///
+    /// This is the sole encoding of that pairing: verdicts, content keys, and
+    /// terminal outcomes all read it, so none of them can drift apart.
+    #[must_use]
+    pub fn settled_identity(&self) -> Option<&ArtifactIdentity> {
+        match (&self.replacement, &self.state) {
+            (Replacement::KeepOriginal, OutputState::Committed { final_identity })
+            | (Replacement::RetireOriginal, OutputState::Retired { final_identity }) => {
+                Some(final_identity)
+            }
+            _ => None,
+        }
+    }
+
+    /// The final artifact identity of a transaction whose artifact has been
+    /// promoted to its final path, whether or not the transaction has settled.
+    ///
+    /// Deliberately wider than [`Self::settled_identity`]: it also answers for
+    /// `RetireIntent` (and for `RetireOriginal` at `Committed`), because the
+    /// encode is committed and the file is on disk while only the original's
+    /// retirement is outstanding. Size projections use this so a verdict does
+    /// not blank its output size during that window. Decisions about whether a
+    /// run succeeded, and which content key it produced, use the settled
+    /// accessor instead. Promotion is a property of the state alone, so unlike
+    /// settlement it does not consult the replacement mode.
+    #[must_use]
+    pub fn promoted_identity(&self) -> Option<&ArtifactIdentity> {
+        match &self.state {
+            OutputState::Committed { final_identity }
+            | OutputState::RetireIntent { final_identity }
+            | OutputState::Retired { final_identity } => Some(final_identity),
+            _ => None,
+        }
+    }
+
     #[must_use]
     pub fn is_settled(&self) -> bool {
         matches!(
-            (&self.replacement, &self.state),
-            (_, OutputState::Conflict { .. })
-                | (_, OutputState::Abandoned)
-                | (Replacement::KeepOriginal, OutputState::Committed { .. })
-                | (Replacement::RetireOriginal, OutputState::Retired { .. })
-        )
+            self.state,
+            OutputState::Conflict { .. } | OutputState::Abandoned
+        ) || self.settled_identity().is_some()
     }
 }
 

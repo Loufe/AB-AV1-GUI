@@ -11,9 +11,9 @@ use crate::{
     BasicScanDisposition, ClaimId, ClaimedJob, CompletionEvidence, ConfigDelta, ContentKey,
     CorruptionSignature, CurrentFileIdentity, DecodeMode, DecodePreference, DurableDelta,
     ExecutionSettings, FreshnessDecision, ImportPath, ImportedHistoryRecord, ItemOutcome,
-    JobAction, JobSpec, MediaObservation, Operation, OutputDelta, OutputState, OutputTarget,
-    OverwriteDecision, PathHash, PhaseSpan, QueueItem, QueueItemId, QueueItemState, ReservedJob,
-    RunId, SessionAggregates, SessionState, Settings, SkipReason, StatisticsPayload, Telemetry,
+    JobAction, JobSpec, MediaObservation, Operation, OutputDelta, OutputTarget, OverwriteDecision,
+    PathHash, PhaseSpan, QueueItem, QueueItemId, QueueItemState, ReservedJob, RunId,
+    SessionAggregates, SessionState, Settings, SkipReason, StatisticsPayload, Telemetry,
     ToolAvailability, ToolsState, UnixMillis, VendorActivity, apply_analysis_mutation,
     begin_analysis_generation, decide_freshness, evaluate_enqueue, fold, fold_config,
     select_job_action, statistics,
@@ -810,11 +810,7 @@ fn settled_output_match(
         .iter()
         .rev()
         .find_map(|(run_id, transaction)| {
-            let artifact = match &transaction.state {
-                OutputState::Committed { final_identity }
-                | OutputState::Retired { final_identity } => final_identity,
-                _ => return None,
-            };
+            let artifact = transaction.settled_identity()?;
             if !predicate(artifact) {
                 return None;
             }
@@ -1653,18 +1649,7 @@ pub(crate) fn validate_terminal(
 }
 
 fn has_successful_output(output: Option<&crate::OutputTransaction>) -> bool {
-    output.is_some_and(|transaction| {
-        matches!(
-            (&transaction.replacement, &transaction.state),
-            (
-                crate::Replacement::KeepOriginal,
-                crate::OutputState::Committed { .. }
-            ) | (
-                crate::Replacement::RetireOriginal,
-                crate::OutputState::Retired { .. }
-            )
-        )
-    })
+    output.is_some_and(|transaction| transaction.settled_identity().is_some())
 }
 
 fn transition_active(
