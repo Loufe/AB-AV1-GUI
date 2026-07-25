@@ -29,6 +29,7 @@ pub mod scan;
 pub mod sentinel;
 pub mod vendor;
 
+mod clock;
 mod failure;
 mod filesystem;
 mod power;
