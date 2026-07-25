@@ -1,19 +1,24 @@
 //! Job-duration estimation from an analysis prediction or historical rates.
 //!
-//! Two additive sources, best first:
+//! Two sources, best first:
 //!
 //! - **Analysis prediction** — ab-av1's own encode-duration prediction from a
 //!   completed CRF search (`SearchMeasurement::predicted_duration_ms`). The
 //!   caller selects the qualifying analysis for the job's execution settings
 //!   via [`crate::select_analysis`]; estimation trusts that selection and
-//!   never re-derives freshness.
+//!   never re-derives freshness. Accurate and nearly free, so everything
+//!   below is only what to show before an analysis exists.
 //! - **Historical rates** — per-file rate = measured phase time / video
 //!   duration, grouped along a specificity ladder: (codec, resolution bucket)
 //!   → codec → global. The first group holding at least
-//!   [`MIN_GROUP_SAMPLES`] samples answers with its exclusive (type-6)
-//!   quartiles scaled by the video's duration. The ladder, thresholds,
-//!   bucket cut-offs, and quantile method match the V2 Python estimator;
-//!   its pinned quartile fixtures are re-pinned in the tests here.
+//!   [`MIN_GROUP_SAMPLES`] samples answers with its median rate scaled by the
+//!   video's duration.
+//!
+//! The fallback is deliberately a plain median, not the V2 Python estimator's
+//! type-6 exclusive quartiles: that method and its `n >= 5` threshold existed
+//! to stabilize an interpolated spread, and reproducing them digit for digit
+//! was parity with accidental semantics for what is an ETA label. One number
+//! is what the UI shows, so one number is what this computes.
 //!
 //! Convert estimates use encoding time, analyze estimates use CRF-search
 //! time. Rate samples come from [`StatFact`]s. Parked imported records are
@@ -32,11 +37,9 @@ use crate::{
 };
 
 /// A group answers only once it holds this many rate samples; sparser groups
-/// defer to the next ladder tier.
-const MIN_GROUP_SAMPLES: usize = 5;
-/// A (codec, resolution) group at or above this many samples upgrades the
-/// estimate's confidence from rough to estimate.
-const HIGH_CONFIDENCE_SAMPLES: u32 = 10;
+/// defer to the next ladder tier. A median needs far less support than an
+/// interpolated spread did, so this sits below V2's five.
+const MIN_GROUP_SAMPLES: usize = 3;
 
 const UHD_4K_MIN_PIXELS: u64 = 8_294_400;
 const QHD_1440_MIN_PIXELS: u64 = 3_686_400;
@@ -78,44 +81,18 @@ impl ResolutionBucket {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq)]
-pub struct Quartiles {
-    pub p25: f64,
-    pub p50: f64,
-    pub p75: f64,
-}
-
-/// Exclusive (type-6) quartiles: rank `q * (n + 1)`, linearly interpolated,
-/// clamped to the extremes. `None` when `values` is empty. Input order does
-/// not matter.
-#[must_use]
-pub fn exclusive_quartiles(values: &[f64]) -> Option<Quartiles> {
+/// Middle value of `values`, averaging the two middles at even counts.
+/// `None` when `values` is empty. Input order does not matter.
+fn median(values: &[f64]) -> Option<f64> {
     let mut sorted = values.to_vec();
     sorted.sort_by(f64::total_cmp);
-    Some(Quartiles {
-        p25: exclusive_quantile(&sorted, 0.25)?,
-        p50: exclusive_quantile(&sorted, 0.5)?,
-        p75: exclusive_quantile(&sorted, 0.75)?,
-    })
-}
-
-fn exclusive_quantile(sorted: &[f64], q: f64) -> Option<f64> {
-    let first = *sorted.first()?;
-    let last = *sorted.last()?;
-    let count = sorted.len() as f64;
-    let rank = q * (count + 1.0);
-    if rank <= 1.0 {
-        return Some(first);
+    let middle = sorted.len() / 2;
+    let upper = *sorted.get(middle)?;
+    if sorted.len() % 2 == 1 {
+        return Some(upper);
     }
-    if rank >= count {
-        return Some(last);
-    }
-    let below = rank.floor();
-    let fraction = rank - below;
-    let lower_index = below as usize - 1;
-    let lower = *sorted.get(lower_index)?;
-    let upper = *sorted.get(lower_index + 1)?;
-    Some(lower + fraction * (upper - lower))
+    let lower = *sorted.get(middle - 1)?;
+    Some(f64::midpoint(lower, upper))
 }
 
 /// Which ladder tier answered a historical estimate, most specific first.
@@ -126,46 +103,37 @@ pub enum HistoricalTier {
     Global,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, specta::Type)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, specta::Type)]
 pub enum EstimateBasis {
     /// ab-av1's own prediction from a completed CRF search of this content.
     AnalysisPrediction,
-    Historical {
-        tier: HistoricalTier,
-        samples: u32,
-    },
+    /// The median rate of the most specific group that could answer.
+    Historical(HistoricalTier),
 }
 
-/// Presentation classes for an estimate's trustworthiness; the UI maps these
-/// to its exact/estimate/rough markers.
+/// How an estimate is marked: `Precise` is analysis-backed and shown bare,
+/// `Estimated` is historical and shown with the tilde prefix. There is no
+/// third grade — the sample count behind a historical rate is a detail of
+/// how it was computed, not a distinction a user acts on.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, specta::Type)]
 pub enum EstimateConfidence {
-    Exact,
-    Estimate,
-    Rough,
+    Precise,
+    Estimated,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, specta::Type)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, specta::Type)]
 pub struct TimeEstimate {
     #[specta(type = crate::JsNumber)]
-    pub min_ms: u64,
-    #[specta(type = crate::JsNumber)]
-    pub best_ms: u64,
-    #[specta(type = crate::JsNumber)]
-    pub max_ms: u64,
+    pub duration_ms: u64,
     pub basis: EstimateBasis,
 }
 
 impl TimeEstimate {
     #[must_use]
     pub fn confidence(&self) -> EstimateConfidence {
-        match &self.basis {
-            EstimateBasis::AnalysisPrediction => EstimateConfidence::Exact,
-            EstimateBasis::Historical {
-                tier: HistoricalTier::CodecResolution,
-                samples,
-            } if *samples >= HIGH_CONFIDENCE_SAMPLES => EstimateConfidence::Estimate,
-            EstimateBasis::Historical { .. } => EstimateConfidence::Rough,
+        match self.basis {
+            EstimateBasis::AnalysisPrediction => EstimateConfidence::Precise,
+            EstimateBasis::Historical(_) => EstimateConfidence::Estimated,
         }
     }
 }
@@ -279,11 +247,8 @@ impl EstimationModel {
             && let Some(analysis) = fresh_analysis
             && analysis.measurement.predicted_duration_ms > 0
         {
-            let predicted_ms = analysis.measurement.predicted_duration_ms;
             return Some(TimeEstimate {
-                min_ms: predicted_ms,
-                best_ms: predicted_ms,
-                max_ms: predicted_ms,
+                duration_ms: analysis.measurement.predicted_duration_ms,
                 basis: EstimateBasis::AnalysisPrediction,
             });
         }
@@ -296,16 +261,9 @@ impl EstimationModel {
         };
         let bucket = ResolutionBucket::from_dimensions(metadata.width, metadata.height);
         let (tier, samples) = rates.lookup(&metadata.codec, bucket)?;
-        let quartiles = exclusive_quartiles(samples)?;
-        let duration_ms = metadata.duration_ms as f64;
         Some(TimeEstimate {
-            min_ms: scale(duration_ms, quartiles.p25),
-            best_ms: scale(duration_ms, quartiles.p50),
-            max_ms: scale(duration_ms, quartiles.p75),
-            basis: EstimateBasis::Historical {
-                tier,
-                samples: u32::try_from(samples.len()).unwrap_or(u32::MAX),
-            },
+            duration_ms: scale(metadata.duration_ms as f64, median(samples)?),
+            basis: EstimateBasis::Historical(tier),
         })
     }
 }
@@ -522,37 +480,22 @@ mod tests {
     }
 
     #[test]
-    fn quartiles_match_the_pinned_python_fixture() {
-        // Pinned in main:tests/test_estimation.py — exclusive method.
-        let quartiles = exclusive_quartiles(&[1.0, 2.0, 3.0, 4.0, 5.0]).unwrap();
-        assert_eq!(quartiles.p25, 1.5);
-        assert_eq!(quartiles.p50, 3.0);
-        assert_eq!(quartiles.p75, 4.5);
+    fn median_takes_the_middle_and_averages_an_even_pair() {
+        assert_eq!(median(&[1.0, 2.0, 3.0, 4.0, 5.0]), Some(3.0));
+        assert_eq!(median(&[1.0, 2.0, 3.0, 4.0]), Some(2.5));
+        assert_eq!(median(&[10.0, 20.0]), Some(15.0));
+        assert_eq!(median(&[7.0]), Some(7.0));
+        assert_eq!(median(&[]), None);
     }
 
     #[test]
-    fn quartiles_interpolate_and_clamp() {
-        // n=4: ranks 1.25 / 2.5 / 3.75.
-        let four = exclusive_quartiles(&[1.0, 2.0, 3.0, 4.0]).unwrap();
-        assert_eq!(four.p25, 1.25);
-        assert_eq!(four.p50, 2.5);
-        assert_eq!(four.p75, 3.75);
-        // n=2: p25 clamps to the first value, p75 to the last.
-        let two = exclusive_quartiles(&[10.0, 20.0]).unwrap();
-        assert_eq!(two.p25, 10.0);
-        assert_eq!(two.p50, 15.0);
-        assert_eq!(two.p75, 20.0);
-        let one = exclusive_quartiles(&[7.0]).unwrap();
-        assert_eq!((one.p25, one.p50, one.p75), (7.0, 7.0, 7.0));
-        assert_eq!(exclusive_quartiles(&[]), None);
-    }
-
-    #[test]
-    fn quartiles_ignore_input_order() {
+    fn median_ignores_input_order_and_outliers() {
         assert_eq!(
-            exclusive_quartiles(&[5.0, 1.0, 4.0, 2.0, 3.0]),
-            exclusive_quartiles(&[1.0, 2.0, 3.0, 4.0, 5.0]),
+            median(&[5.0, 1.0, 4.0, 2.0, 3.0]),
+            median(&[1.0, 2.0, 3.0, 4.0, 5.0])
         );
+        // The point of a median over a mean: one wild sample moves nothing.
+        assert_eq!(median(&[1.0, 2.0, 3.0, 4.0, 10_000.0]), Some(3.0));
     }
 
     #[test]
@@ -567,11 +510,8 @@ mod tests {
             )
             .unwrap();
         assert_eq!(estimate.basis, EstimateBasis::AnalysisPrediction);
-        assert_eq!(
-            (estimate.min_ms, estimate.best_ms, estimate.max_ms),
-            (123_456, 123_456, 123_456)
-        );
-        assert_eq!(estimate.confidence(), EstimateConfidence::Exact);
+        assert_eq!(estimate.duration_ms, 123_456);
+        assert_eq!(estimate.confidence(), EstimateConfidence::Precise);
     }
 
     #[test]
@@ -591,7 +531,7 @@ mod tests {
     }
 
     #[test]
-    fn historical_estimate_scales_quartiles_by_duration() {
+    fn historical_estimate_scales_the_median_rate_by_duration() {
         let model = EstimationModel::from_state(&hevc_ladder_state());
         let estimate = model
             .estimate(
@@ -600,18 +540,13 @@ mod tests {
                 None,
             )
             .unwrap();
-        // Rates 1..=5 → quartiles 1.5 / 3.0 / 4.5 scaled by 600s.
-        assert_eq!(estimate.min_ms, 900_000);
-        assert_eq!(estimate.best_ms, 1_800_000);
-        assert_eq!(estimate.max_ms, 2_700_000);
+        // Rates 1..=5 → median 3.0, scaled by 600s.
+        assert_eq!(estimate.duration_ms, 1_800_000);
         assert_eq!(
             estimate.basis,
-            EstimateBasis::Historical {
-                tier: HistoricalTier::CodecResolution,
-                samples: 5,
-            }
+            EstimateBasis::Historical(HistoricalTier::CodecResolution)
         );
-        assert_eq!(estimate.confidence(), EstimateConfidence::Rough);
+        assert_eq!(estimate.confidence(), EstimateConfidence::Estimated);
     }
 
     #[test]
@@ -628,10 +563,7 @@ mod tests {
             .unwrap();
         assert_eq!(
             by_codec.basis,
-            EstimateBasis::Historical {
-                tier: HistoricalTier::Codec,
-                samples: 5,
-            }
+            EstimateBasis::Historical(HistoricalTier::Codec)
         );
         // Different codec: only the global pool remains.
         let global = model
@@ -643,17 +575,14 @@ mod tests {
             .unwrap();
         assert_eq!(
             global.basis,
-            EstimateBasis::Historical {
-                tier: HistoricalTier::Global,
-                samples: 5,
-            }
+            EstimateBasis::Historical(HistoricalTier::Global)
         );
     }
 
     #[test]
     fn sparse_history_estimates_nothing() {
         let mut state = DurableState::default();
-        for step in 1..=4u64 {
+        for step in 1..=2u64 {
             add_converted(
                 &mut state,
                 step,
@@ -674,7 +603,7 @@ mod tests {
     }
 
     #[test]
-    fn ten_resolution_samples_upgrade_confidence() {
+    fn every_historical_tier_is_estimated_however_many_samples_back_it() {
         let mut state = DurableState::default();
         for step in 1..=10u64 {
             add_converted(
@@ -686,24 +615,22 @@ mod tests {
             );
         }
         let model = EstimationModel::from_state(&state);
-        let precise = model
-            .estimate(
-                Operation::Convert,
-                &meta(VideoCodec::Hevc, 1920, 1080, 600_000),
-                None,
-            )
-            .unwrap();
-        assert_eq!(precise.confidence(), EstimateConfidence::Estimate);
-        // The same ten samples through the codec tier stay rough: only the
-        // resolution-specific group earns the upgrade.
-        let coarse = model
-            .estimate(
-                Operation::Convert,
-                &meta(VideoCodec::Hevc, 3840, 2160, 600_000),
-                None,
-            )
-            .unwrap();
-        assert_eq!(coarse.confidence(), EstimateConfidence::Rough);
+        // Ten samples in the most specific group, and the same ten reached
+        // through the codec tier: neither earns a grade above estimated.
+        for (width, height, tier) in [
+            (1920, 1080, HistoricalTier::CodecResolution),
+            (3840, 2160, HistoricalTier::Codec),
+        ] {
+            let estimate = model
+                .estimate(
+                    Operation::Convert,
+                    &meta(VideoCodec::Hevc, width, height, 600_000),
+                    None,
+                )
+                .unwrap();
+            assert_eq!(estimate.basis, EstimateBasis::Historical(tier));
+            assert_eq!(estimate.confidence(), EstimateConfidence::Estimated);
+        }
     }
 
     #[test]
@@ -752,14 +679,11 @@ mod tests {
                 None,
             )
             .unwrap();
-        // Analyze rates 1, 2, 3, 4, 5 → best = 3.0 × 600s.
-        assert_eq!(estimate.best_ms, 1_800_000);
+        // Analyze rates 1, 2, 3, 4, 5 → median 3.0 × 600s.
+        assert_eq!(estimate.duration_ms, 1_800_000);
         assert_eq!(
             estimate.basis,
-            EstimateBasis::Historical {
-                tier: HistoricalTier::CodecResolution,
-                samples: 5,
-            }
+            EstimateBasis::Historical(HistoricalTier::CodecResolution)
         );
         // One convert sample is not a group.
         assert_eq!(
@@ -807,16 +731,14 @@ mod tests {
 
     proptest! {
         #[test]
-        fn quartiles_are_ordered(
+        fn median_lies_within_the_samples(
             values in proptest::collection::vec(0.001f64..1_000.0, 1..50)
         ) {
-            let quartiles = exclusive_quartiles(&values).unwrap();
-            prop_assert!(quartiles.p25 <= quartiles.p50);
-            prop_assert!(quartiles.p50 <= quartiles.p75);
+            let middle = median(&values).unwrap();
             let smallest = values.iter().copied().fold(f64::INFINITY, f64::min);
             let largest = values.iter().copied().fold(f64::NEG_INFINITY, f64::max);
-            prop_assert!(quartiles.p25 >= smallest);
-            prop_assert!(quartiles.p75 <= largest);
+            prop_assert!(middle >= smallest);
+            prop_assert!(middle <= largest);
         }
 
         #[test]
@@ -829,10 +751,8 @@ mod tests {
                     None,
                 )
                 .unwrap();
-            // Rates 1..=5: best = duration × 3.0 exactly.
-            prop_assert_eq!(estimate.best_ms, duration_ms * 3);
-            prop_assert!(estimate.min_ms <= estimate.best_ms);
-            prop_assert!(estimate.best_ms <= estimate.max_ms);
+            // Rates 1..=5: median 3.0, so the estimate is duration × 3 exactly.
+            prop_assert_eq!(estimate.duration_ms, duration_ms * 3);
         }
     }
 }

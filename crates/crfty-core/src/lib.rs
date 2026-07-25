@@ -46,8 +46,8 @@ pub(crate) use analysis::{
     decide_freshness,
 };
 pub use estimation::{
-    EstimateBasis, EstimateConfidence, EstimationModel, HistoricalTier, Quartiles,
-    ResolutionBucket, TimeEstimate, exclusive_quartiles,
+    EstimateBasis, EstimateConfidence, EstimationModel, HistoricalTier, ResolutionBucket,
+    TimeEstimate,
 };
 pub use failure::{DIAGNOSTIC_TAIL_MAX_BYTES, DiagnosticTail, FailureFacts, FailureKind};
 pub use job::{
