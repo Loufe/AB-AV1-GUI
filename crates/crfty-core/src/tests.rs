@@ -6041,3 +6041,417 @@ fn adopted_verdicts_apply_only_by_content_identity() {
         crate::TimestampReliability::Unknown,
     ));
 }
+
+#[test]
+fn abandon_reservation_rejected_when_run_id_already_owns_a_run() {
+    let mut state = AppState::default();
+    let _first = apply(&mut state, add_command(QueueItemId(1), "first.mkv"));
+    let _second = apply(&mut state, add_command(QueueItemId(4), "second.mkv"));
+    let _started = start_session(&mut state);
+    // Prepare then finish the first item so RunId(3) keeps a conversion run
+    // that outlives its reservation.
+    let _prepared = reserve_and_prepare(&mut state, ClaimId(2), RunId(3), execution());
+    let finished = apply(
+        &mut state,
+        Command::Worker(WorkerCommand::Terminal {
+            item_id: QueueItemId(1),
+            claim_id: ClaimId(2),
+            run_id: RunId(3),
+            outcome: ItemOutcome::Failed(FailureFacts::new(FailureKind::Internal, "fixture")),
+            at: UnixMillis(1_000),
+            phase_spans: Vec::new(),
+            final_telemetry: None,
+        }),
+    );
+    assert_eq!(finished.reply, Reply::Accepted);
+    assert!(state.durable.conversion_runs.contains_key(&RunId(3)));
+
+    // Reserve the second item while reusing RunId(3); its run still exists.
+    let reserved = apply(
+        &mut state,
+        Command::Worker(WorkerCommand::ReserveNext {
+            claim_id: ClaimId(5),
+            run_id: RunId(3),
+        }),
+    );
+    assert!(matches!(reserved.reply, Reply::Reserved(Some(_))));
+
+    // The reservation itself is genuine, but the colliding run blocks abandonment.
+    let abandoned = apply(
+        &mut state,
+        Command::Worker(WorkerCommand::AbandonReservation {
+            item_id: QueueItemId(4),
+            claim_id: ClaimId(5),
+            run_id: RunId(3),
+            at: UnixMillis(2_000),
+        }),
+    );
+    assert!(matches!(abandoned.reply, Reply::Rejected { .. }));
+    assert!(matches!(
+        state
+            .durable
+            .queue
+            .iter()
+            .find(|item| item.id == QueueItemId(4))
+            .expect("second item")
+            .state,
+        QueueItemState::Reserved { .. }
+    ));
+}
+
+fn expect_conflict(action: OutputRecoveryAction, detail: &str) {
+    let OutputRecoveryAction::Conflict(conflict) = action else {
+        panic!("expected a recovery conflict, got {action:?}");
+    };
+    assert_eq!(conflict.detail, detail);
+}
+
+#[test]
+fn not_worthwhile_terminal_validates_attempt_consistency() {
+    let mut state = AppState::default();
+    let _added = apply(&mut state, add_command(QueueItemId(1), "video.mkv"));
+    let _started = start_session(&mut state);
+    let _prepared = reserve_and_prepare(&mut state, ClaimId(2), RunId(3), execution());
+    let run = state
+        .durable
+        .conversion_runs
+        .get(&RunId(3))
+        .expect("prepared encode run");
+    // Not-worthwhile requires an encode run that never produced analysis or output.
+    assert!(run.analysis.is_none());
+
+    // Every attempt sits inside the requested/floor fallback window (90..=95)
+    // with a valid measurement, so the verdict is coherent with the job.
+    let coherent = ItemOutcome::NotWorthwhile {
+        attempts: vec![
+            crate::AnalysisAttempt {
+                target: VmafTarget(95),
+                last_measurement: Some(analysis().measurement),
+            },
+            crate::AnalysisAttempt {
+                target: VmafTarget(90),
+                last_measurement: None,
+            },
+        ],
+    };
+    assert!(validate_terminal(run, None, &coherent).is_ok());
+
+    // An attempt above the requested target cannot belong to this job.
+    let above_requested = ItemOutcome::NotWorthwhile {
+        attempts: vec![crate::AnalysisAttempt {
+            target: VmafTarget(96),
+            last_measurement: None,
+        }],
+    };
+    assert!(validate_terminal(run, None, &above_requested).is_err());
+
+    // No attempts at all is likewise inconsistent with a not-worthwhile claim.
+    let no_attempts = ItemOutcome::NotWorthwhile {
+        attempts: Vec::new(),
+    };
+    assert!(validate_terminal(run, None, &no_attempts).is_err());
+}
+
+#[test]
+fn output_exists_skip_terminal_requires_producing_run_without_output() {
+    let mut state = AppState::default();
+    let _added = apply(&mut state, add_command(QueueItemId(1), "video.mkv"));
+    let _started = start_session(&mut state);
+    let _prepared = reserve_and_prepare(&mut state, ClaimId(2), RunId(3), execution());
+    let run = state
+        .durable
+        .conversion_runs
+        .get(&RunId(3))
+        .expect("prepared encode run");
+    assert!(run.spec.action.produces_output());
+
+    let skip = ItemOutcome::Skipped {
+        reason: SkipReason::OutputExists,
+    };
+    // An output-producing run that wrote nothing may skip because the target
+    // already exists on disk.
+    assert!(validate_terminal(run, None, &skip).is_ok());
+
+    // A settled output transaction contradicts an output-exists skip.
+    let committed = transaction(
+        OutputState::Committed {
+            final_identity: identity("encoded", 7),
+        },
+        Replacement::KeepOriginal,
+    );
+    assert!(validate_terminal(run, Some(&committed), &skip).is_err());
+}
+
+#[test]
+fn recover_abandon_intent_deletes_staging_or_conflicts() {
+    let staging_identity = destructive("encoded", 7);
+    let abandon = transaction(
+        OutputState::AbandonIntent {
+            staging_identity: staging_identity.clone(),
+        },
+        Replacement::KeepOriginal,
+    );
+    let base = FileSystemFacts {
+        staging: DestructiveObservation::Absent,
+        final_path: DestructiveObservation::Absent,
+        original: DestructiveObservation::Present(destructive("input", 10)),
+        staging_artifact: None,
+        final_artifact: None,
+    };
+
+    // Staging already removed: the abandonment is complete.
+    assert_eq!(
+        recover_output(&abandon, &base),
+        OutputRecoveryAction::Append(OutputDelta::Abandoned {
+            run_id: abandon.run_id,
+        })
+    );
+
+    // Staging still present and unchanged: delete the recorded staging file.
+    let staging_present = FileSystemFacts {
+        staging: DestructiveObservation::Present(staging_identity.clone()),
+        ..base.clone()
+    };
+    assert!(matches!(
+        recover_output(&abandon, &staging_present),
+        OutputRecoveryAction::DeleteStaging { .. }
+    ));
+
+    // Staging path now holds a different file: refuse to delete it.
+    let staging_changed = FileSystemFacts {
+        staging: DestructiveObservation::Present(destructive("stranger", 3)),
+        ..base
+    };
+    expect_conflict(
+        recover_output(&abandon, &staging_changed),
+        "staging changed after abandonment intent",
+    );
+}
+
+#[test]
+fn recover_committed_branches_on_replacement_and_guards_identity() {
+    let final_identity = identity("encoded", 7);
+    let committed_facts = FileSystemFacts {
+        staging: DestructiveObservation::Absent,
+        final_path: DestructiveObservation::Present(final_identity.destructive.clone()),
+        original: DestructiveObservation::Present(destructive("input", 10)),
+        staging_artifact: None,
+        final_artifact: Some(final_identity.clone()),
+    };
+
+    // Keep-original conversions are done once the output is committed.
+    let keep = transaction(
+        OutputState::Committed {
+            final_identity: final_identity.clone(),
+        },
+        Replacement::KeepOriginal,
+    );
+    assert_eq!(
+        recover_output(&keep, &committed_facts),
+        OutputRecoveryAction::None
+    );
+
+    // Retire-original conversions still owe the original's retirement.
+    let retire = transaction(
+        OutputState::Committed {
+            final_identity: final_identity.clone(),
+        },
+        Replacement::RetireOriginal,
+    );
+    assert_eq!(
+        recover_output(&retire, &committed_facts),
+        OutputRecoveryAction::Append(OutputDelta::RetireOriginalIntent {
+            run_id: retire.run_id,
+        })
+    );
+
+    // The committed final file was replaced by something else after commit.
+    let changed_final = FileSystemFacts {
+        final_artifact: None,
+        ..committed_facts
+    };
+    expect_conflict(
+        recover_output(&keep, &changed_final),
+        "committed output identity changed",
+    );
+}
+
+#[test]
+fn recover_ready_promotes_commits_or_conflicts_on_mismatch() {
+    let ready_identity = identity("encoded", 7);
+    let ready = transaction(
+        OutputState::Ready {
+            staging_identity: ready_identity.clone(),
+        },
+        Replacement::KeepOriginal,
+    );
+
+    // Crash before the rename: staging is the recorded artifact, promote it.
+    let before_rename = FileSystemFacts {
+        staging: DestructiveObservation::Present(ready_identity.destructive.clone()),
+        final_path: DestructiveObservation::Absent,
+        original: DestructiveObservation::Present(destructive("input", 10)),
+        staging_artifact: Some(ready_identity.clone()),
+        final_artifact: None,
+    };
+    assert!(matches!(
+        recover_output(&ready, &before_rename),
+        OutputRecoveryAction::Promote { .. }
+    ));
+
+    // Crash after the rename: the final file is the artifact, record commit.
+    let after_rename = FileSystemFacts {
+        staging: DestructiveObservation::Absent,
+        final_path: DestructiveObservation::Present(ready_identity.destructive.clone()),
+        original: DestructiveObservation::Present(destructive("input", 10)),
+        staging_artifact: None,
+        final_artifact: Some(ready_identity.clone()),
+    };
+    assert!(matches!(
+        recover_output(&ready, &after_rename),
+        OutputRecoveryAction::Append(OutputDelta::OutputCommitted { .. })
+    ));
+
+    // Neither the staging artifact nor a committed final file is present:
+    // the on-disk world does not match the recorded ready state.
+    let neither = FileSystemFacts {
+        staging: DestructiveObservation::Present(ready_identity.destructive.clone()),
+        final_path: DestructiveObservation::Absent,
+        original: DestructiveObservation::Present(destructive("input", 10)),
+        staging_artifact: None,
+        final_artifact: None,
+    };
+    expect_conflict(
+        recover_output(&ready, &neither),
+        "output files do not match the recorded ready state",
+    );
+}
+
+#[test]
+fn recover_retire_intent_deletes_original_or_conflicts() {
+    let final_identity = identity("encoded", 7);
+    let retire = transaction(
+        OutputState::RetireIntent {
+            final_identity: final_identity.clone(),
+        },
+        Replacement::RetireOriginal,
+    );
+    let with_final = FileSystemFacts {
+        staging: DestructiveObservation::Absent,
+        final_path: DestructiveObservation::Present(final_identity.destructive.clone()),
+        original: DestructiveObservation::Present(destructive("input", 10)),
+        staging_artifact: None,
+        final_artifact: Some(final_identity.clone()),
+    };
+
+    // Original still present and unchanged: it is safe to delete.
+    assert!(matches!(
+        recover_output(&retire, &with_final),
+        OutputRecoveryAction::DeleteOriginal { .. }
+    ));
+
+    // Original already gone: record the retirement.
+    let original_gone = FileSystemFacts {
+        original: DestructiveObservation::Absent,
+        ..with_final.clone()
+    };
+    assert_eq!(
+        recover_output(&retire, &original_gone),
+        OutputRecoveryAction::Append(OutputDelta::OriginalRetired {
+            run_id: retire.run_id,
+        })
+    );
+
+    // The final output changed out from under the retirement intent.
+    let final_changed = FileSystemFacts {
+        final_artifact: None,
+        ..with_final.clone()
+    };
+    expect_conflict(
+        recover_output(&retire, &final_changed),
+        "output changed before original retirement",
+    );
+
+    // A different file now occupies the original's path: do not delete it.
+    let original_changed = FileSystemFacts {
+        original: DestructiveObservation::Present(destructive("replaced", 42)),
+        ..with_final
+    };
+    expect_conflict(
+        recover_output(&retire, &original_changed),
+        "original changed before retirement",
+    );
+}
+
+#[test]
+fn recover_settled_states_take_no_action() {
+    let facts = FileSystemFacts {
+        staging: DestructiveObservation::Present(destructive("anything", 1)),
+        final_path: DestructiveObservation::Present(destructive("anything", 1)),
+        original: DestructiveObservation::Present(destructive("input", 10)),
+        staging_artifact: Some(identity("anything", 1)),
+        final_artifact: Some(identity("anything", 1)),
+    };
+    for state in [
+        OutputState::Retired {
+            final_identity: identity("encoded", 7),
+        },
+        OutputState::Abandoned,
+        OutputState::Conflict {
+            kind: ConflictKind::IdentityMismatch,
+            detail: "already conflicted".to_owned(),
+        },
+    ] {
+        let settled = transaction(state, Replacement::RetireOriginal);
+        assert_eq!(
+            recover_output(&settled, &facts),
+            OutputRecoveryAction::None,
+            "settled state must not schedule further recovery work"
+        );
+    }
+}
+
+#[test]
+fn recover_started_abandons_absent_and_intends_or_conflicts_on_present_staging() {
+    let started = transaction(OutputState::Started, Replacement::KeepOriginal);
+    let base = FileSystemFacts {
+        staging: DestructiveObservation::Absent,
+        final_path: DestructiveObservation::Absent,
+        original: DestructiveObservation::Present(destructive("input", 10)),
+        staging_artifact: None,
+        final_artifact: None,
+    };
+
+    // Staging never appeared: nothing was written, so the run is abandoned.
+    assert_eq!(
+        recover_output(&started, &base),
+        OutputRecoveryAction::Append(OutputDelta::Abandoned {
+            run_id: started.run_id,
+        })
+    );
+
+    // Staging exists but the crash landed before `StagingCreated`, so no
+    // identity was ever journaled to compare against. The staging filename
+    // embeds this run id, so whatever sits there is ours to abandon under the
+    // identity observed now, whichever file it turns out to be.
+    for occupant in [
+        DestructiveIdentity {
+            size: 123,
+            modified_ns: Some(FileTimeNs(456)),
+            ..destructive("empty", 0)
+        },
+        destructive("hijack", 5),
+    ] {
+        let present = FileSystemFacts {
+            staging: DestructiveObservation::Present(occupant.clone()),
+            ..base.clone()
+        };
+        assert_eq!(
+            recover_output(&started, &present),
+            OutputRecoveryAction::Append(OutputDelta::AbandonStagingIntent {
+                run_id: started.run_id,
+                staging_identity: occupant,
+            })
+        );
+    }
+}
