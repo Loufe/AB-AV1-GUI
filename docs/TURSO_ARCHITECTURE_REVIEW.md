@@ -243,7 +243,7 @@ Representative `history_records` columns:
 
 ```text
 history_id TEXT PRIMARY KEY
-happened_at_ms INTEGER NOT NULL
+happened_at_ms INTEGER NULL
 outcome_kind TEXT NOT NULL
 
 source_path_kind TEXT NULL
@@ -284,6 +284,10 @@ otherwise                   -> source_path_hash anonymous label
 
 The path hash is retained whether or not a readable path is stored. Privacy-on
 recording writes `NULL` to the two readable-path columns at insertion time.
+Native observations have a known event time. A translated observation whose
+source time is unknown keeps `happened_at_ms = NULL`; import time is not
+substituted. History ordering places unknown times after known times and uses
+`history_id` as the stable tie-breaker.
 Scrub History performs only:
 
 ```sql
