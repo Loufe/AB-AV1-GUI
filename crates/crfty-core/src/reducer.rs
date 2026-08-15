@@ -90,8 +90,8 @@ pub enum QueueCommand {
         patch: Option<QueueItemEdit>,
     },
     /// Rewrites a pending item's job parameters. Valid only on `Queued`
-    /// items while the session is idle: a running session's rules are frozen
-    /// (#33 §11). Bulk edits are frontend loops over this command.
+    /// items while the session is idle: a running session's rules are frozen.
+    /// Bulk edits are frontend loops over this command.
     Edit {
         item_id: QueueItemId,
         patch: QueueItemEdit,

@@ -41,7 +41,7 @@ pub enum DriverEvent {
     Recovered,
     /// The previous run left the crash sentinel behind: it died without a
     /// clean driver shutdown. Durable state was already restored by the
-    /// journal replay; this is the boot-scoped report of that fact (#33 §12).
+    /// journal replay; this is the boot-scoped report of that fact.
     AbnormalShutdown,
     Fatal {
         message: String,
@@ -102,7 +102,7 @@ struct DriverPersistence {
     _lock: DataLock,
     /// Armed for the driver's lifetime and disarmed only on clean exit; a
     /// leftover sentinel is what the next boot reports as an abnormal
-    /// shutdown (#33 §12).
+    /// shutdown.
     sentinel: CrashSentinel,
 }
 
@@ -168,7 +168,7 @@ impl DriverHandle {
         let journal_path = journal_path.as_ref();
         // The data directory is the journal's directory; the lock is taken
         // before settings load or journal fold so a second instance never
-        // reads (let alone writes) shared durable state (#33 §12).
+        // reads (let alone writes) shared durable state.
         let data_dir = journal_path.parent().unwrap_or(Path::new("."));
         let lock = DataLock::acquire(data_dir).map_err(|error| match error {
             DataLockError::AlreadyHeld { path } => {
@@ -179,7 +179,7 @@ impl DriverHandle {
             }
         })?;
         // Armed while holding the lock and before any durable state is
-        // touched (#33 §12): whatever happens from here on, dying without a
+        // touched: whatever happens from here on, dying without a
         // clean shutdown leaves the sentinel for the next boot to report.
         let sentinel = CrashSentinel::arm(data_dir);
         let config = ConfigStore::new(config_path.as_ref().to_path_buf());
@@ -359,7 +359,7 @@ enum CompactionOutcome {
     Failed,
 }
 
-/// Compact the journal at the driver's idle tick (#33 §10). The writer
+/// Compact the journal at the driver's idle tick. The writer
 /// barrier is implicit: the driver thread is the only journal writer and it
 /// sits between batches here. `force` bypasses the size policy (but never the
 /// quiescence or degraded checks) for the durable transforms that require a

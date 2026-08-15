@@ -134,7 +134,7 @@ pub struct AnalysisProfile {
     pub sample_duration_ms: u64,
     pub thorough: bool,
     /// The decode mode the search actually ran with — part of the analysis
-    /// identity (ADR-007, per #33 §7): hardware and software decoders can
+    /// identity (ADR-007): hardware and software decoders can
     /// produce different decoded frames, so their VMAF measurements are not
     /// interchangeable. The pin is decoder-granular: a Cuvid-recorded
     /// analysis is not returned for a Qsv execution and re-searches instead.

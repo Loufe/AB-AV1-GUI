@@ -51,7 +51,7 @@ the webview crashes on the GPU path — launch with
   excluded from oxfmt/oxlint.
 - `src/lib/ipc/` — `isTauri()` guard, event-stream subscription, and command
   helpers over the generated bindings.
-- `src/lib/store/` — the state layer (#36 D5): `fold.ts` mirrors
+- `src/lib/store/` — the state layer (D5): `fold.ts` mirrors
   `crfty_core::fold`, verified against generated `fold-fixtures.json` (see
   AGENTS.md); `app-store.ts`/`progress-store.ts` are the Zustand containers
   (telemetry separate so progress ticks skip tree subscribers); `connect.ts`

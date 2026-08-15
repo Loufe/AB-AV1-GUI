@@ -13,7 +13,7 @@ interface ErrorBoundaryState {
 }
 
 /**
- * Per-view error boundary (#36 D5): a render crash in one view must not
+ * Per-view error boundary (D5): a render crash in one view must not
  * white-screen the app while a conversion is running. Stores and the delta
  * stream live outside React and survive; "Reload view" just remounts the
  * subtree.

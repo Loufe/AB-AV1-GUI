@@ -320,7 +320,7 @@ pub(crate) enum AnalysisMutationError {
 }
 
 /// Allocate and install the next process-local generation. The discovery
-/// command path added by #55 calls this reducer primitive; callers never
+/// command path calls this reducer primitive; callers never
 /// supply their own generation id.
 pub(crate) fn begin_analysis_generation(
     state: &AnalysisSnapshot,

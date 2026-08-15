@@ -4,7 +4,7 @@
 @custom-variant dark (&:where(.dark, .dark *));
 
 /*
- * CRFty design tokens (issue #36, D2/D3).
+ * CRFty design tokens (D2/D3).
  * Raw values live in :root/.dark and @theme inline references them — literal
  * colors in a plain @theme would be inlined at build time and break runtime
  * theme switching.
@@ -32,7 +32,7 @@
   --success: oklch(0.55 0.14 150);
   --warning: oklch(0.6 0.13 98);
 
-  /* Chart series palette (#36 D7): chart-1 is the identity orange; the rest
+  /* Chart series palette (D7): chart-1 is the identity orange; the rest
    * are hue-spaced for adjacent-series contrast at matched lightness. */
   --chart-1: oklch(0.62 0.16 55);
   --chart-2: oklch(0.55 0.11 210);
@@ -94,7 +94,7 @@
   --color-chart-5: var(--chart-5);
 
   /* shadcn component vocabulary, resolved against the elevation tier —
-   * the tier stays the single source of truth (#36 D2). */
+   * the tier stays the single source of truth (D2). */
   --color-card: var(--surface);
   --color-card-foreground: var(--foreground);
   --color-popover: var(--overlay);

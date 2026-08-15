@@ -1,5 +1,5 @@
 // Telemetry lives in its own store so progress ticks touch no tree
-// subscription (#33 §11): components rendering queue/analysis trees subscribe
+// subscription: components rendering queue/analysis trees subscribe
 // to the app store only, and per-row progress reads from here. Session
 // aggregates ride along: they update at item-finish frequency and belong to
 // the same live-run display surface.

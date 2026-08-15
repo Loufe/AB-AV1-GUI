@@ -1,6 +1,6 @@
 //! System sleep inhibition while a session runs.
 //!
-//! `keepawake` replaces V2's direct `SetThreadExecutionState` call (#33 §12).
+//! `keepawake` replaces V2's direct `SetThreadExecutionState` call.
 //! Only system sleep is inhibited — the display may still turn off, matching
 //! V2's `ES_SYSTEM_REQUIRED`-without-`ES_DISPLAY_REQUIRED` behavior. Windows
 //! inhibition is per-thread (`ES_CONTINUOUS`), so the guard must be created

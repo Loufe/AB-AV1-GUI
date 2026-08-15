@@ -1,7 +1,7 @@
 //! Manual application release check against the GitHub releases API.
 //!
 //! One-shot and user-initiated only: there is no background checking and no
-//! setting that enables it (#33 §12). The comparison ports V2's semantics
+//! setting that enables it. The comparison ports V2's semantics
 //! exactly — dot-separated numeric tuples, falling back to string equality
 //! when either side does not parse (which is every pre-release, so an alpha
 //! reports any differently-tagged release as an update).
@@ -12,7 +12,8 @@ use serde::Deserialize;
 
 use crate::vendor::download::{Fetch, HttpFetch};
 
-/// The V2 repository; #45 renames it for CRFty.
+/// Still the V2 repository name; changes when the repository is renamed for
+/// the CRFty release.
 const RELEASE_API_URL: &str = "https://api.github.com/repos/Loufe/AB-AV1-GUI/releases/latest";
 /// Far above any real release payload; bounds a misbehaving server.
 const RELEASE_BODY_CAP_BYTES: u64 = 1024 * 1024;

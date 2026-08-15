@@ -22,8 +22,8 @@ pub fn run() {
         .build(tauri::generate_context!());
     match built {
         Ok(app) => app.run(|app_handle, event| match event {
-            // An active session makes closing a question, not an order
-            // (#33 §12): the bridge defers the close to the frontend prompt,
+            // An active session makes closing a question, not an order:
+            // the bridge defers the close to the frontend prompt,
             // which re-issues it once the session is idle.
             tauri::RunEvent::WindowEvent {
                 event: tauri::WindowEvent::CloseRequested { api, .. },

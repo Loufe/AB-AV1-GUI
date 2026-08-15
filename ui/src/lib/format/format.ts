@@ -101,7 +101,7 @@ export function formatAudioCodecs(audioCodecs: readonly string[]): string {
 
 /**
  * Wall-clock date "YYYY-MM-DD" in local time from epoch milliseconds (the
- * engine stamps instants as wall-clock ms). Fixed format per #36 D8; the
+ * engine stamps instants as wall-clock ms). Fixed format per D8.
  * The V2 column sliced an ISO string, so parity here is by-construction
  * rather than fixture-generated.
  */
