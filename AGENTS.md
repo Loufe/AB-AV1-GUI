@@ -62,6 +62,10 @@ No external consumers exist. Change APIs and schemas directly, update all call
 sites in the same change, and leave no compatibility artifacts. The one-time
 Python history adoption is a product requirement, not compatibility policy.
 
+- **External contracts included** — When a dependency or external tool changes
+  format, update the required version and replace the old handling. Never support
+  both formats.
+
 ## Design discipline
 
 - Prefer the design where an invariant is unrepresentable over the design where
