@@ -44,7 +44,7 @@ pub(crate) enum StatFactKind {
 
 /// One flattened fact per content with a standing verdict: the joined sizes,
 /// measured times, and media facts that Statistics and estimation consume.
-/// Adopted verdicts (#39) have no backing run; their summary comes from the
+/// Adopted verdicts have no backing run; their summary comes from the
 /// verdict-carried fields the fold absorbed at adoption time.
 #[derive(Debug, Clone, PartialEq)]
 pub(crate) struct StatFact {

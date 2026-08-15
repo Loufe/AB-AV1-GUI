@@ -7,7 +7,7 @@ delegate to the engine; events forward the ordered delta stream.
   `ui/src/lib/bindings.ts` from the Rust types (tauri-specta, ADR-006). Committed,
   never hand-edited, freshness-gated in CI. Regenerate whenever cross-boundary
   types change.
-- All cross-boundary types are defined in Rust (issue #33); the frontend must never
+- All cross-boundary types are defined in Rust; the frontend must never
   hand-author IPC or domain types.
 - Run via `pnpm tauri:dev` from `ui/` (Linux prerequisites: see `ui/README.md`).
   Tauri capability grants live in `capabilities/`.

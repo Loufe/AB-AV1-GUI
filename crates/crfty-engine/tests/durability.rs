@@ -795,7 +795,7 @@ fn imported_media_observation() -> MediaObservation {
     }
 }
 
-/// The phase-4 adoption arc (#39): an import parks records durably, the
+/// The import adoption arc: an import parks records durably, the
 /// forced compaction folds it into a fresh snapshot generation while the
 /// driver runs, a restart replays it, preparation adopts the matching record
 /// onto the observed content, and re-imports are counted no-ops both before

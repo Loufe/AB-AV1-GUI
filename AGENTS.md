@@ -57,6 +57,20 @@ The frontend gate runs from `ui/` — see `ui/AGENTS.md`.
   tested via `uvx pytest tools/test_export_history_v3.py`, never imported by the
   build.
 
+## Comments
+
+A comment states a constraint or rationale the code cannot show: invariants,
+cross-boundary contracts, non-obvious "why". Module docs (`//!`) stating a
+subsystem's contract are encouraged. Delete on sight:
+
+- File-path headers (`// crates/crfty-core/src/foo.rs`)
+- Section banners (`// ---- helpers ----`)
+- Narration of the next line
+- Change commentary; "why this edit is correct" belongs in the commit message
+- Issue references (`#NN`); state the constraint inline or cite an ADR
+
+Partially enforced by `crates/crfty-engine/tests/source_policy.rs`.
+
 ## Zero backwards compatibility
 
 No external consumers exist. Change APIs and schemas directly, update all call
@@ -85,6 +99,12 @@ Python history adoption is a product requirement, not compatibility policy.
 
 - Treat issue bodies as living specifications and update them in place.
 - Do not use issue comments for progress, decision logs, merge notices, or research updates. Put durable detail in project docs and link from the body.
+- Caps: body 30 lines (epics 50), goal 3 sentences, acceptance 5 checkboxes.
+- Set parentage with GitHub's native sub-issue relation, never a `Parent: #NN` body line. Never restate a parent's content.
+- Design and research content goes in `docs/design/`; the issue links the doc.
+- Epics: a 2-3 line header plus a checkbox list of child issues, nothing else.
+- No meta-process prose (scope disclaimers, "this issue does not decide...").
+- Draft from `docs/templates/issue.md` and `docs/templates/epic.md`; assign milestone `v3.0`.
 
 ## Worktrees
 
@@ -101,4 +121,5 @@ read-only inspection, merges, and worktree management.
   merges behind.
 
 Architecture decisions: MADR records in `docs/adr/` (see its AGENTS.md; accepted
-ADRs are immutable — supersede, don't rewrite). Issue #33 is the research narrative.
+ADRs are immutable — supersede, don't rewrite). Current rewrite state, decided
+directions, and open questions: `docs/PLAN.md`.
