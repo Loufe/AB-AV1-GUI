@@ -23,12 +23,12 @@ starts without FFmpeg or ffprobe: missing tools surface as typed availability
 on the stream and gate media sessions while the queue, history, and settings
 stay fully usable. The frontend folds that stream into its stores against
 golden fixtures generated from the Rust fold. The durable domain model is
-complete (issue #38): structured failure facts, wall-clock run instants with
+complete: structured failure facts, wall-clock run instants with
 monotonic phase spans, evidence-carrying success outcomes derived from the
 settled output ledger (including crash recovery), expanded probe metadata,
 content verdicts with derived lineage and a frozen reuse policy, per-item
 analysis intent, and the hardware→software retry ladders for search and
-encode. The queue command surface is complete (issue #41): batch adds expand
+encode. The queue command surface is complete: batch adds expand
 folders through the engine scanner and filter ineligible files at enqueue
 into one typed summary (ADR-013), decided verdicts and content duplicates
 short-circuit at claim as visible skipped rows, and items support per-item
