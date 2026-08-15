@@ -1,5 +1,4 @@
 #![forbid(unsafe_code)]
-#![allow(clippy::expect_used, clippy::indexing_slicing, clippy::unwrap_used)]
 
 use std::{
     fs,
@@ -91,6 +90,7 @@ fn add_input(item_id: QueueItemId, input: PathBuf) -> Command {
 struct TestDirectory(PathBuf);
 
 impl TestDirectory {
+    #[expect(clippy::expect_used, reason = "fixture setup")]
     fn new(name: &str) -> Self {
         let unique = TEMP_SEQUENCE.fetch_add(1, Ordering::Relaxed);
         let nanos = SystemTime::now()
@@ -117,6 +117,7 @@ impl Drop for TestDirectory {
 }
 
 #[test]
+#[expect(clippy::expect_used, reason = "test assertion")]
 fn data_lock_makes_a_second_driver_start_fail_as_already_running() {
     let directory = TestDirectory::new("data-lock");
     let path = directory.path().join("state.jsonl");
@@ -134,6 +135,7 @@ fn data_lock_makes_a_second_driver_start_fail_as_already_running() {
 }
 
 #[test]
+#[expect(clippy::expect_used, reason = "test assertion")]
 fn journal_records_replay() {
     let directory = TestDirectory::new("journal-replay");
     let path = directory.path().join("state.jsonl");
@@ -176,6 +178,7 @@ fn queue_added(id: QueueItemId) -> DurableDelta {
 /// and the fresh one into a single unparseable line, and the journal would
 /// load as corrupt on the following start.
 #[test]
+#[expect(clippy::expect_used, reason = "test assertion")]
 fn torn_tail_is_truncated_on_reopen_so_later_appends_stay_replayable() {
     let directory = TestDirectory::new("torn-tail");
     let path = directory.path().join("state.jsonl");
@@ -213,6 +216,7 @@ fn torn_tail_is_truncated_on_reopen_so_later_appends_stay_replayable() {
 /// evidence that gets archived as `.corrupt-<timestamp>` before any discard,
 /// so reopening never rewrites it (#33 §10).
 #[test]
+#[expect(clippy::expect_used, reason = "test assertion")]
 fn corrupt_journal_is_preserved_byte_identical_on_reopen() {
     let directory = TestDirectory::new("corrupt-preserve");
     let path = directory.path().join("state.jsonl");
@@ -243,6 +247,7 @@ fn corrupt_journal_is_preserved_byte_identical_on_reopen() {
 /// sequence numbering, later appends, and restarts are all unaffected
 /// (#33 §10).
 #[test]
+#[expect(clippy::expect_used, reason = "test assertion")]
 fn compaction_folds_journal_to_snapshot_head_and_restart_replays_it() {
     let directory = TestDirectory::new("compaction");
     let path = directory.path().join("state.jsonl");
@@ -280,6 +285,7 @@ fn compaction_folds_journal_to_snapshot_head_and_restart_replays_it() {
 /// A stray temp file from a compaction that crashed before its atomic replace
 /// is inert: it was never the journal and reopening ignores it.
 #[test]
+#[expect(clippy::expect_used, reason = "test assertion")]
 fn stray_compaction_temp_file_does_not_affect_reopen() {
     let directory = TestDirectory::new("stray-temp");
     let path = directory.path().join("state.jsonl");
@@ -299,6 +305,7 @@ fn stray_compaction_temp_file_does_not_affect_reopen() {
 /// writer still able to append — never a data loss, never a fatal.
 #[cfg(unix)]
 #[test]
+#[expect(clippy::expect_used, reason = "test assertion")]
 fn failed_compaction_leaves_old_journal_authoritative_and_writer_usable() {
     use std::os::unix::fs::PermissionsExt;
     let directory = TestDirectory::new("compaction-failure");
@@ -325,6 +332,7 @@ fn failed_compaction_leaves_old_journal_authoritative_and_writer_usable() {
 }
 
 #[test]
+#[expect(clippy::expect_used, reason = "test assertion")]
 fn journal_group_commit_is_one_atomic_replay_record() {
     let directory = TestDirectory::new("journal-batch");
     let path = directory.path().join("state.jsonl");
@@ -354,6 +362,7 @@ fn journal_group_commit_is_one_atomic_replay_record() {
 }
 
 #[test]
+#[expect(clippy::expect_used, reason = "test assertion")]
 fn crash_sentinel_reports_an_abnormal_previous_run_and_only_that_run() {
     let directory = TestDirectory::new("sentinel");
     let path = directory.path().join("state.jsonl");
@@ -421,6 +430,7 @@ fn crash_sentinel_reports_an_abnormal_previous_run_and_only_that_run() {
 }
 
 #[test]
+#[expect(clippy::expect_used, reason = "test assertion")]
 fn driver_persists_before_emitting_and_replays_after_restart() {
     let directory = TestDirectory::new("driver");
     let path = directory.path().join("state.jsonl");
@@ -469,11 +479,20 @@ fn driver_persists_before_emitting_and_replays_after_restart() {
         panic!("expected replayed snapshot");
     };
     assert_eq!(snapshot.durable.queue.len(), 1);
-    assert_eq!(snapshot.durable.queue[0].id, QueueItemId(7));
+    assert_eq!(
+        snapshot
+            .durable
+            .queue
+            .first()
+            .expect("replayed queue item")
+            .id,
+        QueueItemId(7)
+    );
     restarted.shutdown().expect("restarted shutdown");
 }
 
 #[test]
+#[expect(clippy::expect_used, reason = "test assertion")]
 fn driver_persists_settings_and_restores_them_after_restart() {
     let directory = TestDirectory::new("driver-settings");
     let journal_path = directory.path().join("state.jsonl");
@@ -523,6 +542,7 @@ fn driver_persists_settings_and_restores_them_after_restart() {
 }
 
 #[test]
+#[expect(clippy::expect_used, reason = "test assertion")]
 fn corrupted_journal_starts_degraded_and_rejects_mutation() {
     let directory = TestDirectory::new("degraded");
     let path = directory.path().join("state.jsonl");
@@ -553,6 +573,7 @@ fn corrupted_journal_starts_degraded_and_rejects_mutation() {
     driver.shutdown().expect("degraded shutdown");
 }
 
+#[expect(clippy::expect_used, reason = "fixture setup")]
 fn corrupt_archives(directory: &Path) -> Vec<PathBuf> {
     fs::read_dir(directory)
         .expect("data directory")
@@ -564,6 +585,7 @@ fn corrupt_archives(directory: &Path) -> Vec<PathBuf> {
 
 /// Writes a journal holding one valid record followed by an unparseable line —
 /// the canonical acknowledgeable corruption fixture.
+#[expect(clippy::expect_used, reason = "fixture setup")]
 fn corrupt_journal_fixture(path: &Path) -> Vec<u8> {
     {
         let (mut writer, _initial) = JournalWriter::open(path).expect("journal writer");
@@ -582,6 +604,7 @@ fn corrupt_journal_fixture(path: &Path) -> Vec<u8> {
 /// fresh generation, announces recovery, accepts mutation again, and a
 /// restart comes up healthy with everything intact.
 #[test]
+#[expect(clippy::expect_used, reason = "test assertion")]
 fn acknowledged_corruption_archives_compacts_and_restarts_healthy() {
     let directory = TestDirectory::new("ack-recovery");
     let path = directory.path().join("state.jsonl");
@@ -614,7 +637,10 @@ fn acknowledged_corruption_archives_compacts_and_restarts_healthy() {
     // The corrupt generation is archived byte-identically beside the journal.
     let archives = corrupt_archives(directory.path());
     assert_eq!(archives.len(), 1);
-    assert_eq!(fs::read(&archives[0]).expect("archive bytes"), before);
+    assert_eq!(
+        fs::read(archives.first().expect("one corruption archive")).expect("archive bytes"),
+        before
+    );
     // The journal itself is one healthy snapshot line of the valid prefix.
     let recovered = fs::read(&path).expect("recovered journal");
     assert_eq!(recovered.iter().filter(|byte| **byte == b'\n').count(), 1);
@@ -657,6 +683,7 @@ fn acknowledged_corruption_archives_compacts_and_restarts_healthy() {
 /// different bytes than the ones present — it must be rejected with the file
 /// untouched and the driver still degraded.
 #[test]
+#[expect(clippy::expect_used, reason = "test assertion")]
 fn wrong_signature_acknowledgement_is_rejected_and_stays_degraded() {
     let directory = TestDirectory::new("ack-wrong-signature");
     let path = directory.path().join("state.jsonl");
@@ -689,6 +716,7 @@ fn wrong_signature_acknowledgement_is_rejected_and_stays_degraded() {
 /// Over a healthy journal there is nothing to acknowledge; the command is
 /// rejected and no archive or rewrite happens.
 #[test]
+#[expect(clippy::expect_used, reason = "test assertion")]
 fn acknowledgement_over_a_healthy_journal_is_rejected() {
     let directory = TestDirectory::new("ack-healthy");
     let path = directory.path().join("state.jsonl");
@@ -773,6 +801,7 @@ fn imported_media_observation() -> MediaObservation {
 /// onto the observed content, and re-imports are counted no-ops both before
 /// and after adoption.
 #[test]
+#[expect(clippy::expect_used, reason = "test assertion")]
 fn history_import_parks_compacts_adopts_and_reimports_as_noop() {
     let directory = TestDirectory::new("history-import");
     let journal_path = directory.path().join("state.jsonl");
@@ -964,6 +993,7 @@ fn history_import_parks_compacts_adopts_and_reimports_as_noop() {
 /// Over a corrupt journal an import cannot be made durable; history commands
 /// fall under the degraded gate's blanket rejection.
 #[test]
+#[expect(clippy::expect_used, reason = "test assertion")]
 fn history_import_is_rejected_while_degraded() {
     let directory = TestDirectory::new("import-degraded");
     let path = directory.path().join("state.jsonl");
@@ -986,6 +1016,7 @@ fn history_import_is_rejected_while_degraded() {
 }
 
 #[test]
+#[expect(clippy::expect_used, reason = "test assertion")]
 fn telemetry_pressure_coalesces_and_terminal_value_wins() {
     let directory = TestDirectory::new("telemetry");
     let path = directory.path().join("state.jsonl");
@@ -1088,6 +1119,7 @@ fn telemetry_pressure_coalesces_and_terminal_value_wins() {
 }
 
 #[test]
+#[expect(clippy::expect_used, reason = "test assertion")]
 fn terminal_publishes_final_telemetry_and_clear_before_item_finished() {
     let directory = TestDirectory::new("terminal-order");
     let driver = DriverHandle::start(
@@ -1178,6 +1210,7 @@ fn terminal_publishes_final_telemetry_and_clear_before_item_finished() {
 }
 
 #[test]
+#[expect(clippy::expect_used, reason = "test assertion")]
 fn restart_after_fsynced_terminal_folds_to_finished_snapshot() {
     let directory = TestDirectory::new("fsynced-terminal");
     let journal_path = directory.path().join("state.jsonl");
@@ -1266,6 +1299,7 @@ fn restart_after_fsynced_terminal_folds_to_finished_snapshot() {
 }
 
 #[test]
+#[expect(clippy::expect_used, reason = "test assertion")]
 fn output_recovery_promotes_and_retires_original() {
     let directory = TestDirectory::new("replace");
     let input = directory.path().join("input.mp4");
@@ -1318,6 +1352,7 @@ fn output_recovery_promotes_and_retires_original() {
 }
 
 #[test]
+#[expect(clippy::expect_used, reason = "test assertion")]
 fn invalid_partial_staging_is_cleaned_without_media_validation() {
     let directory = TestDirectory::new("invalid-partial");
     let input = directory.path().join("input.mp4");
@@ -1349,6 +1384,7 @@ fn invalid_partial_staging_is_cleaned_without_media_validation() {
 }
 
 #[test]
+#[expect(clippy::expect_used, reason = "test assertion")]
 fn engine_startup_recovers_an_active_partial_staging_transaction() {
     let _serial = ENGINE_GUARD.lock().expect("engine guard");
     let directory = TestDirectory::new("engine-startup-recovery");
@@ -1410,6 +1446,7 @@ fn engine_startup_recovers_an_active_partial_staging_transaction() {
 /// Journals the durable trail of an active convert run whose output
 /// transaction reached `OutputStarted`, optionally followed by
 /// `StagingCreated`, mirroring the coordinator's journal order.
+#[expect(clippy::expect_used, reason = "fixture setup")]
 fn journal_active_output_run(
     journal_path: &Path,
     input: &Path,
@@ -1473,6 +1510,7 @@ fn journal_active_output_run(
 }
 
 #[test]
+#[expect(clippy::expect_used, reason = "test assertion")]
 fn engine_startup_abandons_intent_when_staging_was_never_created() {
     let _serial = ENGINE_GUARD.lock().expect("engine guard");
     let directory = TestDirectory::new("engine-startup-no-staging");
@@ -1521,6 +1559,7 @@ fn engine_startup_abandons_intent_when_staging_was_never_created() {
 }
 
 #[test]
+#[expect(clippy::expect_used, reason = "test assertion")]
 fn engine_startup_removes_staging_left_before_staging_created_was_durable() {
     let _serial = ENGINE_GUARD.lock().expect("engine guard");
     let directory = TestDirectory::new("engine-startup-unjournaled-staging");
@@ -1574,6 +1613,7 @@ fn engine_startup_removes_staging_left_before_staging_created_was_durable() {
 }
 
 #[test]
+#[expect(clippy::expect_used, reason = "test assertion")]
 fn public_event_overflow_severs_the_stream_without_blocking_the_driver() {
     let _serial = ENGINE_GUARD.lock().expect("engine guard");
     let directory = TestDirectory::new("event-overflow");
@@ -1664,6 +1704,7 @@ fn overflow_request(id: u64) -> QueueAddRequest {
     }
 }
 
+#[expect(clippy::expect_used, reason = "fixture setup")]
 fn assert_no_staging_leftovers(directory: &Path) {
     let leftovers = fs::read_dir(directory)
         .expect("read output directory")
@@ -1684,6 +1725,7 @@ struct SettledSuccessFixture {
 /// Journal a run whose output transaction is fully settled — every output
 /// delta durable, files promoted on disk — but whose `Terminal` record was
 /// lost to a crash.
+#[expect(clippy::expect_used, reason = "fixture setup")]
 fn settled_success_journal(
     directory: &TestDirectory,
     replacement: Replacement,
@@ -1816,6 +1858,7 @@ fn settled_success_journal(
     }
 }
 
+#[expect(clippy::expect_used, reason = "fixture setup")]
 fn recover_settled_success(directory: &TestDirectory, fixture: &SettledSuccessFixture) {
     let executable = std::env::current_exe().expect("test executable");
     let engine = EngineRuntime::start(EngineConfig {
@@ -1866,6 +1909,7 @@ fn recover_settled_success(directory: &TestDirectory, fixture: &SettledSuccessFi
 }
 
 #[test]
+#[expect(clippy::expect_used, reason = "test assertion")]
 fn startup_recovery_labels_settled_keep_original_success_converted() {
     let _serial = ENGINE_GUARD.lock().expect("engine guard");
     let directory = TestDirectory::new("settled-keep-original-recovery");
@@ -1875,6 +1919,7 @@ fn startup_recovery_labels_settled_keep_original_success_converted() {
 }
 
 #[test]
+#[expect(clippy::expect_used, reason = "test assertion")]
 fn startup_recovery_labels_settled_retired_original_success_converted() {
     let _serial = ENGINE_GUARD.lock().expect("engine guard");
     let directory = TestDirectory::new("settled-retired-original-recovery");
@@ -1923,6 +1968,7 @@ impl ArtifactInspector for RejectingMediaInspector {
 }
 
 #[test]
+#[expect(clippy::expect_used, reason = "test assertion")]
 fn abandonment_intent_authorizes_only_the_observed_partial_staging() {
     let directory = TestDirectory::new("abandon");
     let input = directory.path().join("input.mkv");
@@ -1953,6 +1999,7 @@ fn abandonment_intent_authorizes_only_the_observed_partial_staging() {
 }
 
 #[test]
+#[expect(clippy::expect_used, reason = "test assertion")]
 fn recovery_recognizes_crashes_after_rename_and_delete() {
     let directory = TestDirectory::new("crash-boundaries");
     let input = directory.path().join("input.mp4");
@@ -1997,6 +2044,7 @@ fn recovery_recognizes_crashes_after_rename_and_delete() {
 }
 
 #[test]
+#[expect(clippy::expect_used, reason = "test assertion")]
 fn same_path_replacement_preserves_hardlink_sibling() {
     let directory = TestDirectory::new("hardlink");
     let input = directory.path().join("video.mkv");
@@ -2030,6 +2078,7 @@ fn same_path_replacement_preserves_hardlink_sibling() {
 }
 
 #[test]
+#[expect(clippy::expect_used, reason = "test assertion")]
 fn restage_recreates_missing_staging_and_the_ready_pin_follows() {
     let directory = TestDirectory::new("restage");
     let input = directory.path().join("input.mp4");
@@ -2082,6 +2131,7 @@ fn restage_recreates_missing_staging_and_the_ready_pin_follows() {
 }
 
 #[test]
+#[expect(clippy::expect_used, reason = "test assertion")]
 fn output_preparation_enforces_overwrite_policy_before_staging() {
     let directory = TestDirectory::new("overwrite-policy");
     let input = directory.path().join("input.mkv");
@@ -2104,6 +2154,7 @@ fn output_preparation_enforces_overwrite_policy_before_staging() {
 }
 
 #[test]
+#[expect(clippy::expect_used, reason = "test assertion")]
 fn planning_creates_no_filesystem_entries() {
     let directory = TestDirectory::new("plan-no-writes");
     let input = directory.path().join("input.mkv");
@@ -2129,6 +2180,7 @@ fn planning_creates_no_filesystem_entries() {
 }
 
 #[test]
+#[expect(clippy::expect_used, reason = "test assertion")]
 fn changed_destination_becomes_conflict_without_deletion() {
     let directory = TestDirectory::new("destination-conflict");
     let input = directory.path().join("input.mkv");
@@ -2171,6 +2223,7 @@ fn fold_output(state: &mut DurableState, delta: OutputDelta) {
 
 /// Plans a transaction, folds its `OutputStarted` intent, creates the staging
 /// file, and folds `StagingCreated` — the same order the coordinator journals.
+#[expect(clippy::expect_used, reason = "fixture setup")]
 fn stage_output<I: ArtifactInspector>(
     manager: &OutputManager<I>,
     state: &mut DurableState,
@@ -2196,6 +2249,7 @@ fn stage_output<I: ArtifactInspector>(
     current(state, run_id)
 }
 
+#[expect(clippy::expect_used, reason = "fixture setup")]
 fn current(state: &DurableState, run_id: RunId) -> crfty_core::OutputTransaction {
     state
         .outputs

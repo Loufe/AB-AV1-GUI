@@ -2,8 +2,6 @@
 //! is discoverable; any failure — corrupt download, malicious archive,
 //! cancellation — leaves the previous install and `current.json` untouched.
 
-#![allow(clippy::expect_used, clippy::indexing_slicing, clippy::unwrap_used)]
-
 use std::{
     io::Cursor,
     path::Path,
@@ -22,6 +20,7 @@ const FFMPEG_ENTRY: &str = "ffmpeg-test-build/bin/ffmpeg";
 const FFPROBE_ENTRY: &str = "ffmpeg-test-build/bin/ffprobe";
 
 /// Builds a valid tar.xz vendor archive containing the two binaries.
+#[expect(clippy::expect_used, reason = "fixture setup")]
 fn archive_bytes(ffmpeg_contents: &[u8], ffprobe_contents: &[u8]) -> Vec<u8> {
     let mut builder = tar::Builder::new(Vec::new());
     for (name, contents) in [
@@ -29,7 +28,11 @@ fn archive_bytes(ffmpeg_contents: &[u8], ffprobe_contents: &[u8]) -> Vec<u8> {
         (FFPROBE_ENTRY, ffprobe_contents),
     ] {
         let mut header = tar::Header::new_gnu();
-        header.as_mut_bytes()[..name.len()].copy_from_slice(name.as_bytes());
+        header
+            .as_mut_bytes()
+            .get_mut(..name.len())
+            .expect("tar header name field")
+            .copy_from_slice(name.as_bytes());
         header.set_entry_type(tar::EntryType::Regular);
         header.set_size(contents.len() as u64);
         header.set_mode(0o644);
@@ -94,6 +97,7 @@ fn run_install(
 }
 
 /// Snapshot of the state a failed install must not disturb.
+#[expect(clippy::expect_used, reason = "fixture setup")]
 fn seed_previous_install(vendor_root: &Path) -> (Vec<u8>, Vec<u8>) {
     let previous_bin = vendor_root
         .join("installs")
@@ -113,6 +117,7 @@ fn seed_previous_install(vendor_root: &Path) -> (Vec<u8>, Vec<u8>) {
     (record.to_vec(), b"previous ffmpeg".to_vec())
 }
 
+#[expect(clippy::expect_used, reason = "fixture setup")]
 fn assert_previous_untouched(vendor_root: &Path, record: &[u8], ffmpeg: &[u8]) {
     assert_eq!(
         std::fs::read(vendor_root.join("current.json")).expect("read current.json"),
@@ -134,6 +139,7 @@ fn assert_previous_untouched(vendor_root: &Path, record: &[u8], ffmpeg: &[u8]) {
 }
 
 #[test]
+#[expect(clippy::expect_used, reason = "test assertion")]
 fn install_activates_the_build_atomically() {
     let vendor = tempfile::tempdir().expect("create vendor root");
     let archive = archive_bytes(b"new ffmpeg", b"new ffprobe");
@@ -153,8 +159,13 @@ fn install_activates_the_build_atomically() {
         &std::fs::read(vendor.path().join("current.json")).expect("read current.json"),
     )
     .expect("parse current.json");
-    assert_eq!(recorded["version"], BUILD);
-    assert_eq!(recorded["ffmpeg_revision"], BUILD);
+    assert_eq!(recorded.get("version").expect("recorded version"), BUILD);
+    assert_eq!(
+        recorded
+            .get("ffmpeg_revision")
+            .expect("recorded FFmpeg revision"),
+        BUILD
+    );
     // The staging area holds nothing once the install is active.
     let staging_entries = std::fs::read_dir(vendor.path().join("staging"))
         .map(|entries| entries.count())
@@ -163,6 +174,7 @@ fn install_activates_the_build_atomically() {
 }
 
 #[test]
+#[expect(clippy::expect_used, reason = "test assertion")]
 fn corrupt_download_never_touches_the_active_install() {
     let vendor = tempfile::tempdir().expect("create vendor root");
     let (record, previous_ffmpeg) = seed_previous_install(vendor.path());
@@ -182,13 +194,18 @@ fn corrupt_download_never_touches_the_active_install() {
 }
 
 #[test]
+#[expect(clippy::expect_used, reason = "test assertion")]
 fn malicious_archive_never_touches_the_active_install() {
     let vendor = tempfile::tempdir().expect("create vendor root");
     let (record, previous_ffmpeg) = seed_previous_install(vendor.path());
     // Valid download, wrong layout: the ffprobe binary is missing.
     let mut builder = tar::Builder::new(Vec::new());
     let mut header = tar::Header::new_gnu();
-    header.as_mut_bytes()[..FFMPEG_ENTRY.len()].copy_from_slice(FFMPEG_ENTRY.as_bytes());
+    header
+        .as_mut_bytes()
+        .get_mut(..FFMPEG_ENTRY.len())
+        .expect("tar header name field")
+        .copy_from_slice(FFMPEG_ENTRY.as_bytes());
     header.set_entry_type(tar::EntryType::Regular);
     header.set_size(6);
     header.set_cksum();
@@ -213,6 +230,7 @@ fn malicious_archive_never_touches_the_active_install() {
 }
 
 #[test]
+#[expect(clippy::expect_used, reason = "test assertion")]
 fn cancellation_before_the_download_leaves_nothing_behind() {
     let vendor = tempfile::tempdir().expect("create vendor root");
     let (record, previous_ffmpeg) = seed_previous_install(vendor.path());
@@ -227,11 +245,15 @@ fn cancellation_before_the_download_leaves_nothing_behind() {
         &mut |_progress| {},
         &cancelled,
     );
-    assert_eq!(result.unwrap_err(), InstallError::Cancelled);
+    assert_eq!(
+        result.expect_err("pre-cancelled install must fail"),
+        InstallError::Cancelled
+    );
     assert_previous_untouched(vendor.path(), &record, &previous_ffmpeg);
 }
 
 #[test]
+#[expect(clippy::expect_used, reason = "test assertion")]
 fn same_version_reinstall_replaces_a_broken_install() {
     let vendor = tempfile::tempdir().expect("create vendor root");
     let broken_bin = vendor.path().join("installs").join(BUILD).join("bin");
@@ -247,6 +269,7 @@ fn same_version_reinstall_replaces_a_broken_install() {
 }
 
 #[test]
+#[expect(clippy::expect_used, reason = "test assertion")]
 fn superseded_installs_are_pruned_after_activation() {
     let vendor = tempfile::tempdir().expect("create vendor root");
     seed_previous_install(vendor.path());

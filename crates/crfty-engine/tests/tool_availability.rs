@@ -2,7 +2,6 @@
 //! serves non-media commands when no tools are discovered, and startup
 //! recovery defers unsettled output transactions instead of settling blind.
 #![forbid(unsafe_code)]
-#![allow(clippy::expect_used, clippy::indexing_slicing, clippy::unwrap_used)]
 
 use std::{
     fs,
@@ -81,6 +80,7 @@ fn fixture_available() -> ToolAvailability {
 struct TestDirectory(PathBuf);
 
 impl TestDirectory {
+    #[expect(clippy::expect_used, reason = "fixture setup")]
     fn new(name: &str) -> Self {
         let unique = TEMP_SEQUENCE.fetch_add(1, Ordering::Relaxed);
         let nanos = SystemTime::now()
@@ -117,6 +117,7 @@ fn engine_config(directory: &TestDirectory, tools: ToolsConfig) -> EngineConfig 
 }
 
 #[test]
+#[expect(clippy::expect_used, reason = "test assertion")]
 fn startup_without_tools_replays_and_serves_non_media_commands() {
     let _serial = ENGINE_GUARD.lock().expect("engine guard");
     let directory = TestDirectory::new("tool-free-startup");
@@ -160,7 +161,10 @@ fn startup_without_tools_replays_and_serves_non_media_commands() {
         panic!("expected startup snapshot first");
     };
     assert_eq!(snapshot.durable.queue.len(), 1);
-    assert_eq!(snapshot.durable.queue[0].id, QueueItemId(1));
+    assert_eq!(
+        snapshot.durable.queue.first().expect("queued item").id,
+        QueueItemId(1)
+    );
     assert_eq!(snapshot.settings, settings);
     let availability = engine.events.recv().expect("availability event");
     let DriverEvent::Ephemeral(EphemeralDelta::ToolsChanged(ToolsState {
@@ -215,6 +219,7 @@ fn startup_without_tools_replays_and_serves_non_media_commands() {
 }
 
 #[test]
+#[expect(clippy::expect_used, reason = "test assertion")]
 fn startup_recovery_without_ffprobe_defers_output_settlement() {
     let _serial = ENGINE_GUARD.lock().expect("engine guard");
     let directory = TestDirectory::new("tool-free-recovery");
@@ -309,7 +314,7 @@ fn startup_recovery_without_ffprobe_defers_output_settlement() {
     };
     assert!(
         matches!(
-            snapshot.durable.queue[0].state,
+            snapshot.durable.queue.first().expect("queued item").state,
             QueueItemState::Running { .. }
         ),
         "item must stay active while settlement is deferred: {snapshot:?}"
@@ -346,7 +351,7 @@ fn startup_recovery_without_ffprobe_defers_output_settlement() {
     };
     assert!(
         matches!(
-            snapshot.durable.queue[0].state,
+            snapshot.durable.queue.first().expect("queued item").state,
             QueueItemState::Finished(ItemOutcome::Stopped)
         ),
         "deferred recovery must complete once tools exist: {snapshot:?}"
@@ -357,6 +362,7 @@ fn startup_recovery_without_ffprobe_defers_output_settlement() {
 
 /// A PATH-style directory holding contract-fixture copies that answer the
 /// ffprobe JSON version probe.
+#[expect(clippy::expect_used, reason = "fixture setup")]
 fn fixture_path_directory(directory: &TestDirectory) -> PathBuf {
     let fixture = PathBuf::from(env!("CARGO_BIN_EXE_crfty-contract-fixture"));
     let path_dir = directory.path().join("bin");
@@ -455,6 +461,7 @@ fn explicit_paths_win_over_managed_and_path_tiers() {
 }
 
 #[test]
+#[expect(clippy::expect_used, reason = "test assertion")]
 fn system_tools_failing_the_version_probe_are_fail_closed() {
     let directory = TestDirectory::new("discovery-probe-failure");
     let path_dir = directory.path().join("bin");
@@ -477,6 +484,7 @@ fn system_tools_failing_the_version_probe_are_fail_closed() {
     assert_eq!(missing, vec![MediaTool::Ffprobe]);
 }
 
+#[expect(clippy::expect_used, reason = "fixture setup")]
 fn write_managed_install(vendor_root: &Path, version: &str) {
     let bin = vendor_root.join("installs").join(version).join("bin");
     fs::create_dir_all(&bin).expect("managed install directory");
@@ -498,6 +506,7 @@ fn write_managed_install(vendor_root: &Path, version: &str) {
 }
 
 #[test]
+#[expect(clippy::expect_used, reason = "test assertion")]
 fn managed_install_provides_tools_from_metadata_without_probing() {
     let directory = TestDirectory::new("discovery-managed");
     let vendor_root = directory.path().join("vendor");
@@ -523,6 +532,7 @@ fn managed_install_provides_tools_from_metadata_without_probing() {
 }
 
 #[test]
+#[expect(clippy::expect_used, reason = "test assertion")]
 fn managed_install_matching_the_manifest_offers_no_update() {
     let directory = TestDirectory::new("discovery-managed-current");
     let vendor_root = directory.path().join("vendor");
@@ -538,6 +548,7 @@ fn managed_install_matching_the_manifest_offers_no_update() {
 }
 
 #[test]
+#[expect(clippy::expect_used, reason = "test assertion")]
 fn corrupt_managed_record_falls_back_to_the_path_tier() {
     let directory = TestDirectory::new("discovery-managed-corrupt");
     let vendor_root = directory.path().join("vendor");
@@ -559,6 +570,7 @@ fn corrupt_managed_record_falls_back_to_the_path_tier() {
 }
 
 #[test]
+#[expect(clippy::expect_used, reason = "test assertion")]
 fn managed_record_escaping_the_vendor_root_is_rejected() {
     let directory = TestDirectory::new("discovery-managed-escape");
     let vendor_root = directory.path().join("vendor");
@@ -601,6 +613,7 @@ fn wait_for_tools_state(
 }
 
 #[test]
+#[expect(clippy::expect_used, reason = "test assertion")]
 fn vendor_check_rediscovers_tools_and_returns_to_idle() {
     let _serial = ENGINE_GUARD.lock().expect("engine guard");
     let directory = TestDirectory::new("vendor-check-cycle");
@@ -650,6 +663,7 @@ fn vendor_check_rediscovers_tools_and_returns_to_idle() {
 }
 
 #[test]
+#[expect(clippy::expect_used, reason = "test assertion")]
 fn vendor_install_on_a_fixed_tool_engine_fails_typed() {
     let _serial = ENGINE_GUARD.lock().expect("engine guard");
     let directory = TestDirectory::new("vendor-install-fixed");

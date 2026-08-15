@@ -1,8 +1,6 @@
 //! Verified-download contract: corrupt, truncated, and cancelled downloads
 //! never yield a usable archive, and nothing survives on disk after failure.
 
-#![allow(clippy::expect_used, clippy::indexing_slicing, clippy::unwrap_used)]
-
 use std::{
     io::Cursor,
     sync::atomic::{AtomicBool, Ordering},
@@ -42,10 +40,12 @@ impl Fetch for FailingFetch {
     }
 }
 
+#[expect(clippy::expect_used, reason = "fixture setup")]
 fn staging() -> tempfile::TempDir {
     tempfile::tempdir().expect("create staging directory")
 }
 
+#[expect(clippy::expect_used, reason = "fixture setup")]
 fn staging_entry_count(staging: &tempfile::TempDir) -> usize {
     std::fs::read_dir(staging.path())
         .expect("list staging")
@@ -53,6 +53,7 @@ fn staging_entry_count(staging: &tempfile::TempDir) -> usize {
 }
 
 #[test]
+#[expect(clippy::expect_used, reason = "test assertion")]
 fn matching_download_lands_verified_with_progress() {
     let body = vec![0xa5_u8; 300 * 1024];
     let fetch = StaticFetch {
@@ -106,10 +107,14 @@ fn checksum_mismatch_is_rejected_and_leaves_no_file() {
 }
 
 #[test]
+#[expect(clippy::expect_used, reason = "test assertion")]
 fn truncated_download_fails_the_checksum() {
     let full = vec![0x42_u8; 64 * 1024];
     let pinned = sha256_hex(&full);
-    let truncated = full[..full.len() / 2].to_vec();
+    let truncated = full
+        .get(..full.len() / 2)
+        .expect("first half of fixture")
+        .to_vec();
     let fetch = StaticFetch {
         body: truncated,
         total: Some(full.len() as u64),
@@ -132,6 +137,7 @@ fn truncated_download_fails_the_checksum() {
 }
 
 #[test]
+#[expect(clippy::expect_used, reason = "test assertion")]
 fn cancellation_stops_the_download() {
     let body = vec![0_u8; 1024];
     let pinned = sha256_hex(&body);
@@ -147,7 +153,10 @@ fn cancellation_stops_the_download() {
         &mut |_received, _total| {},
         &cancelled,
     );
-    assert_eq!(result.unwrap_err(), DownloadError::Cancelled);
+    assert_eq!(
+        result.expect_err("pre-cancelled download must fail"),
+        DownloadError::Cancelled
+    );
     assert_eq!(staging_entry_count(&staging), 0);
 }
 

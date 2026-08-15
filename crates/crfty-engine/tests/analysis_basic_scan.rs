@@ -1,5 +1,4 @@
 #![forbid(unsafe_code)]
-#![allow(clippy::expect_used, clippy::indexing_slicing, clippy::unwrap_used)]
 
 use std::{
     collections::BTreeSet,
@@ -25,6 +24,7 @@ const EVENT_TIMEOUT: Duration = Duration::from_secs(15);
 static ENGINE_TEST_GATE: Mutex<()> = Mutex::new(());
 
 #[test]
+#[expect(clippy::expect_used, reason = "test assertion")]
 fn basic_scan_streams_results_with_a_bounded_parallel_probe_pool() {
     let _gate = ENGINE_TEST_GATE.lock().expect("engine test gate");
     let fixture = tempfile::tempdir().expect("fixture directory");
@@ -121,6 +121,7 @@ fn basic_scan_streams_results_with_a_bounded_parallel_probe_pool() {
 }
 
 #[test]
+#[expect(clippy::expect_used, reason = "test assertion")]
 fn cancelling_basic_scan_drops_queued_work_and_joins_running_probes() {
     let _gate = ENGINE_TEST_GATE.lock().expect("engine test gate");
     let fixture = tempfile::tempdir().expect("fixture directory");
@@ -174,6 +175,7 @@ fn cancelling_basic_scan_drops_queued_work_and_joins_running_probes() {
 }
 
 #[test]
+#[expect(clippy::expect_used, reason = "test assertion")]
 fn one_probe_failure_is_typed_scrubbed_and_does_not_abort_other_files() {
     let _gate = ENGINE_TEST_GATE.lock().expect("engine test gate");
     let fixture = tempfile::tempdir().expect("fixture directory");
@@ -282,6 +284,7 @@ fn wait_for_probe_marker(directory: &Path) {
     panic!("ffprobe fixture never started");
 }
 
+#[expect(clippy::expect_used, reason = "fixture setup")]
 fn copy_as_tool(directory: &Path, name: &str) -> PathBuf {
     let extension = std::env::consts::EXE_EXTENSION;
     let file_name = if extension.is_empty() {

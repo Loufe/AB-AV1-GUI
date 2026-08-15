@@ -493,6 +493,7 @@ mod tests {
     }
 
     #[test]
+    #[expect(clippy::expect_used, reason = "test assertion")]
     fn fresh_analysis_prediction_wins_for_convert() {
         let model = EstimationModel::from_state(&hevc_ladder_state());
         let analysis = analysis_with_prediction(123_456);
@@ -502,7 +503,7 @@ mod tests {
                 &meta(VideoCodec::Hevc, 1920, 1080, 600_000),
                 Some(&analysis),
             )
-            .unwrap();
+            .expect("fresh analysis produces an estimate");
         assert_eq!(estimate.basis, EstimateBasis::AnalysisPrediction);
         assert_eq!(estimate.duration_ms, 123_456);
         assert_eq!(estimate.confidence(), EstimateConfidence::Precise);
@@ -525,6 +526,7 @@ mod tests {
     }
 
     #[test]
+    #[expect(clippy::expect_used, reason = "test assertion")]
     fn historical_estimate_scales_the_median_rate_by_duration() {
         let model = EstimationModel::from_state(&hevc_ladder_state());
         let estimate = model
@@ -533,7 +535,7 @@ mod tests {
                 &meta(VideoCodec::Hevc, 1920, 1080, 600_000),
                 None,
             )
-            .unwrap();
+            .expect("compatible history produces an estimate");
         // Rates 1..=5 → median 3.0, scaled by 600s.
         assert_eq!(estimate.duration_ms, 1_800_000);
         assert_eq!(
@@ -544,6 +546,7 @@ mod tests {
     }
 
     #[test]
+    #[expect(clippy::expect_used, reason = "test assertion")]
     fn ladder_falls_back_by_bucket_then_codec() {
         let model = EstimationModel::from_state(&hevc_ladder_state());
         // Same codec, different bucket: the resolution group is empty, the
@@ -554,7 +557,7 @@ mod tests {
                 &meta(VideoCodec::Hevc, 3840, 2160, 600_000),
                 None,
             )
-            .unwrap();
+            .expect("codec fallback produces an estimate");
         assert_eq!(
             by_codec.basis,
             EstimateBasis::Historical(HistoricalTier::Codec)
@@ -566,7 +569,7 @@ mod tests {
                 &meta(VideoCodec::H264, 1920, 1080, 600_000),
                 None,
             )
-            .unwrap();
+            .expect("global fallback produces an estimate");
         assert_eq!(
             global.basis,
             EstimateBasis::Historical(HistoricalTier::Global)
@@ -597,6 +600,7 @@ mod tests {
     }
 
     #[test]
+    #[expect(clippy::expect_used, reason = "test assertion")]
     fn every_historical_tier_is_estimated_however_many_samples_back_it() {
         let mut state = DurableState::default();
         for step in 1..=10u64 {
@@ -621,13 +625,14 @@ mod tests {
                     &meta(VideoCodec::Hevc, width, height, 600_000),
                     None,
                 )
-                .unwrap();
+                .expect("historical tier produces an estimate");
             assert_eq!(estimate.basis, EstimateBasis::Historical(tier));
             assert_eq!(estimate.confidence(), EstimateConfidence::Estimated);
         }
     }
 
     #[test]
+    #[expect(clippy::expect_used, reason = "test assertion")]
     fn analyze_rates_come_from_facts_and_analyzed_runs() {
         let mut state = DurableState::default();
         // Two not-worthwhile verdicts, one converted fact with search time,
@@ -672,7 +677,7 @@ mod tests {
                 &meta(VideoCodec::Hevc, 1920, 1080, 600_000),
                 None,
             )
-            .unwrap();
+            .expect("analysis history produces an estimate");
         // Analyze rates 1, 2, 3, 4, 5 → median 3.0 × 600s.
         assert_eq!(estimate.duration_ms, 1_800_000);
         assert_eq!(
@@ -725,10 +730,11 @@ mod tests {
 
     proptest! {
         #[test]
+        #[expect(clippy::expect_used, reason = "test assertion")]
         fn median_lies_within_the_samples(
             values in proptest::collection::vec(0.001f64..1_000.0, 1..50)
         ) {
-            let middle = median(&values).unwrap();
+            let middle = median(&values).expect("generated samples are non-empty");
             let smallest = values.iter().copied().fold(f64::INFINITY, f64::min);
             let largest = values.iter().copied().fold(f64::NEG_INFINITY, f64::max);
             prop_assert!(middle >= smallest);
@@ -736,6 +742,7 @@ mod tests {
         }
 
         #[test]
+        #[expect(clippy::expect_used, reason = "test assertion")]
         fn estimates_scale_linearly_with_duration(duration_ms in 1_000u64..10_000_000) {
             let model = EstimationModel::from_state(&hevc_ladder_state());
             let estimate = model
@@ -744,7 +751,7 @@ mod tests {
                     &meta(VideoCodec::Hevc, 1920, 1080, duration_ms),
                     None,
                 )
-                .unwrap();
+                .expect("compatible history produces an estimate");
             // Rates 1..=5: median 3.0, so the estimate is duration × 3 exactly.
             prop_assert_eq!(estimate.duration_ms, duration_ms * 3);
         }

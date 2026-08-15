@@ -130,6 +130,7 @@ mod tests {
     }
 
     #[test]
+    #[expect(clippy::expect_used, reason = "test assertion")]
     fn tags_lose_their_v_prefix_and_compare_against_current() {
         let fetch =
             StaticFetch(r#"{"tag_name": "v2.1.0", "html_url": "https://example.invalid/rel"}"#);
@@ -141,6 +142,7 @@ mod tests {
     }
 
     #[test]
+    #[expect(clippy::expect_used, reason = "test assertion")]
     fn an_up_to_date_current_version_reports_no_update() {
         let fetch = StaticFetch(r#"{"tag_name": "v2.1.0", "html_url": "u"}"#);
         let check = check_latest_release_with(&fetch, "2.1.0").expect("check succeeds");
@@ -160,6 +162,7 @@ mod tests {
     }
 
     #[test]
+    #[expect(clippy::expect_used, reason = "test assertion")]
     fn transport_failures_surface_as_errors() {
         let error = check_latest_release_with(&FailingFetch, "2.0.0")
             .expect_err("transport failure propagates");

@@ -88,6 +88,7 @@ mod tests {
     use super::{CrashSentinel, SENTINEL_FILE_NAME};
 
     #[test]
+    #[expect(clippy::expect_used, reason = "test assertion")]
     fn a_clean_arm_disarm_cycle_reports_no_abnormal_shutdown() {
         let directory = tempfile::tempdir().expect("temporary directory");
         let mut sentinel = CrashSentinel::arm(directory.path());
@@ -102,6 +103,7 @@ mod tests {
     }
 
     #[test]
+    #[expect(clippy::expect_used, reason = "test assertion")]
     fn a_leftover_sentinel_is_reported_as_abnormal_and_rearmed() {
         let directory = tempfile::tempdir().expect("temporary directory");
         let crashed = CrashSentinel::arm(directory.path());
@@ -117,6 +119,7 @@ mod tests {
     }
 
     #[test]
+    #[expect(clippy::expect_used, reason = "test assertion")]
     fn disarm_is_idempotent() {
         let directory = tempfile::tempdir().expect("temporary directory");
         let mut sentinel = CrashSentinel::arm(directory.path());

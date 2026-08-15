@@ -309,8 +309,6 @@ fn failure(error: impl fmt::Display) -> JobFailure {
 
 #[cfg(test)]
 mod tests {
-    #![allow(clippy::expect_used)]
-
     use crfty_core::{DecodeMode, HardwareDecoder};
 
     use super::{encode_args, search_args, set_telemetry};
@@ -318,6 +316,7 @@ mod tests {
     use std::{path::PathBuf, sync::Mutex, time::Duration};
 
     #[test]
+    #[expect(clippy::expect_used, reason = "test assertion")]
     fn telemetry_keeps_only_the_latest_value_under_pressure() {
         let slot = Mutex::new(None);
         for frame in 0..100_000 {
@@ -341,6 +340,7 @@ mod tests {
     }
 
     #[test]
+    #[expect(clippy::expect_used, reason = "test assertion")]
     fn requests_map_to_typed_ab_av1_arguments() {
         let search = SearchRequest {
             input: PathBuf::from("input.mkv"),

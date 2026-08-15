@@ -187,7 +187,7 @@ pub enum VerdictKind {
 
 /// The profile-keyed index crosses serde as an entry list: JSON map keys must
 /// be strings, and `AnalysisProfile` is a multi-field struct.
-pub type AnalysisIndexEntries = Vec<(AnalysisProfile, BTreeMap<VmafTarget, AnalysisResult>)>;
+pub(crate) type AnalysisIndexEntries = Vec<(AnalysisProfile, BTreeMap<VmafTarget, AnalysisResult>)>;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, specta::Type)]
 pub struct FileRecord {
@@ -210,14 +210,14 @@ mod analysis_index {
 
     use super::{AnalysisIndexEntries, AnalysisProfile, AnalysisResult, VmafTarget};
 
-    pub fn serialize<S: Serializer>(
+    pub(super) fn serialize<S: Serializer>(
         map: &BTreeMap<AnalysisProfile, BTreeMap<VmafTarget, AnalysisResult>>,
         serializer: S,
     ) -> Result<S::Ok, S::Error> {
         serializer.collect_seq(map.iter())
     }
 
-    pub fn deserialize<'de, D: Deserializer<'de>>(
+    pub(super) fn deserialize<'de, D: Deserializer<'de>>(
         deserializer: D,
     ) -> Result<BTreeMap<AnalysisProfile, BTreeMap<VmafTarget, AnalysisResult>>, D::Error> {
         Ok(AnalysisIndexEntries::deserialize(deserializer)?

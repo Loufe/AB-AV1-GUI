@@ -122,6 +122,7 @@ mod tests {
     }
 
     #[test]
+    #[expect(clippy::expect_used, reason = "test assertion")]
     fn replay_validation_rejects_an_oversized_deserialized_tail() {
         let oversized = format!("\"{}\"", "a".repeat(DIAGNOSTIC_TAIL_MAX_BYTES + 1));
         let tail: DiagnosticTail =

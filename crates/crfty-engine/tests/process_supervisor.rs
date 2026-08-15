@@ -1,5 +1,4 @@
 #![forbid(unsafe_code)]
-#![allow(clippy::expect_used, clippy::indexing_slicing, clippy::unwrap_used)]
 
 use std::{
     env, fs,
@@ -104,6 +103,7 @@ fn timeout_terminates_the_process_group() {
 }
 
 #[test]
+#[expect(clippy::expect_used, reason = "test assertion")]
 fn natural_leader_exit_cleans_a_descendant_that_kept_its_pipes() {
     let fixture = fixture();
     let directory = test_directory("orphan-kept-pipes");
@@ -132,6 +132,7 @@ fn natural_leader_exit_cleans_a_descendant_that_kept_its_pipes() {
 }
 
 #[test]
+#[expect(clippy::expect_used, reason = "test assertion")]
 fn natural_leader_exit_cleans_a_descendant_that_closed_its_pipes() {
     let fixture = fixture();
     let directory = test_directory("orphan-closed-pipes");
@@ -160,6 +161,7 @@ fn natural_leader_exit_cleans_a_descendant_that_closed_its_pipes() {
 }
 
 #[test]
+#[expect(clippy::expect_used, reason = "test assertion")]
 fn cancellation_terminates_the_native_process_tree_and_joins_readers() {
     let fixture = fixture();
     let directory = test_directory("cancel-tree");
@@ -193,6 +195,7 @@ fn cancellation_terminates_the_native_process_tree_and_joins_readers() {
 }
 
 #[test]
+#[expect(clippy::expect_used, reason = "test assertion")]
 fn cancellation_before_spawn_has_no_side_effect() {
     let fixture = fixture();
     let directory = test_directory("pre-cancel");
@@ -243,6 +246,7 @@ fn test_directory(label: &str) -> PathBuf {
     ))
 }
 
+#[expect(clippy::expect_used, reason = "fixture setup")]
 fn unique_suffix() -> u128 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)

@@ -33,7 +33,7 @@ const MILLIS_PER_HOUR: f64 = 3_600_000.0;
 
 /// What the current verdict says happened to this content.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub enum StatFactKind {
+pub(crate) enum StatFactKind {
     Converted,
     Remuxed,
     NotWorthwhile {
@@ -47,7 +47,7 @@ pub enum StatFactKind {
 /// Adopted verdicts (#39) have no backing run; their summary comes from the
 /// verdict-carried fields the fold absorbed at adoption time.
 #[derive(Debug, Clone, PartialEq)]
-pub struct StatFact {
+pub(crate) struct StatFact {
     pub content_key: ContentKey,
     pub kind: StatFactKind,
     pub source_run: Option<RunId>,
@@ -70,7 +70,7 @@ impl StatFact {
     /// Savings in bytes when both sizes are known. Negative when the output
     /// grew; `None` never contributes to savings aggregates.
     #[must_use]
-    pub fn saved_bytes(&self) -> Option<i128> {
+    pub(crate) fn saved_bytes(&self) -> Option<i128> {
         let input = self.input_size_bytes?;
         let output = self.output_size_bytes?;
         Some(i128::from(input) - i128::from(output))
@@ -80,7 +80,7 @@ impl StatFact {
 /// Flatten every content with a standing verdict into one [`StatFact`],
 /// joining sizes in evidence → settled-transaction → metadata order.
 #[must_use]
-pub fn collect_stat_facts(state: &DurableState) -> Vec<StatFact> {
+pub(crate) fn collect_stat_facts(state: &DurableState) -> Vec<StatFact> {
     let mut facts = Vec::new();
     for (content_key, record) in &state.records {
         let Some(verdict) = &record.verdict else {
@@ -311,7 +311,7 @@ pub struct StatisticsPayload {
 
 /// Compute the full Statistics answer for the requester's timezone offset.
 #[must_use]
-pub fn statistics(state: &DurableState, utc_offset_minutes: i32) -> StatisticsPayload {
+pub(crate) fn statistics(state: &DurableState, utc_offset_minutes: i32) -> StatisticsPayload {
     let facts = collect_stat_facts(state);
     let mut accumulator = StatisticsAccumulator::new(utc_offset_minutes);
     for fact in &facts {
@@ -374,6 +374,16 @@ struct StatisticsAccumulator {
     last_epoch_day: Option<i64>,
 }
 
+struct ConvertedStatisticsInput<'a> {
+    finished_at: UnixMillis,
+    codec: Option<&'a VideoCodec>,
+    input_size_bytes: Option<u64>,
+    output_size_bytes: Option<u64>,
+    time_ms: u64,
+    vmaf: Option<VmafScore>,
+    crf: Option<Crf>,
+}
+
 impl StatisticsAccumulator {
     fn new(utc_offset_minutes: i32) -> Self {
         Self {
@@ -400,15 +410,15 @@ impl StatisticsAccumulator {
 
     fn add_native(&mut self, fact: &StatFact) {
         match fact.kind {
-            StatFactKind::Converted => self.add_converted(
-                fact.finished_at,
-                Some(&fact.codec),
-                fact.input_size_bytes,
-                fact.output_size_bytes,
-                fact.analyzing_ms.saturating_add(fact.encoding_ms),
-                fact.vmaf,
-                fact.crf,
-            ),
+            StatFactKind::Converted => self.add_converted(ConvertedStatisticsInput {
+                finished_at: fact.finished_at,
+                codec: Some(&fact.codec),
+                input_size_bytes: fact.input_size_bytes,
+                output_size_bytes: fact.output_size_bytes,
+                time_ms: fact.analyzing_ms.saturating_add(fact.encoding_ms),
+                vmaf: fact.vmaf,
+                crf: fact.crf,
+            }),
             StatFactKind::Remuxed => {
                 self.remuxed_files = self.remuxed_files.saturating_add(1);
                 if let Some(saved) = fact.saved_bytes() {
@@ -423,15 +433,15 @@ impl StatisticsAccumulator {
 
     fn add_imported(&mut self, imported: &ImportedHistoryRecord) {
         match imported.status {
-            ParkedStatus::Converted => self.add_converted(
-                imported.decided_at,
-                imported.video_codec.as_ref(),
-                imported.size,
-                imported.output_size,
-                imported.encoding_time.map_or(0, |duration| duration.0),
-                imported.vmaf,
-                imported.crf,
-            ),
+            ParkedStatus::Converted => self.add_converted(ConvertedStatisticsInput {
+                finished_at: imported.decided_at,
+                codec: imported.video_codec.as_ref(),
+                input_size_bytes: imported.size,
+                output_size_bytes: imported.output_size,
+                time_ms: imported.encoding_time.map_or(0, |duration| duration.0),
+                vmaf: imported.vmaf,
+                crf: imported.crf,
+            }),
             ParkedStatus::NotWorthwhile => {
                 self.not_worthwhile_files = self.not_worthwhile_files.saturating_add(1);
             }
@@ -439,17 +449,16 @@ impl StatisticsAccumulator {
         }
     }
 
-    #[allow(clippy::too_many_arguments)]
-    fn add_converted(
-        &mut self,
-        finished_at: UnixMillis,
-        codec: Option<&VideoCodec>,
-        input: Option<u64>,
-        output: Option<u64>,
-        time_ms: u64,
-        vmaf: Option<VmafScore>,
-        crf: Option<Crf>,
-    ) {
+    fn add_converted(&mut self, converted: ConvertedStatisticsInput<'_>) {
+        let ConvertedStatisticsInput {
+            finished_at,
+            codec,
+            input_size_bytes,
+            output_size_bytes,
+            time_ms,
+            vmaf,
+            crf,
+        } = converted;
         self.converted_files = self.converted_files.saturating_add(1);
         self.total_time_ms = self.total_time_ms.saturating_add(time_ms);
         if let Some(codec) = codec {
@@ -469,7 +478,7 @@ impl StatisticsAccumulator {
         self.first_epoch_day = Some(self.first_epoch_day.map_or(day, |first| first.min(day)));
         self.last_epoch_day = Some(self.last_epoch_day.map_or(day, |last| last.max(day)));
 
-        let (Some(input), Some(output)) = (input, output) else {
+        let (Some(input), Some(output)) = (input_size_bytes, output_size_bytes) else {
             return;
         };
         self.sized_converted_files = self.sized_converted_files.saturating_add(1);
@@ -584,7 +593,7 @@ fn clamp_to_i64(value: i128) -> i64 {
 /// Calendar day (days since the Unix epoch) of an instant in the timezone
 /// described by `utc_offset_minutes`.
 #[must_use]
-pub fn local_epoch_day(at: UnixMillis, utc_offset_minutes: i32) -> i64 {
+pub(crate) fn local_epoch_day(at: UnixMillis, utc_offset_minutes: i32) -> i64 {
     let local_ms = i128::from(at.0) + i128::from(utc_offset_minutes) * MILLIS_PER_MINUTE;
     let day = local_ms.div_euclid(MILLIS_PER_DAY);
     i64::try_from(day).unwrap_or_default()
@@ -1097,6 +1106,7 @@ mod tests {
     }
 
     #[test]
+    #[expect(clippy::expect_used, reason = "test assertion")]
     fn parked_imports_project_complete_sparse_history_and_statistics() {
         let mut state = DurableState::default();
         state.parked.insert(
@@ -1137,6 +1147,7 @@ mod tests {
     }
 
     #[test]
+    #[expect(clippy::expect_used, reason = "test assertion")]
     fn one_to_one_adoption_preserves_statistics_and_imported_analysis_is_display_only() {
         let import_path = ImportPath("c:/history/movie.mkv".to_owned());
         let converted_import = imported(ParkedStatus::Converted, Some(VideoCodec::H264));
@@ -1165,7 +1176,7 @@ mod tests {
         assert_eq!(state.adopted_imports.len(), 1);
         assert!(state.parked.is_empty());
         assert_eq!(
-            history_rows(&state)[0].key,
+            history_rows(&state).first().expect("one history row").key,
             HistoryRowKey::Content(content_key)
         );
 
@@ -1181,10 +1192,18 @@ mod tests {
                 verdict: None,
             },
         );
-        assert!(state.records[&key("movie-content")].analyses.is_empty());
+        assert!(
+            state
+                .records
+                .get(&key("movie-content"))
+                .expect("movie record")
+                .analyses
+                .is_empty()
+        );
     }
 
     #[test]
+    #[expect(clippy::expect_used, reason = "test assertion")]
     fn many_import_paths_collapsing_to_one_content_count_once_after_adoption() {
         let path_a = ImportPath("c:/history/a.mkv".to_owned());
         let path_b = ImportPath("c:/history/b.mkv".to_owned());
@@ -1218,7 +1237,10 @@ mod tests {
         assert_eq!(payload.runs, RunTotals::default());
         assert_eq!(state.adopted_imports.len(), 2);
         assert_eq!(
-            state.records[&content_key]
+            state
+                .records
+                .get(&content_key)
+                .expect("shared content record")
                 .imported
                 .as_ref()
                 .map(|provenance| &provenance.import_path),
@@ -1250,6 +1272,7 @@ mod tests {
     }
 
     #[test]
+    #[expect(clippy::expect_used, reason = "test assertion")]
     fn single_conversion_aggregates_from_live_evidence() {
         let state = converted_state(&[(10_000_000_000, 4_000_000_000)], DAY_MS * 20_000);
         let payload = statistics(&state, 0);
@@ -1260,15 +1283,17 @@ mod tests {
         assert_eq!(payload.total_saved_bytes, 6_000_000_000);
         assert_eq!(payload.total_time_ms, 300_000);
         // 60% reduction lands in the 60-70% bin.
-        assert_eq!(payload.reduction_bins[6], 1);
+        assert_eq!(payload.reduction_bins.get(6), Some(&1));
         assert_eq!(payload.reduction_bins.iter().sum::<u32>(), 1);
         assert_eq!(payload.grew_count, 0);
-        let vmaf = payload.vmaf.unwrap();
+        let vmaf = payload.vmaf.expect("converted statistics include VMAF");
         assert_eq!(vmaf.average, 95.12);
-        let crf = payload.crf.unwrap();
+        let crf = payload.crf.expect("converted statistics include CRF");
         assert_eq!(crf.average, 24.0);
         // 10 GB input in 300s: 9.3132 GiB / (1/12) h.
-        let throughput = payload.gigabytes_per_hour.unwrap();
+        let throughput = payload
+            .gigabytes_per_hour
+            .expect("converted statistics include throughput");
         assert!((throughput - 111.76).abs() < 0.01);
         assert_eq!(payload.cumulative_savings.len(), 1);
         assert_eq!(payload.first_epoch_day, Some(20_000));
@@ -1276,6 +1301,7 @@ mod tests {
     }
 
     #[test]
+    #[expect(clippy::expect_used, reason = "test assertion")]
     fn recovered_evidence_falls_back_to_the_settled_transaction() {
         let mut state = converted_state(&[(0, 0)], DAY_MS * 20_000);
         if let Some(run) = state.conversion_runs.get_mut(&RunId(1)) {
@@ -1301,11 +1327,13 @@ mod tests {
         );
         let facts = collect_stat_facts(&state);
         assert_eq!(facts.len(), 1);
-        assert_eq!(facts[0].input_size_bytes, Some(8_000));
-        assert_eq!(facts[0].output_size_bytes, Some(3_000));
+        let fact = facts.first().expect("one statistics fact");
+        assert_eq!(fact.input_size_bytes, Some(8_000));
+        assert_eq!(fact.output_size_bytes, Some(3_000));
     }
 
     #[test]
+    #[expect(clippy::expect_used, reason = "test assertion")]
     fn verdict_without_run_or_transaction_keeps_input_from_metadata() {
         let mut state = DurableState::default();
         let content_key = key("adopted");
@@ -1327,9 +1355,10 @@ mod tests {
 
         let facts = collect_stat_facts(&state);
         assert_eq!(facts.len(), 1);
-        assert_eq!(facts[0].input_size_bytes, Some(5_000));
-        assert_eq!(facts[0].output_size_bytes, None);
-        assert_eq!(facts[0].finished_at, UnixMillis(DAY_MS * 19_000));
+        let fact = facts.first().expect("one statistics fact");
+        assert_eq!(fact.input_size_bytes, Some(5_000));
+        assert_eq!(fact.output_size_bytes, None);
+        assert_eq!(fact.finished_at, UnixMillis(DAY_MS * 19_000));
 
         let payload = statistics(&state, 0);
         // Counted as converted, but never enters savings totals or bins.
@@ -1340,12 +1369,14 @@ mod tests {
 
         let rows = history_rows(&state);
         assert_eq!(rows.len(), 1);
-        assert_eq!(rows[0].status, HistoryStatus::Converted);
-        assert_eq!(rows[0].input_size_bytes, Some(5_000));
-        assert_eq!(rows[0].output_size_bytes, None);
+        let row = rows.first().expect("one history row");
+        assert_eq!(row.status, HistoryStatus::Converted);
+        assert_eq!(row.input_size_bytes, Some(5_000));
+        assert_eq!(row.output_size_bytes, None);
     }
 
     #[test]
+    #[expect(clippy::expect_used, reason = "test assertion")]
     fn remux_stays_out_of_conversion_aggregates() {
         let mut state = converted_state(&[(10_000, 5_000)], DAY_MS * 20_000);
         let content_key = key("remuxed");
@@ -1384,12 +1415,13 @@ mod tests {
         let remux_row = rows
             .iter()
             .find(|row| row.status == HistoryStatus::Remuxed)
-            .unwrap();
+            .expect("remux history row");
         assert_eq!(remux_row.output_size_bytes, Some(8_900));
         assert_eq!(remux_row.vmaf, None);
     }
 
     #[test]
+    #[expect(clippy::expect_used, reason = "test assertion")]
     fn grown_outputs_count_separately_and_dip_the_cumulative_series() {
         let state = converted_state(
             &[(10_000, 4_000), (5_000, 8_000)], // second one grew by 3000
@@ -1400,9 +1432,25 @@ mod tests {
         assert_eq!(payload.reduction_bins.iter().sum::<u32>(), 1);
         assert_eq!(payload.total_saved_bytes, 3_000);
         assert_eq!(payload.cumulative_savings.len(), 2);
-        assert_eq!(payload.cumulative_savings[0].cumulative_saved_bytes, 6_000);
-        assert_eq!(payload.cumulative_savings[1].cumulative_saved_bytes, 3_000);
-        let reduction = payload.reduction_percent.unwrap();
+        assert_eq!(
+            payload
+                .cumulative_savings
+                .first()
+                .expect("first savings point")
+                .cumulative_saved_bytes,
+            6_000
+        );
+        assert_eq!(
+            payload
+                .cumulative_savings
+                .get(1)
+                .expect("second savings point")
+                .cumulative_saved_bytes,
+            3_000
+        );
+        let reduction = payload
+            .reduction_percent
+            .expect("sized conversions include reduction statistics");
         assert_eq!(reduction.minimum, -60.0);
         assert_eq!(reduction.maximum, 60.0);
     }
@@ -1412,10 +1460,10 @@ mod tests {
         // Exactly 30% reduction: bin index 3, matching Python's floor rule.
         let state = converted_state(&[(10_000, 7_000)], DAY_MS * 20_000);
         let payload = statistics(&state, 0);
-        assert_eq!(payload.reduction_bins[3], 1);
+        assert_eq!(payload.reduction_bins.get(3), Some(&1));
         // A 100% reduction clamps into the last bin instead of overflowing.
         let full = converted_state(&[(10_000, 0)], DAY_MS * 20_000);
-        assert_eq!(statistics(&full, 0).reduction_bins[9], 1);
+        assert_eq!(statistics(&full, 0).reduction_bins.get(9), Some(&1));
     }
 
     #[test]
@@ -1428,6 +1476,7 @@ mod tests {
     }
 
     #[test]
+    #[expect(clippy::expect_used, reason = "test assertion")]
     fn not_worthwhile_counts_and_rows_carry_the_targets() {
         let mut state = DurableState::default();
         let content_key = key("declined");
@@ -1458,7 +1507,7 @@ mod tests {
         assert_eq!(payload.converted_files, 0);
         let rows = history_rows(&state);
         assert_eq!(
-            rows[0].status,
+            rows.first().expect("one history row").status,
             HistoryStatus::NotWorthwhile {
                 requested: VmafTarget(95),
                 floor: VmafTarget(90),
@@ -1467,6 +1516,7 @@ mod tests {
     }
 
     #[test]
+    #[expect(clippy::expect_used, reason = "test assertion")]
     fn failure_reports_only_for_verdictless_content() {
         let mut state = converted_state(&[(10_000, 4_000)], DAY_MS * 20_000);
         let converted_key = key("content-0001");
@@ -1506,12 +1556,12 @@ mod tests {
         let converted_row = rows
             .iter()
             .find(|row| row.key == HistoryRowKey::Content(converted_key.clone()))
-            .unwrap();
+            .expect("converted history row");
         assert_eq!(converted_row.status, HistoryStatus::Converted);
         let failed_row = rows
             .iter()
             .find(|row| row.key == HistoryRowKey::Content(fresh_key.clone()))
-            .unwrap();
+            .expect("failed history row");
         assert_eq!(
             failed_row.status,
             HistoryStatus::Failed {
@@ -1524,6 +1574,7 @@ mod tests {
     }
 
     #[test]
+    #[expect(clippy::expect_used, reason = "test assertion")]
     fn analyzed_content_reports_the_latest_run_measurement() {
         let mut state = DurableState::default();
         let content_key = key("studied");
@@ -1541,10 +1592,11 @@ mod tests {
         state.conversion_runs.insert(RunId(4), run);
 
         let rows = history_rows(&state);
-        assert_eq!(rows[0].status, HistoryStatus::Analyzed);
-        assert_eq!(rows[0].crf, Some(Crf(26_000)));
-        assert_eq!(rows[0].vmaf, Some(VmafScore(9_600)));
-        assert_eq!(rows[0].source_run, Some(RunId(4)));
+        let row = rows.first().expect("one history row");
+        assert_eq!(row.status, HistoryStatus::Analyzed);
+        assert_eq!(row.crf, Some(Crf(26_000)));
+        assert_eq!(row.vmaf, Some(VmafScore(9_600)));
+        assert_eq!(row.source_run, Some(RunId(4)));
         // Analyses alone never create a StatFact.
         assert!(collect_stat_facts(&state).is_empty());
         assert_eq!(statistics(&state, 0).runs.analyzed, 1);
@@ -1560,6 +1612,7 @@ mod tests {
     }
 
     #[test]
+    #[expect(clippy::expect_used, reason = "test assertion")]
     fn rotated_dimensions_present_post_rotation() {
         let mut state = DurableState::default();
         let content_key = key("portrait");
@@ -1576,11 +1629,13 @@ mod tests {
         });
         state.records.insert(content_key, record);
         let rows = history_rows(&state);
-        assert_eq!((rows[0].width, rows[0].height), (Some(1080), Some(1920)));
+        let row = rows.first().expect("one history row");
+        assert_eq!((row.width, row.height), (Some(1080), Some(1920)));
     }
 
     proptest! {
         #[test]
+        #[expect(clippy::expect_used, reason = "test assertion")]
         fn savings_identities_hold(
             sizes in proptest::collection::vec(
                 (0u64..1_000_000_000_000, 0u64..1_000_000_000_000),
@@ -1592,8 +1647,9 @@ mod tests {
 
             let expected_input: u128 = sizes.iter().map(|(input, _)| u128::from(*input)).sum();
             let expected_output: u128 = sizes.iter().map(|(_, output)| u128::from(*output)).sum();
-            let expected_saved =
-                i128::try_from(expected_input).unwrap() - i128::try_from(expected_output).unwrap();
+            let expected_saved = i128::try_from(expected_input)
+                .expect("generated input total fits i128")
+                - i128::try_from(expected_output).expect("generated output total fits i128");
             prop_assert_eq!(u128::from(payload.total_input_bytes), expected_input);
             prop_assert_eq!(u128::from(payload.total_output_bytes), expected_output);
             prop_assert_eq!(i128::from(payload.total_saved_bytes), expected_saved);

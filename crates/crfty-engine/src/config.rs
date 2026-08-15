@@ -46,11 +46,11 @@ pub(crate) struct ConfigStore {
 }
 
 impl ConfigStore {
-    pub fn new(path: impl Into<PathBuf>) -> Self {
+    pub(crate) fn new(path: impl Into<PathBuf>) -> Self {
         Self { path: path.into() }
     }
 
-    pub fn load(&self) -> Result<LoadedConfig, ConfigError> {
+    pub(crate) fn load(&self) -> Result<LoadedConfig, ConfigError> {
         let bytes = match fs::read(&self.path) {
             Ok(bytes) => bytes,
             Err(error) if error.kind() == io::ErrorKind::NotFound => {
@@ -90,7 +90,7 @@ impl ConfigStore {
         }
     }
 
-    pub fn write(&self, settings: &Settings) -> Result<(), ConfigError> {
+    pub(crate) fn write(&self, settings: &Settings) -> Result<(), ConfigError> {
         settings.validate().map_err(|reason| {
             ConfigError::new(
                 "refused to write invalid config",
@@ -155,6 +155,7 @@ mod tests {
     use super::ConfigStore;
 
     #[test]
+    #[expect(clippy::expect_used, reason = "test assertion")]
     fn missing_config_uses_typed_defaults_and_valid_config_round_trips() {
         let directory = tempdir().expect("temporary directory");
         let path = directory.path().join("config.json");
@@ -173,6 +174,7 @@ mod tests {
     }
 
     #[test]
+    #[expect(clippy::expect_used, reason = "test assertion")]
     fn unknown_or_invalid_config_is_quarantined_whole() {
         let directory = tempdir().expect("temporary directory");
         let path = directory.path().join("config.json");
@@ -191,6 +193,7 @@ mod tests {
     }
 
     #[test]
+    #[expect(clippy::expect_used, reason = "test assertion")]
     fn atomic_replacement_never_merges_old_fields() {
         let directory = tempdir().expect("temporary directory");
         let path = directory.path().join("config.json");

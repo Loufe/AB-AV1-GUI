@@ -531,6 +531,7 @@ mod tests {
     }
 
     #[test]
+    #[expect(clippy::expect_used, reason = "test assertion")]
     fn scrub_one_file_rewrites_only_when_content_changes() {
         let directory = tempdir().expect("temporary directory");
         let path = directory.path().join("crfty_test.log");

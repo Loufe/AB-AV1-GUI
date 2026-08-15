@@ -143,6 +143,7 @@ mod tests {
     }
 
     #[test]
+    #[expect(clippy::expect_used, reason = "test assertion")]
     fn rotation_shifts_every_rolled_file_without_overwriting() {
         let plan = rotation_plan(Path::new("logs"), "crfty_2025-07-20_08-00-00.log");
         assert_eq!(
@@ -154,8 +155,14 @@ mod tests {
             .iter()
             .map(|(from, to)| {
                 (
-                    from.file_name().unwrap().to_string_lossy().into_owned(),
-                    to.file_name().unwrap().to_string_lossy().into_owned(),
+                    from.file_name()
+                        .expect("rotation source has a file name")
+                        .to_string_lossy()
+                        .into_owned(),
+                    to.file_name()
+                        .expect("rotation destination has a file name")
+                        .to_string_lossy()
+                        .into_owned(),
                 )
             })
             .collect();

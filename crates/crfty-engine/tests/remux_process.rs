@@ -1,5 +1,4 @@
 #![forbid(unsafe_code)]
-#![allow(clippy::expect_used, clippy::indexing_slicing, clippy::unwrap_used)]
 
 use std::{
     env, fs,
@@ -13,6 +12,7 @@ use crfty_engine::remux::{RemuxRequest, RemuxTerminal, start};
 const EXPECTED_MAX_STDERR_TAIL_BYTES: usize = 16 * 1024;
 
 #[test]
+#[expect(clippy::expect_used, reason = "test assertion")]
 fn native_remux_process_contract() {
     let fixture = PathBuf::from(env!("CARGO_BIN_EXE_crfty-contract-fixture"));
     let directory = env::temp_dir().join(format!(
@@ -82,6 +82,7 @@ fn request(ffmpeg: &Path, input: &Path, output: &Path) -> RemuxRequest {
     }
 }
 
+#[expect(clippy::expect_used, reason = "fixture setup")]
 fn copy_tool(fixture: &Path, directory: &Path, name: &str) -> PathBuf {
     let destination = match fixture.extension() {
         Some(extension) => directory.join(name).with_extension(extension),
@@ -101,6 +102,7 @@ fn wait_for_file(path: &Path) {
     panic!("fixture did not create {}", path.display());
 }
 
+#[expect(clippy::expect_used, reason = "fixture setup")]
 fn unique_suffix() -> u128 {
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)

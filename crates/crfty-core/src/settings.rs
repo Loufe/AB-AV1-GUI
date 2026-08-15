@@ -2,7 +2,7 @@ use std::{collections::BTreeSet, path::PathBuf};
 
 use serde::{Deserialize, Serialize};
 
-pub const DEFAULT_OUTPUT_SUFFIX: &str = "_av1";
+pub(crate) const DEFAULT_OUTPUT_SUFFIX: &str = "_av1";
 
 #[derive(
     Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize, specta::Type,

@@ -432,6 +432,7 @@ mod tests {
         }
     }
 
+    #[expect(clippy::expect_used, reason = "fixture setup")]
     fn collect(request: &DiscoveryRequest, batch_size: usize) -> Vec<Vec<AnalysisRow>> {
         let mut batches = Vec::new();
         assert_eq!(
@@ -449,6 +450,7 @@ mod tests {
     }
 
     #[test]
+    #[expect(clippy::expect_used, reason = "test assertion")]
     fn streams_deterministic_breadth_first_rows_and_filters_extensions() {
         let root = test_directory("bfs");
         fs::write(root.join("b.mkv"), b"b").expect("b.mkv");
@@ -486,6 +488,7 @@ mod tests {
     }
 
     #[test]
+    #[expect(clippy::expect_used, reason = "test assertion")]
     fn deep_and_wide_trees_keep_parents_before_children_and_batches_bounded() {
         let root = test_directory("deep-wide");
         let mut current = root.clone();
@@ -510,13 +513,17 @@ mod tests {
             .collect();
         for row in &rows {
             if let Some(parent) = row.parent {
-                assert!(positions[&parent] < positions[&row.id]);
+                assert!(
+                    positions.get(&parent).expect("parent row position")
+                        < positions.get(&row.id).expect("child row position")
+                );
             }
         }
         fs::remove_dir_all(root).expect("remove fixture");
     }
 
     #[test]
+    #[expect(clippy::expect_used, reason = "test assertion")]
     fn duplicate_roots_are_removed_without_normalizing_native_spelling() {
         let root = test_directory("duplicates");
         let roots = deduplicate_roots(vec![root.clone(), root.clone(), PathBuf::new()]);
@@ -525,6 +532,7 @@ mod tests {
     }
 
     #[test]
+    #[expect(clippy::expect_used, reason = "test assertion")]
     fn disappearing_directory_is_a_typed_row_failure_and_does_not_abort() {
         let root = test_directory("disappearing");
         let doomed = root.join("a-doomed");
@@ -559,6 +567,7 @@ mod tests {
     }
 
     #[test]
+    #[expect(clippy::expect_used, reason = "test assertion")]
     fn cancellation_is_checked_before_the_next_batch() {
         let root = test_directory("cancel");
         for index in 0..10 {
@@ -580,6 +589,7 @@ mod tests {
 
     #[cfg(unix)]
     #[test]
+    #[expect(clippy::expect_used, reason = "test assertion")]
     fn non_unicode_paths_remain_native_and_display_is_marked_lossy() {
         use std::os::unix::ffi::OsStringExt;
 
@@ -623,6 +633,7 @@ mod tests {
 
     #[cfg(unix)]
     #[test]
+    #[expect(clippy::expect_used, reason = "test assertion")]
     fn symlinked_directories_are_not_traversed() {
         let root = test_directory("symlink");
         let target = test_directory("symlink-target");
@@ -644,6 +655,7 @@ mod tests {
 
     #[cfg(unix)]
     #[test]
+    #[expect(clippy::expect_used, reason = "test assertion")]
     fn inaccessible_directory_is_typed_when_permissions_are_enforced() {
         use std::os::unix::fs::PermissionsExt;
 

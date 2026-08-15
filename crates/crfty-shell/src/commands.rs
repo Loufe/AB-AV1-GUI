@@ -14,14 +14,14 @@ use crate::bridge::{
 };
 
 #[derive(Debug, Clone, Serialize, specta::Type)]
-pub struct AppInfo {
+pub(crate) struct AppInfo {
     pub version: String,
 }
 
 /// Narrow native-picker intents exposed to the webview. The selected path is
 /// returned without granting general filesystem plugin access.
 #[derive(Debug, Clone, Copy, Deserialize, Serialize, specta::Type)]
-pub enum PathPickerKind {
+pub(crate) enum PathPickerKind {
     File,
     Files,
     Folder,

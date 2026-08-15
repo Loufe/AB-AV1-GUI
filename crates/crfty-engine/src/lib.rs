@@ -1,8 +1,4 @@
 #![forbid(unsafe_code)]
-#![cfg_attr(
-    test,
-    allow(clippy::expect_used, clippy::indexing_slicing, clippy::unwrap_used)
-)]
 
 //! Process and filesystem integration for CRFty.
 //!

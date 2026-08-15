@@ -6,17 +6,17 @@ use crate::{
     UnixMillis, fold, output::validate_output_delta, reducer::validate_terminal,
 };
 
-pub const JOURNAL_SCHEMA_VERSION: u32 = 17;
+pub(crate) const JOURNAL_SCHEMA_VERSION: u32 = 17;
 
 /// Compaction fires at an idle writer barrier when the journal is both large
 /// in absolute terms and dominated by dead upserts (#33 §10). The floor keeps
 /// healthy small journals untouched; the ratio mirrors Redis AOF's
 /// grown-relative-to-live-state rewrite trigger.
 pub const COMPACTION_IDLE_MIN_JOURNAL_BYTES: u64 = 64 * 1024 * 1024;
-pub const COMPACTION_IDLE_MIN_RATIO: u64 = 4;
+pub(crate) const COMPACTION_IDLE_MIN_RATIO: u64 = 4;
 /// Hard ceiling: bounds startup replay cost even when the live state itself is
 /// large enough that the ratio rule never trips.
-pub const COMPACTION_HARD_LIMIT_BYTES: u64 = 256 * 1024 * 1024;
+pub(crate) const COMPACTION_HARD_LIMIT_BYTES: u64 = 256 * 1024 * 1024;
 
 #[must_use]
 pub fn compaction_due(journal_bytes: u64, live_state_bytes: u64) -> bool {
@@ -51,7 +51,7 @@ pub struct JournalEnvelope {
 /// stamped so the surviving file records which schema and application
 /// produced it (#33 §10).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct JournalSnapshot {
+pub(crate) struct JournalSnapshot {
     pub app_version: String,
     pub compacted_at: UnixMillis,
     /// The sequence the first delta record after this snapshot must carry;

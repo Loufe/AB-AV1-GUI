@@ -1,5 +1,4 @@
 #![forbid(unsafe_code)]
-#![allow(clippy::expect_used, clippy::indexing_slicing, clippy::unwrap_used)]
 
 use std::{
     env, fs,
@@ -8,6 +7,7 @@ use std::{
 };
 
 #[test]
+#[expect(clippy::expect_used, reason = "test assertion")]
 fn native_runtime_process_contract() {
     let fixture = PathBuf::from(env!("CARGO_BIN_EXE_crfty-contract-fixture"));
     let directory = env::temp_dir().join(format!(
@@ -43,6 +43,7 @@ fn native_runtime_process_contract() {
 }
 
 #[test]
+#[expect(clippy::expect_used, reason = "test assertion")]
 fn job_coordinator_process_contract() {
     let fixture = PathBuf::from(env!("CARGO_BIN_EXE_crfty-contract-fixture"));
     let directory = env::temp_dir().join(format!(
@@ -72,6 +73,7 @@ fn job_coordinator_process_contract() {
 }
 
 #[test]
+#[expect(clippy::expect_used, reason = "test assertion")]
 fn hardware_decode_ladders_retry_with_software() {
     let fixture = PathBuf::from(env!("CARGO_BIN_EXE_crfty-contract-fixture"));
     let directory = env::temp_dir().join(format!(
@@ -101,6 +103,7 @@ fn hardware_decode_ladders_retry_with_software() {
     fs::remove_dir_all(directory).expect("remove contract directory");
 }
 
+#[expect(clippy::expect_used, reason = "fixture setup")]
 fn copy_tool(fixture: &Path, directory: &Path, name: &str) -> PathBuf {
     let destination = match fixture.extension() {
         Some(extension) => directory.join(name).with_extension(extension),
@@ -110,6 +113,7 @@ fn copy_tool(fixture: &Path, directory: &Path, name: &str) -> PathBuf {
     destination
 }
 
+#[expect(clippy::expect_used, reason = "fixture setup")]
 fn unique_suffix() -> u128 {
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)

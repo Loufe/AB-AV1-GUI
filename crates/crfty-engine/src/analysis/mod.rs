@@ -95,6 +95,7 @@ pub(super) mod test_support {
 
     static TEST_SEQUENCE: AtomicU64 = AtomicU64::new(0);
 
+    #[expect(clippy::expect_used, reason = "fixture setup")]
     pub(super) fn test_directory(label: &str) -> PathBuf {
         let sequence = TEST_SEQUENCE.fetch_add(1, Ordering::Relaxed);
         let path = std::env::temp_dir().join(format!(

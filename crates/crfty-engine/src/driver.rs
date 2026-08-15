@@ -854,6 +854,7 @@ mod tests {
     }
 
     #[test]
+    #[expect(clippy::expect_used, reason = "test assertion")]
     fn journal_failure_emits_no_durable_delta_and_stops_driver() {
         let (reply_tx, reply_rx) = mpsc::sync_channel(1);
         let envelope = Envelope {
@@ -900,6 +901,7 @@ mod tests {
     }
 
     #[test]
+    #[expect(clippy::expect_used, reason = "test assertion")]
     fn standing_analysis_publishes_after_durable_facts_from_the_same_command() {
         let mut state = AppState::default();
         let mut applied = apply(&mut state, add_command(1, "video.mkv"));
@@ -932,6 +934,7 @@ mod tests {
     }
 
     #[test]
+    #[expect(clippy::expect_used, reason = "test assertion")]
     fn terminal_orders_progress_before_and_aggregates_after_the_durable_finish() {
         let execution = {
             let mut profile = AnalysisProfile::production();
@@ -1035,6 +1038,7 @@ mod tests {
     }
 
     #[test]
+    #[expect(clippy::expect_used, reason = "test assertion")]
     fn settings_are_written_once_before_the_coalesced_config_event() {
         let first = Settings {
             hardware_decode: false,
@@ -1089,6 +1093,7 @@ mod tests {
     }
 
     #[test]
+    #[expect(clippy::expect_used, reason = "test assertion")]
     fn settings_write_failure_rolls_back_state_and_emits_no_config_delta() {
         let changed = Settings {
             hardware_decode: false,
@@ -1130,6 +1135,7 @@ mod tests {
     }
 
     #[test]
+    #[expect(clippy::expect_used, reason = "test assertion")]
     fn import_batches_flag_a_forced_compaction() {
         let record = crfty_core::ImportedHistoryRecord {
             status: crfty_core::ParkedStatus::Scanned,
@@ -1212,6 +1218,7 @@ mod tests {
     }
 
     #[test]
+    #[expect(clippy::expect_used, reason = "test assertion")]
     fn forced_compaction_rewrites_only_when_quiescent_and_not_degraded() {
         let directory = tempfile::tempdir().expect("temporary directory");
         let journal_path = directory.path().join("state.jsonl");
@@ -1274,6 +1281,7 @@ mod tests {
     }
 
     #[test]
+    #[expect(clippy::expect_used, reason = "test assertion")]
     fn acknowledgement_requires_the_matching_signature_and_recovers_in_place() {
         let directory = tempfile::tempdir().expect("temporary directory");
         let journal_path = directory.path().join("state.jsonl");
@@ -1368,7 +1376,7 @@ mod tests {
             .collect();
         assert_eq!(archived.len(), 1);
         assert_eq!(
-            std::fs::read(archived[0].path()).expect("archive bytes"),
+            std::fs::read(archived.first().expect("one archive").path()).expect("archive bytes"),
             corrupt_bytes
         );
 
@@ -1383,6 +1391,7 @@ mod tests {
     }
 
     #[test]
+    #[expect(clippy::expect_used, reason = "test assertion")]
     fn acknowledgement_is_rejected_while_healthy() {
         let (reply_tx, reply_rx) = mpsc::sync_channel(1);
         let envelope = Envelope {
@@ -1421,6 +1430,7 @@ mod tests {
     }
 
     #[test]
+    #[expect(clippy::expect_used, reason = "test assertion")]
     fn settings_form_ordered_batch_barriers_but_consecutive_writes_coalesce() {
         let envelope = |command| {
             let (reply, _receiver) = mpsc::sync_channel(1);
@@ -1436,8 +1446,8 @@ mod tests {
             envelope(Command::Session(crfty_core::SessionCommand::Start)),
         ]);
         assert_eq!(groups.len(), 3);
-        assert_eq!(groups[0].len(), 1);
-        assert_eq!(groups[1].len(), 2);
-        assert_eq!(groups[2].len(), 1);
+        assert_eq!(groups.first().expect("first command group").len(), 1);
+        assert_eq!(groups.get(1).expect("second command group").len(), 2);
+        assert_eq!(groups.get(2).expect("third command group").len(), 1);
     }
 }

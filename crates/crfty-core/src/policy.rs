@@ -8,7 +8,7 @@ use crate::{
     TimestampReliability, Verdict, VerdictKind, VideoCodec, VideoMeta,
 };
 
-pub const MIN_VIDEO_PIXELS: u64 = 921_600;
+pub(crate) const MIN_VIDEO_PIXELS: u64 = 921_600;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, specta::Type)]
 pub enum SkipReason {
@@ -45,14 +45,14 @@ pub enum SkipReason {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub enum Eligibility {
+pub(crate) enum Eligibility {
     Process,
     Remux,
     Skip(SkipReason),
 }
 
 #[must_use]
-pub fn evaluate_eligibility(metadata: &VideoMeta, operation: Operation) -> Eligibility {
+pub(crate) fn evaluate_eligibility(metadata: &VideoMeta, operation: Operation) -> Eligibility {
     let pixels = metadata.post_rotation_pixels();
     if pixels < MIN_VIDEO_PIXELS {
         return Eligibility::Skip(SkipReason::LowResolution {
@@ -72,7 +72,7 @@ pub fn evaluate_eligibility(metadata: &VideoMeta, operation: Operation) -> Eligi
 }
 
 #[must_use]
-pub fn select_analysis(
+pub(crate) fn select_analysis(
     record: &FileRecord,
     execution: &ExecutionSettings,
 ) -> Option<AnalysisResult> {
@@ -148,7 +148,7 @@ pub fn verdict_applies(
 /// What becomes of a parked import record once its file is actually
 /// observed.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub enum ParkedResolution {
+pub(crate) enum ParkedResolution {
     /// The record describes this content. `verdict: None` for records that
     /// decided nothing (scanned/analyzed) — the file still gains import
     /// provenance and the parked entry retires.
@@ -173,7 +173,7 @@ pub enum ParkedResolution {
 /// imported record supplied. Missing NotWorthwhile targets fall back to
 /// [`DEFAULT_VMAF_TARGET`] / [`MIN_VMAF_FALLBACK_TARGET`].
 #[must_use]
-pub fn resolve_parked(
+pub(crate) fn resolve_parked(
     parked: &ImportedHistoryRecord,
     observation: &MediaObservation,
 ) -> ParkedResolution {
@@ -236,7 +236,7 @@ fn not_worthwhile_verdict(parked: &ImportedHistoryRecord) -> Verdict {
 /// transaction, if any. `OutputTransaction::settled_identity` owns what
 /// counts as settled per replacement mode.
 #[must_use]
-pub fn settled_output_identity(
+pub(crate) fn settled_output_identity(
     durable: &DurableState,
     run_id: RunId,
 ) -> Option<&DestructiveIdentity> {
@@ -261,7 +261,7 @@ pub fn settled_output_identity(
 ///   explicit "do it again" escape hatch. Media-fact skips (resolution,
 ///   already-AV1) still apply: refreshing cannot make a file eligible.
 #[must_use]
-pub fn evaluate_enqueue(
+pub(crate) fn evaluate_enqueue(
     durable: &DurableState,
     path_hash: &PathHash,
     identity: Option<&DestructiveIdentity>,
@@ -352,7 +352,7 @@ pub fn permitted_profiles(execution: &ExecutionSettings) -> Vec<AnalysisProfile>
 }
 
 #[must_use]
-pub fn select_job_action(
+pub(crate) fn select_job_action(
     metadata: Option<&VideoMeta>,
     record: Option<&FileRecord>,
     operation: Operation,

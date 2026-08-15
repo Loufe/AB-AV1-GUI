@@ -1,9 +1,5 @@
 //! CRFty's Tauri shell: IPC and application wiring only (ADR-001, ADR-006).
 #![forbid(unsafe_code)]
-#![cfg_attr(
-    test,
-    allow(clippy::expect_used, clippy::indexing_slicing, clippy::unwrap_used)
-)]
 
 mod bridge;
 mod commands;

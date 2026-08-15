@@ -5,7 +5,6 @@
 //! paths, and media paths are all exercised with the hostile characters.
 
 #![forbid(unsafe_code)]
-#![allow(clippy::expect_used, clippy::indexing_slicing, clippy::unwrap_used)]
 
 use std::{
     env, fs,
@@ -35,6 +34,7 @@ const CONTRACT_MAX_ENCODED_PERCENT_BASIS_POINTS: u32 = 50_000;
 
 #[test]
 #[ignore = "requires CRFTY_FFMPEG and CRFTY_FFPROBE with libsvtav1 and libvmaf"]
+#[expect(clippy::expect_used, reason = "test assertion")]
 fn managed_tools_execute_from_a_spaces_and_unicode_vendor_root() {
     let source_ffmpeg = absolute_environment_path("CRFTY_FFMPEG");
     let source_ffprobe = absolute_environment_path("CRFTY_FFPROBE");
@@ -137,6 +137,7 @@ fn managed_tools_execute_from_a_spaces_and_unicode_vendor_root() {
 
 /// Lays out `installs/<version>/bin/` with copies of the real binaries and a
 /// `current.json` naming them, exactly as a completed install leaves them.
+#[expect(clippy::expect_used, reason = "fixture setup")]
 fn seed_managed_install(vendor_root: &Path, source_ffmpeg: &Path, source_ffprobe: &Path) {
     let bin = vendor_root
         .join("installs")
@@ -156,8 +157,8 @@ fn seed_managed_install(vendor_root: &Path, source_ffmpeg: &Path, source_ffprobe
     }
     let metadata = InstalledMetadata {
         version: INSTALL_VERSION.to_owned(),
-        ffmpeg: relative[0].clone(),
-        ffprobe: relative[1].clone(),
+        ffmpeg: relative.first().expect("FFmpeg relative path").clone(),
+        ffprobe: relative.get(1).expect("ffprobe relative path").clone(),
         ffmpeg_revision: FFMPEG_REVISION.to_owned(),
         encoder_revision: ENCODER_REVISION.to_owned(),
     };
@@ -165,6 +166,7 @@ fn seed_managed_install(vendor_root: &Path, source_ffmpeg: &Path, source_ffprobe
     fs::write(vendor_root.join("current.json"), serialized).expect("write install record");
 }
 
+#[expect(clippy::expect_used, reason = "fixture setup")]
 fn absolute_environment_path(name: &str) -> PathBuf {
     let path = PathBuf::from(env::var_os(name).expect("media tool environment variable"));
     assert!(
@@ -175,6 +177,7 @@ fn absolute_environment_path(name: &str) -> PathBuf {
     path
 }
 
+#[expect(clippy::expect_used, reason = "fixture setup")]
 fn generate_fixture(ffmpeg: &Path, output: &Path) {
     let status = Command::new(ffmpeg)
         .args(["-hide_banner", "-loglevel", "error", "-y", "-f", "lavfi"])
@@ -189,6 +192,7 @@ fn generate_fixture(ffmpeg: &Path, output: &Path) {
     assert!(status.success(), "fixture generation failed: {status}");
 }
 
+#[expect(clippy::expect_used, reason = "fixture setup")]
 fn probe_codec(ffprobe: &Path, input: &Path) -> String {
     let output = Command::new(ffprobe)
         .args([
@@ -215,6 +219,7 @@ fn probe_codec(ffprobe: &Path, input: &Path) -> String {
         .to_owned()
 }
 
+#[expect(clippy::expect_used, reason = "fixture setup")]
 fn unique_suffix() -> u128 {
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)

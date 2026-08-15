@@ -33,9 +33,10 @@ The frontend gate runs from `ui/` — see `ui/AGENTS.md`.
 
 - Unsafe code, `unwrap`, `expect`, unchecked indexing, `todo!`, and `unimplemented!`
   are forbidden via `[workspace.lints]` — do not weaken this; ADR-005 documents the
-  only escape hatch. Unit tests may narrowly use `unwrap`, `expect`, and indexing
-  for fixture setup; integration-test crates declare those three Clippy allowances
-  at their crate root; unsafe remains forbidden in all test code.
+  only unsafe escape hatch. `#[allow(...)]` is forbidden. Tests follow the same
+  defaults as production: refactor first, and use the narrowest item-scoped
+  `#[expect(..., reason = "...")]` only when a test invariant is clearer than
+  propagating setup failure. Unsafe remains forbidden in all test code.
 - Keep `Cargo.lock`, git dependency revisions, and structured-tool versions pinned.
   Manifest requirements use normal caret ranges; exact `=` pins are reserved for
   the specta pre-release family until it stabilizes. The Rust compiler itself

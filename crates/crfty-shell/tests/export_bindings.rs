@@ -4,11 +4,11 @@
 //! after the test suite runs, so a stale file fails the build rather than
 //! silently drifting from the Rust types.
 #![forbid(unsafe_code)]
-#![allow(clippy::expect_used, clippy::indexing_slicing, clippy::unwrap_used)]
 
 use specta_typescript::Typescript;
 
 #[test]
+#[expect(clippy::expect_used, reason = "test assertion")]
 fn export_bindings() {
     crfty_shell::specta_builder()
         .export(

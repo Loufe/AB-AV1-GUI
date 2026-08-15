@@ -311,7 +311,7 @@ pub enum BasicScanDisposition {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum AnalysisMutationError {
+pub(crate) enum AnalysisMutationError {
     EmptyRoots,
     GenerationExhausted,
     InvalidActivityTransition,
@@ -322,7 +322,7 @@ pub enum AnalysisMutationError {
 /// Allocate and install the next process-local generation. The discovery
 /// command path added by #55 calls this reducer primitive; callers never
 /// supply their own generation id.
-pub fn begin_analysis_generation(
+pub(crate) fn begin_analysis_generation(
     state: &AnalysisSnapshot,
     roots: Vec<AnalysisDisplayText>,
 ) -> Result<AnalysisDelta, AnalysisMutationError> {
@@ -352,7 +352,7 @@ pub fn begin_analysis_generation(
 /// replacement must advance the generation and live deltas must name the
 /// current generation. The shell/frontend use [`fold_analysis`] because a
 /// reconnect Reset is allowed to replace any local state.
-pub fn apply_analysis_mutation(
+pub(crate) fn apply_analysis_mutation(
     state: &mut AnalysisSnapshot,
     delta: &AnalysisDelta,
 ) -> Result<(), AnalysisMutationError> {
@@ -492,7 +492,7 @@ pub enum FreshnessReason {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum FreshnessDecision {
+pub(crate) enum FreshnessDecision {
     RecognizeSettledOutput,
     ReuseObservation,
     Reobserve(FreshnessReason),
@@ -528,7 +528,7 @@ pub fn observation_stability(
 /// settled-output identity deliberately outranks a stale source binding.
 /// Unknown/coarse/recent timestamps never become size-only cache hits.
 #[must_use]
-pub fn decide_freshness(
+pub(crate) fn decide_freshness(
     current: &CurrentFileIdentity,
     cached: Option<&DestructiveIdentity>,
     settled_output: Option<&DestructiveIdentity>,
@@ -723,6 +723,7 @@ mod tests {
     }
 
     #[test]
+    #[expect(clippy::expect_used, reason = "test assertion")]
     fn reducer_allocates_generations_and_rejects_stale_mutations() {
         let mut state = AnalysisSnapshot::default();
         assert_eq!(
@@ -822,6 +823,7 @@ mod tests {
     }
 
     #[test]
+    #[expect(clippy::expect_used, reason = "test assertion")]
     fn live_deltas_apply_only_to_the_current_generation() {
         let mut state = snapshot(2);
         fold_analysis(
@@ -857,6 +859,7 @@ mod tests {
     }
 
     #[test]
+    #[expect(clippy::expect_used, reason = "test assertion")]
     fn activity_transitions_enforce_the_generation_lifecycle() {
         let allowed = [
             (AnalysisActivity::Discovering, AnalysisActivity::Discovered),

@@ -1,6 +1,5 @@
 #![forbid(unsafe_code)]
 #![cfg(feature = "contract-test-fixture")]
-#![allow(clippy::expect_used, clippy::indexing_slicing, clippy::unwrap_used)]
 
 use std::{
     env, fs,
@@ -56,6 +55,7 @@ use crfty_engine::vendor::discovery::MediaTools;
 
 #[test]
 #[ignore = "requires CRFTY_FFMPEG and CRFTY_FFPROBE with libsvtav1 and libvmaf"]
+#[expect(clippy::expect_used, reason = "test assertion")]
 fn real_search_encode_cancel_panic_and_reuse() {
     let _guard = lock_real_media_tests();
     let tools = tools_from_environment();
@@ -145,6 +145,7 @@ fn real_search_encode_cancel_panic_and_reuse() {
 
 #[test]
 #[ignore = "requires CRFTY_FFMPEG and CRFTY_FFPROBE with libsvtav1 and libvmaf"]
+#[expect(clippy::expect_used, reason = "test assertion")]
 fn real_coordinator_analyzes_encodes_verifies_and_promotes() {
     let _guard = lock_real_media_tests();
     let tools = tools_from_environment();
@@ -198,6 +199,7 @@ fn real_coordinator_analyzes_encodes_verifies_and_promotes() {
 
 #[test]
 #[ignore = "requires CRFTY_FFMPEG and CRFTY_FFPROBE with libsvtav1"]
+#[expect(clippy::expect_used, reason = "test assertion")]
 fn real_coordinator_remuxes_av1_mp4_without_reencoding() {
     let _guard = lock_real_media_tests();
     let tools = tools_from_environment();
@@ -257,6 +259,7 @@ trait ExpectReport<T> {
 }
 
 impl<T> ExpectReport<T> for crfty_engine::ab_av1::JobHandle<T> {
+    #[expect(clippy::expect_used, reason = "fixture setup")]
     fn expect_report(self) -> crfty_engine::ab_av1::JobReport<T> {
         self.wait().expect("receive adapter report")
     }
@@ -269,6 +272,7 @@ fn tools_from_environment() -> MediaTools {
     }
 }
 
+#[expect(clippy::expect_used, reason = "fixture setup")]
 fn absolute_environment_path(name: &str) -> PathBuf {
     let path = PathBuf::from(env::var_os(name).expect("media tool environment variable"));
     assert!(
@@ -279,6 +283,7 @@ fn absolute_environment_path(name: &str) -> PathBuf {
     path
 }
 
+#[expect(clippy::expect_used, reason = "fixture setup")]
 fn generate_fixture(ffmpeg: &Path, output: &Path, duration: &str, size: &str) {
     let status = Command::new(ffmpeg)
         .args(["-hide_banner", "-loglevel", "error", "-y", "-f", "lavfi"])
@@ -297,6 +302,7 @@ fn generate_fixture(ffmpeg: &Path, output: &Path, duration: &str, size: &str) {
     assert!(status.success(), "fixture generation failed: {status}");
 }
 
+#[expect(clippy::expect_used, reason = "fixture setup")]
 fn generate_av1_mp4_fixture(ffmpeg: &Path, output: &Path) {
     let status = Command::new(ffmpeg)
         .args(["-hide_banner", "-loglevel", "error", "-y", "-f", "lavfi"])
@@ -394,6 +400,7 @@ fn probe_stream_inventory(ffprobe: &Path, input: &Path) -> Vec<u8> {
     )
 }
 
+#[expect(clippy::expect_used, reason = "fixture setup")]
 fn probe_output(ffprobe: &Path, input: &Path, arguments: &[&str]) -> Vec<u8> {
     let output = Command::new(ffprobe)
         .args(["-v", "error"])
@@ -442,6 +449,7 @@ fn wait_for_telemetry<T>(job: &crfty_engine::ab_av1::JobHandle<T>) {
     panic!("real encode produced no telemetry");
 }
 
+#[expect(clippy::expect_used, reason = "fixture setup")]
 fn probe_codec(ffprobe: &Path, input: &Path) -> String {
     let output = Command::new(ffprobe)
         .args([
@@ -468,6 +476,7 @@ fn probe_codec(ffprobe: &Path, input: &Path) -> String {
         .to_owned()
 }
 
+#[expect(clippy::expect_used, reason = "fixture setup")]
 fn unique_suffix() -> u128 {
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)

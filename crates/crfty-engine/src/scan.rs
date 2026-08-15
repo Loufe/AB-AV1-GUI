@@ -148,6 +148,7 @@ mod tests {
 
     static TEST_SEQUENCE: AtomicU64 = AtomicU64::new(0);
 
+    #[expect(clippy::expect_used, reason = "fixture setup")]
     fn test_directory(label: &str) -> PathBuf {
         let sequence = TEST_SEQUENCE.fetch_add(1, Ordering::Relaxed);
         let path =
@@ -168,6 +169,7 @@ mod tests {
     }
 
     #[test]
+    #[expect(clippy::expect_used, reason = "test assertion")]
     fn folders_expand_breadth_first_in_sorted_order_with_facts() {
         let root = test_directory("scan-bfs");
         fs::write(root.join("b.mkv"), b"b").expect("b.mkv");
@@ -204,6 +206,7 @@ mod tests {
     }
 
     #[test]
+    #[expect(clippy::expect_used, reason = "test assertion")]
     fn extension_filter_is_case_insensitive_and_honors_the_configured_set() {
         let root = test_directory("scan-case");
         fs::write(root.join("upper.MKV"), b"u").expect("upper.MKV");
@@ -219,6 +222,7 @@ mod tests {
     }
 
     #[test]
+    #[expect(clippy::expect_used, reason = "test assertion")]
     fn direct_file_inputs_bypass_the_filter_and_carry_no_source_root() {
         let root = test_directory("scan-direct");
         let file = root.join("explicit.webm");
@@ -235,6 +239,7 @@ mod tests {
     }
 
     #[test]
+    #[expect(clippy::expect_used, reason = "test assertion")]
     fn empty_folders_and_missing_inputs_yield_nothing() {
         let root = test_directory("scan-empty");
         let missing = root.join("does-not-exist");
@@ -247,6 +252,7 @@ mod tests {
 
     #[cfg(unix)]
     #[test]
+    #[expect(clippy::expect_used, reason = "test assertion")]
     fn symlinked_directories_and_files_are_not_followed() {
         let root = test_directory("scan-symlink");
         let real = test_directory("scan-symlink-target");
@@ -265,6 +271,7 @@ mod tests {
 
     #[cfg(unix)]
     #[test]
+    #[expect(clippy::expect_used, reason = "test assertion")]
     fn unreadable_directories_are_skipped_without_aborting_the_scan() {
         use std::os::unix::fs::PermissionsExt;
 

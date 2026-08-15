@@ -45,6 +45,7 @@ mod tests {
     use super::{DurationMs, FileTimeNs, UnixMillis};
 
     #[test]
+    #[expect(clippy::expect_used, reason = "test assertion")]
     fn file_time_round_trips_through_a_json_string() {
         // Above 2^53: survives only because the wire representation is text.
         let original = FileTimeNs(1_752_871_234_567_890_123);
@@ -61,6 +62,7 @@ mod tests {
     }
 
     #[test]
+    #[expect(clippy::expect_used, reason = "test assertion")]
     fn millisecond_newtypes_stay_plain_numbers_on_the_wire() {
         assert_eq!(
             serde_json::to_string(&UnixMillis(1_752_871_234_567)).expect("serialize instant"),

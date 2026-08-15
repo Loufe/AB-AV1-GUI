@@ -36,11 +36,13 @@ pub enum FileSystemId {
 mod u128_string {
     use serde::{Deserialize, Deserializer, Serializer};
 
-    pub fn serialize<S: Serializer>(value: &u128, serializer: S) -> Result<S::Ok, S::Error> {
+    pub(super) fn serialize<S: Serializer>(value: &u128, serializer: S) -> Result<S::Ok, S::Error> {
         serializer.collect_str(value)
     }
 
-    pub fn deserialize<'de, D: Deserializer<'de>>(deserializer: D) -> Result<u128, D::Error> {
+    pub(super) fn deserialize<'de, D: Deserializer<'de>>(
+        deserializer: D,
+    ) -> Result<u128, D::Error> {
         let text = String::deserialize(deserializer)?;
         text.parse::<u128>().map_err(serde::de::Error::custom)
     }

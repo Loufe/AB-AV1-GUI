@@ -372,6 +372,7 @@ mod tests {
     use crate::driver::{DriverEvent, DriverHandle};
 
     #[test]
+    #[expect(clippy::expect_used, reason = "test assertion")]
     fn superseding_generation_is_the_only_one_that_can_finish_and_retain_paths() {
         let data = tempfile::tempdir().expect("data directory");
         let first_root = test_directory("generation-first");

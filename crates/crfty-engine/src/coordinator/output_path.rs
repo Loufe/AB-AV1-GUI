@@ -140,6 +140,7 @@ mod tests {
     }
 
     #[test]
+    #[expect(clippy::expect_used, reason = "test assertion")]
     fn replace_preserves_case_equivalent_mkv_path() {
         let input = Path::new("Movie.MKV");
         let (output, replacement) =

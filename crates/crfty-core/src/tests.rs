@@ -55,6 +55,7 @@ fn execution() -> ExecutionSettings {
 }
 
 #[test]
+#[expect(clippy::expect_used, reason = "test assertion")]
 fn analysis_commands_allocate_generations_and_reject_late_same_generation_work() {
     let mut state = AppState::default();
     let root = |name: &str| AnalysisDisplayText {
@@ -844,6 +845,7 @@ fn basic_scan_cache_hit_has_no_durable_write_and_stale_work_is_rejected() {
 }
 
 #[test]
+#[expect(clippy::expect_used, reason = "test assertion")]
 fn basic_scan_recognizes_reliable_settled_output_before_stale_source_binding() {
     let mut state = basic_scan_state();
     let source = media_observation("source-content");
@@ -992,6 +994,7 @@ fn basic_scan_recognizes_reliable_settled_output_before_stale_source_binding() {
 }
 
 #[test]
+#[expect(clippy::expect_used, reason = "test assertion")]
 fn basic_scan_observation_adopts_import_after_media_write() {
     let mut state = basic_scan_state();
     let observation = media_observation("imported");
@@ -1045,6 +1048,7 @@ fn basic_scan_observation_adopts_import_after_media_write() {
 }
 
 #[test]
+#[expect(clippy::expect_used, reason = "test assertion")]
 fn basic_scan_adopts_sparse_conversion_without_manufacturing_summary_fields() {
     let mut state = basic_scan_state();
     let observation = media_observation("sparse-import");
@@ -1170,6 +1174,7 @@ fn moved_or_duplicated_paths_join_the_probable_content_record_after_observation(
 }
 
 #[test]
+#[expect(clippy::expect_used, reason = "test assertion")]
 fn reducer_enforces_session_claim_and_terminal_ordering() {
     let mut state = AppState::default();
     let add = apply(&mut state, add_command(QueueItemId(1), "video.mkv"));
@@ -1553,6 +1558,7 @@ fn policy_uses_post_rotation_pixel_floor_and_typed_av1_decisions() {
 }
 
 #[test]
+#[expect(clippy::expect_used, reason = "test assertion")]
 fn analysis_selection_prefers_exact_then_lowest_qualifying_target() {
     let settings = execution();
     let mut record = FileRecord::new(media_observation("selection").metadata);
@@ -1580,6 +1586,7 @@ fn analysis_selection_prefers_exact_then_lowest_qualifying_target() {
 }
 
 #[test]
+#[expect(clippy::expect_used, reason = "test assertion")]
 fn media_record_and_analysis_checkpoint_replay_as_one_state() {
     let mut state = AppState::default();
     let mut bytes = Vec::new();
@@ -1757,6 +1764,7 @@ fn converted_requires_a_successfully_committed_output() {
 }
 
 #[test]
+#[expect(clippy::expect_used, reason = "test assertion")]
 fn remuxed_requires_a_remux_action_and_committed_output() {
     let mut state = AppState::default();
     let _added = apply(&mut state, add_command(QueueItemId(1), "video.mp4"));
@@ -1845,6 +1853,7 @@ fn remuxed_requires_a_remux_action_and_committed_output() {
 }
 
 #[test]
+#[expect(clippy::expect_used, reason = "test assertion")]
 fn successful_outcomes_require_a_started_run_and_matching_evidence() {
     // Claimed but never Started: a live success is impossible from this state,
     // and recovery derives Stopped for it — Converted must be rejected.
@@ -1917,6 +1926,7 @@ fn successful_outcomes_require_a_started_run_and_matching_evidence() {
 }
 
 #[test]
+#[expect(clippy::expect_used, reason = "test assertion")]
 fn run_facts_fold_start_finish_instants_and_phase_spans() {
     let mut state = active_state();
     let spans = vec![
@@ -2100,6 +2110,7 @@ fn terminal_and_abandonment_emit_the_updated_aggregates() {
 }
 
 #[test]
+#[expect(clippy::expect_used, reason = "test assertion")]
 fn failed_terminal_invariants_check_conflict_state_and_diagnostic_bound() {
     let mut state = AppState::default();
     let _added = apply(&mut state, add_command(QueueItemId(1), "video.mkv"));
@@ -2192,6 +2203,7 @@ fn preparation_rejects_invalid_execution_settings() {
 }
 
 #[test]
+#[expect(clippy::expect_used, reason = "test assertion")]
 fn reserved_item_can_be_durably_stopped_before_preparation() {
     let mut state = AppState::default();
     let mut durable = Vec::new();
@@ -2309,6 +2321,7 @@ fn output_ledger_rejects_skipped_and_mismatched_transitions() {
 }
 
 #[test]
+#[expect(clippy::expect_used, reason = "test assertion")]
 fn journal_ignores_only_an_unterminated_final_record() {
     let delta = DurableDelta::QueueAdded {
         item: crate::QueueItem {
@@ -2343,6 +2356,7 @@ fn journal_ignores_only_an_unterminated_final_record() {
 }
 
 #[test]
+#[expect(clippy::expect_used, reason = "test assertion")]
 fn journal_degrades_on_nonfinal_corruption() {
     let first = JournalEnvelope {
         sequence: JournalSequence(0),
@@ -2386,6 +2400,7 @@ fn acknowledge_corruption_never_applies_through_the_reducer() {
 }
 
 #[test]
+#[expect(clippy::expect_used, reason = "test assertion")]
 fn corruption_signature_covers_the_whole_unreadable_suffix() {
     let mut bytes = encode_record(&JournalEnvelope {
         sequence: JournalSequence(0),
@@ -2413,6 +2428,7 @@ fn corruption_signature_covers_the_whole_unreadable_suffix() {
 }
 
 #[test]
+#[expect(clippy::expect_used, reason = "test assertion")]
 fn different_corrupt_tails_yield_different_signatures() {
     let head = encode_record(&JournalEnvelope {
         sequence: JournalSequence(0),
@@ -2432,6 +2448,7 @@ fn different_corrupt_tails_yield_different_signatures() {
 }
 
 #[test]
+#[expect(clippy::expect_used, reason = "test assertion")]
 fn the_same_corrupt_tail_at_different_offsets_shares_a_signature() {
     let suffix: &[u8] = b"not-json\n";
     let mut short = encode_record(&JournalEnvelope {
@@ -2472,6 +2489,7 @@ fn queue_added_delta(id: u64, name: &str) -> DurableDelta {
 }
 
 #[test]
+#[expect(clippy::expect_used, reason = "test assertion")]
 fn snapshot_head_seeds_state_and_continues_sequence_numbering() {
     let mut compacted = crate::DurableState::default();
     crate::fold(&mut compacted, &queue_added_delta(1, "one.mkv"));
@@ -2493,6 +2511,7 @@ fn snapshot_head_seeds_state_and_continues_sequence_numbering() {
 }
 
 #[test]
+#[expect(clippy::expect_used, reason = "test assertion")]
 fn replay_rejects_a_snapshot_after_the_journal_head() {
     let mut bytes = encode_record(&JournalEnvelope {
         sequence: JournalSequence(0),
@@ -2518,6 +2537,7 @@ fn replay_rejects_a_snapshot_after_the_journal_head() {
 }
 
 #[test]
+#[expect(clippy::expect_used, reason = "test assertion")]
 fn replay_rejects_a_mismatched_sequence_after_a_snapshot() {
     let mut bytes = encode_snapshot(
         "1.2.3",
@@ -2541,6 +2561,7 @@ fn replay_rejects_a_mismatched_sequence_after_a_snapshot() {
 }
 
 #[test]
+#[expect(clippy::expect_used, reason = "test assertion")]
 fn replay_reports_old_and_future_schema_versions_before_decoding_the_payload() {
     for unsupported in [JOURNAL_SCHEMA_VERSION - 1, JOURNAL_SCHEMA_VERSION + 1] {
         let line =
@@ -2555,6 +2576,7 @@ fn replay_reports_old_and_future_schema_versions_before_decoding_the_payload() {
 }
 
 #[test]
+#[expect(clippy::expect_used, reason = "test assertion")]
 fn torn_tail_after_a_snapshot_still_seeds_the_snapshot_state() {
     let mut state = crate::DurableState::default();
     crate::fold(&mut state, &queue_added_delta(1, "one.mkv"));
@@ -2577,6 +2599,7 @@ fn torn_tail_after_a_snapshot_still_seeds_the_snapshot_state() {
 }
 
 #[test]
+#[expect(clippy::expect_used, reason = "test assertion")]
 fn compacting_a_replayed_journal_preserves_state_and_sequence() {
     let mut bytes = Vec::new();
     for sequence in 0..3_u64 {
@@ -2638,6 +2661,7 @@ fn compaction_waits_for_an_idle_session_and_settled_queue() {
 }
 
 #[test]
+#[expect(clippy::expect_used, reason = "test assertion")]
 fn replay_rejects_semantically_impossible_durable_transition() {
     let envelope = JournalEnvelope {
         sequence: JournalSequence(0),
@@ -2654,6 +2678,7 @@ fn replay_rejects_semantically_impossible_durable_transition() {
 }
 
 #[test]
+#[expect(clippy::expect_used, reason = "test assertion")]
 fn replay_applies_one_atomic_pending_order() {
     let envelope = JournalEnvelope {
         sequence: JournalSequence(0),
@@ -2680,6 +2705,7 @@ fn replay_applies_one_atomic_pending_order() {
 }
 
 #[test]
+#[expect(clippy::expect_used, reason = "test assertion")]
 fn replay_rejects_an_incomplete_pending_order_with_its_entire_batch() {
     let envelope = JournalEnvelope {
         sequence: JournalSequence(0),
@@ -2697,6 +2723,7 @@ fn replay_rejects_an_incomplete_pending_order_with_its_entire_batch() {
 }
 
 #[test]
+#[expect(clippy::expect_used, reason = "test assertion")]
 fn replay_rejects_an_entire_semantically_invalid_batch() {
     let envelope = JournalEnvelope {
         sequence: JournalSequence(0),
@@ -2726,6 +2753,7 @@ fn replay_rejects_an_entire_semantically_invalid_batch() {
 }
 
 #[test]
+#[expect(clippy::expect_used, reason = "test assertion")]
 fn replay_rejects_invalid_queue_output_targets_before_folding() {
     let invalid_target = || OutputTarget::Suffix {
         suffix: "../escape".to_owned(),
@@ -2816,6 +2844,7 @@ fn replay_rejects_invalid_queue_output_targets_before_folding() {
 }
 
 #[test]
+#[expect(clippy::expect_used, reason = "test assertion")]
 fn replay_rejects_adoption_when_carried_facts_do_not_match_parked_record() {
     let import_path = ImportPath("c:/videos/imported.mkv".to_owned());
     let parked = parked_record(ParkedStatus::Converted);
@@ -2955,6 +2984,7 @@ fn recovery_covers_every_destructive_boundary() {
 
 proptest! {
     #[test]
+    #[expect(clippy::expect_used, reason = "test assertion")]
     fn replay_equals_live_fold(operations in prop::collection::vec(any::<bool>(), 0..80)) {
         let mut live = AppState::default();
         let mut emitted = Vec::new();
@@ -3041,6 +3071,7 @@ fn reserve_and_prepare(
     )
 }
 
+#[expect(clippy::expect_used, reason = "fixture setup")]
 fn apply_and_journal(
     state: &mut AppState,
     bytes: &mut Vec<u8>,
@@ -3117,6 +3148,7 @@ fn fold_finished(state: &mut crate::DurableState, run: u64, outcome: ItemOutcome
 }
 
 #[test]
+#[expect(clippy::expect_used, reason = "test assertion")]
 fn decisive_outcomes_upsert_the_record_verdict() {
     let key = "verdict-content";
     let record_verdict = |state: &crate::DurableState| {
@@ -3217,6 +3249,7 @@ fn decisive_outcomes_upsert_the_record_verdict() {
 }
 
 #[test]
+#[expect(clippy::expect_used, reason = "test assertion")]
 fn latest_decisive_run_wins_the_verdict() {
     let key = "verdict-content";
     let mut state = verdict_fixture(
@@ -3381,6 +3414,7 @@ fn verdict_freshness_is_a_full_identity_match_against_the_settled_output() {
 /// A durable state with one observed path/record, optionally carrying a
 /// standing verdict. Returns the bound path hash and its full destructive
 /// identity (the "file is unchanged" probe).
+#[expect(clippy::expect_used, reason = "fixture setup")]
 fn enqueue_fixture(
     verdict: Option<crate::Verdict>,
 ) -> (crate::DurableState, PathHash, DestructiveIdentity) {
@@ -3642,6 +3676,7 @@ fn enqueue_recognizes_the_replace_mode_output_without_a_fresh_binding() {
 }
 
 #[test]
+#[expect(clippy::expect_used, reason = "test assertion")]
 fn enqueue_filters_ineligible_cached_metadata_only_when_fresh() {
     let (mut durable, path_hash, identity) = enqueue_fixture(None);
     {
@@ -3944,6 +3979,7 @@ fn add_many_judges_each_request_and_reports_one_summary() {
 }
 
 #[test]
+#[expect(clippy::expect_used, reason = "test assertion")]
 fn add_many_skips_a_queued_path_until_it_finishes() {
     let mut state = AppState::default();
     let first = apply(&mut state, add_command(QueueItemId(1), "video.mkv"));
@@ -3960,7 +3996,8 @@ fn add_many_skips_a_queued_path_until_it_finishes() {
         }]
     );
     // Once the standing item is finished, the same path enqueues again.
-    state.durable.queue[0].state = QueueItemState::Finished(ItemOutcome::Stopped);
+    state.durable.queue.first_mut().expect("queued item").state =
+        QueueItemState::Finished(ItemOutcome::Stopped);
     let after_finish = apply(&mut state, add_command(QueueItemId(3), "video.mkv"));
     assert_eq!(after_finish.durable.len(), 1);
     assert_eq!(state.durable.queue.len(), 2);
@@ -4033,6 +4070,7 @@ fn prepare_resolves_overwrite_from_the_item_not_the_settings() {
 /// and 2 (Stopped) are finished, item 3 takes the given state, items 4 and 5
 /// are queued. Item and session states are set directly — the command flows
 /// that produce them are exercised by the lifecycle tests.
+#[expect(clippy::expect_used, reason = "fixture setup")]
 fn admin_fixture(third: QueueItemState, session: SessionState) -> AppState {
     let mut state = AppState::default();
     for id in 1..=5 {
@@ -4042,11 +4080,27 @@ fn admin_fixture(third: QueueItemState, session: SessionState) -> AppState {
         );
         assert_eq!(added.reply, Reply::Accepted);
     }
-    state.durable.queue[0].state = QueueItemState::Finished(ItemOutcome::Failed(
-        FailureFacts::new(FailureKind::Internal, "fixture"),
-    ));
-    state.durable.queue[1].state = QueueItemState::Finished(ItemOutcome::Stopped);
-    state.durable.queue[2].state = third;
+    state
+        .durable
+        .queue
+        .first_mut()
+        .expect("first administrative fixture item")
+        .state = QueueItemState::Finished(ItemOutcome::Failed(FailureFacts::new(
+        FailureKind::Internal,
+        "fixture",
+    )));
+    state
+        .durable
+        .queue
+        .get_mut(1)
+        .expect("second administrative fixture item")
+        .state = QueueItemState::Finished(ItemOutcome::Stopped);
+    state
+        .durable
+        .queue
+        .get_mut(2)
+        .expect("third administrative fixture item")
+        .state = third;
     state.session = session;
     state
 }
@@ -4185,6 +4239,7 @@ fn clear_completed_keeps_failed_items_and_runs_in_any_session_state() {
 }
 
 #[test]
+#[expect(clippy::expect_used, reason = "test assertion")]
 fn clear_completed_removes_every_terminal_outcome_except_failed() {
     let outcomes = [
         ItemOutcome::Analyzed,
@@ -4207,7 +4262,12 @@ fn clear_completed_removes_every_terminal_outcome_except_failed() {
             add_command(QueueItemId(id), format!("clip-{id}.mkv")),
         );
         assert_eq!(added.reply, Reply::Accepted);
-        state.durable.queue[index].state = QueueItemState::Finished(outcome);
+        state
+            .durable
+            .queue
+            .get_mut(index)
+            .expect("newly added queue item")
+            .state = QueueItemState::Finished(outcome);
     }
     let applied = apply(&mut state, Command::Queue(QueueCommand::ClearCompleted));
     assert_eq!(applied.reply, Reply::Accepted);
@@ -4222,6 +4282,7 @@ fn clear_completed_removes_every_terminal_outcome_except_failed() {
 }
 
 #[test]
+#[expect(clippy::expect_used, reason = "test assertion")]
 fn retry_requeues_a_finished_item_to_the_end_in_any_session_state() {
     for session in [
         SessionState::Idle,
@@ -4256,6 +4317,7 @@ fn retry_requeues_a_finished_item_to_the_end_in_any_session_state() {
 }
 
 #[test]
+#[expect(clippy::expect_used, reason = "test assertion")]
 fn patched_retry_resolves_every_field_and_requeues_in_one_transition() {
     for (operation, expected_intent) in [
         (Operation::Convert, AnalysisIntent::Refresh),
@@ -4463,6 +4525,7 @@ fn retry_flows_through_the_next_reservation_and_replays() {
 }
 
 #[test]
+#[expect(clippy::expect_used, reason = "test assertion")]
 fn edit_resolves_partial_patches_against_the_current_tuple() {
     let mut state = AppState::default();
     let mut bytes = Vec::new();
@@ -4500,8 +4563,9 @@ fn edit_resolves_partial_patches_against_the_current_tuple() {
             overwrite: OverwriteDecision::Deny,
         }]
     );
-    assert_eq!(state.durable.queue[0].operation, Operation::Analyze);
-    assert_eq!(state.durable.queue[0].overwrite, OverwriteDecision::Deny);
+    let edited_item = state.durable.queue.first().expect("edited queue item");
+    assert_eq!(edited_item.operation, Operation::Analyze);
+    assert_eq!(edited_item.overwrite, OverwriteDecision::Deny);
     // Patches that change nothing are accepted no-ops with no durable record.
     for patch in [
         QueueItemEdit::default(),
@@ -4577,6 +4641,7 @@ fn edit_is_idle_only_and_targets_queued_items() {
 }
 
 #[test]
+#[expect(clippy::expect_used, reason = "test assertion")]
 fn queue_targets_are_validated_before_add_edit_and_patched_retry() {
     let invalid_targets = [
         OutputTarget::Suffix {
@@ -4618,7 +4683,15 @@ fn queue_targets_are_validated_before_add_edit_and_patched_retry() {
         );
         assert!(matches!(edited.reply, Reply::Rejected { .. }), "{target:?}");
         assert!(edited.durable.is_empty());
-        assert_eq!(state.durable.queue[0].output_target, OutputTarget::Replace);
+        assert_eq!(
+            state
+                .durable
+                .queue
+                .first()
+                .expect("retained queue item")
+                .output_target,
+            OutputTarget::Replace
+        );
 
         let mut retry_state = admin_fixture(claimed_state(), SessionState::Idle);
         let retried = apply(
@@ -4637,13 +4710,19 @@ fn queue_targets_are_validated_before_add_edit_and_patched_retry() {
         );
         assert!(retried.durable.is_empty());
         assert!(matches!(
-            retry_state.durable.queue[0].state,
+            retry_state
+                .durable
+                .queue
+                .first()
+                .expect("retry fixture item")
+                .state,
             QueueItemState::Finished(_)
         ));
     }
 }
 
 #[test]
+#[expect(clippy::expect_used, reason = "test assertion")]
 fn retry_and_remove_many_survive_compacted_snapshot() {
     let mut state = AppState::default();
     for id in 1..=3 {
@@ -4653,7 +4732,8 @@ fn retry_and_remove_many_survive_compacted_snapshot() {
         );
         assert_eq!(added.reply, Reply::Accepted);
     }
-    state.durable.queue[0].state = QueueItemState::Finished(ItemOutcome::Stopped);
+    state.durable.queue.first_mut().expect("queued item").state =
+        QueueItemState::Finished(ItemOutcome::Stopped);
     let retried = apply(
         &mut state,
         Command::Queue(QueueCommand::Retry {
@@ -4688,6 +4768,7 @@ fn retry_and_remove_many_survive_compacted_snapshot() {
 }
 
 #[test]
+#[expect(clippy::expect_used, reason = "test assertion")]
 fn replay_rejects_invalid_atomic_removal_sets() {
     for (item_ids, expected) in [
         (Vec::new(), "empty"),
@@ -4746,6 +4827,7 @@ fn replay_rejects_invalid_atomic_removal_sets() {
 }
 
 #[test]
+#[expect(clippy::expect_used, reason = "test assertion")]
 fn replay_rejects_retries_of_pending_and_edits_of_finished_items() {
     // A queued item cannot be requeued.
     let mut bytes = encode_record(&JournalEnvelope {
@@ -5153,6 +5235,7 @@ fn analyses_recorded_under_hardware_decode_are_not_reused_elsewhere() {
 }
 
 #[test]
+#[expect(clippy::expect_used, reason = "test assertion")]
 fn restage_moves_the_staging_pin_and_is_refused_after_abandonment() {
     let mut state = AppState::default();
     let mut bytes = Vec::new();
@@ -5298,6 +5381,7 @@ fn restage_moves_the_staging_pin_and_is_refused_after_abandonment() {
 }
 
 #[test]
+#[expect(clippy::expect_used, reason = "test assertion")]
 fn file_record_round_trips_through_json() {
     let mut record = FileRecord::new(VideoMeta {
         codec: VideoCodec::H264,
@@ -5539,6 +5623,7 @@ fn imported_provenance_priority_is_total_and_deterministic() {
 }
 
 #[test]
+#[expect(clippy::expect_used, reason = "test assertion")]
 fn history_deltas_fold_park_adopt_and_retire() {
     let mut state = crate::DurableState::default();
     let key_a = ImportPath("c:/videos/a.mkv".to_owned());
@@ -5713,6 +5798,7 @@ fn import_parks_fresh_records_and_skips_known_keys() {
 }
 
 #[test]
+#[expect(clippy::expect_used, reason = "test assertion")]
 fn prepare_resolves_parked_records_after_the_observation() {
     let mut state = AppState::default();
     let matching = ImportPath("c:/videos/match.mkv".to_owned());
@@ -5801,6 +5887,7 @@ fn prepare_resolves_parked_records_after_the_observation() {
 }
 
 #[test]
+#[expect(clippy::expect_used, reason = "test assertion")]
 fn adoption_never_overwrites_a_native_verdict() {
     let mut state = AppState::default();
     let key = ImportPath("c:/videos/native.mkv".to_owned());
@@ -5872,6 +5959,7 @@ fn adoption_never_overwrites_a_native_verdict() {
 }
 
 #[test]
+#[expect(clippy::expect_used, reason = "test assertion")]
 fn finished_verdict_absorbs_the_measured_summary() {
     let key = "verdict-content";
     let mut state = verdict_fixture(
@@ -6019,6 +6107,7 @@ fn adopted_verdicts_apply_only_by_content_identity() {
 }
 
 #[test]
+#[expect(clippy::expect_used, reason = "test assertion")]
 fn abandon_reservation_rejected_when_run_id_already_owns_a_run() {
     let mut state = AppState::default();
     let _first = apply(&mut state, add_command(QueueItemId(1), "first.mkv"));
@@ -6083,6 +6172,7 @@ fn expect_conflict(action: OutputRecoveryAction, detail: &str) {
 }
 
 #[test]
+#[expect(clippy::expect_used, reason = "test assertion")]
 fn not_worthwhile_terminal_validates_attempt_consistency() {
     let mut state = AppState::default();
     let _added = apply(&mut state, add_command(QueueItemId(1), "video.mkv"));
@@ -6129,6 +6219,7 @@ fn not_worthwhile_terminal_validates_attempt_consistency() {
 }
 
 #[test]
+#[expect(clippy::expect_used, reason = "test assertion")]
 fn output_exists_skip_terminal_requires_producing_run_without_output() {
     let mut state = AppState::default();
     let _added = apply(&mut state, add_command(QueueItemId(1), "video.mkv"));

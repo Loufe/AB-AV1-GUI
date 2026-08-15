@@ -37,7 +37,7 @@ pub(crate) struct HttpFetch {
 }
 
 impl HttpFetch {
-    pub fn new() -> Result<Self, String> {
+    pub(crate) fn new() -> Result<Self, String> {
         // reqwest is built without a default TLS provider; ring is installed
         // process-wide here. An Err means a provider is already installed,
         // which is exactly the state this call wants.

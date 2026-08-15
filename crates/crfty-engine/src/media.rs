@@ -78,7 +78,7 @@ pub(crate) struct DecodeResolver {
 }
 
 impl DecodeResolver {
-    pub fn new(ffmpeg: PathBuf) -> Self {
+    pub(crate) fn new(ffmpeg: PathBuf) -> Self {
         Self {
             ffmpeg,
             availability: BTreeMap::new(),
@@ -86,7 +86,11 @@ impl DecodeResolver {
     }
 
     #[must_use]
-    pub fn resolve(&mut self, preference: DecodePreference, codec: &VideoCodec) -> DecodeMode {
+    pub(crate) fn resolve(
+        &mut self,
+        preference: DecodePreference,
+        codec: &VideoCodec,
+    ) -> DecodeMode {
         if preference == DecodePreference::SoftwareOnly {
             return DecodeMode::Software;
         }
@@ -107,11 +111,11 @@ impl DecodeResolver {
 }
 
 impl MediaInspector {
-    pub fn new(ffprobe: PathBuf) -> Self {
+    pub(crate) fn new(ffprobe: PathBuf) -> Self {
         Self { ffprobe }
     }
 
-    pub fn observe(&self, path: &Path) -> io::Result<MediaObservation> {
+    pub(crate) fn observe(&self, path: &Path) -> io::Result<MediaObservation> {
         let (metadata, identity) = self.inspect(path)?;
         Ok(MediaObservation {
             path_hash: path_hash(path)?,
@@ -772,6 +776,7 @@ mod tests {
 
     #[cfg(unix)]
     #[test]
+    #[expect(clippy::expect_used, reason = "test assertion")]
     fn ph2_distinguishes_non_unicode_paths_that_render_identically() {
         use std::{ffi::OsString, os::unix::ffi::OsStringExt as _, path::PathBuf};
 
@@ -787,6 +792,7 @@ mod tests {
 
     #[cfg(unix)]
     #[test]
+    #[expect(clippy::expect_used, reason = "test assertion")]
     fn path_hash_preserves_non_unicode_identity_and_canonicalizes_symlinks() {
         use std::{ffi::OsString, os::unix::ffi::OsStringExt as _, os::unix::fs::symlink};
 
@@ -806,6 +812,7 @@ mod tests {
 
     #[cfg(windows)]
     #[test]
+    #[expect(clippy::expect_used, reason = "test assertion")]
     fn ph2_hashes_windows_wide_units_without_lossy_conversion() {
         use std::{ffi::OsString, os::windows::ffi::OsStringExt as _, path::PathBuf};
 
@@ -819,6 +826,7 @@ mod tests {
     }
 
     #[test]
+    #[expect(clippy::expect_used, reason = "test assertion")]
     fn ck1_matches_independent_golden_fixtures() {
         let directory = test_directory("ck1-golden");
         let small = directory.join("small.bin");
@@ -870,6 +878,7 @@ mod tests {
         fs::remove_dir_all(directory).expect("remove fixture directory");
     }
 
+    #[expect(clippy::expect_used, reason = "fixture setup")]
     fn test_directory(label: &str) -> std::path::PathBuf {
         let sequence = TEST_SEQUENCE.fetch_add(1, Ordering::Relaxed);
         let path =

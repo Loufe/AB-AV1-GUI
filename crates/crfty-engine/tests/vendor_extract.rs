@@ -2,8 +2,6 @@
 //! absolute paths, links, case collisions, escapes, bombs — reject the whole
 //! archive, and only the two manifest binaries ever reach disk.
 
-#![allow(clippy::expect_used, clippy::indexing_slicing, clippy::unwrap_used)]
-
 use std::io::{Cursor, Write};
 
 use crfty_engine::vendor::{
@@ -26,6 +24,7 @@ fn spec(kind: ArchiveKind) -> ExtractSpec {
 
 /// Appends a tar entry with the name written verbatim into the header,
 /// bypassing any sanitizing the builder API performs.
+#[expect(clippy::expect_used, reason = "fixture setup")]
 fn raw_tar_entry(
     builder: &mut tar::Builder<Vec<u8>>,
     name: &str,
@@ -34,7 +33,11 @@ fn raw_tar_entry(
 ) {
     let mut header = tar::Header::new_gnu();
     assert!(name.len() < 100, "raw names must fit the header field");
-    header.as_mut_bytes()[..name.len()].copy_from_slice(name.as_bytes());
+    header
+        .as_mut_bytes()
+        .get_mut(..name.len())
+        .expect("tar header name field")
+        .copy_from_slice(name.as_bytes());
     header.set_entry_type(entry_type);
     header.set_size(contents.len() as u64);
     header.set_mode(0o644);
@@ -42,6 +45,7 @@ fn raw_tar_entry(
     builder.append(&header, contents).expect("append tar entry");
 }
 
+#[expect(clippy::expect_used, reason = "fixture setup")]
 fn tar_xz(build: impl FnOnce(&mut tar::Builder<Vec<u8>>)) -> tempfile::NamedTempFile {
     let mut builder = tar::Builder::new(Vec::new());
     build(&mut builder);
@@ -71,6 +75,7 @@ fn expected_tar_layout(builder: &mut tar::Builder<Vec<u8>>) {
     raw_tar_entry(builder, "build/LICENSE", tar::EntryType::Regular, b"GPL");
 }
 
+#[expect(clippy::expect_used, reason = "fixture setup")]
 fn zip_archive(
     build: impl FnOnce(&mut zip::ZipWriter<Cursor<Vec<u8>>>),
 ) -> tempfile::NamedTempFile {
@@ -86,11 +91,13 @@ fn stored() -> SimpleFileOptions {
     SimpleFileOptions::default().compression_method(zip::CompressionMethod::Stored)
 }
 
+#[expect(clippy::expect_used, reason = "fixture setup")]
 fn zip_file(writer: &mut zip::ZipWriter<Cursor<Vec<u8>>>, name: &str, contents: &[u8]) {
     writer.start_file(name, stored()).expect("start zip entry");
     writer.write_all(contents).expect("write zip entry");
 }
 
+#[expect(clippy::expect_used, reason = "fixture setup")]
 fn extract_error(archive: &tempfile::NamedTempFile, spec: &ExtractSpec) -> String {
     let destination = tempfile::tempdir().expect("create destination");
     extract_binaries(archive.path(), spec, destination.path())
@@ -98,6 +105,7 @@ fn extract_error(archive: &tempfile::NamedTempFile, spec: &ExtractSpec) -> Strin
 }
 
 #[test]
+#[expect(clippy::expect_used, reason = "test assertion")]
 fn extracts_the_two_binaries_from_a_tar_xz() {
     let archive = tar_xz(expected_tar_layout);
     let destination = tempfile::tempdir().expect("create destination");
@@ -141,6 +149,7 @@ fn extracts_the_two_binaries_from_a_tar_xz() {
 }
 
 #[test]
+#[expect(clippy::expect_used, reason = "test assertion")]
 fn extracts_the_two_binaries_from_a_zip() {
     let archive = zip_archive(|writer| {
         zip_file(writer, FFMPEG_ENTRY, b"ffmpeg binary");
@@ -184,6 +193,7 @@ fn tar_absolute_path_rejects_the_archive() {
 }
 
 #[test]
+#[expect(clippy::expect_used, reason = "test assertion")]
 fn tar_symlink_rejects_the_archive() {
     let archive = tar_xz(|builder| {
         expected_tar_layout(builder);
@@ -199,6 +209,7 @@ fn tar_symlink_rejects_the_archive() {
 }
 
 #[test]
+#[expect(clippy::expect_used, reason = "test assertion")]
 fn tar_hardlink_rejects_the_archive() {
     let archive = tar_xz(|builder| {
         expected_tar_layout(builder);
@@ -235,6 +246,7 @@ fn zip_case_colliding_duplicates_reject_the_archive() {
 }
 
 #[test]
+#[expect(clippy::expect_used, reason = "test assertion")]
 fn zip_symlink_rejects_the_archive() {
     let archive = zip_archive(|writer| {
         zip_file(writer, FFMPEG_ENTRY, b"ffmpeg binary");

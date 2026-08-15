@@ -91,6 +91,7 @@ mod tests {
     use super::{DataLock, DataLockError};
 
     #[test]
+    #[expect(clippy::expect_used, reason = "test assertion")]
     fn lock_is_exclusive_and_released_on_drop() {
         let directory = tempfile::tempdir().expect("temporary directory");
         let held = DataLock::acquire(directory.path()).expect("first acquisition");
@@ -104,6 +105,7 @@ mod tests {
     }
 
     #[test]
+    #[expect(clippy::expect_used, reason = "test assertion")]
     fn stale_lock_file_from_a_dead_process_locks_cleanly() {
         let directory = tempfile::tempdir().expect("temporary directory");
         std::fs::write(directory.path().join(super::LOCK_FILE_NAME), b"stale")

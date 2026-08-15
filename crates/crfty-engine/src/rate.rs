@@ -44,7 +44,7 @@ impl RateTracker {
     /// `total_work` is the value `work_done` reaches at completion, in the
     /// same units the caller feeds to [`Self::record`]; `None` means the
     /// total is unknown and the ETA stays absent.
-    pub fn new(total_work: Option<f64>) -> Self {
+    pub(crate) fn new(total_work: Option<f64>) -> Self {
         Self {
             total_work: total_work.filter(|total| total.is_finite() && *total > 0.0),
             frames: Window::new(),
@@ -56,7 +56,7 @@ impl RateTracker {
     /// Records one adapter update observed `elapsed` after the run started.
     /// Push each distinct update once: repeating the latest value at later
     /// instants would drag the window's slope toward zero between updates.
-    pub fn record(&mut self, elapsed: Duration, sample: &RateSample) {
+    pub(crate) fn record(&mut self, elapsed: Duration, sample: &RateSample) {
         if let Some(frames) = sample.frames {
             self.frames.push(elapsed, frames as f64);
         }
@@ -74,7 +74,7 @@ impl RateTracker {
     /// Smoothed fps in hundredths of a frame per second. The frame-counter
     /// slope is the honest measurement and wins when the window spans one;
     /// otherwise the windowed gauge mean stands in.
-    pub fn fps_centi(&self) -> Option<u32> {
+    pub(crate) fn fps_centi(&self) -> Option<u32> {
         let fps = self
             .frames
             .slope_per_second()
@@ -85,7 +85,7 @@ impl RateTracker {
     /// Milliseconds until the tracked work reaches its total, from the
     /// window's progress velocity. Absent during warm-up, without a known
     /// total, and until the velocity is positive.
-    pub fn eta_ms(&self, elapsed: Duration) -> Option<u64> {
+    pub(crate) fn eta_ms(&self, elapsed: Duration) -> Option<u64> {
         if elapsed < ETA_WARMUP {
             return None;
         }

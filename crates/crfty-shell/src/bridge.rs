@@ -38,13 +38,13 @@ const VENDOR_DIR_NAME: &str = "vendor";
 const LOG_DIR_NAME: &str = "logs";
 
 #[derive(Debug, Clone, Serialize, specta::Type)]
-pub struct ShellEvent {
+pub(crate) struct ShellEvent {
     pub seq: u32,
     pub payload: StreamPayload,
 }
 
 #[derive(Debug, Clone, Serialize, specta::Type)]
-pub enum StreamPayload {
+pub(crate) enum StreamPayload {
     Snapshot(AppSnapshot),
     Durable(DurableDelta),
     Config(ConfigDelta),
@@ -82,7 +82,7 @@ pub enum StreamPayload {
 /// Outcome of a history import: how many records were parked and how many
 /// were skipped as duplicates of already-parked or already-adopted paths.
 #[derive(Debug, Clone, Copy, Serialize, specta::Type)]
-pub struct ImportSummary {
+pub(crate) struct ImportSummary {
     pub parked: u32,
     pub skipped: u32,
 }
@@ -90,7 +90,7 @@ pub struct ImportSummary {
 /// Outcome of a retroactive log scrub: how many log files were examined, how
 /// many were rewritten with anonymized content, and how many failed.
 #[derive(Debug, Clone, Copy, Serialize, specta::Type)]
-pub struct ScrubSummary {
+pub(crate) struct ScrubSummary {
     pub total: u32,
     pub modified: u32,
     pub failed: u32,
@@ -98,14 +98,14 @@ pub struct ScrubSummary {
 
 /// Outcome of a manual update check against the GitHub releases API.
 #[derive(Debug, Clone, Serialize, specta::Type)]
-pub struct ReleaseSummary {
+pub(crate) struct ReleaseSummary {
     pub current: String,
     pub latest: String,
     pub update_available: bool,
 }
 
 #[derive(Debug, Clone, Serialize, specta::Type)]
-pub struct CommandError {
+pub(crate) struct CommandError {
     pub code: String,
     pub message: String,
 }
@@ -269,7 +269,7 @@ impl StreamState {
     }
 }
 
-pub struct Bridge {
+pub(crate) struct Bridge {
     stream: Arc<Mutex<StreamState>>,
     commands: Option<UserCommandSender>,
     next_item_id: Arc<AtomicU64>,
@@ -284,7 +284,7 @@ pub struct Bridge {
 }
 
 impl Bridge {
-    pub fn start(app: &tauri::AppHandle) -> Self {
+    pub(crate) fn start(app: &tauri::AppHandle) -> Self {
         match Self::try_start(app) {
             Ok(bridge) => bridge,
             Err(health) => {
@@ -371,7 +371,7 @@ impl Bridge {
     /// would otherwise only learn on their next transition), then any
     /// standing degradation. All under the stream lock, so no delta
     /// interleaves.
-    pub fn subscribe(&self, channel: Channel<ShellEvent>) {
+    pub(crate) fn subscribe(&self, channel: Channel<ShellEvent>) {
         let mut stream = lock_stream(&self.stream);
         stream.subscriber = Some(channel);
         stream.seq = 0;
@@ -380,16 +380,16 @@ impl Bridge {
         }
     }
 
-    pub fn allocate_item_id(&self) -> QueueItemId {
+    pub(crate) fn allocate_item_id(&self) -> QueueItemId {
         QueueItemId(self.next_item_id.fetch_add(1, Ordering::Relaxed))
     }
 
-    pub fn submit_queue(&self, command: QueueCommand) -> Result<(), CommandError> {
+    pub(crate) fn submit_queue(&self, command: QueueCommand) -> Result<(), CommandError> {
         let commands = self.commands()?;
         map_reply(commands.submit_queue(command))
     }
 
-    pub fn begin_analysis_discovery(
+    pub(crate) fn begin_analysis_discovery(
         &self,
         roots: Vec<PathBuf>,
     ) -> Result<AnalysisGenerationId, CommandError> {
@@ -404,13 +404,13 @@ impl Bridge {
             .map_err(CommandError::from)
     }
 
-    pub fn cancel_analysis(&self) -> Result<(), CommandError> {
+    pub(crate) fn cancel_analysis(&self) -> Result<(), CommandError> {
         self.commands()?
             .cancel_analysis()
             .map_err(CommandError::from)
     }
 
-    pub fn begin_analysis_basic_scan(
+    pub(crate) fn begin_analysis_basic_scan(
         &self,
         generation: AnalysisGenerationId,
     ) -> Result<(), CommandError> {
@@ -424,7 +424,7 @@ impl Bridge {
     /// filter comes from the settings read model; for `SeparateFolder`
     /// targets, each folder-discovered file gets its originating folder as
     /// `source_root` so the output tree mirrors the source tree.
-    pub fn queue_add_paths(
+    pub(crate) fn queue_add_paths(
         &self,
         inputs: Vec<PathBuf>,
         operation: Operation,
@@ -465,22 +465,22 @@ impl Bridge {
         map_reply(commands.submit_queue(QueueCommand::AddMany { requests }))
     }
 
-    pub fn submit_session(&self, command: SessionCommand) -> Result<(), CommandError> {
+    pub(crate) fn submit_session(&self, command: SessionCommand) -> Result<(), CommandError> {
         let commands = self.commands()?;
         map_reply(commands.submit_session(command))
     }
 
-    pub fn submit_settings(&self, settings: Settings) -> Result<(), CommandError> {
+    pub(crate) fn submit_settings(&self, settings: Settings) -> Result<(), CommandError> {
         let commands = self.commands()?;
         map_reply(commands.submit_settings(SettingsCommand::Set { settings }))
     }
 
-    pub fn submit_vendor(&self, command: VendorCommand) -> Result<(), CommandError> {
+    pub(crate) fn submit_vendor(&self, command: VendorCommand) -> Result<(), CommandError> {
         let commands = self.commands()?;
         map_reply(commands.submit_vendor(command))
     }
 
-    pub fn submit_projection(&self, command: ProjectionCommand) -> Result<(), CommandError> {
+    pub(crate) fn submit_projection(&self, command: ProjectionCommand) -> Result<(), CommandError> {
         let commands = self.commands()?;
         map_reply(commands.submit_projection(command))
     }
@@ -488,7 +488,10 @@ impl Bridge {
     /// Reads and parses the import file in the engine, then submits it for
     /// durable parking. Failures (unreadable/malformed file, degraded
     /// journal) come back as one user-facing message.
-    pub fn import_history(&self, path: &std::path::Path) -> Result<ImportSummary, CommandError> {
+    pub(crate) fn import_history(
+        &self,
+        path: &std::path::Path,
+    ) -> Result<ImportSummary, CommandError> {
         let commands = self.commands()?;
         commands
             .import_history(path)
@@ -504,7 +507,7 @@ impl Bridge {
     /// anonymize-logs toggle and is irreversible. Gated on a healthy engine
     /// so a second instance can never rewrite files the lock holder is
     /// actively writing.
-    pub fn scrub_logs(&self) -> Result<ScrubSummary, CommandError> {
+    pub(crate) fn scrub_logs(&self) -> Result<ScrubSummary, CommandError> {
         self.commands()?;
         crfty_engine::logging::scrub_log_files()
             .map(|outcome| ScrubSummary {
@@ -518,14 +521,16 @@ impl Bridge {
     /// The slot the blocking update check writes its release page into.
     /// Cloned out so the check can run on a worker thread without borrowing
     /// the bridge.
-    pub fn release_url_slot(&self) -> Arc<Mutex<Option<String>>> {
+    pub(crate) fn release_url_slot(&self) -> Arc<Mutex<Option<String>>> {
         Arc::clone(&self.release_url)
     }
 
     /// Runs the one-shot update check and records the release page for
     /// [`Bridge::open_release_page`]. Blocks on the network — callers run it
     /// off the UI thread.
-    pub fn check_for_update(slot: &Mutex<Option<String>>) -> Result<ReleaseSummary, CommandError> {
+    pub(crate) fn check_for_update(
+        slot: &Mutex<Option<String>>,
+    ) -> Result<ReleaseSummary, CommandError> {
         let check = crfty_engine::release::check_latest_release(env!("CARGO_PKG_VERSION"))
             .map_err(|message| CommandError::new("update_check_failed", message))?;
         *lock_slot(slot) = Some(check.html_url);
@@ -537,7 +542,7 @@ impl Bridge {
     }
 
     /// Opens the release page recorded by the last successful update check.
-    pub fn open_release_page(&self) -> Result<(), CommandError> {
+    pub(crate) fn open_release_page(&self) -> Result<(), CommandError> {
         let url = lock_slot(&self.release_url).clone().ok_or_else(|| {
             CommandError::new(
                 "no_release_page",
@@ -550,7 +555,7 @@ impl Bridge {
     /// Passes through while degraded by design: acknowledgement is the one
     /// mutation a corrupt journal accepts, and the driver verifies the
     /// signature itself.
-    pub fn acknowledge_corruption(
+    pub(crate) fn acknowledge_corruption(
         &self,
         signature: CorruptionSignature,
     ) -> Result<(), CommandError> {
@@ -564,7 +569,7 @@ impl Bridge {
     /// the session is idle. That gate is what keeps engine shutdown from ever
     /// relabeling an ordinary stop as an active-file cancellation: by the
     /// time the close goes through, no run is live.
-    pub fn handle_close_requested(&self) -> bool {
+    pub(crate) fn handle_close_requested(&self) -> bool {
         let mut stream = lock_stream(&self.stream);
         if !should_defer_close(&stream) {
             return false;
@@ -579,7 +584,7 @@ impl Bridge {
     /// this call from `RunEvent::Exit` is the only clean-shutdown path, and
     /// without it the crash sentinel stays armed and every next boot reports
     /// a false abnormal shutdown.
-    pub fn shutdown_engine(&self) {
+    pub(crate) fn shutdown_engine(&self) {
         let engine = lock_engine(&self.engine).take();
         if let Some(engine) = engine
             && let Err(error) = engine.shutdown()
@@ -821,6 +826,7 @@ mod tests {
     }
 
     #[test]
+    #[expect(clippy::expect_used, reason = "test assertion")]
     fn reconnect_replay_places_the_complete_analysis_reset_after_snapshot() {
         let mut state = StreamState::new(Health::Ok);
         state.analysis = analysis_snapshot(7);
@@ -853,6 +859,7 @@ mod tests {
     }
 
     #[test]
+    #[expect(clippy::expect_used, reason = "test assertion")]
     fn absorb_tracks_analysis_and_a_new_snapshot_clears_it() {
         let ids = AtomicU64::new(1);
         let mut state = StreamState::new(Health::Ok);
@@ -953,6 +960,7 @@ mod tests {
     }
 
     #[test]
+    #[expect(clippy::expect_used, reason = "test assertion")]
     fn a_severed_engine_stream_marks_the_bridge_fatal() {
         let ids = AtomicU64::new(1);
         let stream = Arc::new(Mutex::new(StreamState::new(Health::Ok)));

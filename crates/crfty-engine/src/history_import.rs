@@ -313,6 +313,7 @@ mod tests {
     }
 
     #[test]
+    #[expect(clippy::expect_used, reason = "test assertion")]
     fn candidates_deduplicate_canonical_and_absolute_spellings() {
         let file = tempfile::NamedTempFile::new().expect("create temp file");
         let candidates = import_path_candidates(file.path());
@@ -347,6 +348,7 @@ mod tests {
         })
     }
 
+    #[expect(clippy::expect_used, reason = "fixture setup")]
     fn import_file(records: Vec<serde_json::Value>) -> Vec<u8> {
         serde_json::to_vec(&serde_json::json!({
             "import_version": 1,
@@ -356,6 +358,7 @@ mod tests {
     }
 
     #[test]
+    #[expect(clippy::expect_used, reason = "test assertion")]
     fn parses_full_and_sparse_records() {
         let bytes = import_file(vec![
             full_record_json(),
@@ -363,7 +366,7 @@ mod tests {
         ]);
         let records = parse_import(&bytes, UnixMillis(42)).expect("parse import");
         assert_eq!(records.len(), 2);
-        let (key, parked) = &records[0];
+        let (key, parked) = records.first().expect("full record");
         assert_eq!(key.0, "c:/videos/movie.mkv");
         assert_eq!(parked.status, ParkedStatus::Converted);
         assert_eq!(parked.size, Some(3_000_000));
@@ -375,7 +378,7 @@ mod tests {
         assert_eq!(parked.crf, Some(crfty_core::Crf(30_000)));
         assert_eq!(parked.vmaf, Some(crfty_core::VmafScore(9_550)));
         assert_eq!(parked.decided_at, UnixMillis(1_700_000_000_000));
-        let (_, sparse) = &records[1];
+        let (_, sparse) = records.get(1).expect("sparse record");
         assert_eq!(sparse.status, ParkedStatus::Scanned);
         assert_eq!(sparse.size, None);
         // A record without a decision timestamp adopts the import instant.
@@ -383,6 +386,7 @@ mod tests {
     }
 
     #[test]
+    #[expect(clippy::expect_used, reason = "test assertion")]
     fn rejects_wrong_version_naming_the_converter() {
         let bytes = serde_json::to_vec(&serde_json::json!({ "import_version": 2, "records": [] }))
             .expect("serialize");
@@ -392,6 +396,7 @@ mod tests {
     }
 
     #[test]
+    #[expect(clippy::expect_used, reason = "test assertion")]
     fn rejects_files_that_are_not_the_import_schema() {
         // A raw V2-style history document is not an import file.
         let foreign = serde_json::to_vec(&serde_json::json!({
@@ -405,7 +410,10 @@ mod tests {
         ));
         // Unknown fields are version skew, not tolerated noise.
         let mut extra = full_record_json();
-        extra["surprise"] = serde_json::json!(true);
+        extra
+            .as_object_mut()
+            .expect("record object")
+            .insert("surprise".to_owned(), serde_json::json!(true));
         assert!(matches!(
             parse_import(&import_file(vec![extra]), UnixMillis(0)),
             Err(ImportError::Malformed { .. })
@@ -417,21 +425,30 @@ mod tests {
     }
 
     #[test]
+    #[expect(clippy::expect_used, reason = "test assertion")]
     fn rejects_out_of_range_values_and_empty_paths() {
         let mut empty_path = full_record_json();
-        empty_path["path"] = serde_json::json!("   ");
+        empty_path
+            .as_object_mut()
+            .expect("record object")
+            .insert("path".to_owned(), serde_json::json!("   "));
         assert!(matches!(
             parse_import(&import_file(vec![empty_path]), UnixMillis(0)),
             Err(ImportError::Malformed { .. })
         ));
         let mut vmaf = full_record_json();
-        vmaf["vmaf_hundredths"] = serde_json::json!(10_001);
+        vmaf.as_object_mut()
+            .expect("record object")
+            .insert("vmaf_hundredths".to_owned(), serde_json::json!(10_001));
         assert!(matches!(
             parse_import(&import_file(vec![vmaf]), UnixMillis(0)),
             Err(ImportError::Malformed { .. })
         ));
         let mut target = full_record_json();
-        target["target"] = serde_json::json!(101);
+        target
+            .as_object_mut()
+            .expect("record object")
+            .insert("target".to_owned(), serde_json::json!(101));
         assert!(matches!(
             parse_import(&import_file(vec![target]), UnixMillis(0)),
             Err(ImportError::Malformed { .. })
@@ -439,14 +456,19 @@ mod tests {
     }
 
     #[test]
+    #[expect(clippy::expect_used, reason = "test assertion")]
     fn duplicate_keys_pass_through_for_the_reducer_to_dedup() {
         let bytes = import_file(vec![full_record_json(), full_record_json()]);
         let records = parse_import(&bytes, UnixMillis(0)).expect("parse import");
         assert_eq!(records.len(), 2);
-        assert_eq!(records[0].0, records[1].0);
+        assert_eq!(
+            records.first().expect("first duplicate").0,
+            records.get(1).expect("second duplicate").0
+        );
     }
 
     #[test]
+    #[expect(clippy::expect_used, reason = "test assertion")]
     fn load_enforces_the_size_cap_and_reports_unreadable_files() {
         use std::io::Write;
         let mut file = tempfile::NamedTempFile::new().expect("create temp file");
@@ -467,13 +489,17 @@ mod tests {
     }
 
     #[test]
+    #[expect(clippy::expect_used, reason = "test assertion")]
     fn unknown_codec_strings_are_preserved_not_dropped() {
         let mut record = full_record_json();
-        record["video_codec"] = serde_json::json!("mpeg2video");
+        record
+            .as_object_mut()
+            .expect("record object")
+            .insert("video_codec".to_owned(), serde_json::json!("mpeg2video"));
         let records =
             parse_import(&import_file(vec![record]), UnixMillis(0)).expect("parse import");
         assert_eq!(
-            records[0].1.video_codec,
+            records.first().expect("one imported record").1.video_codec,
             Some(VideoCodec::Other("mpeg2video".to_owned()))
         );
     }

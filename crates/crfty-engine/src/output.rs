@@ -532,7 +532,7 @@ pub(crate) struct MediaArtifactInspector {
 }
 
 impl MediaArtifactInspector {
-    pub fn new(ffprobe: PathBuf) -> Self {
+    pub(crate) fn new(ffprobe: PathBuf) -> Self {
         Self {
             media: MediaInspector::new(ffprobe),
         }
