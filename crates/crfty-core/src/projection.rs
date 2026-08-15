@@ -994,12 +994,6 @@ mod tests {
         CompletionEvidence::LiveEncode {
             input_size,
             output_size,
-            stream_sizes: crate::StreamByteSizes {
-                video: output_size,
-                audio: 0,
-                subtitle: 0,
-                other: 0,
-            },
             encode_decode: crate::DecodeMode::Software,
         }
     }

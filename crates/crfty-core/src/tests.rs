@@ -23,9 +23,9 @@ use crate::{
     ParkedResolution, ParkedStatus, PathBinding, PathHash, PhaseSpan, ProjectionCommand,
     QueueAddRequest, QueueCommand, QueueItemEdit, QueueItemId, QueueItemState, Replacement, Reply,
     RunId, SearchMeasurement, SessionAggregates, SessionCommand, SessionState, Settings,
-    SettingsCommand, SkipReason, StreamByteSizes, SystemCommand, Telemetry, ToolAvailability,
-    ToolRevisions, ToolSource, ToolsState, UnixMillis, VendorActivity, VendorCommand, VideoCodec,
-    VideoMeta, VmafScore, VmafTarget, WorkerCommand, apply, compaction_due, compaction_quiescent,
+    SettingsCommand, SkipReason, SystemCommand, Telemetry, ToolAvailability, ToolRevisions,
+    ToolSource, ToolsState, UnixMillis, VendorActivity, VendorCommand, VideoCodec, VideoMeta,
+    VmafScore, VmafTarget, WorkerCommand, apply, compaction_due, compaction_quiescent,
     corruption_signature, encode_record, encode_snapshot, permitted_profiles, recover_output,
     replay, resolve_parked, select_analysis, select_job_action,
 };
@@ -1837,12 +1837,6 @@ fn remuxed_requires_a_remux_action_and_committed_output() {
             &ItemOutcome::Remuxed(CompletionEvidence::LiveEncode {
                 input_size: 10_000,
                 output_size: 20,
-                stream_sizes: StreamByteSizes {
-                    video: 10,
-                    audio: 5,
-                    subtitle: 0,
-                    other: 5,
-                },
                 encode_decode: DecodeMode::Software,
             }),
         )
@@ -1915,12 +1909,6 @@ fn successful_outcomes_require_a_started_run_and_matching_evidence() {
             &ItemOutcome::Converted(CompletionEvidence::LiveEncode {
                 input_size: 10_000,
                 output_size: 20,
-                stream_sizes: StreamByteSizes {
-                    video: 15,
-                    audio: 3,
-                    subtitle: 1,
-                    other: 1,
-                },
                 encode_decode: DecodeMode::Software,
             }),
         )
@@ -1972,12 +1960,6 @@ fn session_aggregates_absorb_counts_every_outcome_and_live_evidence() {
         &ItemOutcome::Converted(CompletionEvidence::LiveEncode {
             input_size: 1_000,
             output_size: 400,
-            stream_sizes: StreamByteSizes {
-                video: 300,
-                audio: 80,
-                subtitle: 15,
-                other: 5,
-            },
             encode_decode: DecodeMode::Software,
         }),
         &[
@@ -5915,12 +5897,6 @@ fn finished_verdict_absorbs_the_measured_summary() {
             outcome: ItemOutcome::Converted(CompletionEvidence::LiveEncode {
                 input_size: 10_000,
                 output_size: 4_000,
-                stream_sizes: StreamByteSizes {
-                    video: 3_000,
-                    audio: 900,
-                    subtitle: 50,
-                    other: 50,
-                },
                 encode_decode: DecodeMode::Software,
             }),
             at: UnixMillis(5_000),

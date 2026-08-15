@@ -13,9 +13,9 @@ pub const AB_AV1_REVISION: &str = "8bde51723f6f95945792f58a94c08f59171047d7";
 pub use runtime::FaultInjection;
 pub use runtime::{AbAv1Runtime, CancellationHandle, JobHandle};
 pub use types::{
-    CancelMode, EncodeOutcome, EncodeRequest, EncodeTelemetry, JobFailure, JobFailureKind,
-    JobReport, JobTerminal, RuntimeStartError, SearchOutcome, SearchRequest, SearchTelemetry,
-    SearchWork, ShutdownError, StartJobError, StreamSizes, Telemetry, WaitError,
+    CancelMode, EncodeRequest, EncodeTelemetry, JobFailure, JobFailureKind, JobReport, JobTerminal,
+    RuntimeStartError, SearchOutcome, SearchRequest, SearchTelemetry, SearchWork, ShutdownError,
+    StartJobError, Telemetry, WaitError,
 };
 
 #[cfg(test)]

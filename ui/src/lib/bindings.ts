@@ -367,14 +367,13 @@ export type CommandError = {
 
 /**
  *  Where the facts backing a successful outcome came from. A live run carries
- *  what the adapter measured; a crash-recovered success carries nothing —
- *  output size, path, and content key are already durable on the settled
- *  transaction, and fabricating adapter fields would be dishonest.
+ *  sizes verified by the settled output transaction plus runtime facts; a
+ *  crash-recovered success carries nothing because those transaction facts are
+ *  already durable and fabricating runtime evidence would be dishonest.
  */
 export type CompletionEvidence = ({ LiveEncode: {
 	input_size: number,
 	output_size: number,
-	stream_sizes: StreamByteSizes,
 	/**
 	 *  The decode mode the encode actually ran with; diverges from the
 	 *  analysis profile once the hardware→software retry ladder exists.
@@ -1432,14 +1431,6 @@ export type StatisticsPayload = {
 	first_epoch_day: number | null,
 	last_epoch_day: number | null,
 	runs: RunTotals,
-};
-
-/**  Core-owned mirror of the adapter's per-stream output byte accounting. */
-export type StreamByteSizes = {
-	video: number,
-	audio: number,
-	subtitle: number,
-	other: number,
 };
 
 export type StreamPayload = StreamPayload_Serialize | StreamPayload_Deserialize;

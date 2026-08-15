@@ -147,7 +147,6 @@ describe("queueRows", () => {
         LiveEncode: {
           input_size: 1_000,
           output_size: 600,
-          stream_sizes: { video: 500, audio: 90, subtitle: 0, other: 10 },
           encode_decode: "Software",
         },
       },

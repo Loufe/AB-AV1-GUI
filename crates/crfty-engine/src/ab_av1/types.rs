@@ -65,22 +65,6 @@ pub struct SearchOutcome {
     pub from_cache: bool,
 }
 
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
-pub struct StreamSizes {
-    pub video: u64,
-    pub audio: u64,
-    pub subtitle: u64,
-    pub other: u64,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct EncodeOutcome {
-    pub output: PathBuf,
-    pub input_size: u64,
-    pub output_size: u64,
-    pub stream_sizes: StreamSizes,
-}
-
 #[derive(Debug, Clone, PartialEq)]
 pub enum JobFailureKind {
     NoGoodCrf { last: SearchOutcome },

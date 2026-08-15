@@ -6,8 +6,7 @@ use std::path::PathBuf;
 use crfty_core::{
     ClaimedJob, Command, CompletionEvidence, ConflictKind, DurableDelta, DurableState,
     FailureFacts, FailureKind, ItemOutcome, JobPhase, JobProgress, OutputDelta, OutputState,
-    OutputTransaction, Replacement, RunId, SkipReason, StreamByteSizes, Telemetry, WorkerCommand,
-    fold,
+    OutputTransaction, Replacement, RunId, SkipReason, Telemetry, WorkerCommand, fold,
 };
 
 use crate::{
@@ -276,20 +275,13 @@ pub(super) fn finish_successful_output(
 fn settled_outcome(success: SuccessfulJob, transaction: &OutputTransaction) -> ItemOutcome {
     if let Some(final_identity) = transaction.settled_identity() {
         return match success {
-            SuccessfulJob::Encode {
-                outcome,
-                decode_mode,
-            } => ItemOutcome::Converted(CompletionEvidence::LiveEncode {
-                input_size: outcome.input_size,
-                output_size: outcome.output_size,
-                stream_sizes: StreamByteSizes {
-                    video: outcome.stream_sizes.video,
-                    audio: outcome.stream_sizes.audio,
-                    subtitle: outcome.stream_sizes.subtitle,
-                    other: outcome.stream_sizes.other,
-                },
-                encode_decode: decode_mode,
-            }),
+            SuccessfulJob::Encode { decode_mode } => {
+                ItemOutcome::Converted(CompletionEvidence::LiveEncode {
+                    input_size: transaction.input_identity.size,
+                    output_size: final_identity.destructive.size,
+                    encode_decode: decode_mode,
+                })
+            }
             // The remux adapter reports only the output path; sizes come from
             // the identities the settlement itself verified.
             SuccessfulJob::Remux => ItemOutcome::Remuxed(CompletionEvidence::LiveRemux {

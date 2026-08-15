@@ -11,8 +11,8 @@ use crfty_core::{
 
 use crate::{
     ab_av1::{
-        AbAv1Runtime, EncodeOutcome, EncodeRequest, JobFailureKind, JobHandle, JobReport,
-        JobTerminal, SearchRequest,
+        AbAv1Runtime, EncodeRequest, JobFailureKind, JobHandle, JobReport, JobTerminal,
+        SearchRequest,
     },
     driver::CommandSender,
     failure::scrub_tail,
@@ -34,14 +34,10 @@ use super::telemetry::{
 
 const ADAPTER_REPORT_POLL_INTERVAL: Duration = Duration::from_millis(20);
 
-/// What a successful adapter run measured before settlement. The terminal
-/// outcome is built only after the output transaction settles, from these
-/// facts plus the settled ledger state.
+/// Which adapter completed before settlement. The terminal outcome is built
+/// only after the output transaction settles.
 pub(super) enum SuccessfulJob {
-    Encode {
-        outcome: EncodeOutcome,
-        decode_mode: DecodeMode,
-    },
+    Encode { decode_mode: DecodeMode },
     Remux,
 }
 
@@ -96,7 +92,7 @@ pub(super) fn run_encode(
         );
         match report {
             Ok(JobReport {
-                terminal: JobTerminal::Completed(outcome),
+                terminal: JobTerminal::Completed(()),
                 final_telemetry,
             }) => {
                 return finish_successful_output(
@@ -104,10 +100,7 @@ pub(super) fn run_encode(
                     job,
                     manager,
                     transaction,
-                    SuccessfulJob::Encode {
-                        outcome,
-                        decode_mode,
-                    },
+                    SuccessfulJob::Encode { decode_mode },
                     final_telemetry.as_ref().map(telemetry_progress),
                     tracker,
                 );

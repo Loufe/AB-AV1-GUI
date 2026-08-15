@@ -2630,12 +2630,6 @@
                 "LiveEncode": {
                   "input_size": 3000000,
                   "output_size": 1000000,
-                  "stream_sizes": {
-                    "video": 850000,
-                    "audio": 120000,
-                    "subtitle": 5000,
-                    "other": 25000
-                  },
                   "encode_decode": "Software"
                 }
               }
@@ -2669,12 +2663,6 @@
                   "LiveEncode": {
                     "input_size": 3000000,
                     "output_size": 1000000,
-                    "stream_sizes": {
-                      "video": 850000,
-                      "audio": 120000,
-                      "subtitle": 5000,
-                      "other": 25000
-                    },
                     "encode_decode": "Software"
                   }
                 }
@@ -2821,12 +2809,6 @@
                 "LiveEncode": {
                   "input_size": 3000000,
                   "output_size": 1000000,
-                  "stream_sizes": {
-                    "video": 850000,
-                    "audio": 120000,
-                    "subtitle": 5000,
-                    "other": 25000
-                  },
                   "encode_decode": "Software"
                 }
               }
@@ -3361,12 +3343,6 @@
                 "LiveEncode": {
                   "input_size": 3000000,
                   "output_size": 1000000,
-                  "stream_sizes": {
-                    "video": 850000,
-                    "audio": 120000,
-                    "subtitle": 5000,
-                    "other": 25000
-                  },
                   "encode_decode": "Software"
                 }
               }
@@ -3400,12 +3376,6 @@
                   "LiveEncode": {
                     "input_size": 3000000,
                     "output_size": 1000000,
-                    "stream_sizes": {
-                      "video": 850000,
-                      "audio": 120000,
-                      "subtitle": 5000,
-                      "other": 25000
-                    },
                     "encode_decode": "Software"
                   }
                 }
@@ -3538,12 +3508,6 @@
                 "LiveEncode": {
                   "input_size": 3000000,
                   "output_size": 1000000,
-                  "stream_sizes": {
-                    "video": 850000,
-                    "audio": 120000,
-                    "subtitle": 5000,
-                    "other": 25000
-                  },
                   "encode_decode": "Software"
                 }
               }
@@ -8029,12 +7993,6 @@
                 "LiveEncode": {
                   "input_size": 3000000,
                   "output_size": 1000000,
-                  "stream_sizes": {
-                    "video": 850000,
-                    "audio": 120000,
-                    "subtitle": 5000,
-                    "other": 25000
-                  },
                   "encode_decode": "Software"
                 }
               }
@@ -8068,12 +8026,6 @@
                   "LiveEncode": {
                     "input_size": 3000000,
                     "output_size": 1000000,
-                    "stream_sizes": {
-                      "video": 850000,
-                      "audio": 120000,
-                      "subtitle": 5000,
-                      "other": 25000
-                    },
                     "encode_decode": "Software"
                   }
                 }
@@ -8287,12 +8239,6 @@
                 "LiveEncode": {
                   "input_size": 3000000,
                   "output_size": 1000000,
-                  "stream_sizes": {
-                    "video": 850000,
-                    "audio": 120000,
-                    "subtitle": 5000,
-                    "other": 25000
-                  },
                   "encode_decode": "Software"
                 }
               }

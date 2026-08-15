@@ -141,7 +141,6 @@ describe("QueueView", () => {
             LiveEncode: {
               input_size: 2_000,
               output_size: 1_000,
-              stream_sizes: { video: 900, audio: 90, subtitle: 0, other: 10 },
               encode_decode: "Software",
             },
           },

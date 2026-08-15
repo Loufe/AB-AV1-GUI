@@ -91,7 +91,6 @@ describe("deriveRowStatus", () => {
               LiveEncode: {
                 input_size: 2048,
                 output_size: 1536,
-                stream_sizes: { video: 1200, audio: 300, subtitle: 6, other: 30 },
                 encode_decode: "Software",
               },
             },

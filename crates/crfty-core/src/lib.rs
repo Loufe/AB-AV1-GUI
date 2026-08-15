@@ -87,8 +87,8 @@ pub use settings::{DefaultOutputMode, Settings, VideoExtension};
 pub use state::{
     AppSnapshot, AppState, ClaimId, CompletionEvidence, ConfigDelta, ConversionRun, DurableDelta,
     DurableState, ItemOutcome, JobProgress, JournalSequence, MediaTool, PhaseSpan, QueueItem,
-    QueueItemId, QueueItemState, RunId, SessionAggregates, SessionState, StreamByteSizes,
-    Telemetry, ToolAvailability, ToolSource, ToolsState, VendorActivity, fold, fold_config,
+    QueueItemId, QueueItemState, RunId, SessionAggregates, SessionState, Telemetry,
+    ToolAvailability, ToolSource, ToolsState, VendorActivity, fold, fold_config,
 };
 pub use time::{DurationMs, FileTimeNs, UnixMillis};
 

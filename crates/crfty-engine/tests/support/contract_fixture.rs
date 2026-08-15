@@ -27,8 +27,8 @@ const CONTRACT_EXPECTED_FINISHED_ITEMS: u8 = 4;
 const CONTRACT_EVENT_TIMEOUT: Duration = Duration::from_secs(10);
 const NOISY_STDERR_BYTES: usize = 32 * 1024;
 use crfty_engine::ab_av1::{
-    AbAv1Runtime, EncodeOutcome, EncodeRequest, FaultInjection, JobHandle, JobTerminal,
-    SearchRequest, StartJobError,
+    AbAv1Runtime, EncodeRequest, FaultInjection, JobHandle, JobTerminal, SearchRequest,
+    StartJobError,
 };
 use crfty_engine::coordinator::{EngineConfig, EngineRuntime, ToolsConfig};
 use crfty_engine::vendor::discovery::{CurrentTools, DiscoveredTools, MediaTools};
@@ -344,6 +344,7 @@ fn run_coordinator_contract(
     let mut profile_changed = false;
     let mut remuxed = 0_u8;
     let mut remux_failures = 0_u8;
+    let mut encode_evidence = None;
     while finished < CONTRACT_EXPECTED_FINISHED_ITEMS {
         match engine.events.recv_timeout(CONTRACT_EVENT_TIMEOUT)? {
             crfty_engine::driver::DriverEvent::Durable(
@@ -378,8 +379,14 @@ fn run_coordinator_contract(
                     item_id, outcome, ..
                 },
             ) => {
+                if item_id == QueueItemId(2) {
+                    let ItemOutcome::Converted(evidence) = &outcome else {
+                        return Err(format!("coordinated encode failed: {outcome:?}").into());
+                    };
+                    encode_evidence = Some(evidence.clone());
+                }
                 if item_id == QueueItemId(4)
-                    && matches!(outcome, crfty_core::ItemOutcome::Failed { .. })
+                    && matches!(&outcome, crfty_core::ItemOutcome::Failed { .. })
                 {
                     remux_failures = remux_failures.saturating_add(1);
                 }
@@ -400,6 +407,17 @@ fn run_coordinator_contract(
     if searches != 1 {
         return Err(format!(
             "analysis reuse expected one search, observed {searches}; prepared reuse count {prepared_with_reuse}; content changed {content_changed}; profile changed {profile_changed}"
+        )
+        .into());
+    }
+    let expected_encode_evidence = CompletionEvidence::LiveEncode {
+        input_size: 8192,
+        output_size: 4096,
+        encode_decode: DecodeMode::Software,
+    };
+    if encode_evidence != Some(expected_encode_evidence) {
+        return Err(format!(
+            "coordinated encode did not use settled artifact sizes: {encode_evidence:?}"
         )
         .into());
     }
@@ -774,7 +792,7 @@ fn fake_ffmpeg() -> Result<(), Box<dyn Error>> {
     }
 
     eprintln!(
-        "video:1kB audio:2kB subtitle:0kB other streams:1kB global headers:0kB muxing overhead: 0.0%"
+        "video:1KiB audio:2KiB subtitle:0KiB other streams:1KiB global headers:0KiB muxing overhead: 0.0%"
     );
     Ok(())
 }
@@ -926,7 +944,7 @@ fn successful_encode(
     let report = runtime
         .start_encode(tools.clone(), encode_request(input, &output))?
         .wait()?;
-    verify_encode(report.terminal)?;
+    verify_encode(report.terminal, &output)?;
     if report.final_telemetry.is_none() {
         return Err("encode report omitted final telemetry".into());
     }
@@ -973,6 +991,7 @@ fn cancel_descendant_and_reuse(
             .start_encode(tools.clone(), encode_request(input, &second))?
             .wait()?
             .terminal,
+        &second,
     )
 }
 
@@ -1008,6 +1027,7 @@ fn panic_and_reuse(
             .start_encode(tools.clone(), encode_request(input, &after))?
             .wait()?
             .terminal,
+        &after,
     )
 }
 
@@ -1032,17 +1052,15 @@ fn shutdown_cancels_active_job(
     Ok(())
 }
 
-fn verify_encode(terminal: JobTerminal<EncodeOutcome>) -> Result<(), Box<dyn Error>> {
-    match terminal {
-        JobTerminal::Completed(outcome)
-            if outcome.output_size == 4096 && outcome.stream_sizes.audio == 2048 =>
-        {
-            Ok(())
-        }
-        terminal => {
-            Err(format!("encode did not preserve typed completion data: {terminal:?}").into())
-        }
+fn verify_encode(terminal: JobTerminal<()>, output: &Path) -> Result<(), Box<dyn Error>> {
+    if terminal != JobTerminal::Completed(()) {
+        return Err(format!("encode did not complete successfully: {terminal:?}").into());
     }
+    let output_size = fs::metadata(output)?.len();
+    if output_size != 4096 {
+        return Err(format!("encode wrote {output_size} bytes instead of 4096").into());
+    }
+    Ok(())
 }
 
 fn search_request(input: &Path) -> SearchRequest {

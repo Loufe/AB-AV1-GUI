@@ -11,8 +11,8 @@ use crfty_core::DecodeMode;
 use tokio_stream::StreamExt;
 
 use super::types::{
-    CancelMode, EncodeOutcome, EncodeRequest, EncodeTelemetry, JobFailure, JobTerminal,
-    SearchOutcome, SearchRequest, SearchTelemetry, SearchWork, StreamSizes, Telemetry,
+    CancelMode, EncodeRequest, EncodeTelemetry, JobFailure, JobTerminal, SearchOutcome,
+    SearchRequest, SearchTelemetry, SearchWork, Telemetry,
 };
 use crate::vendor::discovery::MediaTools;
 
@@ -45,7 +45,7 @@ pub(crate) async fn run_encode(
     cancellation: tokio::sync::watch::Receiver<Option<CancelMode>>,
     telemetry: Arc<Mutex<Option<Telemetry>>>,
     #[cfg(feature = "contract-test-fixture")] fault: FaultInjection,
-) -> JobTerminal<EncodeOutcome> {
+) -> JobTerminal<()> {
     let tools = ab_av1::ToolPaths {
         ffmpeg: tools.ffmpeg,
         ffprobe: tools.ffprobe,
@@ -152,14 +152,13 @@ async fn encode(
     mut cancellation: tokio::sync::watch::Receiver<Option<CancelMode>>,
     telemetry: Arc<Mutex<Option<Telemetry>>>,
     #[cfg(feature = "contract-test-fixture")] fault: FaultInjection,
-) -> Result<EncodeOutcome, OperationError> {
+) -> Result<(), OperationError> {
     if cancellation.borrow().is_some() {
         return Err(OperationError::Cancelled);
     }
     let probe = Arc::new(ffprobe::probe(&request.input));
     let args = encode_args(&request).map_err(OperationError::Failed)?;
     let mut updates = std::pin::pin!(command::encode::run(args, probe));
-    let mut sizes = StreamSizes::default();
     loop {
         tokio::select! {
             changed = cancellation.changed() => {
@@ -179,17 +178,10 @@ async fn encode(
                         panic!("contract fault after first encode progress");
                     }
                 }
-                Some(Ok(command::encode::Update::StreamSizes { video, audio, subtitle, other })) => {
-                    sizes = StreamSizes { video, audio, subtitle, other };
-                }
-                Some(Ok(command::encode::Update::Done { output, input_size, output_size })) => {
-                    return Ok(EncodeOutcome {
-                        output,
-                        input_size,
-                        output_size,
-                        stream_sizes: sizes,
-                    });
-                }
+                // ab-av1 derives this rounded breakdown from FFmpeg's human
+                // summary; it is deliberately not an application contract.
+                Some(Ok(command::encode::Update::StreamSizes { .. })) => {}
+                Some(Ok(command::encode::Update::Done { .. })) => return Ok(()),
                 Some(Err(error)) => return Err(OperationError::Failed(failure(error))),
                 None => return Err(OperationError::Failed(JobFailure::new(
                     "encode ended without a result",

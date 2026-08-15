@@ -21,8 +21,8 @@ use crfty_core::{
     DurationMs, ExecutionSettings, FailureFacts, FailureKind, FileRecord, FileSystemId, FileTimeNs,
     HistoryRow, ImportPath, ImportedHistoryRecord, ImportedProvenance, ItemOutcome, JobAction,
     JobPhase, JobSpec, MediaContainer, Operation, OutputState, OutputTarget, OutputTransaction,
-    ParkedStatus, PhaseSpan, QueueItemId, Replacement, RunId, SearchMeasurement, StreamByteSizes,
-    UnixMillis, Verdict, VerdictKind, VideoCodec, VideoMeta, VmafScore, VmafTarget, history_rows,
+    ParkedStatus, PhaseSpan, QueueItemId, Replacement, RunId, SearchMeasurement, UnixMillis,
+    Verdict, VerdictKind, VideoCodec, VideoMeta, VmafScore, VmafTarget, history_rows,
 };
 use serde::Serialize;
 
@@ -139,12 +139,6 @@ fn live_encode(input_size: u64, output_size: u64) -> CompletionEvidence {
     CompletionEvidence::LiveEncode {
         input_size,
         output_size,
-        stream_sizes: StreamByteSizes {
-            video: output_size,
-            audio: 0,
-            subtitle: 0,
-            other: 0,
-        },
         encode_decode: crfty_core::DecodeMode::Software,
     }
 }

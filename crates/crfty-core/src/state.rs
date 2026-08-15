@@ -69,9 +69,9 @@ pub enum ItemOutcome {
 }
 
 /// Where the facts backing a successful outcome came from. A live run carries
-/// what the adapter measured; a crash-recovered success carries nothing —
-/// output size, path, and content key are already durable on the settled
-/// transaction, and fabricating adapter fields would be dishonest.
+/// sizes verified by the settled output transaction plus runtime facts; a
+/// crash-recovered success carries nothing because those transaction facts are
+/// already durable and fabricating runtime evidence would be dishonest.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, specta::Type)]
 pub enum CompletionEvidence {
     LiveEncode {
@@ -79,7 +79,6 @@ pub enum CompletionEvidence {
         input_size: u64,
         #[specta(type = crate::JsNumber)]
         output_size: u64,
-        stream_sizes: StreamByteSizes,
         /// The decode mode the encode actually ran with; diverges from the
         /// analysis profile once the hardware→software retry ladder exists.
         encode_decode: DecodeMode,
@@ -91,19 +90,6 @@ pub enum CompletionEvidence {
         output_size: u64,
     },
     RecoveredAtStartup,
-}
-
-/// Core-owned mirror of the adapter's per-stream output byte accounting.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, specta::Type)]
-pub struct StreamByteSizes {
-    #[specta(type = crate::JsNumber)]
-    pub video: u64,
-    #[specta(type = crate::JsNumber)]
-    pub audio: u64,
-    #[specta(type = crate::JsNumber)]
-    pub subtitle: u64,
-    #[specta(type = crate::JsNumber)]
-    pub other: u64,
 }
 
 /// How long one job phase ran, measured monotonically by the worker and

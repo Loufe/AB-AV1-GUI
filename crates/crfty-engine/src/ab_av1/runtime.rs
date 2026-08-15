@@ -13,8 +13,8 @@ use std::{
 use super::{
     operation,
     types::{
-        CancelMode, EncodeOutcome, EncodeRequest, JobReport, JobTerminal, RuntimeStartError,
-        SearchOutcome, SearchRequest, ShutdownError, StartJobError, Telemetry, WaitError,
+        CancelMode, EncodeRequest, JobReport, JobTerminal, RuntimeStartError, SearchOutcome,
+        SearchRequest, ShutdownError, StartJobError, Telemetry, WaitError,
     },
 };
 use crate::vendor::discovery::MediaTools;
@@ -131,7 +131,7 @@ enum RuntimeCommand {
         request: EncodeRequest,
         cancellation: tokio::sync::watch::Receiver<Option<CancelMode>>,
         telemetry: Arc<Mutex<Option<Telemetry>>>,
-        result: mpsc::Sender<JobReport<EncodeOutcome>>,
+        result: mpsc::Sender<JobReport<()>>,
         #[cfg(feature = "contract-test-fixture")]
         fault: FaultInjection,
     },
@@ -193,7 +193,7 @@ impl AbAv1Runtime {
         &self,
         tools: MediaTools,
         request: EncodeRequest,
-    ) -> Result<JobHandle<EncodeOutcome>, StartJobError> {
+    ) -> Result<JobHandle<()>, StartJobError> {
         self.start_encode_inner(
             tools,
             request,
@@ -208,7 +208,7 @@ impl AbAv1Runtime {
         tools: MediaTools,
         request: EncodeRequest,
         fault: FaultInjection,
-    ) -> Result<JobHandle<EncodeOutcome>, StartJobError> {
+    ) -> Result<JobHandle<()>, StartJobError> {
         self.start_encode_inner(tools, request, fault)
     }
 
@@ -217,7 +217,7 @@ impl AbAv1Runtime {
         tools: MediaTools,
         request: EncodeRequest,
         #[cfg(feature = "contract-test-fixture")] fault: FaultInjection,
-    ) -> Result<JobHandle<EncodeOutcome>, StartJobError> {
+    ) -> Result<JobHandle<()>, StartJobError> {
         validate_encode_request(&request)?;
         self.validate_and_acquire(&tools)?;
         let (handle, cancellation, telemetry, result) = JobHandle::channels();

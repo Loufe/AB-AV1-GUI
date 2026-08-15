@@ -291,8 +291,8 @@ mod tests {
     use crate::{
         AnalysisProfile, ClaimId, CompletionEvidence, ContentKey, ConversionRun, Crf, DecodeMode,
         DurationMs, ExecutionSettings, FileRecord, JobAction, JobPhase, JobSpec, MediaContainer,
-        OutputTarget, PhaseSpan, QueueItemId, RunId, SearchMeasurement, StreamByteSizes,
-        UnixMillis, Verdict, VerdictKind, VideoMeta, VmafScore, VmafTarget,
+        OutputTarget, PhaseSpan, QueueItemId, RunId, SearchMeasurement, UnixMillis, Verdict,
+        VerdictKind, VideoMeta, VmafScore, VmafTarget,
     };
 
     fn meta(codec: VideoCodec, width: u32, height: u32, duration_ms: u64) -> VideoMeta {
@@ -384,12 +384,6 @@ mod tests {
         conversion.outcome = Some(ItemOutcome::Converted(CompletionEvidence::LiveEncode {
             input_size: 1_000_000,
             output_size: 400_000,
-            stream_sizes: StreamByteSizes {
-                video: 400_000,
-                audio: 0,
-                subtitle: 0,
-                other: 0,
-            },
             encode_decode: DecodeMode::Software,
         }));
         conversion.phase_spans = spans(analyzing_ms, encoding_ms);

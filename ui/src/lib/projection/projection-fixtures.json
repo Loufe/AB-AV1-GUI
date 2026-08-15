@@ -130,12 +130,6 @@
                 "LiveEncode": {
                   "input_size": 10000000,
                   "output_size": 4000000,
-                  "stream_sizes": {
-                    "video": 4000000,
-                    "audio": 0,
-                    "subtitle": 0,
-                    "other": 0
-                  },
                   "encode_decode": "Software"
                 }
               }
@@ -1174,12 +1168,6 @@
                 "LiveEncode": {
                   "input_size": 10000000,
                   "output_size": 4000000,
-                  "stream_sizes": {
-                    "video": 4000000,
-                    "audio": 0,
-                    "subtitle": 0,
-                    "other": 0
-                  },
                   "encode_decode": "Software"
                 }
               }
