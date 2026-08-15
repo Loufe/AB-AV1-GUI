@@ -44,18 +44,33 @@ fn comment_text(line: &str) -> Option<&str> {
     line.find("//").and_then(|pos| line.get(pos..))
 }
 
-/// Case-insensitive `issue #<digits>` or `(#<digits>)`, the two reference
-/// shapes bare enough to rot. Attributes (`#[...]`) and hex colors cannot
-/// match either shape.
+/// `#` followed by one to five digits ending at a word boundary: the shape of
+/// a tracker reference in any phrasing (`(#NN)`, `issue #NN`, `per #NN`,
+/// bare `#NN`). Attributes (`#[...]`) have no digits, HTML entities
+/// (`&#39;`) are excluded by the `&` guard, and six-digit hex colors exceed
+/// the digit cap; three-digit hex shorthand in a comment is accepted as a
+/// false positive worth spelling out.
 fn has_issue_ref(comment: &str) -> bool {
-    let lower = comment.to_ascii_lowercase();
-    ["(#", "issue #"].iter().any(|pattern| {
-        lower.match_indices(pattern).any(|(pos, _)| {
-            lower
-                .get(pos + pattern.len()..)
-                .and_then(|rest| rest.chars().next())
-                .is_some_and(|c| c.is_ascii_digit())
-        })
+    let bytes = comment.as_bytes();
+    bytes.iter().enumerate().any(|(pos, &byte)| {
+        if byte != b'#' {
+            return false;
+        }
+        if pos > 0 && bytes.get(pos.wrapping_sub(1)) == Some(&b'&') {
+            return false;
+        }
+        let digits = bytes
+            .get(pos + 1..)
+            .unwrap_or_default()
+            .iter()
+            .take_while(|c| c.is_ascii_digit())
+            .count();
+        if digits == 0 || digits > 5 {
+            return false;
+        }
+        !bytes
+            .get(pos + 1 + digits)
+            .is_some_and(|c| c.is_ascii_alphanumeric())
     })
 }
 

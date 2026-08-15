@@ -1,4 +1,4 @@
-// Zustand is only the container (#36 D5): state is written from outside React
+// Zustand is only the container (D5): state is written from outside React
 // by the stream consumer in connect.ts, and no reduce logic lives in a store
 // action — deltas apply through the pure functions in fold.ts.
 
@@ -51,7 +51,7 @@ export interface AppStoreState {
    */
   statistics: StatisticsPayload | null;
   /**
-   * The shell deferred a window close because a session is active (#33 §12);
+   * The shell deferred a window close because a session is active;
    * the close dialog is open while true.
    */
   closeRequested: boolean;

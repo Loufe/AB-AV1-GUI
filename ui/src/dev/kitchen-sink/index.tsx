@@ -4,7 +4,7 @@ import { PrimitivesSection } from "./primitives-section";
 import { TokensSection } from "./tokens-section";
 
 /**
- * Dev-only component workshop (#36 D10). Excluded from release bundles via
+ * Dev-only component workshop (D10). Excluded from release bundles via
  * the import.meta.env.DEV gate in App.tsx — Vite eliminates the dynamic
  * import entirely, so no chunk is emitted.
  */

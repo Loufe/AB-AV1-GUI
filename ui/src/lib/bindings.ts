@@ -64,7 +64,7 @@ export const commands = {
 	 */
 	scrubLogs: () => typedError<ScrubSummary, CommandError>(__TAURI_INVOKE("scrub_logs")),
 	/**
-	 *  One-shot manual check of the GitHub releases API (#33 §12: no background
+	 *  One-shot manual check of the GitHub releases API (no background
 	 *  checking exists). Async so the blocking network call never runs on the
 	 *  main thread; the release page URL stays shell-side — open it with
 	 *  `open_release_page`.
@@ -229,7 +229,7 @@ export type AnalysisProfile = {
 	thorough: boolean,
 	/**
 	 *  The decode mode the search actually ran with — part of the analysis
-	 *  identity (ADR-007, per #33 §7): hardware and software decoders can
+	 *  identity (ADR-007): hardware and software decoders can
 	 *  produce different decoded frames, so their VMAF measurements are not
 	 *  interchangeable. The pin is decoder-granular: a Cuvid-recorded
 	 *  analysis is not returned for a Qsv execution and re-searches instead.
@@ -1466,13 +1466,13 @@ export type StreamPayload_Deserialize = ({ Snapshot: AppSnapshot_Deserialize }) 
 /**
  *  The previous run left the crash sentinel behind: it died without a
  *  clean shutdown. Durable state was already restored by the journal
- *  replay; this is informational and stands for the whole run (#33 §12).
+ *  replay; this is informational and stands for the whole run.
  */
 "AbnormalShutdown" | 
 /**
  *  The user asked to close the window while a session was active. The
  *  shell kept the window open; the frontend owns the prompt and re-issues
- *  the close once the session is idle (#33 §12).
+ *  the close once the session is idle.
  */
 "CloseRequested";
 
@@ -1507,13 +1507,13 @@ export type StreamPayload_Serialize = ({ Snapshot: AppSnapshot_Serialize }) & { 
 /**
  *  The previous run left the crash sentinel behind: it died without a
  *  clean shutdown. Durable state was already restored by the journal
- *  replay; this is informational and stands for the whole run (#33 §12).
+ *  replay; this is informational and stands for the whole run.
  */
 "AbnormalShutdown" | 
 /**
  *  The user asked to close the window while a session was active. The
  *  shell kept the window open; the frontend owns the prompt and re-issues
- *  the close once the session is idle (#33 §12).
+ *  the close once the session is idle.
  */
 "CloseRequested";
 
@@ -1524,14 +1524,14 @@ export type Telemetry = {
 	progress: JobProgress,
 	/**
 	 *  Smoothed live throughput in hundredths of a frame per second, from the
-	 *  engine's ~3 s sliding window (#33 §11). Absent until the window has a
-	 *  sample and for phases with no frame rate (remux) — never a sentinel.
+	 *  engine's ~3 s sliding window. Absent until the window has a
+	 *  sample and for phases with no frame rate (remux); never a sentinel.
 	 */
 	fps_centi: number | null,
 	/**
 	 *  Estimated milliseconds until the current phase completes, from the
 	 *  window's progress velocity. Absent during the engine's warm-up and
-	 *  whenever the remaining work is unknown (#33 §11) — never a sentinel.
+	 *  whenever the remaining work is unknown; never a sentinel.
 	 */
 	eta_ms: number | null,
 };

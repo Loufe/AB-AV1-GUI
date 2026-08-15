@@ -25,5 +25,5 @@ Deleted code is recoverable from git history or the shadcn registry.
   The fixtures are hand-maintained spec data — edit them only as a deliberate,
   reviewed change; there is no regeneration path.
 - `src/dev/` is dev-gated and never ships in release bundles.
-- Before touching the drag, statistics, or queue views, read issue #36 comments
-  D6, D7, and D11 (recorded design verdicts).
+- Before touching the drag, statistics, or queue views, read the recorded
+  design verdicts (D6, D7, D11) in `docs/design/ui-verdicts.md`.

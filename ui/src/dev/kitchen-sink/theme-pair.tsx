@@ -1,8 +1,8 @@
 import type { ReactNode } from "react";
 
 /**
- * Renders the same content in light and dark side by side (#36: both themes
- * ship at v3 with equal polish — this keeps the dual review cheap). The dark
+ * Renders the same content in light and dark side by side (both themes
+ * ship at v3 with equal polish; this keeps the dual review cheap). The dark
  * copy works by scoping the .dark class, which re-resolves every token.
  */
 export function ThemePair({ children }: { children: ReactNode }) {

@@ -9,7 +9,7 @@ use crate::{
 pub(crate) const JOURNAL_SCHEMA_VERSION: u32 = 17;
 
 /// Compaction fires at an idle writer barrier when the journal is both large
-/// in absolute terms and dominated by dead upserts (#33 §10). The floor keeps
+/// in absolute terms and dominated by dead upserts. The floor keeps
 /// healthy small journals untouched; the ratio mirrors Redis AOF's
 /// grown-relative-to-live-state rewrite trigger.
 pub const COMPACTION_IDLE_MIN_JOURNAL_BYTES: u64 = 64 * 1024 * 1024;
@@ -28,8 +28,8 @@ pub fn compaction_due(journal_bytes: u64, live_state_bytes: u64) -> bool {
 }
 
 /// Compaction is a writer barrier, never an interruption: it runs only while
-/// no session is active and no queue item holds a reservation or claim
-/// (#33 §10 — "a conversion already running is never interrupted").
+/// no session is active and no queue item holds a reservation or claim:
+/// a conversion already running is never interrupted.
 #[must_use]
 pub fn compaction_quiescent(state: &AppState) -> bool {
     state.session == SessionState::Idle
@@ -49,7 +49,7 @@ pub struct JournalEnvelope {
 
 /// The folded state a compaction wrote as the new journal's head line,
 /// stamped so the surviving file records which schema and application
-/// produced it (#33 §10).
+/// produced it.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub(crate) struct JournalSnapshot {
     pub app_version: String,

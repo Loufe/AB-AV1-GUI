@@ -253,7 +253,7 @@ fn scrub_logs(bridge: State<'_, Bridge>) -> Result<ScrubSummary, CommandError> {
     bridge.scrub_logs()
 }
 
-/// One-shot manual check of the GitHub releases API (#33 §12: no background
+/// One-shot manual check of the GitHub releases API (no background
 /// checking exists). Async so the blocking network call never runs on the
 /// main thread; the release page URL stays shell-side — open it with
 /// `open_release_page`.

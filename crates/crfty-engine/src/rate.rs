@@ -1,15 +1,15 @@
 //! Live-rate smoothing for job telemetry: fps over a ~3 s sliding window and
-//! a progress-velocity ETA that is simply absent during warm-up (#33 §11).
+//! a progress-velocity ETA that is simply absent during warm-up.
 //! One implementation serves the search, encode, and remux phases. Elapsed
 //! time enters as an argument — the math owns no clock — so every rule here
 //! is testable without processes.
 
 use std::{collections::VecDeque, time::Duration};
 
-/// Sliding-window span for rate smoothing (#33 §11).
+/// Sliding-window span for rate smoothing.
 const SMOOTHING_WINDOW: Duration = Duration::from_secs(3);
 /// ETA stays absent this long after a phase starts: early velocity readings
-/// swing wildly while encoder pipelines fill (#33 §17 progress hygiene).
+/// swing wildly while encoder pipelines fill.
 const ETA_WARMUP: Duration = Duration::from_secs(4);
 /// The wire's `fps_centi` field is hundredths of a frame per second.
 const CENTI_PER_UNIT: f64 = 100.0;

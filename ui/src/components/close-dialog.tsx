@@ -31,8 +31,8 @@ function chooseQuit(stop: (() => Promise<void>) | null): void {
 }
 
 /**
- * Prompt for a window close that arrived during an active session (#33 §12:
- * closing during active work prompts rather than hiding to tray). The shell
+ * Prompt for a window close that arrived during an active session
+ * (closing during active work prompts rather than hiding to tray). The shell
  * kept the window open; every choice except "keep converting" arms a quit
  * that App fires once the session reaches Idle.
  */

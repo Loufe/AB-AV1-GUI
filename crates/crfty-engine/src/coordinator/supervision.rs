@@ -26,7 +26,7 @@ use super::vendor_task::{VendorTask, spawn_vendor_worker};
 
 /// How long shutdown waits for the vendor worker to observe cancellation and
 /// unwind through its own staging cleanup before abandoning the thread to
-/// process exit (#33 §12). Cancellation is observed between download chunks,
+/// process exit. Cancellation is observed between download chunks,
 /// so anything slower than this is a wedged network read.
 const VENDOR_SHUTDOWN_WAIT: Duration = Duration::from_secs(5);
 

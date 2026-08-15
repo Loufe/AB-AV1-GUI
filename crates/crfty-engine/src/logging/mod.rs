@@ -1,7 +1,7 @@
 //! Engine-owned structured logging: a reconfigurable file/stderr sink with
 //! privacy scrubbing applied inside the write path.
 //!
-//! Initialized by the shell before any durable-state work (#33 §12). The
+//! Initialized by the shell before any durable-state work. The
 //! subscriber layers never change after [`init`]; everything a settings
 //! change can alter — the anonymization toggle, the configured-folder
 //! placeholders, the log folder — lives behind one shared [`LogControl`]
@@ -109,8 +109,8 @@ fn write_file_line(state: &mut SinkState, line: &str) {
         Ok(()) => state.written += pending,
         Err(error) => {
             // The sink is what tracing writes into; report the loss directly
-            // to stderr, once, and keep the app running (#33: logging must
-            // never abort work).
+            // to stderr, once, and keep the app running: logging must
+            // never abort work.
             state.file = None;
             if !state.write_error_reported {
                 state.write_error_reported = true;
@@ -222,7 +222,7 @@ impl Drop for LineBuffer {
 ///
 /// The settings peek is deliberately lenient and read-only: an unreadable or
 /// invalid config yields defaults here, and the driver later owns the real
-/// load (including quarantine). Startup ordering per #33 §12 — tracing first,
+/// load (including quarantine). Startup ordering: tracing first,
 /// then lock, then durable state.
 pub fn init(default_log_dir: &Path, config_path: &Path) {
     if CONTROL.get().is_some() {
