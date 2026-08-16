@@ -169,7 +169,7 @@ the prediction stage in production:
 | CPU quota/cpuset or Job limits | candidate best effort | prepared | Linux cgroup hierarchy; Windows containment/parent limits where safely observable | Effective hierarchical limit is not always exposed by a leaf API |
 | Process/job user and kernel CPU | candidate best effort | attempt terminal | Linux `wait4`/`rusage`; Windows Job Object accounting | Linux leader/process semantics differ from Windows job-tree semantics |
 | Peak memory | candidate best effort, source-specific | attempt terminal | Linux `ru_maxrss` in KiB; Windows Job Object peak memory | Resident vs job memory/commit semantics are not portable |
-| Process/job I/O | experimental, source-specific | attempt terminal | Linux `/proc/<pid>/io` before reap; Windows Job Object `IO_COUNTERS` | Linux storage bytes and Windows all-I/O transfer bytes are not equivalent |
+| Process/job I/O | Windows candidate; Linux terminal source rejected on current evidence | attempt terminal | Windows Job Object `IO_COUNTERS`; Linux `wait4` block-operation counts only | WSL fixture returned `EACCES` for exited-unreaped `/proc/<pid>/io`; Windows all-I/O bytes and Linux block operations are not equivalent |
 | Page faults/context switches | experimental | attempt terminal | `rusage` or Job Object counters when available | Predictive value unknown and cross-platform sets differ |
 | Claim-time system CPU/memory | experimental | claim | Linux `/proc/stat` and `/proc/meminfo`; safe Windows wrapper | Snapshot is noisy; a delta needs a defined interval and cannot explain cause |
 | PSI deltas | experimental, Linux only | claim/run envelope | `/proc/pressure/*` or cgroup v2 `*.pressure` | Encoder self-contention contributes; cgroup may contain unrelated processes |
@@ -305,12 +305,14 @@ its scope.
 
 `command-group` 5.0.1 currently calls `waitpid` and discards resource usage. A
 reviewed dependency change could use `wait4` and return a safe terminal
-snapshot. This is preferable to polling. For I/O bytes, a Linux-only experiment
-can use `waitid(..., WNOWAIT)` to leave the exited direct child waitable, read
-`/proc/<pid>/io`, then reap it. The
+snapshot. This is preferable to polling. A Linux-only experiment used
+`waitid(..., WNOWAIT)` to leave exited direct children waitable before reading
+`/proc/<pid>/io` and reaping them. Although the
 [`waitid` contract](https://man7.org/linux/man-pages/man2/waitpid.2.html) supports
-this sequence, but a fixture must prove `/proc` availability for successful,
-failed, killed, and fast-exiting children before it becomes a recommendation.
+leaving the child waitable, the WSL fixture returned `EACCES` for the I/O file
+on successful, killed, and fast-exiting zombies. Terminal `/proc` I/O is
+therefore not a current recommendation; native/restricted Linux fixtures may
+explain portability, but cannot turn this failure into a required collector.
 
 [`/proc/<pid>/io`](https://www.kernel.org/doc/html/latest/filesystems/proc.html)
 distinguishes characters passed through reads/writes from storage-layer bytes,
@@ -461,6 +463,39 @@ overhead, parsing cost, Windows cost, cold-cache behavior, correctness under
 process exit, or an acceptable polling interval. The throwaway source and
 binary were removed after measurement.
 
+### Linux terminal/reap fixture
+
+A second throwaway native fixture tested the lifecycle that a modified
+`command-group` would actually own. For each direct child, the parent called
+`waitid(P_PID, ..., WEXITED | WNOWAIT)`, attempted allowlisted `/proc` reads,
+then called `wait4` and checked that `/proc/<pid>` disappeared after reaping.
+Cases covered normal success, a child that waited for its own descendant, an
+immediate nonzero exit, and forced `SIGKILL`.
+
+Results on this WSL2 kernel:
+
+- `wait4` returned user/system CPU, maximum RSS, faults, block operations, and
+  context switches in all four cases, including immediate exit and `SIGKILL`.
+- The successful direct child reported about 400 ms user CPU, 87 ms system CPU,
+  67,340 KiB maximum RSS, and 8,192 output block operations after touching
+  64 MiB and writing 4 MiB.
+- When that child waited for a descendant that touched 32 MiB, used CPU, and
+  wrote another 2 MiB, the returned totals rose to about 807 ms CPU, 99,996 KiB
+  maximum RSS, and 12,288 output block operations. This is evidence that
+  waited-descendant usage can reach the leader's terminal `rusage` on this
+  kernel; the portable contract still needs native Linux repetition and must
+  not claim a simultaneous process-tree RSS peak from one observation.
+- `/proc/<pid>/io` returned permission denied after `waitid(WNOWAIT)` in every
+  case. `/proc/<pid>/status` remained readable for the zombie but `VmHWM` was
+  zero, so it did not recover terminal peak memory. The process directory
+  disappeared immediately after `wait4` reaped it.
+
+This materially narrows the Linux recommendation: retain `wait4` CPU/max-RSS/
+fault/block/context-switch fields for further validation; do not depend on a
+terminal `/proc` byte-I/O or `VmHWM` collector. Obtaining byte I/O would require
+active polling, task accounting, or a dedicated cgroup, each of which has more
+cost and scope complexity and needs a consumer before further work.
+
 ## Required spike matrix
 
 ### Environments
@@ -498,7 +533,9 @@ paths, machine names, account names, IDs, and device addresses are excluded.
 2. Targeted `sysinfo` snapshots with only CPU/memory/I/O refreshes.
 3. A safe `command-group`/process-wrapper terminal snapshot:
    Windows Job Object accounting and Linux `wait4` resource usage.
-4. Linux `waitid(WNOWAIT)` plus allowlisted `/proc/<pid>/io` before reap.
+4. Linux `waitid(WNOWAIT)` plus allowlisted `/proc/<pid>/io` only as a negative
+   portability fixture; current WSL evidence rejects it as a dependable
+   terminal source.
 5. Claim/terminal system snapshots, with PSI separately feature-gated on Linux.
 
 No candidate may survive merely because it is easy to collect. It must satisfy
@@ -578,8 +615,9 @@ pinned ab-av1 fork:
    phase spans as the run envelope.
 5. Evaluate targeted `sysinfo` only for claim-time system context and as a
    cross-check. Do not add it solely to poll child PIDs.
-6. Keep Linux `/proc` I/O, PSI, topology, virtualization, and hardware facts
-   feature-gated within the spike until predictive and privacy results exist.
+6. Keep PSI, topology, virtualization, and hardware facts feature-gated within
+   the spike. Treat Linux terminal `/proc` I/O as rejected unless a required
+   consumer and materially different native evidence justify reopening it.
 7. Delete spike-only implementations that are rejected; #99 implements only
    the selected collectors.
 
@@ -595,8 +633,9 @@ above and reconciled with #93's final observation contract.
   any environment telemetry is added?
 - Does `wait4` account enough of the real FFmpeg workload on Linux, including
   any descendants used by supported tools?
-- Can an exited, unreaped FFmpeg process reliably expose allowlisted
-  `/proc/<pid>/io` across supported Linux and restricted environments?
+- Does native Linux reproduce the WSL finding that an exited, unreaped child
+  denies `/proc/<pid>/io`, and do any supported environments differ enough to
+  justify more than a recorded typed absence?
 - Can `command-group` expose Windows Job accounting without changing its
   containment and cancellation guarantees?
 - Which Windows outer-Job constraints can be observed safely and truthfully?
