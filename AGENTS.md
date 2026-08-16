@@ -121,7 +121,7 @@ ab-av1 output has two phases with different formats:
 - **Quality Detection**: Structured ab-av1 output, reliable progress
 - **Encoding**: FFmpeg output, subject to buffering, multiple regex patterns needed
 
-`RUST_LOG` (set in `ab_av1/wrapper.py`) is the only environment variable ab-av1 reads. Encode operations use `debug,ab_av1=trace,ffmpeg=trace` (ffmpeg trace is needed to parse encoding progress); crf-search uses `debug,ab_av1=trace` (ffmpeg trace would just flood the sample runs).
+`RUST_LOG` (set in `ab_av1/wrapper.py`) is the only environment variable ab-av1 reads; the leading `debug` level is what enables the parsed output. The `ab_av1=trace`/`ffmpeg=trace` fragments are inert: ab-av1 (vendored 0.11.4) logs at most debug, registers no `ffmpeg` log target, and captures FFmpeg's own output without forwarding it. Encoding progress comes from ab-av1's log lines.
 
 ## Privacy & Security
 

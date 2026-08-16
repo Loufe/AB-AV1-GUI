@@ -316,8 +316,8 @@ process = subprocess.Popen(
 
 ### Environment Variables
 `RUST_LOG` (the only variable ab-av1 reads):
-- Encode operations: `debug,ab_av1=trace,ffmpeg=trace` (ffmpeg trace needed for encoding progress)
-- crf-search: `debug,ab_av1=trace` (ffmpeg trace would flood the sample runs)
+- Encode operations: `debug,ab_av1=trace,ffmpeg=trace`; crf-search: `debug,ab_av1=trace`
+- Only the `debug` level matters: the trace fragments are inert (ab-av1 logs at most debug, has no `ffmpeg` log target, and never forwards FFmpeg's own output; progress is parsed from ab-av1's log lines)
 
 ### Process Termination
 - **Graceful stop**: Set `stop_event`, wait for current file to finish (CONVERT); aborts mid-run for ANALYZE
