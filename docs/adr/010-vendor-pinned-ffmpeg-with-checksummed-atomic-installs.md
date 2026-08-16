@@ -40,16 +40,18 @@ any byte without touching the active tools.
 
 Mechanics, fixed by this record:
 
-* The manifest (`vendor/manifest.rs`) pins one BtbN autobuild per OS — tag,
-  build id, URL, SHA-256, archive layout, and a decompressed-size cap — the
+* The manifest (`vendor/manifest.rs`) pins one BtbN autobuild per OS (tag,
+  build id, URL, SHA-256, archive layout, and a decompressed-size cap), the
   same build `media-contract.yml` tests against. Updating FFmpeg is a code
   change that ships through CI, never a runtime poll; `update_available` is a
   local comparison of the installed version against the compiled-in manifest.
+  Which artifact may be pinned is constrained by upstream retention, recorded
+  under More Information below.
 * The pinned SHA-256 is the trust anchor. TLS provides transport privacy only:
   the HTTPS client (reqwest/rustls with the `ring` provider) verifies servers
-  against operating-system trust roots via `rustls-platform-verifier` — a
+  against operating-system trust roots via `rustls-platform-verifier` (a
   deviation from the originally planned bundled webpki roots, which reqwest
-  0.13 no longer offers — and this is acceptable precisely because content
+  0.13 no longer offers), and this is acceptable precisely because content
   authenticity never rests on the transport. No signatures: a signing key
   adds infrastructure without adding security over a hash compiled into the
   binary that the user already trusts by running it.
@@ -61,16 +63,16 @@ Mechanics, fixed by this record:
 * Promotion is staged and atomic: the extracted install is renamed into
   `installs/<version>/`, then `current.json` is atomically replaced and
   fsynced. The previous install is untouched until the new record is durable
-  and pruned only afterwards, best-effort. The one non-additive step —
-  clearing a same-version directory left by a broken earlier install —
+  and pruned only afterwards, best-effort. The one non-additive step
+  (clearing a same-version directory left by a broken earlier install)
   happens while `current.json` still names the previous version. Discovery
   deletes stale staging debris on every run.
 * Discovery precedence per tool: explicit `CRFTY_FFMPEG`/`CRFTY_FFPROBE` env
   paths, then the managed install, then PATH. An explicit path that is not a
-  file is reported `Missing` — fail-closed, no fallthrough. Managed revisions
+  file is reported `Missing`, fail-closed, no fallthrough. Managed revisions
   come from install metadata (no spawn); system/explicit tools are probed via
   ffprobe's JSON version document, and that FFmpeg version also stands in as
-  the encoder revision — no machine-readable SVT-AV1 version exists, so any
+  the encoder revision: no machine-readable SVT-AV1 version exists, so any
   FFmpeg change conservatively invalidates cached analyses (ADR-007).
 * Tools swap only while idle: the reducer rejects `Install` unless the
   session is idle with no active run, and rejects `Start` mid-install. A
@@ -82,14 +84,14 @@ Mechanics, fixed by this record:
   case for racing installs of the same manifest is a last-writer win over
   identical content.
 * XZ decoding uses the pure-Rust `lzma-rs`. If it ever fails on a BtbN
-  stream, the accepted fallback is the C `liblzma` binding — a dependency
+  stream, the accepted fallback is the C `liblzma` binding, a dependency
   risk on par with other C-backed crates already in the tree, not a change
   to the first-party unsafe rule (ADR-005).
 
 ### Consequences
 
 * Good: Content authenticity is independent of TLS roots, mirrors, and CDNs
-* Good: Kill the process at any point during an install — the active tool
+* Good: Kill the process at any point during an install: the active tool
   set is either the old one or the new one, never a mixture
 * Good: Provenance is honest per source; user-pinned tools are never
   silently substituted
@@ -99,6 +101,16 @@ Mechanics, fixed by this record:
   FFmpeg re-analyzes even when SVT-AV1 is unchanged
 
 ## More Information
+
+### Upstream artifact retention
+
+Recorded after acceptance. This evidence constrains which artifact the manifest may name; it does not change the decision.
+
+BtbN's retention policy keeps only the last 14 daily builds plus the last build of each month for two years, so a pinned daily autobuild expires. The build this record's manifest names (`autobuild-2026-07-19-13-12`, still compiled in at `crates/crfty-engine/src/vendor/manifest.rs`) has since returned HTTP 404 for both the Linux and Windows archives, and a cache-miss media-contract run failed on both platforms while fetching those exact URLs. A managed install on a clean machine therefore cannot currently complete, and a stale CI cache had been hiding it.
+
+The trust anchor is unaffected, and the evidence narrows the option space in this record's favor: the floating `latest` release is a durable URL whose bytes change, so it can never satisfy a checksum compiled into the binary. A hash pinned at build time still authenticates content end to end. What retention adds is a durability requirement on the artifact itself: a released application must be able to fetch its pinned bytes for its whole supported lifetime, and expiration must be detected before a user meets it.
+
+Repointing the manifest at a durable artifact is the kind of change this record already contemplates, since updating FFmpeg is a code change that ships through CI. Which durable source to adopt is open in issue #102: project-owned immutable hosting, artifacts built in project CI, or a bounded support and update policy that stays inside upstream's monthly retention. The first two carry redistribution and GPL source-availability obligations this record never weighed, so choosing either needs its own record superseding this one; staying inside monthly retention needs only a manifest update and a monitoring owner.
 
 Related: ADR-003 (pinned ab-av1 adapter; its revision constant is verified
 against `Cargo.lock`), ADR-005 (unsafe policy), ADR-007 (identity honesty),

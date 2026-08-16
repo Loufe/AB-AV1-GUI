@@ -13,7 +13,7 @@ state through a crash-safe writer barrier without breaking replay identity,
 recovery semantics, or the runtime-id derivation that depends on sequence
 numbering. The journal format also had no room to evolve: the version rode
 inside each delta envelope, so a record of any future shape failed as a parse
-error — indistinguishable from corruption — instead of "unsupported schema".
+error (indistinguishable from corruption) instead of "unsupported schema".
 
 ## Decision Drivers
 
@@ -23,7 +23,7 @@ error — indistinguishable from corruption — instead of "unsupported schema".
 * Torn-tail and semantic-corruption detection must survive the format change
 * A future schema version must fail distinctly, not as corruption
 * A failed compaction must never lose data or take the driver down
-* A running conversion is never interrupted (#33 §10)
+* A running conversion is never interrupted by compaction
 * No new dependencies
 
 ## Considered Options
@@ -44,8 +44,8 @@ probes the version alone before decoding the record, so an unknown schema
 reports "unsupported journal schema" instead of a parse error. A snapshot is
 only legal as the first line; one appearing later is semantic corruption.
 
-Compaction runs on the driver's idle tick — the writer barrier is implicit
-because the driver is the only writer and sits between batches — and only when
+Compaction runs on the driver's idle tick (the writer barrier is implicit
+because the driver is the only writer and sits between batches) and only when
 the state is quiescent (idle session, no reserved or claimed queue item). The
 size policy fires at a 64 MiB floor combined with a 4× dead-to-live ratio
 (Redis-AOF-style), or unconditionally at a 256 MiB hard cap; durable
@@ -55,7 +55,7 @@ it, closes the old journal handle, atomically replaces the journal (with a
 bounded retry for Windows sharing violations), fsyncs the parent directory
 where supported, and reopens. Sequence numbering continues from the snapshot's
 base sequence. On any failure the temp file is discarded, the old generation
-stays authoritative, and the driver retries after a backoff — never a fatal.
+stays authoritative, and the driver retries after a backoff, never a fatal.
 
 A single-file replace was chosen over a sidecar-plus-truncate because it keeps
 exactly one authoritative artifact with no cross-file recovery protocol.
@@ -72,10 +72,12 @@ makes adding checksums later a cheap schema bump.
   a stray temp file is inert
 * Bad: Compaction waits for quiescence, so a machine that never idles between
   work can exceed the size targets until the next barrier
-* Bad: The snapshot line duplicates fold logic's trust — a bug that folds bad
+* Bad: The snapshot line duplicates fold logic's trust: a bug that folds bad
   state would be baked into the compacted head (mitigated by semantic replay
   validation before any compaction)
 
 ## More Information
 
-See issue #33 section 10, issue #39, ADR-002, ADR-004, and ADR-008.
+The journal format and single-writer rule this record extends are ADR-004; the corruption-acknowledgment path that shares its writer barrier is ADR-011.
+
+See issue #39 (parked legacy records), ADR-002, ADR-004, ADR-008, and ADR-011.

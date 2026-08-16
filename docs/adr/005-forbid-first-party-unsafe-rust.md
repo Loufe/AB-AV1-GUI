@@ -42,4 +42,4 @@ blocks. Dependencies are locked, denied against policy, vetted, and inventoried.
 
 ## More Information
 
-See issue #33, sections 12 and 18.
+See `docs/design/lifecycle.md` (panic containment and platform process containment) and `docs/design/prior-art.md` (the dependency and native-binding findings behind this record).

@@ -178,7 +178,7 @@ Use ordinary barriers and controllable fake workers for protocol races. Loom is 
 
 ## More Information
 
-See issue #85 and ADR-012. ADR-012 establishes that statistics and prediction provenance derive from validated facts; cancellation telemetry is not such a fact. The upstream ab-av1 boundary research is recorded in [`docs/AB_AV1_LIBRARY_LIFECYCLE_RESEARCH.md`](../AB_AV1_LIBRARY_LIFECYCLE_RESEARCH.md) and [issue #104](https://github.com/Loufe/AB-AV1-GUI/issues/104); its implementation-validation contract is tracked separately in [issue #105](https://github.com/Loufe/AB-AV1-GUI/issues/105).
+See issue #85 and ADR-015, which supersedes ADR-012 and retains the rule that statistics and prediction provenance derive from validated facts; cancellation telemetry is not such a fact. The upstream ab-av1 boundary research is recorded in [`docs/AB_AV1_LIBRARY_LIFECYCLE_RESEARCH.md`](../AB_AV1_LIBRARY_LIFECYCLE_RESEARCH.md) and [issue #104](https://github.com/Loufe/AB-AV1-GUI/issues/104); its implementation-validation contract is tracked separately in [issue #105](https://github.com/Loufe/AB-AV1-GUI/issues/105).
 
 Implementation locations at the time of this proposal:
 

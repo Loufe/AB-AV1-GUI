@@ -97,7 +97,7 @@ Python history adoption is a product requirement, not compatibility policy.
 
 ## GitHub issues
 
-- Treat issue bodies as living specifications and update them in place.
+- Treat issue bodies as living specifications and update them in place. They own active scope, next actions, blockers, unresolved decisions, and acceptance criteria.
 - Do not use issue comments for progress, decision logs, merge notices, or research updates. Put durable detail in project docs and link from the body.
 - Caps: body 30 lines (epics 50), goal 3 sentences, acceptance 5 checkboxes.
 - Set parentage with GitHub's native sub-issue relation, never a `Parent: #NN` body line. Never restate a parent's content.

@@ -7,7 +7,7 @@ date: 2026-07-19
 
 ## Context and Problem Statement
 
-The frontend must never hand-author IPC or domain types (issue #33 §11): every
+The frontend must never hand-author IPC or domain types: every
 cross-boundary type is generated from Rust, and the delta stream must be ordered.
 The shell crate that owns this boundary needs a bindings toolchain, a transport,
 and a placement inside the workspace.
@@ -28,6 +28,9 @@ and a placement inside the workspace.
 * tauri-specta typed events for the delta stream
 * TauRPC
 * Hand-wired string commands over ts-rs types (Yaak's approach)
+* Generate the whole command layer from annotations on domain functions (GitButler's approach; rejected: the right call at hundreds of commands and three transports, but a proc-macro crate here would be more machinery than the boilerplate it deletes)
+* Emit empty-payload invalidation events and let the frontend refetch (GitButler's sync model; rejected: it cost them hand-built dedupe and focus guards for hazards a sequenced stream excludes structurally, and CRFty's whole state fits in one snapshot)
+* Send Rust-side view models (display strings) across the wire (rejected: presentation churn belongs in TypeScript, and generated types make raw-fact transfer safe)
 
 ## Decision Outcome
 
@@ -53,12 +56,12 @@ Mechanics, fixed by this record:
   crate into `ui/src/lib/bindings.ts`, which is committed. CI regenerates and
   fails on `git diff`. The file is excluded from oxfmt/oxlint so it stays
   byte-identical to generator output. (Handy exports only during dev runs and
-  has no freshness gate; issue #33 §16 records the lesson.)
+  has no freshness gate; `docs/design/prior-art.md` records the lesson.)
 * Integers wider than 32 bits cross the wire as TypeScript `number`, declared
   with `#[specta(type = crfty_core::JsNumber)]` field overrides. Tauri's JSON
   transport delivers every integer as a JavaScript number, so the honest
-  alternatives specta-typescript 0.0.12 offers — a hard export error or
-  `bigint` types whose runtime values would still be numbers — are both worse.
+  alternatives specta-typescript 0.0.12 offers (a hard export error or
+  `bigint` types whose runtime values would still be numbers) are both worse.
   Values are exact below 2^53; ids are counters and sizes stay far under it.
   The only fields that can exceed the bound are filesystem-identity internals
   (`modified_ns`, Windows `file_id`), which the frontend treats as opaque and
@@ -67,7 +70,7 @@ Mechanics, fixed by this record:
   wrapped with a per-connection sequence number assigned by the shell forwarder.
   Driver effects never cross the boundary.
 * Reconnect uses snapshot-in-stream: the forwarder thread maintains a read model
-  by applying `crfty_core::fold` — the same pure fold the frontend runs — and a
+  by applying `crfty_core::fold` (the same pure fold the frontend runs) and a
   new subscription receives that state as its first message, ordered by the
   single forwarder thread. Moving snapshot emission into the driver itself
   remains an open alternative; the wire contract would not change.
@@ -82,5 +85,4 @@ Mechanics, fixed by this record:
 
 ## More Information
 
-See issue #33 §11 and §16, ADR-001, ADR-002, ADR-004, and tauri-specta issue
-#198 (Channel support is limited to command arguments — the one position used).
+See `docs/design/event-stream.md` (delta lanes, coalescing, and reconnect), `docs/design/prior-art.md` (the shipped-app lessons behind the pins and the export gate), ADR-001, ADR-002, ADR-004, and tauri-specta issue #198 (Channel support is limited to command arguments, the one position used).

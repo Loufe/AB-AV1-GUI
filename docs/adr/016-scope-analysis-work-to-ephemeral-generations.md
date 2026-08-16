@@ -158,8 +158,8 @@ prediction/confidence fields to streamed rows after Basic Scan facts land.
 ## More Information
 
 See issues #42, #53, #55, #56, #57, and #59; ADR-002, ADR-004, ADR-006,
-ADR-007, and ADR-012. ADR-015 is reserved by #52 for imported-history
-projection and provenance decisions.
+ADR-007, and ADR-015 (which supersedes ADR-012 and carries the projection and
+imported-history provenance decisions).
 
 Implementation references:
 

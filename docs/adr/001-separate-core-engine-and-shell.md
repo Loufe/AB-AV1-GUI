@@ -23,6 +23,8 @@ and Tauri integration from becoming coupled.
 * One application crate
 * Many topic-oriented crates
 * Core, engine, and thin Tauri shell separated by dependency capability
+* Run the engine as a separate daemon process (rejected: a tray-resident application would cover the same need at a fraction of the complexity)
+* Ship a headless CLI alongside the GUI (rejected: ab-av1 is already the headless tool, a GUI-less wrapper would re-serve it minus the product's actual value in bulk estimates and statistics, and the engine-to-GUI boundary is enforced by the crate graph alone)
 
 ## Decision Outcome
 
@@ -41,4 +43,4 @@ future shell may depend on both and contains only IPC and application wiring.
 
 ## More Information
 
-See issue #33, section 4, and ADR-002.
+See `docs/ARCHITECTURE.md` (the workspace layout and dependency rule) and ADR-002.

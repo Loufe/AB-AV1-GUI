@@ -11,10 +11,12 @@ The journal has exactly one writer (ADR-002, ADR-004), and that must hold across
 processes, not just threads: a second application instance replaying and appending
 the same journal would corrupt durable state. The guard previously lived as an OS
 lock on the journal file handle itself, which ties exclusivity to that handle's
-lifetime — compaction's writer barrier must close and reopen the journal, and on
+lifetime: compaction's writer barrier must close and reopen the journal, and on
 Windows an append-mode handle cannot always be locked. A GUI-level single-instance
 plugin is insufficient because headless or crashed-shell scenarios bypass it while
-the engine still owns shared state (#33 §16).
+the engine still owns shared state: a shipped application in this stack skipped
+its own single-instance plugin in headless mode, which `docs/design/prior-art.md`
+records.
 
 ## Decision Drivers
 
@@ -34,8 +36,9 @@ the engine still owns shared state (#33 §16).
 
 Chosen option: **a dedicated lock file (`crfty.lock`) in the data directory**,
 locked exclusively via `std::fs::File::try_lock` and held for the driver's
-lifetime. Acquisition happens before settings load and journal fold (#33 §12), so
-a losing instance never reads shared durable state. `TryLockError::WouldBlock`
+lifetime. Acquisition happens before settings load and journal fold, the startup
+order recorded in `docs/design/lifecycle.md`, so a losing instance never reads
+shared durable state. `TryLockError::WouldBlock`
 maps to a typed `AlreadyRunning` error that the shell surfaces as a dedicated
 second-instance stream payload rather than a generic degraded reason.
 
@@ -49,8 +52,8 @@ start. No unlock, cleanup, or staleness protocol exists.
 * Good: Second-instance behavior is a typed state, testable end to end
 * Good: Advisory locks release on process death, so crashes need no recovery path
 * Bad: The lock is advisory; non-cooperating processes are not blocked (they never
-  were — this guards against our own second instance, not tampering)
+  were: this guards against our own second instance, not tampering)
 
 ## More Information
 
-See issue #33, sections 12 and 16, and ADR-004.
+See `docs/design/lifecycle.md` (startup order and shutdown), `docs/design/prior-art.md` (the headless single-instance lesson), and ADR-004.
