@@ -2,6 +2,8 @@
 
 Status: living research note; not an accepted design or implementation specification  
 Upstream coordination: [alexheretic/ab-av1#371](https://github.com/alexheretic/ab-av1/issues/371)  
+Tracking issue: [#104](https://github.com/Loufe/AB-AV1-GUI/issues/104)  
+Implementation validation: [#105](https://github.com/Loufe/AB-AV1-GUI/issues/105)  
 Related CRFty decisions: [ADR-003](adr/003-embed-a-pinned-ab-av1-adapter.md), [ADR-018](adr/018-unify-job-cancellation-and-completion.md)  
 Last updated: 2026-08-16
 
@@ -275,8 +277,8 @@ The prototype may supply implementation pieces after each is independently justi
 ## Documentation and issue actions
 
 * Keep CRFty's private supervision decision in ADR-018 and issue #85.
-* Track the upstream ab-av1 operation boundary in a dedicated CRFty issue linked to upstream issue #371.
-* Track implementation and real-process contract tests in a separate issue rather than treating them as research deliverables.
+* Track the upstream ab-av1 operation boundary in [issue #104](https://github.com/Loufe/AB-AV1-GUI/issues/104), linked to upstream issue #371.
+* Track implementation and real-process contract tests in [issue #105](https://github.com/Loufe/AB-AV1-GUI/issues/105) rather than treating them as research deliverables.
 * Update upstream issue #371 with the confirmed hazards, mechanism-neutral requirements, both credible API families, and an explicit statement that no public `CancellationToken` dependency is requested.
 * Write a new ADR only after the public lifecycle and process-ownership decisions are made. Relate it to ADR-003 and ADR-018, and supersede ADR-003 only if the fundamental embedded-adapter decision changes.
 
