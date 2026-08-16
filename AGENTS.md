@@ -83,7 +83,7 @@ Python history adoption is a product requirement, not compatibility policy.
 
 ## GitHub issues
 
-- Treat issue bodies as living specifications and update them in place.
+- Treat issue bodies as living specifications and update them in place. They own active scope, next actions, blockers, unresolved decisions, and acceptance criteria.
 - Do not use issue comments for progress, decision logs, merge notices, or research updates. Put durable detail in project docs and link from the body.
 
 ## Worktrees
