@@ -2,7 +2,7 @@
 
 Status: living research note; not an accepted design or implementation specification  
 Tracking issue: [#94](https://github.com/Loufe/AB-AV1-GUI/issues/94)  
-Related decisions: [#92](https://github.com/Loufe/AB-AV1-GUI/issues/92), [#93](https://github.com/Loufe/AB-AV1-GUI/issues/93), [#95](https://github.com/Loufe/AB-AV1-GUI/issues/95), [#96](https://github.com/Loufe/AB-AV1-GUI/issues/96), [#97](https://github.com/Loufe/AB-AV1-GUI/issues/97), [#99](https://github.com/Loufe/AB-AV1-GUI/issues/99)  
+Related issues: [#92](https://github.com/Loufe/AB-AV1-GUI/issues/92), [#93](https://github.com/Loufe/AB-AV1-GUI/issues/93), [#95](https://github.com/Loufe/AB-AV1-GUI/issues/95), [#96](https://github.com/Loufe/AB-AV1-GUI/issues/96), [#97](https://github.com/Loufe/AB-AV1-GUI/issues/97), [#99](https://github.com/Loufe/AB-AV1-GUI/issues/99), [#102](https://github.com/Loufe/AB-AV1-GUI/issues/102), [#103](https://github.com/Loufe/AB-AV1-GUI/issues/103)  
 Last updated: 2026-08-16
 
 ## Purpose and boundary
@@ -43,22 +43,9 @@ The labels below mean:
 3. Keep both attempt cost and end-to-end user-wait cost. A clean successful
    attempt is useful for throughput modeling; the full run envelope, including
    retries and cleanup, is the truthful observation for queue-time prediction.
-4. Use FFmpeg and SVT-AV1 self-reporting before adding an operating-system
-   collector. V3 already owns typed effective arguments and managed-build
-   identity; FFmpeg can additionally emit machine-readable progress and a
-   terminal self benchmark, while SVT reports useful runtime corroboration.
-   Parse only allowlisted fields. Do not retain raw stderr or use `-report`,
-   which records the full command line.
-5. The supervisor still owns the authoritative attempt clock and terminal
-   outcome. FFmpeg's benchmark is best effort: a crash or forced kill may omit
-   it, it covers the FFmpeg process rather than the complete run/fallback
-   envelope, and its maximum-memory meaning differs by platform. OS-level
-   accounting should target only facts self-reporting cannot provide.
-6. Reliable remaining process-tree counters belong at the process wait/reap
-   boundary. PID polling can miss short attempts, cannot inspect a process
-   after it has been reaped, and risks PID reuse. `sysinfo` is useful as a safe
-   portability oracle and for controlled experiments, but is not yet the
-   preferred source for durable per-attempt accounting.
+4. Separate requested execution intent from encoder-confirmed effective configuration. V3's typed arguments are authoritative for what it requested, but a representative managed-family SVT build mapped requested presets 12 and 13 to effective preset 11. SVT's public API has setters but no configuration getter, and FFmpeg does not receive normalized settings back. An estimator must not split or label cohorts by settings the encoder did not actually apply.
+5. Use FFmpeg/SVT self-reporting for progress, runtime library identity, and effective encoder semantics, not as the preferred resource-accounting layer. `-benchmark` is a useful fixture oracle, but its timing excludes FFmpeg startup/teardown, startup failures can emit memory without timing, V3 hard-kill cancellation emits nothing, and its memory meaning differs by platform.
+6. Reliable attempt resource counters belong at the process wait/reap or Job boundary, with explicit scope. Linux terminal `wait4` matched the FFmpeg leader's maximum RSS exactly in ten trials while covering more of that process lifecycle, but it is not a process-group aggregate. Windows Job accounting covers the contained tree, which matters when PATH launchers add a shim before FFmpeg. PID polling can miss short attempts and risks reuse. `sysinfo` remains a controlled oracle, not the preferred durable source.
 7. Similar names do not imply comparable measurements. Windows Job Object I/O
    counts all I/O operations; Linux `/proc/<pid>/io` distinguishes characters
    passed through I/O calls from storage-layer bytes. Windows peak job memory
@@ -92,6 +79,8 @@ The rewrite already records more execution identity than the estimator uses:
   decoder actually used by the successful encode.
 - `ConversionRun`: immutable job specification, analysis, outcome, wall-clock
   timestamps, and monotonic phase spans.
+
+The revision fields are not yet equally authoritative. A managed archive checksum fixes the complete FFmpeg/SVT artifact, so its build identifier is a sound compatibility key even though it is not the literal SVT version. For system and explicit tools, discovery runs only ffprobe's JSON `-show_program_version` probe and assigns that one program version to both `ffmpeg_revision` and `encoder_revision`. FFmpeg and ffprobe may resolve from different tiers or builds, and a dynamically linked SVT library may change without either program version changing. Those fields are therefore proxies that can permit a stale analysis cache hit; they must not be described as exact runtime revisions until the executed FFmpeg and encoder are independently verified.
 
 The current `EstimationModel` reduces eligible history to phase-time per second
 of video and groups it by codec and resolution bucket. It does not distinguish
@@ -171,17 +160,17 @@ the prediction stage in production:
 
 | Candidate | Initial class | Stage | Source/semantic requirements | Main risk or unresolved question |
 | --- | --- | --- | --- | --- |
-| Effective execution settings | candidate required | prepared/attempt | Existing typed `JobSpec`; record requested and actual values | Estimator cohort explosion; decide exact-match and fallback ladder in #92/#93 |
-| Exact app and tool revisions | candidate required | prepared | Existing discovered revisions plus app build identity | Decide grouping across revisions; never infer equivalence from version strings |
+| Requested and effective execution settings | candidate required | prepared/attempt | Existing typed `JobSpec` for requested intent; a revision-scoped compatibility contract, preflight rejection, or encoder-confirmed effective value when coercion is possible | Estimator cohort explosion; accepted numeric range does not prove one-to-one behavior, and human startup-log parsing is not an ideal authority |
+| Exact app and tool revisions | candidate required | prepared | App build identity; managed artifact checksum/contract; executed FFmpeg identity and runtime SVT version for external tools | Current system/explicit discovery copies ffprobe's version into both FFmpeg and encoder fields; never infer equivalence from version strings |
 | Platform family and architecture | candidate required | startup/prepared | Typed enum such as Windows/Linux and x86_64/aarch64 | Raw kernel/build strings can be high-cardinality or contain custom suffixes |
 | Actual decoder/accelerator role | candidate required | attempt | Existing `DecodeMode`, expanded to failed attempts | Hardware capability is not proof that hardware was actually used |
 | Monotonic attempt and run wall time | candidate required | attempt/terminal | `Instant`-based duration; wall clock only for display chronology | Recovery cannot fabricate missing monotonic evidence |
-| FFmpeg terminal self benchmark | candidate best effort | attempt terminal | FFmpeg `-benchmark`: real/user/system time and platform-specific maximum memory | Missing on abrupt termination; process-only scope; Linux maximum RSS and Windows peak pagefile usage are not equivalent |
-| SVT runtime self-report | candidate best effort corroboration | attempt start | Allowlisted version, selected instruction level, and parallelism/configuration fields from SVT startup output | Human log format, verbosity, and version-dependent names make absence normal; typed arguments remain authoritative |
+| FFmpeg terminal self benchmark | experimental validation oracle; reject as initial durable collector | attempt terminal | FFmpeg `-benchmark`: transcode real/user/system time and platform-specific maximum memory | Partial on startup failure, absent on hard kill, human log, process-only scope, and lifecycle/semantic mismatch with terminal OS accounting |
+| SVT runtime self-report | candidate best effort; required when supported settings can be coerced and no revision contract exists | attempt start | Allowlisted runtime version, selected instruction level, parallelism, warnings, and effective configuration from SVT startup output | Human/version-dependent log; SVT exposes no structured effective-configuration getter through FFmpeg |
 | Available parallelism | candidate best effort | startup/prepared | `std::thread::available_parallelism`, with source and approximation quality | Can over/undercount affinity, job, VM, or cgroup limits; do not call in hot loops |
-| CPU quota/cpuset or Job limits | candidate best effort | prepared | Linux cgroup hierarchy; Windows containment/parent limits where safely observable | Effective hierarchical limit is not always exposed by a leaf API |
-| Process/job user and kernel CPU | candidate best effort | attempt terminal | Linux `wait4`/`rusage`; Windows Job Object accounting | Linux leader/process semantics differ from Windows job-tree semantics |
-| Peak memory | candidate best effort, source-specific | attempt terminal | Linux `ru_maxrss` in KiB; Windows Job Object peak memory | Resident vs job memory/commit semantics are not portable |
+| CPU quota/cpuset or Job limits | candidate best effort | prepared | Linux cgroup hierarchy; Windows containment/parent limits where safely observable | The owned Windows inner Job does not expose an ancestor's effective limits; Linux likewise requires hierarchy traversal |
+| Process/job user and kernel CPU | candidate best effort | attempt terminal | Linux `wait4` leader plus descendants it waited for; Windows Job Object accounting for the contained tree | Linux conditional lineage semantics differ from Windows job-tree semantics |
+| Peak memory | candidate best effort, source-specific | attempt terminal | Linux leader/waited-lineage `ru_maxrss` in KiB; Windows Job Object peak memory | Linux reports the largest process RSS rather than aggregate tree memory; Windows uses different job memory/commit semantics |
 | Process/job I/O | Windows candidate; Linux terminal source rejected on current evidence | attempt terminal | Windows Job Object `IO_COUNTERS`; Linux `wait4` block-operation counts only | WSL fixture returned `EACCES` for exited-unreaped `/proc/<pid>/io`; Windows all-I/O bytes and Linux block operations are not equivalent |
 | Page faults/context switches | experimental | attempt terminal | `rusage` or Job Object counters when available | Predictive value unknown and cross-platform sets differ |
 | Claim-time system CPU/memory | experimental | claim | Linux `/proc/stat` and `/proc/meminfo`; safe Windows wrapper | Snapshot is noisy; a delta needs a defined interval and cannot explain cause |
@@ -243,57 +232,53 @@ Units belong to the measurement contract. Do not publish a generic
 honest names are `max_resident_kib`, `job_peak_memory_bytes`,
 `storage_read_bytes`, and `all_io_read_transfer_bytes`.
 
-## FFmpeg-first collection boundary
+## FFmpeg, SVT, and supervisor collection boundary
 
-FFmpeg is not merely the workload being observed. It is the best source for
-several facts about its own execution, and using those facts first materially
-narrows the native collector surface.
+FFmpeg and SVT are the best sources for facts about the media pipeline and encoder-effective behavior. They are not the most complete source for attempt lifecycle resource usage.
 
 | Fact | Preferred source | Contract treatment |
 | --- | --- | --- |
-| Effective requested encoder/search settings | V3's typed request and pinned ab-av1 adapter arguments | Authoritative; do not reconstruct configuration by parsing logs |
-| Managed FFmpeg/encoder identity | Checksummed vendor manifest and discovered revisions | Authoritative for the checksummed managed build; collect once during discovery |
-| Explicit/override runtime identity | Allowlisted `ffmpeg -version` fields plus SVT startup version when emitted | Corroborating evidence with typed absence; never store the complete banner/build configuration |
-| Encode/search progress | Existing typed ab-av1 adapter updates; FFmpeg `-progress` for direct FFmpeg operations such as remux | Operational machine-readable source; retain durable fields only when a named History consumer requires them |
-| FFmpeg terminal real/user/system time | `-benchmark` terminal summary | Best-effort process-scoped evidence; supervisor monotonic time remains authoritative |
-| FFmpeg terminal maximum memory | `-benchmark`, retained with platform/source semantics | Linux is maximum resident set; current Windows implementation reports peak pagefile usage; never merge them into one portable field |
+| Requested encoder/search settings | V3's typed request and pinned ab-av1 adapter arguments | Authoritative intent; do not reconstruct by parsing logs |
+| Encoder-effective settings | Revision-scoped compatibility contract or preflight validation; otherwise allowlisted SVT startup evidence | Record separately from requested intent; never assume equality when the encoder can map, clamp, or reject |
+| Managed FFmpeg/encoder identity | Checksummed vendor manifest and discovered revisions | Authoritative only while the exact managed artifact remains obtainable; [#102](https://github.com/Loufe/AB-AV1-GUI/issues/102) owns artifact durability |
+| Explicit/override runtime identity | Allowlisted `ffmpeg -version` fields plus SVT startup version when emitted | Corroborating evidence with typed absence; never retain the complete banner/build configuration |
+| Encode/search progress | Existing typed ab-av1 adapter updates; FFmpeg `-progress` for direct FFmpeg operations such as remux | Operational machine-readable source; retain durable fields only for a named History consumer |
+| Process/job CPU and memory | Linux terminal `wait4` for the FFmpeg leader/waited lineage; Windows Job accounting for the contained tree | Preferred source-qualified attempt evidence because it survives leader hard kill and avoids a human benchmark parser; never imply equal scope |
+| FFmpeg self benchmark | Synthetic validation oracle | Do not persist initially; it is partial/absent on important outcomes and its timing scope differs from terminal accounting |
 | Exit cause, cancellation escalation, retries, and decoder fallback | V3 supervisor/attempt ledger | Authoritative; FFmpeg cannot see the enclosing orchestration |
-| Whole contained tree, resource caps, and system contention | Narrow OS collector, only if a consumer justifies it | Residual research scope; not replaceable by an FFmpeg query |
+| Resource caps and system contention | Narrow OS collector only if a consumer justifies it | Not replaceable by an FFmpeg query |
 
-FFmpeg documents [`-progress`](https://ffmpeg.org/ffmpeg.html) as periodic
-machine-readable `key=value` sequences ending in `progress=continue` or
-`progress=end`. V3's remux path already uses this interface. Search and encode
-currently receive typed progress from the pinned ab-av1 adapter, so this
-research should not introduce a second competing progress parser merely to
-collect History evidence.
+FFmpeg documents [`-progress`](https://ffmpeg.org/ffmpeg.html) as periodic machine-readable `key=value` sequences ending in `progress=continue` or `progress=end`. V3's remux path already uses this interface. Search and encode already receive typed progress from the pinned ab-av1 adapter, so History should not introduce a second competing progress parser.
 
-FFmpeg's [`-benchmark`](https://ffmpeg.org/ffmpeg.html) prints real, system, and
-user time plus maximum memory at the end of an encode. Its implementation is
-not semantically uniform: [current FFmpeg source](https://ffmpeg.org/doxygen/trunk/ffmpeg_8c_source.html)
-uses `getrusage(RUSAGE_SELF)` and `ru_maxrss` on Linux, but `GetProcessTimes` and
-`PROCESS_MEMORY_COUNTERS.PeakPagefileUsage` on Windows. The SVT encoder runs
-inside FFmpeg, so its threads contribute to these process counters; surrounding
-ab-av1/V3 orchestration, separate sample/score processes, and unrelated
-descendants do not become one run-level observation. Each FFmpeg execution must
-bind to its own attempt, and the run envelope must aggregate attempts without
-discarding failed work.
+FFmpeg's [`-benchmark`](https://ffmpeg.org/ffmpeg.html) prints transcode real, system, and user time plus maximum memory. [Current FFmpeg source](https://ffmpeg.org/doxygen/trunk/ffmpeg_8c_source.html) starts the timing baseline after option parsing and input/output initialization, uses `getrusage(RUSAGE_SELF)` and `ru_maxrss` on Linux, and uses `GetProcessTimes` plus `PROCESS_MEMORY_COUNTERS.PeakPagefileUsage` on Windows. The memory value is process-lifetime cumulative, but the time values omit startup and teardown. Linux maximum resident set and Windows peak pagefile usage must never share one portable field.
 
-`-benchmark_all` emits timing throughout multiple internal steps, but those
-human diagnostic lines are not required for the initial consumer and would
-expand parsing/version surface. The first experiment should add only
-`-benchmark`, compare its results with terminal OS accounting, and record its
-miss rate for success, nonzero exit, cancellation, and forced termination.
+### FFmpeg/SVT lifecycle fixture
 
-SVT's startup output can corroborate the runtime library version, selected
-instruction level, reported parallelism, and effective encoder configuration.
-It is a human/version-dependent log, not the authority for values V3 already
-sets through typed arguments. A versioned allowlist parser may retain selected
-fields with normal typed absence; it must not store arbitrary stderr lines.
+All workloads were synthetic lavfi inputs with null outputs. No media path, process ID, command line, host/user name, or device identity was retained. The temporary scripts, archive, and extracted binary were removed after the fixture.
 
-FFmpeg [`-report`](https://ffmpeg.org/ffmpeg.html) is prohibited for History
-collection because it writes the complete command line and log. Ordinary
-stderr can also contain media paths and metadata, so the same typed-allowlist
-boundary applies even when no report file is created.
+The Windows fixture used FFmpeg 8.1.2. Five successful trials emitted two lines: real/user/system time followed by `maxrss`. Two failures during input initialization or encoder selection emitted only `maxrss`; a parser must therefore support partial terminal evidence rather than one atomic benchmark record.
+
+The Linux fixture used a retained BtbN FFmpeg 8.1 build from the same release family as V3's pin, with its published SHA-256 verified before extraction. It is not the exact pinned build: BtbN had already deleted V3's July 19 daily artifact under its [documented retention policy](https://github.com/BtbN/FFmpeg-Builds#release-retention-policy). [Issue #102](https://github.com/Loufe/AB-AV1-GUI/issues/102) owns that separate managed-install failure.
+
+On the Linux fixture, normal SVT encodes emitted both benchmark lines. `SIGINT` and `SIGTERM` allowed FFmpeg to emit full benchmark output; `SIGKILL` emitted none. The pinned ab-av1 fork calls `AsyncGroupChild::kill`, which [`command-group` 5.0.1 documents](https://docs.rs/command-group/5.0.1/command_group/struct.AsyncGroupChild.html#method.kill) and implements as process-group `SIGKILL` on Unix and `TerminateJobObject` on Windows. Therefore stopped/cancelled V3 attempts cannot rely on FFmpeg benchmark evidence.
+
+Across five one-frame and five thirty-frame Linux SVT trials, FFmpeg `maxrss` exactly matched the parent-observed terminal maximum RSS in every trial (91,800–92,680 KiB and 147,620–150,456 KiB respectively). Parent-observed CPU and wall time were slightly larger because terminal accounting included the lifecycle outside FFmpeg's transcode baseline. The self benchmark adds no Linux peak-memory fact and provides a narrower time scope than `wait4`.
+
+The Windows `ffmpeg` command was a Chocolatey launcher shim, confirmed through non-identifying executable metadata. Sampling that leader handle measured the shim rather than the descendant encoder, while FFmpeg's self-report came from the descendant. This is a concrete reason to use the already-owned Job tree rather than leader-PID polling; command launchers are not merely theoretical.
+
+The representative BtbN build contained SVT-AV1 `v4.1.0-279-gd3c4cb394`. One-frame trials across V3's accepted preset range 0–13 showed requested presets 0–11 preserved, requested 12 mapped to effective 11, and requested 13 mapped to effective 11. The existing `MAX_ENCODING_PRESET = 13` and `AnalysisProfile.preset` therefore describe requested intent, not necessarily actual encoder configuration. The implementation must either reject/map unsupported settings before execution or retain separately sourced effective settings; an estimator must not treat requested 11, 12, and 13 as three different workloads when the active encoder executes all three as 11.
+
+This is revision-sensitive behavior, not a stable meaning of the preset integer. [SVT-AV1 2.3.0](https://gitlab.com/AOMediaCodec/SVT-AV1/-/releases/v2.3.0) documented M12/M13 mapping to M11 while retaining the accepted API range; [SVT-AV1 3.0.0](https://gitlab.com/AOMediaCodec/SVT-AV1/-/releases/v3.0.0) repositioned presets and declared M10 the maximum unique preset; later releases added faster RTC-only modes. The current public header still enumerates M0–M13, so an accepted range or `ffmpeg -h encoder=libsvtav1` cannot establish that each number selects a distinct workload.
+
+SVT 4.1's [public encoder header](https://gitlab.com/AOMediaCodec/SVT-AV1/-/raw/v4.1.0/Source/API/EbSvtAv1Enc.h) exposes `svt_av1_enc_init_handle`, `svt_av1_enc_set_parameter`, and `svt_av1_enc_parse_parameter`, but no configuration getter; its stream-info API exposes pass statistics rather than normalized configuration. FFmpeg 8.1.2's [libsvtav1 wrapper](https://raw.githubusercontent.com/FFmpeg/FFmpeg/n8.1.2/libavcodec/libsvtav1.c) fills a local configuration, passes it to `svt_av1_enc_set_parameter`, and then initializes the encoder without reading effective values back. SVT 4.x adds a global log callback for direct library consumers, but FFmpeg does not register it and callback output remains diagnostic text rather than a typed normalized-config result. V3 therefore cannot query effective SVT configuration through FFmpeg today.
+
+For managed artifacts, the least ambiguous contract is a CI-produced, exact-revision compatibility table derived from tiny synthetic encodes and bound to the vendor manifest checksum. Preparation can reject settings outside the proven one-to-one set or deliberately canonicalize them before they reach History. A system override must pass the same behavioral probe or provide typed absence and be excluded from setting-sensitive cohorts; matching only a version string or advertised option range is insufficient. Startup-log parsing is a corroborating fallback, not the primary contract.
+
+The same privacy-safe synthetic encode can close the external-tool identity gap: invoke the selected FFmpeg directly with a lavfi source and null output, retain only an allowlisted FFmpeg version, SVT runtime version, requested preset, and effective preset, then discard all raw output. This proves the executable/encoder pair actually used and avoids real media paths. It should be cached only ephemerally for the session and requested configuration unless a separate stable external-artifact identity is defined; a persisted ffprobe version cannot prove that a dynamically linked encoder stayed unchanged.
+
+The pinned ab-av1 parser is not currently shaped for benchmark collection. `FfmpegOutStream` reads arbitrary 4 KiB stderr chunks, retains a bounded tail, and attempts one parse against only the latest non-empty line per chunk. FFmpeg emits timing and memory as separate adjacent lines that may coalesce into one chunk, and the stream exposes no terminal resource report. Adding a reliable benchmark path would require terminal parsing, partial-field handling, error attachment, and parser-version fixtures—not just adding `-benchmark` to `enc_args`. That integration cost is unjustified while terminal OS accounting is more complete.
+
+`-benchmark_all` remains rejected: it expands unstable human diagnostic parsing without a named consumer. FFmpeg [`-report`](https://ffmpeg.org/ffmpeg.html) is prohibited because it writes the complete command line and log. Ordinary stderr can also contain media paths and metadata, so any SVT runtime parser must emit only typed allowlisted fields and discard raw lines.
 
 ## Platform source review
 
@@ -368,16 +353,9 @@ and context switches. Some `rusage` members are unmaintained zeros, and
 peak. The collector must expose only documented maintained fields and identify
 its scope.
 
-`command-group` 5.0.1 currently calls `waitpid` and discards resource usage. A
-reviewed dependency change could use `wait4` and return a safe terminal
-snapshot. This is preferable to polling. A Linux-only experiment used
-`waitid(..., WNOWAIT)` to leave exited direct children waitable before reading
-`/proc/<pid>/io` and reaping them. Although the
-[`waitid` contract](https://man7.org/linux/man-pages/man2/waitpid.2.html) supports
-leaving the child waitable, the WSL fixture returned `EACCES` for the I/O file
-on successful, killed, and fast-exiting zombies. Terminal `/proc` I/O is
-therefore not a current recommendation; native/restricted Linux fixtures may
-explain portability, but cannot turn this failure into a required collector.
+Linux [`getrusage`](https://www.man7.org/linux/man-pages/man2/getrusage.2.html) includes grandchildren and further descendants only when every intervening process waited for its children. `wait4` cannot reap an arbitrary grandchild merely because it shares the leader's process group; an unwaited descendant is reparented when its parent exits. Therefore the honest scope is the FFmpeg leader plus descendant usage that was folded into it by intervening waits, not the contained process group. This still captures SVT's encoder threads because they execute inside FFmpeg, but it cannot promise Windows-Job-equivalent tree accounting.
+
+`command-group` 5.0.1 currently calls `waitpid` and discards resource usage. Its Unix loop passes the negative process-group ID and says it waits for the group completely, but `waitpid` can return only the caller's waitable children; V3 is not a child subreaper. A reviewed dependency change could use `wait4` and return a safe source-qualified terminal snapshot, but it must not label that snapshot as group aggregate. This is preferable to polling. A Linux-only experiment used `waitid(..., WNOWAIT)` to leave exited direct children waitable before reading `/proc/<pid>/io` and reaping them. Although the [`waitid` contract](https://man7.org/linux/man-pages/man2/waitpid.2.html) supports leaving the child waitable, the WSL fixture returned `EACCES` for the I/O file on successful, killed, and fast-exiting zombies. Terminal `/proc` I/O is therefore not a current recommendation; native/restricted Linux fixtures may explain portability, but cannot turn this failure into a required collector.
 
 [`/proc/<pid>/io`](https://www.kernel.org/doc/html/latest/filesystems/proc.html)
 distinguishes characters passed through reads/writes from storage-layer bytes,
@@ -455,8 +433,7 @@ Environment:
 
 - Windows build 10.0.26100, x64;
 - 12 processors reported to the process environment;
-- the probe process was not already inside an outer Job Object, so nested and
-  constrained-parent behavior remains untested.
+- the initial accounting/overhead probe was not already inside an outer Job Object; a follow-up synthetic fixture created controlled outer Jobs for nested-limit behavior.
 
 The direct-child workload touched a 64 MiB allocation, performed CPU work, and
 wrote/read/deleted a 4 MiB temporary file. Across five runs:
@@ -489,10 +466,15 @@ PowerShell loop overhead. Five direct-child trials produced:
 | `GetSystemTimes` | 4.067 µs | 4.280 µs | 5.327 µs |
 | `GlobalMemoryStatusEx` | 1.322 µs | 1.376 µs | 1.385 µs |
 
-This supports terminal-boundary collection rather than polling, but it does not
-yet prove that `command-group` can expose the snapshot without changing handle,
-wait, cancellation, or completion-port behavior. It also does not test an outer
-Job, CPU-rate limit, affinity restriction, cancellation, or very fast child.
+The follow-up fixture assigned the probe to an outer Job with `ActiveProcessLimit = 2`, then assigned its synthetic child to an otherwise unconstrained inner Job. Nested assignment succeeded. After the child tree exited, the outer Job reported three total processes and the inner Job reported two, matching Microsoft's [nested-Job accounting contract](https://learn.microsoft.com/en-us/windows/win32/procthread/nested-jobs) that parent accounting aggregates child Jobs while each Job accounts its own subtree.
+
+Querying the inner Job returned zero limit flags and no active-process limit even though the outer Job reported flag `0x8` and limit `2`. The parent limit remains effective according to the Windows contract, but it is not surfaced by querying V3's inner Job handle. History must therefore represent ancestor constraint as unknown unless a separately authorized parent-discovery API proves it; the owned Job cannot truthfully report effective capacity by itself.
+
+A second outer Job set UI restriction flag `0x1`. Nested assignment still succeeded on Windows build 10.0.26100 and the inner Job again accounted the child subtree, despite current Microsoft prose saying default nesting requires neither Job to set UI limits. Treat this as one platform observation, not a portability guarantee; assignment remains fallible and needs deterministic cleanup.
+
+That cleanup is currently defective in `command-group` 5.0.1. Both Windows spawn paths create raw Job/completion-port handles, spawn the child suspended, and return immediately on `AssignProcessToJobObject` or thread-resumption error before an owning group wrapper exists. Rust child drop does not terminate/reap the process, and the raw handles have no error-path owner. [Issue #103](https://github.com/Loufe/AB-AV1-GUI/issues/103) owns the dependency fix and regression tests; resource-accounting exposure remains here and in #99.
+
+This supports terminal-boundary collection rather than polling, but it does not yet prove that `command-group` can expose the snapshot without changing handle, wait, cancellation, or completion-port behavior. It also does not test CPU-rate limits, affinity restrictions, cancellation, very fast children, or restricted host Jobs whose handles V3 cannot access.
 The throwaway source was removed after recording the fixture.
 
 ## Preliminary Linux/WSL fixture
@@ -595,10 +577,9 @@ paths, machine names, account names, IDs, and device addresses are excluded.
 ### Implementations to compare
 
 1. No collector control.
-2. FFmpeg `-benchmark` self-report, bound to each real FFmpeg attempt.
+2. FFmpeg `-benchmark` as a fixture oracle only, bound to each real FFmpeg attempt where emitted.
 3. Targeted `sysinfo` snapshots with only CPU/memory/I/O refreshes.
-4. A safe `command-group`/process-wrapper terminal snapshot:
-   Windows Job Object accounting and Linux `wait4` resource usage.
+4. A safe `command-group`/process-wrapper terminal snapshot with distinct Windows Job-tree and Linux leader/waited-lineage variants.
 5. Linux `waitid(WNOWAIT)` plus allowlisted `/proc/<pid>/io` only as a negative
    portability fixture; current WSL evidence rejects it as a dependable
    terminal source.
@@ -665,36 +646,17 @@ or scope mismatch must produce an unavailable derivation, not zero contention.
 
 ## Recommended dependency and integration direction
 
-The first spike should start with the existing FFmpeg/adapter boundary, then add
-OS collection only for residual facts:
+The first implementation spike should use FFmpeg/SVT only for semantic execution evidence and the existing containment boundary for resource evidence:
 
-1. Add FFmpeg `-benchmark` to synthetic and real adapter fixtures, parse only
-   terminal real/user/system time and the source-qualified memory value, and
-   bind the result to the exact FFmpeg attempt. Keep supervisor monotonic time
-   and terminal outcome authoritative.
-2. Compare the self-report with independently observed terminal accounting and
-   record missing/malformed behavior for success, failure, cancellation, and
-   forced termination. Evaluate an allowlisted SVT startup parser separately;
-   typed V3 arguments remain the configuration authority.
-3. Define a tiny safe terminal-resource snapshot in the process containment
-   layer, with source-specific optional fields and no identifiers, only for
-   facts that survive consumer review after the FFmpeg baseline.
-4. Prototype Windows Job Object accounting and Linux `wait4` behind that
-   interface. Because ADR-005 forbids first-party unsafe and `command-group`
-   owns the necessary Windows handle/reap logic, prefer a reviewed dependency
-   extension over engine-local OS calls.
-5. Thread the snapshot through the pinned ab-av1 library's `ManagedChunkStream`
-   terminal report so every FFmpeg search/encode attempt can retain it. The
-   global running-child list currently owns the only `AsyncGroupChild` handles.
-6. Add an explicit attempt ledger before attaching resource facts. Keep current
-   phase spans as the run envelope.
-7. Evaluate targeted `sysinfo` only for claim-time system context and as a
-   cross-check. Do not add it solely to poll child PIDs.
-8. Keep PSI, topology, virtualization, and hardware facts feature-gated within
-   the spike. Treat Linux terminal `/proc` I/O as rejected unless a required
-   consumer and materially different native evidence justify reopening it.
-9. Delete spike-only implementations that are rejected; #99 implements only
-   the selected collectors.
+1. Split requested settings from optional encoder-confirmed effective settings. Resolve managed preset coercion through an exact-artifact compatibility table generated by synthetic CI probes, then reject or canonicalize settings before execution; for system/explicit tools, run a bounded privacy-safe synthetic probe against the selected FFmpeg/configuration and retain only typed allowlisted identity/effective fields.
+2. Keep FFmpeg `-benchmark` in synthetic contract fixtures as an oracle; do not add a durable benchmark parser unless a named consumer needs a fact unavailable from terminal OS accounting.
+3. Define a tiny safe terminal-resource snapshot in the process containment layer, with source-specific optional fields and no identifiers.
+4. Prototype Windows Job-tree accounting and Linux leader/waited-lineage `wait4` behind that interface with different provenance/scope variants. ADR-005 forbids first-party unsafe and `command-group` owns the necessary Job handle/reap logic, so prefer a reviewed dependency extension over engine-local OS calls; #103 must first make Windows post-spawn failure cleanup deterministic.
+5. Thread the snapshot through the pinned ab-av1 library's `ManagedChunkStream` terminal report so every FFmpeg search/encode attempt can retain it. The global running-child list currently owns the only `AsyncGroupChild` handles.
+6. Add an explicit attempt ledger before attaching resource or effective-configuration facts. Keep current phase spans as the run envelope.
+7. Evaluate targeted `sysinfo` only for claim-time system context and as a cross-check. Do not add it solely to poll child PIDs.
+8. Keep PSI, topology, virtualization, and hardware facts feature-gated. Treat Linux terminal `/proc` I/O and FFmpeg benchmark persistence as rejected unless a required consumer and materially different evidence justify reopening them.
+9. Delete rejected spike implementations; #99 implements only the selected collectors.
 
 This direction is a research recommendation, not permission to fork a
 dependency or change the durable schema. It must be validated by the matrix
@@ -706,20 +668,17 @@ above and reconciled with #93's final observation contract.
   stage budgets (#92)?
 - Does exact execution/tool cohorting outperform the current baseline before
   any environment telemetry is added?
-- How often is FFmpeg's terminal benchmark missing or malformed across normal
-  exit, nonzero exit, cancellation, forced termination, and adapter versions?
-- Does the FFmpeg self benchmark provide all process-level CPU evidence needed
-  by a named consumer, making OS CPU collection redundant for normal attempts?
-- Which SVT startup fields remain stable enough across the managed/override
-  version matrix to serve as corroboration rather than configuration truth?
-- Does `wait4` account enough of the real FFmpeg workload on Linux, including
-  any descendants used by supported tools?
+- How should existing system/explicit analyses be treated when their `ffmpeg_revision` and `encoder_revision` both came from ffprobe's program version and do not prove the executed FFmpeg/SVT pair?
+- Does any named consumer need FFmpeg's narrower transcode-only timing after terminal OS accounting is available?
+- Should V3 expose only the managed artifact's proven one-to-one preset set, or retain requested and canonical effective settings separately for deliberately supported aliases?
+- What is the smallest synthetic compatibility probe that reliably validates managed and override encoders without persisting raw startup output, and should an unverified override be rejected or merely excluded from setting-sensitive cohorts?
+- Does leader-plus-waited-lineage `wait4` cover every supported FFmpeg/SVT attempt in practice, or does a named consumer justify the much heavier cgroup/subreaper work needed for true Linux tree accounting?
 - Does native Linux reproduce the WSL finding that an exited, unreaped child
   denies `/proc/<pid>/io`, and do any supported environments differ enough to
   justify more than a recorded typed absence?
 - Can `command-group` expose Windows Job accounting without changing its
   containment and cancellation guarantees?
-- Which Windows outer-Job constraints can be observed safely and truthfully?
+- Is there any safe non-identifying way to observe effective Windows ancestor-Job limits, given that querying the owned inner Job exposes only its local limits?
 - Are peak memory and I/O useful to an actual user-facing consumer, or merely
   interesting operational telemetry?
 - Can claim-time load improve held-out queue estimates without amplifying noise
@@ -738,7 +697,7 @@ The research is ready to feed #96/#99 only when:
 - Windows, native Linux, WSL, restricted, constrained, and virtualized fixtures
   are committed with only synthetic/pathless facts;
 - collector-disabled/enabled overhead and miss/race rates are measured;
-- process-tree scope and units are proven rather than inferred;
+- process, waited-lineage, or contained-tree scope and units are proven rather than inferred;
 - each candidate has a consumer, stage, provenance, quality, null behavior,
   privacy classification, and evidence-backed disposition;
 - estimator comparisons report held-out error, bias, and coverage;
