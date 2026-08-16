@@ -159,8 +159,8 @@ identical.
 
 ## More Information
 
-See issues #28, #42, #51, #52, #53, #55, and #56; ADR-001, ADR-004, ADR-012,
-and ADR-014.
+See issues #28, #42, #51, #52, #53, #55, and #56; ADR-001, ADR-004, ADR-015
+(which supersedes ADR-012), and ADR-014.
 
 Implementation references:
 

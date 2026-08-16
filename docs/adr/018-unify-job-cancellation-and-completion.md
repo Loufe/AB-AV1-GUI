@@ -173,7 +173,7 @@ Use ordinary barriers and controllable fake workers for protocol races. Loom is 
 
 ## More Information
 
-See issue #85 and ADR-012. ADR-012 establishes that statistics and prediction provenance derive from validated facts; cancellation telemetry is not such a fact.
+See issue #85 and ADR-015, which supersedes ADR-012 and retains the rule that statistics and prediction provenance derive from validated facts; cancellation telemetry is not such a fact.
 
 Implementation locations at the time of this proposal:
 

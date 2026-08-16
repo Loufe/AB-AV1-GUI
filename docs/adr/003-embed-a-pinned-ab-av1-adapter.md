@@ -23,6 +23,7 @@ cleanup in a long-lived process.
 * Continue parsing human-readable subprocess output
 * Use structured NDJSON subprocess output permanently
 * Pin a minimally patched ab-av1 revision as a library dependency
+* Abstract every encoder behind one integration trait so future backends share a single mechanism (rejected: speculative generality, and the second backend does not exist yet)
 
 ## Decision Outcome
 
@@ -42,4 +43,22 @@ if native platform containment cannot satisfy the lifecycle contract.
 
 ## More Information
 
-See issue #33, sections 2, 3, and 9.
+### Error discrimination: what a subprocess boundary can actually report
+
+ab-av1's `main.rs` collapses every failure to exit code 1, so an exit code cannot separate "no suitable CRF" from an encoder crash or a missing input. Structured output exists only for `sample-encode` (`--stdout-format json`); `crf-search`, `auto-encode`, and `encode` have none. The one dependable signal is the final `Error: ...` line, which is the `Display` of the top-level error rather than incidental log text: `NoGoodCrf` renders as exactly "Failed to find a suitable crf", byte-identical from v0.4.0 through v0.11.4. A subprocess boundary therefore yields exactly one trustworthy discrimination, obtained by comparing a sentence.
+
+That one discrimination is the one the application needs, because it is the not-worthwhile verdict and the VMAF fallback trigger. An audit of the Python callers found it was also the only exception any caller branched on; the rest of the regex-derived hierarchy changed log wording and nothing else. Under the library adapter the same fact arrives as a typed variant matched in a `match` arm (`crf_search::Error::NoGoodCrf { last }`, carrying the last search outcome), which is the concrete payoff of this record.
+
+### Upstream and patch-fork strategy
+
+The dependency is a fork pinned to an exact reviewed commit and built with a `library` feature, so updating it is an application rebuild and upstream API changes surface as compile failures. The delta stays small enough to review in one sitting and is proposed upstream where generally useful: a library target exposing the existing command modules without CLI completion wiring, a library-facing typed encode-update stream lifted from the internal FFmpeg event loop, and a per-job cancellation handle with graceful and force modes. MIT licensing permits the fork; attribution and license text ship with the application. Only one ab-av1 job runs at a time because upstream's child and temp registries are process-global.
+
+### The NDJSON contingency, and what it would still cost
+
+Upstream PR 368 (`crf-search --stdout-format json`) is the contingency's prerequisite and remains tracked upstream. Issue #29, which planned the V2 cutover to that stream, was closed as superseded: its only consumer would have been the Python parser. Two upstream deferrals bound what the contingency could deliver even after PR 368 lands: encode-update messages are a later PR, so encode progress would still come from human FFmpeg output, and structured error reasons were deferred too, so failure detection would still be exit code plus the "Failed to find a suitable crf" string. Upstream issue 369 (`sample-encode-update`) no longer matters to the rewrite at all, because the typed `crf_search::Update` stream already carries sample status.
+
+### Boundary for future backends
+
+This record binds the ab-av1 adapter, not every future encoder. No ab-av1 argument or result type leaves the adapter; the driver speaks only application-owned job requests, coarse phases, progress, checkpoints, and terminal outcomes. The integration rule for a future backend is a judgment about its lifecycle, not a precedent set here: prefer a crate when it offers a repeatable typed lifecycle, programmatic cancellation, and no uncontrolled process-global state; prefer a contained subprocess when it owns a complex descendant tree, carries significant unsafe or FFI code, calls `process::exit`, or exposes a stable structured protocol. Regex scraping is never the price of subprocess isolation.
+
+Related: ADR-005 (unsafe policy) and ADR-010 (the FFmpeg binaries this adapter drives). The job runtime, cancellation contract, and output-promotion transaction are in `docs/design/lifecycle.md`; the hazards this boundary carries into the port are in `docs/design/porting-hazards.md`.

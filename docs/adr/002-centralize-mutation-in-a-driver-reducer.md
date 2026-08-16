@@ -23,6 +23,8 @@ ordering and notification rules to remain correct by convention.
 * Lock-based shared state
 * An actor framework and multiple state owners
 * One synchronous driver owning state and applying a pure reducer
+* Make the core and the driver async throughout (rejected: Tokio belongs only inside the dedicated ab-av1 adapter, which needs it because upstream spawns local futures; state ownership stays synchronous)
+* Accept one IPC command per settings field (rejected: sprawl observed in the field, where a comparable application grew a command per knob; one settings object means one command, applied and emitted only after the write durably succeeds)
 
 ## Decision Outcome
 
@@ -42,4 +44,4 @@ deltas, effects, and replies for the driver to interpret.
 
 ## More Information
 
-See issue #33, section 5, and ADR-001.
+See `docs/ARCHITECTURE.md` (the driver loop, command lanes, and effect discipline) and ADR-001.

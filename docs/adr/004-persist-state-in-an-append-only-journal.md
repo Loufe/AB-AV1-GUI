@@ -24,6 +24,7 @@ driver.
 * Rewrite one JSON state file after each change
 * Store history and queue in SQLite
 * Append typed durable deltas to a single-writer journal
+* Treat the journal as a full event-sourced source of truth (rejected: the journal is a storage format and any command log is a debugging record; upsert-last-wins stays the storage semantic, and promoting either into event sourcing buys replay semantics nothing here needs)
 
 ## Decision Outcome
 
@@ -42,4 +43,4 @@ state through a crash-safe writer barrier.
 
 ## More Information
 
-See issue #33, sections 5 and 10, and ADR-002.
+See `docs/ARCHITECTURE.md` (the driver loop this journal is a law of) and ADR-002. The format's later decisions are ADR-009 (compaction) and ADR-011 (corruption acknowledgment).
