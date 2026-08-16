@@ -10,10 +10,10 @@ TypeScript + Tailwind v4, pnpm-managed); external FFmpeg/ffprobe processes.
 
 ## Workspace
 
-- `crfty-core` — pure domain logic (state, reducer, fold, policy); no I/O.
-- `crfty-engine` — external processes and filesystem I/O; no Tauri.
-- `crfty-shell` — thin Tauri command/event bridge; no domain logic.
-- `ui/` — React frontend; consumes generated bindings only.
+- `crfty-core`: pure domain logic (state, reducer, fold, policy); no I/O.
+- `crfty-engine`: external processes and filesystem I/O; no Tauri.
+- `crfty-shell`: thin Tauri command/event bridge; no domain logic.
+- `ui/`: React frontend; consumes generated bindings only.
 - Mutable application state has one owner: the synchronous driver/reducer.
 
 Each crate and `ui/` carries its own AGENTS.md with subsystem rules.
@@ -27,12 +27,12 @@ cargo test --workspace --all-features --locked
 cargo deny check
 ```
 
-The frontend gate runs from `ui/` — see `ui/AGENTS.md`.
+The frontend gate runs from `ui/`; see `ui/AGENTS.md`.
 
 ## Strict rules
 
 - Unsafe code, `unwrap`, `expect`, unchecked indexing, `todo!`, and `unimplemented!`
-  are forbidden via `[workspace.lints]` — do not weaken this; ADR-005 documents the
+  are forbidden via `[workspace.lints]`. Do not weaken this; ADR-005 documents the
   only unsafe escape hatch. `#[allow(...)]` is forbidden. Tests follow the same
   defaults as production: refactor first, and use the narrowest item-scoped
   `#[expect(..., reason = "...")]` only when a test invariant is clearer than
@@ -48,14 +48,14 @@ The frontend gate runs from `ui/` — see `ui/AGENTS.md`.
 - Never read logs or history containing real paths. Stop if unanonymized paths are
   encountered and do not quote them.
 - Do not provide effort or duration estimates.
-- Never commit Python — no scripts, no tooling, no dev dependencies. The V2 app
+- Never commit Python. No scripts, no tooling, no dev dependencies. The V2 app
   retained on `main` is a read-only oracle: consult it via `git show main:<path>`,
   and freeze any semantics worth keeping as committed JSON fixtures. Fixture
   generation scripts are throwaway and never committed; once frozen, fixtures are
   spec data maintained by hand. Sole exception: `tools/export_history_v3.py` (and
-  its test), the user-facing V2 history converter — standalone stdlib-only Python,
-  tested via `uvx pytest tools/test_export_history_v3.py`, never imported by the
-  build.
+  its test), the user-facing V2 history converter, standalone stdlib-only Python
+  tested via `uvx pytest tools/test_export_history_v3.py` and never imported by
+  the build.
 
 ## Comments
 
@@ -77,7 +77,7 @@ No external consumers exist. Change APIs and schemas directly, update all call
 sites in the same change, and leave no compatibility artifacts. The one-time
 Python history adoption is a product requirement, not compatibility policy.
 
-- **External contracts included** — When a dependency or external tool changes
+- **External contracts included**. When a dependency or external tool changes
   format, update the required version and replace the old handling. Never support
   both formats.
 
@@ -108,8 +108,8 @@ Python history adoption is a product requirement, not compatibility policy.
 
 ## Worktrees
 
-The main checkout stays on `main` — never edit files in it. It is used only for
-read-only inspection, merges, and worktree management.
+The main checkout stays on `main` and its files are never edited. It is used
+only for read-only inspection, merges, and worktree management.
 
 - Before any file modification, enter a git worktree on a `feature/*`, `fix/*`,
   or `refactor/*` branch. Canonical location: `.worktrees/<name>` at the repo
@@ -121,5 +121,5 @@ read-only inspection, merges, and worktree management.
   merges behind.
 
 Architecture decisions: MADR records in `docs/adr/` (see its AGENTS.md; accepted
-ADRs are immutable — supersede, don't rewrite). Current rewrite state, decided
-directions, and open questions: `docs/PLAN.md`.
+ADRs are immutable, so supersede rather than rewrite). Current rewrite state,
+decided directions, and open questions: `docs/PLAN.md`.
