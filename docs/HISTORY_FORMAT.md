@@ -33,6 +33,22 @@ The loader accepts only `schema_version` 2 and raises on the legacy unversioned 
 
 `path_hash` is BLAKE2b (16-byte digest) of the normalized path, truncated to 16 hex characters. Normalization: absolute path, mapped network drives resolved to their UNC spelling, lowercased on Windows, backslashes to forward slashes.
 
+### History Anonymization and Scrubbing
+
+When history anonymization is enabled, new records store `original_path` as
+`null` while retaining `path_hash`, `filename_hash`, and all technical,
+status, and conversion fields.
+
+**Scrub History** applies the same transformation retroactively: it sets
+`original_path` to `null` on every existing record and leaves the hashes and
+all statistical evidence unchanged. The action is irreversible at the
+application-data level because the history no longer contains the readable
+path or a reverse mapping for its hash.
+
+Scrubbing is a logical history-record transformation. It does not promise
+forensic erasure from the storage device, and it does not alter operational
+paths held elsewhere by the application.
+
 ## FileRecord Fields
 
 ### Identity

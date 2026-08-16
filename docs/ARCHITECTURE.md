@@ -195,7 +195,10 @@ variables on the GUI object, persisted by `main_window.py`:
   conversion codec (opus/aac), hardware-accelerated decoding toggle with
   detected CUVID/QSV availability shown inline
 - **Logging & History**: log folder, anonymization toggles, and the
-  irreversible "Scrub Logs" / "Scrub History" actions
+  irreversible "Scrub Logs" / "Scrub History" actions. History scrubbing
+  clears `original_path` from existing records while preserving path hashes,
+  technical fields, and all Statistics/Estimation evidence; it is not a
+  physical-storage erasure operation.
 - **Version Info**: app, ab-av1, and FFmpeg versions with Download /
   Check for Updates buttons handled by `gui/dependency_manager.py`
 

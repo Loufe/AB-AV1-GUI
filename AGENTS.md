@@ -2,6 +2,12 @@
 
 GUI application for batch converting videos to AV1 using VMAF-targeted quality encoding via the `ab-av1` tool.
 
+## V3 rewrite
+
+The V3 rewrite (CRFty, Rust/Tauri) lives on branch `rewrite` and is governed by the AGENTS.md on that branch, not this file.
+This file governs only the V2 Python app on `main`.
+Warning: ADR numbering collides across branches. `main` has docs/adr/001-002 and `rewrite` has docs/adr/001-018, so the same numbers refer to different documents depending on branch.
+
 ## Tech Stack
 
 - **External tools**: `ab-av1`, FFmpeg with libsvtav1 (downloaded to `vendor/` or system PATH)
@@ -129,7 +135,7 @@ ab-av1 output has two phases with different formats:
 
 When enabled, file paths and filenames are anonymized with BLAKE2b hashes (configured folders become `[input_folder]`/`[output_folder]` placeholders). Implementation and detection patterns live in `src/privacy.py`.
 
-**Retroactive scrubbing**: Settings tab provides "Scrub Logs" and "Scrub History" buttons to anonymize existing files (irreversible).
+**Retroactive scrubbing**: Settings tab provides "Scrub Logs" and "Scrub History" buttons to anonymize existing files (irreversible). History scrubbing sets `original_path` to `None` while preserving path hashes and all technical/statistical data. It is a logical record transformation, not a physical-storage erasure guarantee.
 
 **Reverse lookup**: Use `tools/hash_lookup.py` to find files by hash:
 ```bash
