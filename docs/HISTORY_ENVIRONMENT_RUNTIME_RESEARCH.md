@@ -3,7 +3,7 @@
 Status: living research note; not an accepted design or implementation specification  
 Tracking issue: [#94](https://github.com/Loufe/AB-AV1-GUI/issues/94)  
 Related decisions: [#92](https://github.com/Loufe/AB-AV1-GUI/issues/92), [#93](https://github.com/Loufe/AB-AV1-GUI/issues/93), [#95](https://github.com/Loufe/AB-AV1-GUI/issues/95), [#96](https://github.com/Loufe/AB-AV1-GUI/issues/96), [#97](https://github.com/Loufe/AB-AV1-GUI/issues/97), [#99](https://github.com/Loufe/AB-AV1-GUI/issues/99)  
-Last updated: 2026-08-15
+Last updated: 2026-08-16
 
 ## Purpose and boundary
 
@@ -43,26 +43,37 @@ The labels below mean:
 3. Keep both attempt cost and end-to-end user-wait cost. A clean successful
    attempt is useful for throughput modeling; the full run envelope, including
    retries and cleanup, is the truthful observation for queue-time prediction.
-4. Reliable process CPU and terminal resource counters belong at the process
-   wait/reap boundary. PID polling can miss short attempts, cannot inspect a
-   process after it has been reaped, and risks PID reuse. `sysinfo` is useful as
-   a safe portability oracle and for controlled experiments, but is not yet the
+4. Use FFmpeg and SVT-AV1 self-reporting before adding an operating-system
+   collector. V3 already owns typed effective arguments and managed-build
+   identity; FFmpeg can additionally emit machine-readable progress and a
+   terminal self benchmark, while SVT reports useful runtime corroboration.
+   Parse only allowlisted fields. Do not retain raw stderr or use `-report`,
+   which records the full command line.
+5. The supervisor still owns the authoritative attempt clock and terminal
+   outcome. FFmpeg's benchmark is best effort: a crash or forced kill may omit
+   it, it covers the FFmpeg process rather than the complete run/fallback
+   envelope, and its maximum-memory meaning differs by platform. OS-level
+   accounting should target only facts self-reporting cannot provide.
+6. Reliable remaining process-tree counters belong at the process wait/reap
+   boundary. PID polling can miss short attempts, cannot inspect a process
+   after it has been reaped, and risks PID reuse. `sysinfo` is useful as a safe
+   portability oracle and for controlled experiments, but is not yet the
    preferred source for durable per-attempt accounting.
-5. Similar names do not imply comparable measurements. Windows Job Object I/O
+7. Similar names do not imply comparable measurements. Windows Job Object I/O
    counts all I/O operations; Linux `/proc/<pid>/io` distinguishes characters
    passed through I/O calls from storage-layer bytes. Windows peak job memory
    and Linux maximum resident set have different semantics. Preserve the
    source-specific meaning rather than forcing both into a misleading portable
    field.
-6. PSI and whole-system load do not isolate external contention. A highly
+8. PSI and whole-system load do not isolate external contention. A highly
    parallel encoder creates CPU pressure itself. Store source counters, if
    selected, and version any derived contention signal; do not label PSI as
    “background load.”
-7. No environment fingerprint should be generated. A pathless export is
+9. No environment fingerprint should be generated. A pathless export is
    pseudonymous, not guaranteed anonymous, and combinations of ordinary
    technical facts may still be distinctive. Persist only allowlisted values,
    disclose linkability, and never serialize raw collector objects.
-8. Power, temperature, frequency, and accelerator utilization remain
+10. Power, temperature, frequency, and accelerator utilization remain
    experimental or rejected for initial production. They are vendor- and
    platform-specific, frequently system-wide rather than job-attributable, and
    introduce native APIs or device identifiers without demonstrated predictive
@@ -165,6 +176,8 @@ the prediction stage in production:
 | Platform family and architecture | candidate required | startup/prepared | Typed enum such as Windows/Linux and x86_64/aarch64 | Raw kernel/build strings can be high-cardinality or contain custom suffixes |
 | Actual decoder/accelerator role | candidate required | attempt | Existing `DecodeMode`, expanded to failed attempts | Hardware capability is not proof that hardware was actually used |
 | Monotonic attempt and run wall time | candidate required | attempt/terminal | `Instant`-based duration; wall clock only for display chronology | Recovery cannot fabricate missing monotonic evidence |
+| FFmpeg terminal self benchmark | candidate best effort | attempt terminal | FFmpeg `-benchmark`: real/user/system time and platform-specific maximum memory | Missing on abrupt termination; process-only scope; Linux maximum RSS and Windows peak pagefile usage are not equivalent |
+| SVT runtime self-report | candidate best effort corroboration | attempt start | Allowlisted version, selected instruction level, and parallelism/configuration fields from SVT startup output | Human log format, verbosity, and version-dependent names make absence normal; typed arguments remain authoritative |
 | Available parallelism | candidate best effort | startup/prepared | `std::thread::available_parallelism`, with source and approximation quality | Can over/undercount affinity, job, VM, or cgroup limits; do not call in hot loops |
 | CPU quota/cpuset or Job limits | candidate best effort | prepared | Linux cgroup hierarchy; Windows containment/parent limits where safely observable | Effective hierarchical limit is not always exposed by a leaf API |
 | Process/job user and kernel CPU | candidate best effort | attempt terminal | Linux `wait4`/`rusage`; Windows Job Object accounting | Linux leader/process semantics differ from Windows job-tree semantics |
@@ -229,6 +242,58 @@ Units belong to the measurement contract. Do not publish a generic
 `peak_memory_bytes` or `io_bytes` when the source semantics differ. Examples of
 honest names are `max_resident_kib`, `job_peak_memory_bytes`,
 `storage_read_bytes`, and `all_io_read_transfer_bytes`.
+
+## FFmpeg-first collection boundary
+
+FFmpeg is not merely the workload being observed. It is the best source for
+several facts about its own execution, and using those facts first materially
+narrows the native collector surface.
+
+| Fact | Preferred source | Contract treatment |
+| --- | --- | --- |
+| Effective requested encoder/search settings | V3's typed request and pinned ab-av1 adapter arguments | Authoritative; do not reconstruct configuration by parsing logs |
+| Managed FFmpeg/encoder identity | Checksummed vendor manifest and discovered revisions | Authoritative for the checksummed managed build; collect once during discovery |
+| Explicit/override runtime identity | Allowlisted `ffmpeg -version` fields plus SVT startup version when emitted | Corroborating evidence with typed absence; never store the complete banner/build configuration |
+| Encode/search progress | Existing typed ab-av1 adapter updates; FFmpeg `-progress` for direct FFmpeg operations such as remux | Operational machine-readable source; retain durable fields only when a named History consumer requires them |
+| FFmpeg terminal real/user/system time | `-benchmark` terminal summary | Best-effort process-scoped evidence; supervisor monotonic time remains authoritative |
+| FFmpeg terminal maximum memory | `-benchmark`, retained with platform/source semantics | Linux is maximum resident set; current Windows implementation reports peak pagefile usage; never merge them into one portable field |
+| Exit cause, cancellation escalation, retries, and decoder fallback | V3 supervisor/attempt ledger | Authoritative; FFmpeg cannot see the enclosing orchestration |
+| Whole contained tree, resource caps, and system contention | Narrow OS collector, only if a consumer justifies it | Residual research scope; not replaceable by an FFmpeg query |
+
+FFmpeg documents [`-progress`](https://ffmpeg.org/ffmpeg.html) as periodic
+machine-readable `key=value` sequences ending in `progress=continue` or
+`progress=end`. V3's remux path already uses this interface. Search and encode
+currently receive typed progress from the pinned ab-av1 adapter, so this
+research should not introduce a second competing progress parser merely to
+collect History evidence.
+
+FFmpeg's [`-benchmark`](https://ffmpeg.org/ffmpeg.html) prints real, system, and
+user time plus maximum memory at the end of an encode. Its implementation is
+not semantically uniform: [current FFmpeg source](https://ffmpeg.org/doxygen/trunk/ffmpeg_8c_source.html)
+uses `getrusage(RUSAGE_SELF)` and `ru_maxrss` on Linux, but `GetProcessTimes` and
+`PROCESS_MEMORY_COUNTERS.PeakPagefileUsage` on Windows. The SVT encoder runs
+inside FFmpeg, so its threads contribute to these process counters; surrounding
+ab-av1/V3 orchestration, separate sample/score processes, and unrelated
+descendants do not become one run-level observation. Each FFmpeg execution must
+bind to its own attempt, and the run envelope must aggregate attempts without
+discarding failed work.
+
+`-benchmark_all` emits timing throughout multiple internal steps, but those
+human diagnostic lines are not required for the initial consumer and would
+expand parsing/version surface. The first experiment should add only
+`-benchmark`, compare its results with terminal OS accounting, and record its
+miss rate for success, nonzero exit, cancellation, and forced termination.
+
+SVT's startup output can corroborate the runtime library version, selected
+instruction level, reported parallelism, and effective encoder configuration.
+It is a human/version-dependent log, not the authority for values V3 already
+sets through typed arguments. A versioned allowlist parser may retain selected
+fields with normal typed absence; it must not store arbitrary stderr lines.
+
+FFmpeg [`-report`](https://ffmpeg.org/ffmpeg.html) is prohibited for History
+collection because it writes the complete command line and log. Ordinary
+stderr can also contain media paths and metadata, so the same typed-allowlist
+boundary applies even when no report file is created.
 
 ## Platform source review
 
@@ -530,13 +595,14 @@ paths, machine names, account names, IDs, and device addresses are excluded.
 ### Implementations to compare
 
 1. No collector control.
-2. Targeted `sysinfo` snapshots with only CPU/memory/I/O refreshes.
-3. A safe `command-group`/process-wrapper terminal snapshot:
+2. FFmpeg `-benchmark` self-report, bound to each real FFmpeg attempt.
+3. Targeted `sysinfo` snapshots with only CPU/memory/I/O refreshes.
+4. A safe `command-group`/process-wrapper terminal snapshot:
    Windows Job Object accounting and Linux `wait4` resource usage.
-4. Linux `waitid(WNOWAIT)` plus allowlisted `/proc/<pid>/io` only as a negative
+5. Linux `waitid(WNOWAIT)` plus allowlisted `/proc/<pid>/io` only as a negative
    portability fixture; current WSL evidence rejects it as a dependable
    terminal source.
-5. Claim/terminal system snapshots, with PSI separately feature-gated on Linux.
+6. Claim/terminal system snapshots, with PSI separately feature-gated on Linux.
 
 No candidate may survive merely because it is easy to collect. It must satisfy
 a consumer and improve correctness or held-out prediction enough to justify its
@@ -599,26 +665,35 @@ or scope mismatch must produce an unavailable derivation, not zero contention.
 
 ## Recommended dependency and integration direction
 
-The first spike should target the process boundary already shared by V3 and the
-pinned ab-av1 fork:
+The first spike should start with the existing FFmpeg/adapter boundary, then add
+OS collection only for residual facts:
 
-1. Define a tiny safe terminal-resource snapshot in the process containment
-   layer, with source-specific optional fields and no identifiers.
-2. Prototype Windows Job Object accounting and Linux `wait4` behind that
+1. Add FFmpeg `-benchmark` to synthetic and real adapter fixtures, parse only
+   terminal real/user/system time and the source-qualified memory value, and
+   bind the result to the exact FFmpeg attempt. Keep supervisor monotonic time
+   and terminal outcome authoritative.
+2. Compare the self-report with independently observed terminal accounting and
+   record missing/malformed behavior for success, failure, cancellation, and
+   forced termination. Evaluate an allowlisted SVT startup parser separately;
+   typed V3 arguments remain the configuration authority.
+3. Define a tiny safe terminal-resource snapshot in the process containment
+   layer, with source-specific optional fields and no identifiers, only for
+   facts that survive consumer review after the FFmpeg baseline.
+4. Prototype Windows Job Object accounting and Linux `wait4` behind that
    interface. Because ADR-005 forbids first-party unsafe and `command-group`
    owns the necessary Windows handle/reap logic, prefer a reviewed dependency
    extension over engine-local OS calls.
-3. Thread the snapshot through the pinned ab-av1 library's `ManagedChunkStream`
+5. Thread the snapshot through the pinned ab-av1 library's `ManagedChunkStream`
    terminal report so every FFmpeg search/encode attempt can retain it. The
    global running-child list currently owns the only `AsyncGroupChild` handles.
-4. Add an explicit attempt ledger before attaching resource facts. Keep current
+6. Add an explicit attempt ledger before attaching resource facts. Keep current
    phase spans as the run envelope.
-5. Evaluate targeted `sysinfo` only for claim-time system context and as a
+7. Evaluate targeted `sysinfo` only for claim-time system context and as a
    cross-check. Do not add it solely to poll child PIDs.
-6. Keep PSI, topology, virtualization, and hardware facts feature-gated within
+8. Keep PSI, topology, virtualization, and hardware facts feature-gated within
    the spike. Treat Linux terminal `/proc` I/O as rejected unless a required
    consumer and materially different native evidence justify reopening it.
-7. Delete spike-only implementations that are rejected; #99 implements only
+9. Delete spike-only implementations that are rejected; #99 implements only
    the selected collectors.
 
 This direction is a research recommendation, not permission to fork a
@@ -631,6 +706,12 @@ above and reconciled with #93's final observation contract.
   stage budgets (#92)?
 - Does exact execution/tool cohorting outperform the current baseline before
   any environment telemetry is added?
+- How often is FFmpeg's terminal benchmark missing or malformed across normal
+  exit, nonzero exit, cancellation, forced termination, and adapter versions?
+- Does the FFmpeg self benchmark provide all process-level CPU evidence needed
+  by a named consumer, making OS CPU collection redundant for normal attempts?
+- Which SVT startup fields remain stable enough across the managed/override
+  version matrix to serve as corroboration rather than configuration truth?
 - Does `wait4` account enough of the real FFmpeg workload on Linux, including
   any descendants used by supported tools?
 - Does native Linux reproduce the WSL finding that an exited, unreaped child
