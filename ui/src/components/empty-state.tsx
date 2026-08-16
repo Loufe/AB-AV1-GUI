@@ -9,7 +9,7 @@ interface EmptyStateProps {
   action?: ReactNode;
 }
 
-/** Named per-view empty/first-run states (#36 D11). */
+/** Named per-view empty/first-run states (D11). */
 export function EmptyState({ icon: Icon, title, description, action }: EmptyStateProps) {
   return (
     <div className="flex h-full flex-col items-center justify-center gap-2 p-8 text-center">

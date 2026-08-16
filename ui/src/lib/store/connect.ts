@@ -14,7 +14,7 @@ import { foldConfig, foldDurable, foldSession, foldTelemetry } from "@/lib/store
 import { emptySessionAggregates, progressStore } from "@/lib/store/progress-store";
 
 // The transport is ordered by construction; seq is a tripwire, not a recovery
-// protocol (#33 §11). Each connection's numbering starts at 0, so a fresh
+// protocol. Each connection's numbering starts at 0, so a fresh
 // subscription is recognized by seq 0 rather than continuity with the last.
 export function hasSequenceGap(last: number | null, next: number): boolean {
   return next !== 0 && next !== (last === null ? 0 : last + 1);
@@ -100,7 +100,7 @@ export function applyPayload(payload: StreamPayload_Deserialize): void {
     }
     if ("CommandRejected" in delta && delta.CommandRejected !== undefined) {
       // Command results already surface rejections at the call site; this is
-      // the observability backstop, not a user-facing notification (#33 §11).
+      // the observability backstop, not a user-facing notification.
       console.warn("command rejected by the engine", delta.CommandRejected.reason);
       return;
     }

@@ -3,7 +3,7 @@
 // output.rs) and the ephemeral application in reducer.rs. Deltas on the wire
 // are pre-validated by the Rust reducer, so every arm applies structurally —
 // no validation lives here. Pure functions only: no store imports, no I/O
-// (#36 D5). Golden fixtures exported from the Rust fold prove agreement
+// (D5). Golden fixtures exported from the Rust fold prove agreement
 // (fold-fixtures.json, replayed by fold.test.ts).
 
 import type {

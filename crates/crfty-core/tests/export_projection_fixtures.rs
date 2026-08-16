@@ -1,6 +1,6 @@
 //! Regenerates the checked-in golden projection fixtures replayed by the
 //! frontend (`ui/src/lib/projection/history-rows.test.ts`), proving the
-//! TypeScript history-row mirror matches `crfty_core::history_rows` (#40).
+//! TypeScript history-row mirror matches `crfty_core::history_rows`.
 //! Every scenario's `expected_rows` are computed by the Rust projection
 //! itself — the oracle — and serialized with the same serde shapes the
 //! snapshot wire uses for `DurableState`.

@@ -71,11 +71,11 @@ pub(crate) enum StreamPayload {
     },
     /// The previous run left the crash sentinel behind: it died without a
     /// clean shutdown. Durable state was already restored by the journal
-    /// replay; this is informational and stands for the whole run (#33 §12).
+    /// replay; this is informational and stands for the whole run.
     AbnormalShutdown,
     /// The user asked to close the window while a session was active. The
     /// shell kept the window open; the frontend owns the prompt and re-issues
-    /// the close once the session is idle (#33 §12).
+    /// the close once the session is idle.
     CloseRequested,
 }
 
@@ -563,7 +563,7 @@ impl Bridge {
         map_reply(commands.acknowledge_corruption(signature))
     }
 
-    /// Decides a window-close request (#33 §12: closing during active work
+    /// Decides a window-close request (closing during active work
     /// prompts). Returns true when the close must be deferred; the request is
     /// then forwarded to the frontend prompt, which re-issues the close once
     /// the session is idle. That gate is what keeps engine shutdown from ever

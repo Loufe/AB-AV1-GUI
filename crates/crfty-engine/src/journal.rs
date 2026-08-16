@@ -186,9 +186,9 @@ impl JournalWriter {
         Ok((vec![envelope], DurabilityToken::new()))
     }
 
-    /// Replace the journal with a single snapshot line of the folded state
-    /// (#33 §10). Runs only at the driver's writer barrier: the current batch
-    /// is finished and no append can race this. Sequence numbering continues —
+    /// Replace the journal with a single snapshot line of the folded state.
+    /// Runs only at the driver's writer barrier: the current batch
+    /// is finished and no append can race this. Sequence numbering continues:
     /// the first record after the snapshot carries the same sequence the next
     /// append would have carried before compaction.
     ///

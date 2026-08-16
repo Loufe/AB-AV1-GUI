@@ -130,7 +130,7 @@ export async function forceStop(): Promise<void> {
 
 /**
  * Re-issues the window close the shell deferred. The shell re-runs its close
- * decision, so this only actually closes once the session is idle (#33 §12).
+ * decision, so this only actually closes once the session is idle.
  */
 export async function closeAppWindow(): Promise<void> {
   await getCurrentWindow().close();

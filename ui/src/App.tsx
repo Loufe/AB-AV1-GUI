@@ -42,7 +42,7 @@ function StatisticsRoute() {
   );
 }
 
-// Dev-only workshop (#36 D10): the DEV gate is statically replaced in
+// Dev-only workshop (D10): the DEV gate is statically replaced in
 // release builds, so the dynamic imports and their chunks are eliminated.
 const DEV_COMPONENTS: Record<
   DevViewId,
@@ -87,7 +87,7 @@ export default function App() {
   useEffect(() => watchSystemTheme(), []);
 
   // A close-dialog choice armed the quit; with the session idle, the shell
-  // now lets the re-issued close through (#33 §12).
+  // now lets the re-issued close through.
   useEffect(() => {
     if (!isTauri() || !quitAfterSession || session !== "Idle") {
       return;

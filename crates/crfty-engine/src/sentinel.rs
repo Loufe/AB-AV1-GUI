@@ -1,5 +1,5 @@
 //! Crash sentinel: a marker file whose presence at boot means the previous
-//! run died without closing durable state cleanly (OBS's pattern, #33 §12).
+//! run died without closing durable state cleanly (OBS's pattern).
 //!
 //! Armed immediately after the data-directory lock is acquired and disarmed
 //! when the driver exits cleanly. Only the lock holder ever touches the file,

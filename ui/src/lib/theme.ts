@@ -1,5 +1,5 @@
 /**
- * Three-state theme (system/light/dark), frontend-only per issue #36 D2:
+ * Three-state theme (system/light/dark), frontend-only by design decision:
  * persisted in localStorage, never part of the Rust settings schema. The
  * no-flash boot script in index.html reads the same key before first paint.
  */

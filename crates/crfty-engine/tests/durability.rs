@@ -214,7 +214,7 @@ fn torn_tail_is_truncated_on_reopen_so_later_appends_stay_replayable() {
 
 /// Semantic corruption must leave the journal byte-identical: the file is the
 /// evidence that gets archived as `.corrupt-<timestamp>` before any discard,
-/// so reopening never rewrites it (#33 §10).
+/// so reopening never rewrites it.
 #[test]
 #[expect(clippy::expect_used, reason = "test assertion")]
 fn corrupt_journal_is_preserved_byte_identical_on_reopen() {
@@ -244,8 +244,7 @@ fn corrupt_journal_is_preserved_byte_identical_on_reopen() {
 }
 
 /// Compaction replaces the journal with one snapshot head line; folded state,
-/// sequence numbering, later appends, and restarts are all unaffected
-/// (#33 §10).
+/// sequence numbering, later appends, and restarts are all unaffected.
 #[test]
 #[expect(clippy::expect_used, reason = "test assertion")]
 fn compaction_folds_journal_to_snapshot_head_and_restart_replays_it() {
@@ -599,7 +598,7 @@ fn corrupt_journal_fixture(path: &Path) -> Vec<u8> {
     bytes
 }
 
-/// The full recovery arc (#39 phase 3): a matching acknowledgement archives
+/// The full recovery arc: a matching acknowledgement archives
 /// the corrupt journal byte-identically, compacts the valid prefix into a
 /// fresh generation, announces recovery, accepts mutation again, and a
 /// restart comes up healthy with everything intact.
@@ -795,7 +794,7 @@ fn imported_media_observation() -> MediaObservation {
     }
 }
 
-/// The phase-4 adoption arc (#39): an import parks records durably, the
+/// The import adoption arc: an import parks records durably, the
 /// forced compaction folds it into a fresh snapshot generation while the
 /// driver runs, a restart replays it, preparation adopts the matching record
 /// onto the observed content, and re-imports are counted no-ops both before

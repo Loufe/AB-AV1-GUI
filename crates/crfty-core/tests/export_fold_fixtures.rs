@@ -1,6 +1,6 @@
 //! Regenerates the checked-in golden fold fixtures replayed by the frontend
 //! (`ui/src/lib/store/fold.test.ts`), proving the TypeScript fold mirrors
-//! `crfty_core::fold` (#33 §14). Every scenario's `initial` and `expected`
+//! `crfty_core::fold`. Every scenario's `initial` and `expected`
 //! states are computed by the Rust fold itself — the oracle — and serialized
 //! with the same serde shapes the wire uses.
 //!

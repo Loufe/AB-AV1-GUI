@@ -18,8 +18,9 @@ import { Section, ThemePair } from "./theme-pair";
 
 /**
  * Analysis view static design pass — hardcoded rows through the real
- * formatters, judged on localhost, verdict to be recorded on #36 like
- * D6/D11. Mockup literals only: the scan engine features don't exist yet,
+ * formatters, judged on localhost, verdict to be recorded in
+ * docs/design/ui-verdicts.md like D6/D11. Mockup literals only: the scan
+ * engine features don't exist yet,
  * so no domain types ahead of the bindings.
  *
  * Design decisions under review:

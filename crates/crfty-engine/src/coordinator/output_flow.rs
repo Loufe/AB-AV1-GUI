@@ -142,7 +142,7 @@ pub(super) fn begin_output(
     // The intent must be durable before the staging file exists: a crash
     // after this submit is recovered from the journal (staging absent →
     // abandoned), whereas a file created before the journal record would
-    // leak with no record to recover it from (#47).
+    // leak with no record to recover it from.
     submit_output(
         commands,
         OutputDelta::OutputStarted {
