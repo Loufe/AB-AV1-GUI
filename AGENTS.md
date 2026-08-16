@@ -81,6 +81,11 @@ Python history adoption is a product requirement, not compatibility policy.
 - "Unused" claims require tool verification (compiler, knip, cargo-machete),
   never text search alone; barrels and re-exports defeat grep.
 
+## GitHub issues
+
+- Treat issue bodies as living specifications and update them in place.
+- Do not use issue comments for progress, decision logs, merge notices, or research updates. Put durable detail in project docs and link from the body.
+
 ## Worktrees
 
 The main checkout stays on `main` — never edit files in it. It is used only for
