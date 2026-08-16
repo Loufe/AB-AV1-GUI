@@ -16,7 +16,7 @@ The engine currently represents the same one-shot supervision contract with four
 
 The coordinator adapts the ab-av1 and remux handles through `ActiveJobCancellation` and maintains two polling loops with the same result, timeout, telemetry, and cancellation behavior. Each implementation must independently get pre-registration cancellation, channel disconnection, cancel-on-drop, terminal cleanup, worker termination, and subprocess settlement right.
 
-The ab-av1 library lifecycle is a related but separate external-boundary decision tracked in [issue #104](https://github.com/Loufe/AB-AV1-GUI/issues/104) and [`docs/AB_AV1_LIBRARY_LIFECYCLE_RESEARCH.md`](../AB_AV1_LIBRARY_LIFECYCLE_RESEARCH.md). This record decides how CRFty requests cancellation and owns worker completion; it does not prescribe whether ab-av1 ultimately accepts a generic shutdown future or exposes an explicit operation handle.
+The ab-av1 library lifecycle is a related but separate external-boundary decision tracked in [issue #104](https://github.com/Loufe/AB-AV1-GUI/issues/104) and [`docs/design/ab-av1-library-lifecycle-research.md`](../design/ab-av1-library-lifecycle-research.md). This record decides how CRFty requests cancellation and owns worker completion; it does not prescribe whether ab-av1 ultimately accepts a generic shutdown future or exposes an explicit operation handle.
 
 Four guarantees must remain distinct:
 
@@ -178,7 +178,7 @@ Use ordinary barriers and controllable fake workers for protocol races. Loom is 
 
 ## More Information
 
-See issue #85 and ADR-015, which supersedes ADR-012 and retains the rule that statistics and prediction provenance derive from validated facts; cancellation telemetry is not such a fact. The upstream ab-av1 boundary research is recorded in [`docs/AB_AV1_LIBRARY_LIFECYCLE_RESEARCH.md`](../AB_AV1_LIBRARY_LIFECYCLE_RESEARCH.md) and [issue #104](https://github.com/Loufe/AB-AV1-GUI/issues/104); its implementation-validation contract is tracked separately in [issue #105](https://github.com/Loufe/AB-AV1-GUI/issues/105).
+See issue #85 and ADR-015, which supersedes ADR-012 and retains the rule that statistics and prediction provenance derive from validated facts; cancellation telemetry is not such a fact. The upstream ab-av1 boundary research is recorded in [`docs/design/ab-av1-library-lifecycle-research.md`](../design/ab-av1-library-lifecycle-research.md) and [issue #104](https://github.com/Loufe/AB-AV1-GUI/issues/104); its implementation-validation contract is tracked separately in [issue #105](https://github.com/Loufe/AB-AV1-GUI/issues/105).
 
 Implementation locations at the time of this proposal:
 

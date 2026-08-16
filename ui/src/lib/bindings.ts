@@ -344,8 +344,8 @@ export type ArtifactIdentity_Serialize = {
 export type AudioCodec = "Aac" | "Ac3" | "Eac3" | "Dts" | "Opus" | "Flac" | "Mp3" | { Other: string };
 
 /**
- *  One audio stream of the inspected file. Consumers are remux-eligibility
- *  policy and remux reporting, not the current view designs, so this stays a
+ *  One audio stream of the inspected file. Its only consumer today is the
+ *  History projection; policy and remux read no audio facts, so this stays a
  *  summary rather than a full stream description.
  */
 export type AudioStreamMeta = {

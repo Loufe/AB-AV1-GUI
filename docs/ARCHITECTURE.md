@@ -24,8 +24,10 @@ Crates split on hard dependency boundaries (no Tauri, no process), never by topi
 | Crate boundaries and language discipline | this file; ADR-001 (separate core, engine, and shell), ADR-005 (forbid first-party unsafe Rust) |
 | Driver, reducer, and durable state | ADR-002 (centralize mutation in a driver reducer), ADR-004 (persist state in an append-only journal), ADR-009 (compact the journal into a snapshot head line), ADR-011 (acknowledge corruption by generation identity) |
 | Eligibility and conversion policy | `docs/POLICY.md`; ADR-007 (pin the actual decode mode in the analysis identity), ADR-013 (filter queue adds at enqueue) |
+| Content identity and durable facts | ADR-019 (key durable facts by sampled content identity) |
 | Analysis pipeline | `docs/ANALYSIS.md`; ADR-016 (scope analysis work to ephemeral generations), ADR-017 (keep analysis paths engine-native) |
-| Job lifecycle, cancellation, and output settlement | `docs/design/lifecycle.md`; ADR-018 (unify job cancellation and completion; proposed) |
+| Queue and job coordination | ADR-002 (centralize mutation in a driver reducer), ADR-013 (filter queue adds at enqueue); dedicated contract doc pending |
+| Job lifecycle, cancellation, and output settlement | `docs/design/lifecycle.md`; ADR-018 (unify job cancellation and completion; proposed), ADR-020 (own output promotion as a journaled transaction) |
 | ab-av1 adapter | ADR-003 (embed a pinned ab-av1 adapter) |
 | Events and IPC | `docs/design/event-stream.md`; ADR-006 (generate IPC bindings with tauri-specta) |
 | History and statistics | `docs/HISTORY.md`; ADR-015 (project imported history separately) |

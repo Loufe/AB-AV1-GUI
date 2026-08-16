@@ -79,8 +79,8 @@ pub enum AudioCodec {
     Other(String),
 }
 
-/// One audio stream of the inspected file. Consumers are remux-eligibility
-/// policy and remux reporting, not the current view designs, so this stays a
+/// One audio stream of the inspected file. Its only consumer today is the
+/// History projection; policy and remux read no audio facts, so this stays a
 /// summary rather than a full stream description.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, specta::Type)]
 pub struct AudioStreamMeta {

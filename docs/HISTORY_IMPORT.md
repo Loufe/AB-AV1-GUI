@@ -6,7 +6,7 @@ script shipped in this repository (`tools/export_history_v3.py`, stdlib-only
 Python run against a V2 `conversion_history.json`) reads the old history,
 performs all source-format interpretation (path recovery, timestamp parsing,
 float scrubbing, status mapping), and emits this schema. The app strictly
-parses it — a malformed or unknown-version file is rejected whole, never
+parses it: a malformed or unknown-version file is rejected whole, never
 salvaged record by record.
 
 Reader: `crfty-engine/src/history_import.rs`. Import flow: records land in
@@ -52,8 +52,8 @@ mode, or tool revisions. It therefore never enters `FileRecord.analyses`.
 ## Record
 
 Only `path` and `status` are required. Every other field is optional and
-omitted when the source had nothing honest to say. All numbers are integers —
-never floats — and 64-bit values must stay within JSON-safe integer range
+omitted when the source had nothing honest to say. All numbers are integers
+(never floats), and 64-bit values must stay within JSON-safe integer range
 except `modified_ns`, which is a decimal string.
 
 | Field | Type | Meaning |
@@ -69,9 +69,9 @@ except `modified_ns`, which is a decimal string.
 | `encoding_time_ms` | integer | Wall-clock encoding time in milliseconds. |
 | `crf_thousandths` | integer | CRF × 1000 (e.g. CRF 30 → `30000`). |
 | `vmaf_hundredths` | integer | Achieved VMAF × 100, at most `10000`. |
-| `target` | integer 0–100 | VMAF target the result satisfied. |
-| `requested_target` | integer 0–100 | Originally requested VMAF target (not-worthwhile records). |
-| `floor_target` | integer 0–100 | Fallback floor that was exhausted (not-worthwhile records). |
+| `target` | integer 0-100 | VMAF target the result satisfied. |
+| `requested_target` | integer 0-100 | Originally requested VMAF target (not-worthwhile records). |
+| `floor_target` | integer 0-100 | Fallback floor that was exhausted (not-worthwhile records). |
 | `decided_at_ms` | integer | When the record was decided, milliseconds since Unix epoch. Missing → the import instant. |
 
 ## Path matching
@@ -88,14 +88,15 @@ Emit paths in the spelling most likely to match how the app will see the
 file. On Windows, `std::fs::canonicalize` resolves mapped drive letters to
 UNC (`\\server\share\…`), so paths on network shares should be emitted in
 UNC form; local paths keep their drive letter. Duplicate keys within one
-file are allowed — the reducer keeps the first and counts the rest as
+file are allowed; the reducer keeps the first and counts the rest as
 skipped. Paths already parked or adopted are also skipped, including after a
 restart. Records whose files have moved will simply never match and can be
 retired from the parked inbox later.
 
-All import paths are cleartext PII. Privacy scrubbing in #51 must cover parked
-map keys, adopted-path guards, retained provenance, path-keyed History rows,
-and journal deltas containing those values.
+All import paths are cleartext PII. The privacy scrub defined in
+`docs/HISTORY.md` must cover parked map keys, adopted-path guards, retained
+provenance, path-keyed History rows, and journal deltas containing those
+values.
 
 ## What deliberately does not cross
 
