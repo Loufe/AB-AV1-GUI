@@ -1,6 +1,6 @@
 # Design Notes
 
-Long-form design and research for the rewrite. Content that would otherwise bloat a GitHub issue lives here as a versioned, greppable document; the issue links the doc.
+Long-form design and research for the rewrite. Decisions and the reasoning behind them live here as versioned, greppable documents; issues link the document rather than restating it.
 
 ## Where knowledge lives
 
@@ -10,12 +10,16 @@ Long-form design and research for the rewrite. Content that would otherwise bloa
 
 ## Header
 
-Every document opens with a header block: purpose and boundary, status, and owning issue.
+Every document opens with a title, a status line, then purpose and boundary.
+
+## Ownership and linking
+
+Each document has one owning issue, recorded in that issue's body and not in the document. Any number of issues may link a document.
 
 ## Lifecycle
 
-Each document is owned by exactly one issue, named in the document header and linked from that issue's body. No document is shared between issues, and none is orphaned.
+A working note is material for a decision in progress. When its subject settles, distill it: decisions become ADRs, settled behavior becomes a contract doc under `docs/`, and the note is deleted rather than left as a second unmaintained account of a subject covered elsewhere.
 
-A design document is working material, not a permanent artifact. When its owning issue closes, distill it: decisions become ADRs, settled behavior becomes a contract doc under `docs/`, and the design document is deleted. Leaving it in place creates a second, unmaintained account of a subject that is already covered elsewhere.
+A working note may carry a register of recorded verdicts under stable labels. Register entries are durable even while the surrounding note is not, and they survive into the ADR or contract doc that replaces it.
 
-The exception is a stable reference document, such as a survey of prior art or a record of an external tool's observed behavior, whose value does not expire when an issue closes. Mark it `Status: stable reference` in the header and it survives issue closure.
+A document whose value does not expire, such as a survey of prior art or a record of an external tool's observed behavior, is not working material. Mark it `Status: stable reference` and it persists.

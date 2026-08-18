@@ -97,11 +97,11 @@ Python history adoption is a product requirement, not compatibility policy.
 
 ## GitHub issues
 
-- Treat issue bodies as living specifications and update them in place. They own active scope, next actions, blockers, unresolved decisions, and acceptance criteria.
+- Treat issue bodies as living specifications and update them in place. They own active scope, next actions, blockers, and acceptance criteria.
 - Do not use issue comments for progress, decision logs, merge notices, or research updates. Put durable detail in project docs and link from the body.
 - Caps: body 30 lines (epics 50), goal 3 sentences, acceptance 5 checkboxes.
 - Set parentage with GitHub's native sub-issue relation, never a `Parent: #NN` body line. Never restate a parent's content.
-- Design and research content goes in `docs/design/`; the issue links the doc.
+- Decisions, their reasoning, and unresolved design questions live in `docs/`; the issue links the document. Documents never cite issue numbers, so the link runs one way.
 - Epics: a 2-3 line header plus a checkbox list of child issues, nothing else.
 - No meta-process prose (scope disclaimers, "this issue does not decide...").
 - Draft from `docs/templates/issue.md` and `docs/templates/epic.md`; assign milestone `v3.0`.

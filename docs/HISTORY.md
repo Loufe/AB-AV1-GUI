@@ -16,7 +16,7 @@ Facts flow one way. The analysis level a file stands at, the analysis it may reu
 - A historical analysis is not a reusable analysis. Analysis identity is profile-exact per ADR-007, pin decode mode in analysis identity, so only a native search recorded under a permitted profile can be selected for reuse. An imported Analyzed fact is display-only and never enters `FileRecord.analyses`.
 - Queue eligibility reads the path binding, the live destructive identity, timestamp reliability, and the standing verdict, per ADR-013, filter queue adds at enqueue. It consults neither History rows, nor Statistics, nor the parked import inbox.
 
-Estimation is the one sanctioned consumer in the other direction: completed phase spans and settled sizes feed the cohorts behind size and time predictions.
+Estimation is the one sanctioned consumer in the other direction: completed phase spans and settled sizes feed the cohorts behind size and time predictions. It reads History and never writes to it; its model, evidence seam, and open questions are in `docs/design/estimation.md`.
 
 One seam does run from historical records into current state, and it is deliberately narrow. An imported record adopts onto a content record only when a fresh observation of the file at its recorded path confirms it, either by matching size and modification time or by the replace-mode case where the file now at that path is already the AV1 output. Adoption is the one-time route for V2 history and is governed by ADR-015; a record that no longer describes the file retires and decides nothing.
 

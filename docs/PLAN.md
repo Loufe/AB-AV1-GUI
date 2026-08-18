@@ -20,11 +20,11 @@ Engine and queue foundations are complete and contract-tested: pinned ab-av1 ada
 
 ## Open questions
 
-- Durable state model and storage engine for first-class History (#89)
-- History observation and export contract: fields, budgets, consumers (#90, #92)
-- Serving History by request/response instead of the frontend fold (#77, #78)
-- Which estimates must improve over V2, and from which evidence stage (#57)
-- One supervision kit for job cancellation and completion: ADR-018 proposed (#85)
-- Upstream acceptance and implementation of the caller-driven owned ab-av1 operation: ADR-021 proposed (#104, alexheretic/ab-av1#371)
+- Durable state model and storage engine for first-class History
+- History observation and export contract: fields, budgets, consumers
+- Serving History by request/response instead of the frontend fold
+- Estimation as a subsystem separate from History: consumers, evidence seam, uncertainty, evaluation (`docs/design/estimation.md`)
+- One supervision kit for job cancellation and completion: ADR-018 proposed
+- Upstream acceptance and implementation of the caller-driven owned ab-av1 operation: ADR-021 proposed (alexheretic/ab-av1#371)
 
 Issue conventions: AGENTS.md "GitHub issues". Milestone: `v3.0`.
