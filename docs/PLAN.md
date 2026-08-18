@@ -14,6 +14,8 @@ Engine and queue foundations are complete and contract-tested: pinned ab-av1 ada
 - IPC bindings generated from Rust via tauri-specta: ADR-006
 - History and Statistics derive as pure projections, with imported history projected separately: ADR-015
 - Analysis identity pins decode mode; queue adds filter at enqueue: ADR-007, ADR-013
+- Analysis work is scoped to ephemeral generations and its paths stay engine-native: ADR-016, ADR-017
+- Path scrubbing happens inside the log sink: ADR-014
 - No first-party unsafe Rust: ADR-005; engine-owned data-dir lock: ADR-008
 - Durable facts keyed by sampled content identity: ADR-019
 - Output promotion owned as a journaled transaction: ADR-020

@@ -8,7 +8,7 @@ Do not create ADRs for contained implementation details, routine refactors, or b
 
 - Store ADRs in `docs/adr/` as `NNN-short-title.md`.
 - Use lowercase, hyphenated, present-tense imperative titles.
-- Number records sequentially.
+- Number records sequentially, and never reuse a number. A deleted record leaves its number retired, so a citation in git history or an old commit message resolves to one record and not two.
 - Every committed ADR is accepted. Do not use a separate proposal or acceptance lifecycle.
 - Treat ADRs as living records of the current architectural truth. When a decision changes, edit the existing ADR in place so its context, options, outcome, consequences, and references describe the new truth.
 - When an ADR no longer represents a current decision, delete it and remove every reference to it from code comments and documentation in the same change. Git history preserves the old record; do not keep deprecated, superseded, or tombstone ADRs.
