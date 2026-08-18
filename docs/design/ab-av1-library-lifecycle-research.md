@@ -1,31 +1,31 @@
 # ab-av1 library lifecycle and cancellation research
 
-Status: living research note; not an accepted design or implementation specification  
+Status: completed research basis for proposed ADR-021  
 Upstream coordination: [alexheretic/ab-av1#371](https://github.com/alexheretic/ab-av1/issues/371)  
 Tracking issue: [#104](https://github.com/Loufe/AB-AV1-GUI/issues/104)  
 Implementation validation: [#105](https://github.com/Loufe/AB-AV1-GUI/issues/105)  
-Related CRFty decisions: [ADR-003](adr/003-embed-a-pinned-ab-av1-adapter.md), [ADR-018](adr/018-unify-job-cancellation-and-completion.md)  
-Last updated: 2026-08-16
+Related CRFty decisions: [ADR-003](../adr/003-embed-a-pinned-ab-av1-adapter.md), [ADR-018](../adr/018-unify-job-cancellation-and-completion.md), [ADR-021](../adr/021-drive-ab-av1-through-an-owned-operation.md)
 
 ## Purpose and boundary
 
-This note records an upstream-first investigation of the lifecycle boundary ab-av1 would need to support reliable in-process use by CRFty. It separates confirmed resource-ownership requirements from the still-undecided public Rust API and from CRFty's private cancellation and worker-supervision design.
+This note records an upstream-first investigation of the lifecycle boundary ab-av1 would need to support reliable in-process use by CRFty. It separates the selected public operation shape and confirmed resource-ownership requirements from CRFty's private cancellation and worker-supervision design.
 
 The source review used a fresh clone of alexheretic/ab-av1 at v0.11.6 commit [`629cfaa`](https://github.com/alexheretic/ab-av1/tree/629cfaa) without adding or consulting the CRFty fork while deriving the findings. The existing `Loufe/ab-av1` prototype was compared only afterward and is treated as exploratory evidence rather than the source of the design.
 
-This is a research artifact. It does not authorize an upstream PR, select a process-management crate, settle the public progress API, or define implementation-test work. Implementation and real-process validation belong in separately tracked issues.
+This is a research artifact, not an implementation specification or authority to open an upstream PR. It recommends a public lifecycle, progress boundary, and process-management direction; proposed ADR-021 owns the CRFty decision, while implementation and real-process validation belong in separately tracked issues.
 
 ## Current conclusions
 
 1. CRFty's use of `tokio_util::sync::CancellationToken` is an application-internal choice and does not require ab-av1 to expose or depend publicly on that type.
-2. ab-av1 needs an awaited terminal lifecycle for embedded operations. Returning `Cancelled` or another terminal outcome must mean internal producers have stopped, owned process trees have terminated and been reaped, and explicit temporary cleanup has been attempted.
+2. ab-av1 needs an awaited terminal lifecycle for embedded operations. Returning `Cancelled` or another terminal outcome must mean internal producers have stopped, every owned process leader has been reaped, the selected platform containment unit has received and acknowledged its strongest available termination operation, and explicit temporary cleanup has been attempted. POSIX cannot let an ordinary parent reap arbitrary grandchildren, so descendant reaping must not be promised beyond the active platform mechanism.
 3. Drop behavior is a last-resort safety net, not proof of terminal cleanup. Rust has no asynchronous `Drop`, Tokio process reaping after kill-on-drop is best effort, and fallible temporary cleanup cannot report errors from a destructor.
 4. Every task and subprocess started by an operation needs an accountable owner. Dropping an ordinary Tokio `JoinHandle` detaches its task, and dropping a Tokio child does not kill it unless kill-on-drop is enabled.
 5. Cancellation must first prevent internal producers from starting more subprocesses, then terminate active containment units, await internal task termination and child reaping, and finally clean temporary state. Draining a global child registry before detached producers stop creates a spawn-after-cleanup race.
 6. Process and temporary ownership should be operation-local rather than process-global. This prevents one operation from finalizing another operation's resources and avoids forcing a permanent global one-job policy merely because the current CLI has global registries.
 7. ab-av1 should accept either a mechanism-neutral cancellation signal or an ab-av1-owned operation control API. Requiring `CancellationToken` in the public API would make `tokio-util` part of ab-av1's public dependency and semver surface without being necessary for CRFty integration.
-8. Two public API families remain credible: a high-level operation that accepts a generic shutdown future and owns cleanup internally, or an explicit operation handle with an awaited cancellation method. The research does not yet select between them.
+8. The recommended public API is a caller-driven high-level operation that accepts a generic shutdown future, emits typed progress through a synchronous observer, and returns only after settlement. An explicit background operation handle is unnecessary for ab-av1's finite pipeline; CRFty may create its own handle by spawning the operation inside its private runtime.
 9. The current CRFty fork does not prove the complete lifecycle contract. Its explicit global finalization and process containment work are useful experiments, but the upstream sample producer can detach and the sample-copy FFmpeg path is not registered with that global finalizer.
+10. `process-wrap` is the preferred containment building block, not a complete lifecycle abstraction. ab-av1 must wrap it in an operation-owned `ManagedChild` whose awaited path force-kills and waits for the whole containment unit and whose Drop fallback synchronously starts whole-unit termination.
 
 ## Terminology
 
@@ -37,7 +37,7 @@ Tokio defines cancellation safety in terms of whether dropping and recreating a 
 
 **Task settlement** means every internally owned task stopped and its completion was observed rather than detached.
 
-**Process settlement** means every owned process containment unit was terminated when required and its leader and descendants were reaped according to the platform contract.
+**Process settlement** means every owned process containment unit received the required termination operation, every direct child leader was awaited and reaped, and stronger platform-specific evidence was observed when available. A Windows Job Object can report that its active-process count reached zero, and a delegated Linux cgroup can report an empty subtree; a POSIX process group can broadcast an uncatchable signal but cannot let the caller reap or conclusively observe arbitrary non-child descendants.
 
 **Drop fallback** means synchronous or best-effort protection used when a caller abandons the normal awaited lifecycle. It cannot report the same guarantees as an awaited terminal path.
 
@@ -105,7 +105,7 @@ The following requirements are independent of the final public API shape.
 * Every asynchronous FFmpeg and FFprobe invocation goes through one managed process abstraction.
 * Registration or ownership begins immediately after spawn, not when a stream is later dropped.
 * Cancellation targets the entire containment unit, not only the immediate child.
-* Termination is followed by an awaited reap.
+* Termination is followed by an awaited reap of every direct child and by the strongest descendant-drain evidence the platform mechanism supplies.
 * stdout and stderr are drained or closed without a pipe deadlock.
 * Drop provides best-effort containment, while the awaited terminal path returns process-settlement failures.
 
@@ -125,9 +125,9 @@ The following requirements are independent of the final public API shape.
 * The CLI uses the same core operation boundary as library consumers so the library path does not become an untested second implementation.
 * The public API does not require `tokio_util::sync::CancellationToken`; CRFty may still pass `CancellationToken::cancelled()` to a generic signal boundary or translate the token into an ab-av1 control operation.
 
-## Candidate public API families
+## Selected public API family
 
-### Option A: high-level operation with a shutdown future
+### Caller-driven operation with a shutdown future and observer
 
 Conceptually:
 
@@ -137,25 +137,26 @@ let outcome = engine
     .await?;
 ```
 
-The operation owns the race between completion and shutdown, stops internal producers, settles processes and tasks, cleans temporary state, and only then returns `Completed` or `Cancelled`. The cancellation input can be any `Future<Output = ()>`, allowing the CLI to pass an OS-signal future and CRFty to pass its private token future.
+The operation owns the race between completion and shutdown, stops internal producers, settles processes and tasks, cleans temporary state, and only then returns `Completed` or `Cancelled`. The cancellation input can be any `Future<Output = ()>`, allowing the CLI to pass an OS-signal future and CRFty to pass its private token future. The observer is synchronous, receives typed non-terminal events, and must return promptly; CRFty can forward events into its latest-value telemetry channel without making Tokio channels part of ab-av1's public API.
 
 This pattern is established by axum's [`with_graceful_shutdown`](https://docs.rs/axum/latest/axum/serve/struct.WithGracefulShutdown.html) and tonic's [`serve_with_shutdown`](https://docs.rs/tonic/latest/tonic/transport/server/struct.Server.html#method.serve_with_shutdown). Those server APIs reinforce the mechanism-neutral signal shape, although ab-av1 is a finite media pipeline rather than a server and still needs typed progress and partial-output policy.
 
-Advantages:
+This family is selected because:
 
 * The normal API cannot forget a separate finalization call.
 * CLI and library cancellation can share one operation root.
 * ab-av1 owns completion-versus-cancellation precedence and cleanup ordering.
 * No background task or remote-control actor is required merely to provide cancellation.
+* A synchronous observer does not bind the public API to a channel implementation, executor-owned stream, or asynchronous backpressure policy.
+* Terminal results remain separate from progress, so dropping or coalescing telemetry cannot manufacture completion.
 
-Costs and unresolved questions:
+Accepted costs:
 
-* Progress needs a callback, channel, `Sink`, or another mechanism that does not reintroduce detached background work.
-* A synchronous callback cannot provide asynchronous backpressure.
+* A slow observer delays output parsing and can indirectly stall a child with full pipes, so the API must document the observer as non-blocking and CRFty must only perform bounded in-memory publication inside it.
 * Dropping the entire returned future still bypasses awaited cleanup and relies on the Drop fallback.
 * The signature and concrete future bounds become part of the public semver API.
 
-### Option B: explicit operation handle
+### Rejected alternative: explicit operation handle
 
 Conceptually:
 
@@ -173,31 +174,13 @@ Cancellation from another task could use a separate control capability or a cons
 operation.cancel().await?;
 ```
 
-Watchexec's [`Job`](https://docs.rs/watchexec-supervisor/latest/watchexec_supervisor/job/struct.Job.html) is a mature example of a background supervisor with explicit ordered controls, stop, wait, restart, and signaling. [`tokio-process-tools`](https://docs.rs/tokio-process-tools/latest/tokio_process_tools/) likewise exposes explicit wait, cancel, abort, terminate, and kill operations and treats automatic Drop cleanup as a fallback.
+Watchexec's [`Job`](https://docs.rs/watchexec-supervisor/latest/watchexec_supervisor/job/struct.Job.html) is a mature example of a background supervisor with explicit ordered controls, stop, wait, restart, and signaling. [`tokio-process-tools`](https://docs.rs/tokio-process-tools/latest/tokio_process_tools/) likewise exposes explicit wait, cancel, abort, terminate, and kill operations and treats automatic Drop cleanup as a fallback. That shape is appropriate when the library owns a long-lived service, restart policy, or independently controlled background actor.
 
-Advantages:
+It is rejected for the initial ab-av1 API because a background operation generally requires spawning and therefore binds behavior to an executor and task ownership model; independently droppable event, control, and join handles multiply abandonment states; and restart, pause, and service-manager semantics are not requirements of a finite encode/search operation. CRFty already owns the runtime thread and application-level job handle, so reproducing that layer upstream would split supervision authority.
 
-* Remote cancellation and explicit terminal acknowledgement are natural.
-* Progress can be streamed independently from the terminal result.
-* The lifecycle can later support graceful escalation or richer controls.
-
-Costs and unresolved questions:
-
-* A background operation generally requires spawning and therefore binds behavior to an executor and task ownership model.
-* The API must define what happens when the event receiver, control handle, or operation owner is dropped independently.
-* It can overbuild service-manager semantics for a finite one-shot pipeline.
-* Multiple handles can obscure which object owns the unique right to await terminal cleanup unless capabilities are deliberately separated.
-
-### Option C: public stream plus manual finalization
+### Rejected alternative: public stream plus manual finalization
 
 Conceptually, this is the current CRFty prototype shape: consume a command stream, drop it, and call a separate global `finish_job()` or `cancel_job()` function.
-
-Advantages:
-
-* It follows the existing typed CRF-search stream seam.
-* It requires a smaller initial change to internal command functions.
-
-Costs:
 
 * The compiler does not connect a stream to the correct global finalization call.
 * A caller can forget cleanup or overlap operations that share global state.
@@ -205,7 +188,7 @@ Costs:
 * Detached producers can outlive stream drop.
 * Global process and temporary registries force restrictions that are not inherent to ab-av1's algorithms.
 
-This option should not be treated as the default upstream design. It remains useful as a temporary adapter boundary while a safer operation contract is developed.
+This option follows the existing typed CRF-search seam and requires fewer initial changes, but those advantages do not compensate for its unenforced lifecycle. It remains only a temporary CRFty adapter boundary until the selected operation API exists.
 
 ## External project evidence
 
@@ -216,8 +199,9 @@ This option should not be treated as the default upstream design. It remains use
 * Tokio's [`JoinHandle`](https://docs.rs/tokio/latest/tokio/task/struct.JoinHandle.html) documentation confirms that dropping a handle detaches the task, directly matching the upstream sample-producer risk.
 * Tokio's [`JoinSet`](https://docs.rs/tokio/latest/tokio/task/struct.JoinSet.html) owns its tasks, aborts them on Drop, and can abort and await them through `shutdown()`, providing a maintained building block for internal structured ownership.
 * Cargo-mutants' [process-management design](https://github.com/sourcefrog/cargo-mutants/blob/main/DESIGN.md) documents why terminating only an immediate child leaks nested test processes and why Unix process groups plus signal forwarding are necessary.
-* [`process-wrap`](https://docs.rs/process-wrap/latest/process_wrap/) provides composable Tokio and standard process wrappers, Unix groups or sessions, Windows Job Objects, and kill-on-drop. Its documentation describes it as the more flexible successor to `command-group`.
+* [`process-wrap`](https://docs.rs/process-wrap/latest/process_wrap/) provides composable Tokio and standard process wrappers, Unix groups or sessions, Windows Job Objects, and a Tokio kill-on-drop shim. Its documentation describes it as the more flexible successor to `command-group` and retains the `command-group` test suite. Its explicit kill calls wrapper `start_kill()` and then `wait()`.
 * [`command-group::AsyncGroupChild`](https://docs.rs/command-group/latest/command_group/struct.AsyncGroupChild.html) provides process-group kill and wait but warns that a cancelled asynchronous wait can leave its underlying blocking wait active, so process-wrapper selection needs an explicit wait-cancellation audit.
+* [`processkit`](https://docs.rs/processkit/latest/processkit/) provides a broader Tokio runner with cancellation, capture, streaming, and kernel-backed containment. It reports whether Linux obtained cgroup v2 or fell back to a process group, which is more honest than claiming identical containment on every host.
 * [`tempfile::TempDir`](https://docs.rs/tempfile/latest/tempfile/struct.TempDir.html) distinguishes best-effort Drop cleanup from explicit fallible `close()`, matching the required dual cleanup contract.
 
 ### Evidence limiting or refuting a single obvious API
@@ -227,6 +211,67 @@ This option should not be treated as the default upstream design. It remains use
 * SQLx documents that Rust's lack of async Drop requires an explicit [`Pool::close`](https://docs.rs/sqlx/latest/sqlx/pool/struct.Pool.html#method.close) for deterministic cleanup even though Drop handles local fallback cleanup. This refutes relying on an operation future's destructor as the complete contract.
 * `tokio-process-tools` provides a correctness-focused process lifecycle but its automatic asynchronous Drop termination requires a multithreaded Tokio runtime. CRFty currently embeds ab-av1 on a current-thread runtime, so it is evidence and a possible component rather than an assumed drop-in solution.
 * [`async-scoped`](https://docs.rs/async-scoped/latest/async_scoped/) documents the caveats and even unsafe surface involved in guaranteeing non-`'static` async scopes across cancellation. A narrow ab-av1 design should prefer ordinary owned futures and tasks over importing a generalized scoped-concurrency model without need.
+* `process-wrap`'s Tokio `KillOnDrop` configures the underlying Tokio child. Its Unix `ProcessGroupChild` overrides `start_kill()` and `wait()` but has no Drop implementation that invokes group termination, so bare `KillOnDrop` is not a whole-process-group Drop guarantee on Unix. ab-av1 needs its own `ManagedChild` Drop guard around the wrapper.
+* `process-wrap`'s Unix group wait uses `waitpid(-pgid, ...)`. POSIX wait calls can reap only children of the caller, so this does not prove that arbitrary grandchildren were reaped; after group SIGKILL and leader wait, orphaned grandchildren are the responsibility of their parent or the host subreaper.
+* `processkit` supplies more of the desired lifecycle directly, including cgroup v2 when available, but its supervision, pipelines, limits, retries, capture policies, and public `CancellationToken` integration are substantially broader than ab-av1 needs. Its own platform and container documentation explains both that typical Linux systemd or container placement can prevent cgroup controller use and force a process-group fallback and that an ordinary process cannot reap an orphaned grandchild that was reparented to PID 1, so adopting it would not create a universal stronger guarantee.
+
+## Selected lifecycle contracts
+
+### Process containment and termination
+
+Use `process-wrap`'s Tokio frontend behind a private ab-av1 `ManagedCommand` and `ManagedChild`. On Unix, each FFmpeg or FFprobe child is the leader of a fresh process group. On Windows, each child is assigned to a Job Object before it is resumed, and GUI consumers can compose the no-window creation flag before the Job Object wrapper. ab-av1 exposes none of these dependency types publicly.
+
+Every external command path, including sample copy, the retry with generated timestamps, FFmpeg version discovery, and FFprobe, must use this abstraction. The awaited cancellation path calls whole-unit force termination and then waits for the direct child leader and owned pipe tasks. On Windows it also waits for Job Object completion. On Unix, successful group SIGKILL plus leader reap is the available contract; it does not falsely claim that the caller reaped non-child descendants. Concurrent stdout and stderr drains remain owned until EOF or deliberate closure, so termination cannot return while pipe-reader work is detached.
+
+Cancellation uses immediate force termination rather than a graceful signal interval. ab-av1 writes disposable samples and caller-selected staging output; CRFty never promotes a cancelled staging file. Sending `q`, SIGINT, or SIGTERM would add platform-dependent latency and produce a finalized partial file that is still discarded. A later opt-in graceful policy can be additive, but it is not part of the initial contract.
+
+The `ManagedChild` Drop implementation synchronously starts whole-unit termination and then relinquishes the handle to the runtime's best-effort reaper. Drop cannot promise awaited settlement or report failure. The ordinary operation path must therefore call an explicit consuming `terminate_and_wait()` or `wait()` before returning. `#[must_use]`, private constructors, and a denied `unused_must_use` lint make accidental abandonment visible without pretending Rust has asynchronous Drop.
+
+`processkit` is the strongest alternative if ab-av1 later needs observable cgroup containment, limits, or a complete process runner. It is not selected initially because `process-wrap` provides the narrow group/job primitives needed by a trusted pinned FFmpeg and FFprobe toolchain, preserves ab-av1's existing streaming parser, and avoids importing service supervision and runner policy. FFmpeg and FFprobe are not expected to daemonize or intentionally escape their group; if that trust assumption changes, the boundary must move to cgroup, subreaper, container, or equivalent externally owned containment. Direct platform bindings are rejected because the project would reproduce reviewed Job Object, process-group, wait, and wrapper-ordering code.
+
+### Cancellation and terminal precedence
+
+The operation has one linearization point: production of its domain result after the final child has exited and any staging file has reached the state ab-av1 promises. A biased root race gives that completed domain result precedence when it and cancellation are observed in the same poll. Once the domain result linearizes, cancellation no longer changes the disposition; mandatory task, process, and temporary settlement still runs before the result is returned.
+
+If cancellation is observed before the domain result linearizes, the operation closes process registration, broadcasts its private internal cancellation signal, terminates managed children, joins internal tasks, cleans its operation-local temporary state, and returns `Outcome::Cancelled`. A plain cancelled outcome therefore means settlement succeeded.
+
+An operation or cancellation followed by failed process settlement or explicit temporary cleanup returns an error that preserves both the initiating disposition and every settlement failure. Cleanup failure is never collapsed into `Cancelled`, and a cleanup error never erases the earlier encode or search failure. Exact Rust variant names remain a PR-level naming choice, but the information model is fixed: primary disposition plus ordered settlement failures.
+
+### Task ownership, FFprobe, and runtime support
+
+Replace the detached `spawn_local` sample producer with operation-owned work that has a sticky private cancellation signal, a retained join authority, and an abort-on-drop fallback. Normal cancellation is cooperative and awaited; abort exists only for abandonment or panic fallback after every subprocess future has its own `ManagedChild` guard. No ordinary `JoinHandle` may leave the operation context without a unique join owner.
+
+Remove the public or internal requirement for `LocalSet`. Library futures and internal tasks should be `Send` and run on either a current-thread or multithreaded Tokio runtime supplied by the caller. ab-av1 does not create a runtime in its library API; the CLI remains free to use `#[tokio::main(flavor = "current_thread")]`.
+
+Replace the synchronous `ffprobe` crate call with the managed asynchronous command path and parse its machine-readable output. Tool paths are immutable engine configuration rather than PATH mutation or thread-local dynamic scope. Cache identity derives from the actual configured FFmpeg build. Short filesystem/cache critical sections may use blocking tasks only when their join authority is retained; cancellation waits for an already-running blocking section rather than claiming it was aborted.
+
+### Temporary ownership and concurrency
+
+Each operation creates a unique temporary namespace and registry. Keep policy belongs to the request, explicit cleanup reports all failed removals, and Drop only attempts best-effort cleanup. No operation calls a process-global `clean_all()` or can remove another operation's files.
+
+The library contract permits overlapping operations because operation-local ownership makes overlap correct, but it does not promise fairness or manage a resource budget. CRFty continues to enforce one active ab-av1 job in its own coordinator. Supporting overlap at the boundary avoids encoding CRFty's product policy or the current global-registry limitation into ab-av1's semver API.
+
+### Stable package and API surface
+
+Add a library target to the existing `ab-av1` package rather than creating a second published package. Keep CLI parsing and presentation behind the default `cli` feature so `cargo install ab-av1` retains its behavior while `default-features = false` library consumers avoid Clap, `indicatif`, terminal detection, signal handling, logger initialization, and process exit.
+
+Expose an immutable `Engine` or equivalent built from explicit FFmpeg, FFprobe, temporary-root, and cache configuration. Expose narrow search and encode request builders, typed non-terminal event enums, typed successful results, `Outcome<T>`, and a structured operation error. Keep fields private and use `#[non_exhaustive]` only on reported enums that are expected to grow; builders avoid making every request-field addition a semver break.
+
+Keep `process-wrap`, Tokio synchronization types, `indicatif`, Clap, and cache implementation types private. Run [`cargo-semver-checks`](https://github.com/obi1kenobi/cargo-semver-checks) against the previous release and review a [`cargo-public-api`](https://github.com/Enselic/cargo-public-api) diff before publishing. Use Clippy's [`disallowed_methods`](https://doc.rust-lang.org/clippy/lint_configuration.html) configuration to forbid direct `tokio::process::Command::spawn`, `tokio::task::spawn_local`, and unowned task spawning outside the private operation/process modules; this turns the ownership boundary into a checked convention instead of relying only on review.
+
+The terms that most accurately describe the direction are **structured concurrency**, **cooperative cancellation**, **resource-safe cancellation**, **process-tree containment**, **explicit asynchronous close**, **RAII fallback**, and **capability-based ownership**. The API is not fully structured concurrency in the language-level sense because Tokio tasks remain `'static` and Drop cannot await, but every child task and process is nested under one accountable operation lifecycle.
+
+## Reviewable upstream patch sequence
+
+1. Add the library target and default `cli` feature, move terminal rendering behind that feature, and keep `cargo install` behavior unchanged without publishing command internals.
+2. Introduce private engine/toolchain configuration and route FFmpeg version discovery and FFprobe through explicit configured paths.
+3. Introduce `ManagedCommand` and `ManagedChild` over `process-wrap`, then migrate every FFmpeg and FFprobe spawn, including sample-copy retries, while preserving the current parsers.
+4. Replace global temporary state with an operation-local temporary namespace and make explicit cleanup fallible.
+5. Replace the detached sample producer with owned, cancellable, joined work and remove the `LocalSet` requirement.
+6. Add narrow request, event, result, outcome, and error types plus the caller-driven operation methods; adapt the CLI to those same methods.
+7. Remove the prototype's global `finish_job()` and `cancel_job()` surface once CRFty consumes the owned operation boundary.
+
+The patch touches package/module boundaries, command presentation, every subprocess construction site, temporary ownership, sample production, cache/tool identity, and the CRFty adapter. It is a lifecycle refactor rather than a cancellation-token parameter addition. The sequence above keeps each review centered on one ownership boundary and leaves the real-process validation matrix in issue #105.
 
 ## Assessment of the existing CRFty prototype
 
@@ -257,30 +302,19 @@ The prototype may supply implementation pieces after each is independently justi
 
 ## Relationship to CRFty decisions
 
-[ADR-003](adr/003-embed-a-pinned-ab-av1-adapter.md) accepted an embedded, pinned ab-av1 adapter. Its core integration direction remains compatible with this research, but its statement that the real-process prototype demonstrated the complete lifecycle is too broad: the proof did not cover the detached sample producer and unmanaged sample-copy FFmpeg path. Because accepted ADRs are immutable, this correction belongs here and in a later related or superseding ADR rather than a rewrite of ADR-003.
+[ADR-003](../adr/003-embed-a-pinned-ab-av1-adapter.md) accepted an embedded, pinned ab-av1 adapter. Its core integration direction remains compatible with this research, but its statement that the real-process prototype demonstrated the complete lifecycle is too broad: the proof did not cover the detached sample producer and unmanaged sample-copy FFmpeg path. Because accepted ADRs are immutable, proposed ADR-021 refines that boundary instead of rewriting or superseding ADR-003.
 
-[ADR-018](adr/018-unify-job-cancellation-and-completion.md) concerns CRFty's private cancellation, terminal-report, telemetry, and worker-ownership contract. It should require an awaited ab-av1 terminal lifecycle without permanently naming the prototype's `finish_job()` or `cancel_job()` functions. The choice between a generic cancellation future and an explicit ab-av1 operation handle is a separate external-boundary decision.
+[ADR-018](../adr/018-unify-job-cancellation-and-completion.md) concerns CRFty's private cancellation, terminal-report, telemetry, and worker-ownership contract. It requires an awaited ab-av1 terminal lifecycle without permanently naming the prototype's `finish_job()` or `cancel_job()` functions. Proposed ADR-021 selects the generic cancellation-future boundary between that private supervisor and ab-av1.
 
-## Open decisions
+## Residual maintainer choices
 
-1. Should the primary library API be a high-level operation with a generic shutdown future or an explicit operation handle with awaited cancellation?
-2. Should progress use a synchronous observer, asynchronous `Sink`, caller-provided channel, or operation-owned event stream?
-3. Must multiple operations be supported concurrently, explicitly rejected, or left unspecified in the initial library contract?
-4. Should process containment use `process-wrap`, `command-group` with focused fixes, another maintained process runner, or a narrow internal wrapper over platform APIs?
-5. What graceful signal, grace interval, and forceful escalation policy should apply to FFmpeg on Unix and Windows?
-6. How should synchronous FFprobe and cache work participate in cancellation without binding the library to a caller-owned runtime configuration?
-7. What terminal result represents cancellation followed by a cleanup or process-settlement failure?
-8. What wins when operation completion and cancellation become ready in the same poll?
-9. Which request, event, result, and error types are stable enough for a regular semver library API?
-10. Should the initial library API document current-thread `LocalSet` requirements or remove `spawn_local` and support ordinary Tokio runtimes before stabilization?
+The architecture no longer depends on unresolved lifecycle choices. Upstream review may still choose exact type and method names, callback argument ownership, builder ergonomics, event granularity, cache backend, and whether `process-wrap` is accepted or its narrow behavior is implemented another way. Any substitute must preserve the selected operation, containment, Drop-fallback, settlement, race-precedence, toolchain, temporary-ownership, concurrency, and semver contracts.
 
-## Documentation and issue actions
+The maintainer may also prefer a separate published core package instead of the selected same-package library target. That packaging choice is acceptable if the CLI still consumes the identical operation implementation and library consumers do not inherit terminal dependencies. It does not reopen the lifecycle decision.
 
-* Keep CRFty's private supervision decision in ADR-018 and issue #85.
-* Track the upstream ab-av1 operation boundary in [issue #104](https://github.com/Loufe/AB-AV1-GUI/issues/104), linked to upstream issue #371.
-* Track implementation and real-process contract tests in [issue #105](https://github.com/Loufe/AB-AV1-GUI/issues/105) rather than treating them as research deliverables.
-* Update upstream issue #371 with the confirmed hazards, mechanism-neutral requirements, both credible API families, and an explicit statement that no public `CancellationToken` dependency is requested.
-* Write a new ADR only after the public lifecycle and process-ownership decisions are made. Relate it to ADR-003 and ADR-018, and supersede ADR-003 only if the fundamental embedded-adapter decision changes.
+## Coordination boundary
+
+CRFty's private supervision remains in ADR-018 and issue #85. Proposed ADR-021 records the selected adapter boundary. Issue #105 owns implementation and real-process contract validation; neither test implementation nor its results are research completion criteria. Upstream issue #371 owns maintainer coordination and any eventual pull-request authorization.
 
 ## Primary sources
 
@@ -298,6 +332,12 @@ The prototype may supply implementation pieces after each is independently justi
 * [Watchexec process supervisor](https://docs.rs/watchexec-supervisor/latest/watchexec_supervisor/)
 * [cargo-mutants process-tree design](https://github.com/sourcefrog/cargo-mutants/blob/main/DESIGN.md)
 * [`process-wrap`](https://docs.rs/process-wrap/latest/process_wrap/)
+* [`process-wrap` Tokio child wrapper source](https://github.com/watchexec/process-wrap/blob/0c3d820/src/tokio/core.rs)
+* [`process-wrap` Unix process-group source](https://github.com/watchexec/process-wrap/blob/0c3d820/src/tokio/process_group.rs)
+* [`processkit`](https://docs.rs/processkit/latest/processkit/)
 * [`command-group`](https://docs.rs/command-group/latest/command_group/struct.AsyncGroupChild.html)
 * [`tokio-process-tools`](https://docs.rs/tokio-process-tools/latest/tokio_process_tools/)
 * [`tempfile`](https://docs.rs/tempfile/latest/tempfile/)
+* [Cargo SemVer compatibility](https://doc.rust-lang.org/cargo/reference/semver.html)
+* [`cargo-semver-checks`](https://github.com/obi1kenobi/cargo-semver-checks)
+* [Clippy lint configuration](https://doc.rust-lang.org/clippy/lint_configuration.html)

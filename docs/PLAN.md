@@ -25,6 +25,6 @@ Engine and queue foundations are complete and contract-tested: pinned ab-av1 ada
 - Serving History by request/response instead of the frontend fold (#77, #78)
 - Which estimates must improve over V2, and from which evidence stage (#57)
 - One supervision kit for job cancellation and completion: ADR-018 proposed (#85)
-- Whether ab-av1 can be used in-process, and the upstream lifecycle boundary it would need (#104)
+- Upstream acceptance and implementation of the caller-driven owned ab-av1 operation: ADR-021 proposed (#104, alexheretic/ab-av1#371)
 
 Issue conventions: AGENTS.md "GitHub issues". Milestone: `v3.0`.
