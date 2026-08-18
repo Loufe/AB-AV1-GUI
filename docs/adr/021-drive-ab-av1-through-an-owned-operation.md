@@ -43,7 +43,7 @@ The terminal contract follows the strongest evidence each platform can supply. W
 
 Cancellation force-terminates the containment unit immediately. ab-av1's samples and CRFty's staging output are disposable on cancellation, so graceful FFmpeg finalization would add platform-specific behavior and latency without producing an artifact CRFty can promote. A graceful policy may be added later as an explicit opt-in.
 
-The domain result has precedence if it and cancellation are observed in the same root poll. Once the domain result linearizes, later cancellation cannot reclassify it, but mandatory settlement still runs. Cancellation observed before that point returns `Cancelled` only when settlement succeeds. Process, pipe, task, or temporary-cleanup failure returns a structured error that preserves both the initiating disposition and all settlement failures.
+The domain disposition, whether success or operation failure, has precedence if it and cancellation are observed in the same root poll. Once that disposition linearizes, later cancellation cannot reclassify it or hide a real operation error, but mandatory settlement still runs. Cancellation observed before that point returns `Cancelled` only when settlement succeeds. Process, pipe, task, or temporary-cleanup failure returns a structured error that preserves both the initiating disposition and all settlement failures.
 
 Engine configuration contains explicit FFmpeg and FFprobe paths, temporary root, cache location, and toolchain identity. Every operation owns a unique temporary namespace and registry. The library permits overlapping operations to be correct but does not schedule or budget them; CRFty continues to enforce its product policy of one active ab-av1 job.
 
