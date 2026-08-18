@@ -3,18 +3,18 @@ status: accepted
 date: 2026-08-16
 ---
 
-# Unify Job Cancellation and Completion
+# Unify job cancellation and completion
 
-## Context and Problem Statement
+## Context and problem statement
 
-The engine currently represents the same one-shot supervision contract with four cancellation mechanisms and two nearly identical job handles:
+The engine represents the same one-shot supervision contract with four cancellation mechanisms and two nearly identical job handles:
 
 * ab-av1 jobs use a Tokio watch channel, `CancellationHandle`, and `JobHandle<T>`
 * remux jobs use a standard MPSC channel, `RemuxCancellationHandle`, and `RemuxHandle`
 * synchronous supervised processes use `ProcessCancellation` over `Arc<AtomicBool>`
 * vendor installation uses a resettable shared `Arc<AtomicBool>` alongside a separately owned thread handle
 
-The coordinator adapts the ab-av1 and remux handles through `ActiveJobCancellation` and maintains two polling loops with the same result, timeout, telemetry, and cancellation behavior. Each implementation must independently get pre-registration cancellation, channel disconnection, cancel-on-drop, terminal cleanup, worker termination, and subprocess settlement right.
+The coordinator adapts the ab-av1 and remux handles through `ActiveJobCancellation` and maintains two polling loops with the same result, timeout, telemetry, and cancellation behaviour. Each implementation must independently get pre-registration cancellation, channel disconnection, cancel-on-drop, terminal cleanup, worker termination, and subprocess settlement right.
 
 The ab-av1 library lifecycle is a related but separate external-boundary decision selected by [ADR-021](021-drive-ab-av1-through-an-owned-operation.md), with evidence in [`docs/design/ab-av1-library-lifecycle-research.md`](../design/ab-av1-library-lifecycle-research.md). ADR-021 gives ab-av1 a generic shutdown future and keeps its owned settlement inside that finite operation; this record decides how CRFty produces that signal, owns the executor worker, and publishes the terminal report.
 
@@ -29,7 +29,7 @@ Conflating these events can publish a false terminal outcome, detach a worker, l
 
 This design is an application of **structured job supervision**: cooperative cancellation, explicit completion, owned worker lifetimes, RAII cleanup, and process-tree containment. It borrows the parent/child lifetime discipline of structured concurrency without claiming that a Tokio-only task scope can supervise CRFty's standard threads and external processes.
 
-## Decision Drivers
+## Decision drivers
 
 * A cancellation requested before worker registration must not be lost.
 * Cancellation must be idempotent, sticky, cloneable internally, and observable from synchronous threads and Tokio tasks.
@@ -44,9 +44,9 @@ This design is an application of **structured job supervision**: cooperative can
 * Shutdown must account for every worker and retain the unique right to join every joinable thread or task.
 * Process-tree containment and operation-specific cleanup must remain intact.
 * The compiler should prevent cloned terminal publishers, accidentally cloned join authority, new jobs after shutdown begins, and direct worker access to cancellation authority where practical.
-* The shared abstraction must not pre-build graceful/restart policy that the engine does not currently expose.
+* The shared abstraction must not pre-build graceful/restart policy that the engine does not expose.
 
-## Considered Options
+## Considered options
 
 * Keep the four cancellation mechanisms and two handles.
 * Introduce a local cancellation trait over the existing watch, MPSC, and atomic implementations.
@@ -55,13 +55,13 @@ This design is an application of **structured job supervision**: cooperative can
 * Replace most of CRFty's process layer with the opinionated `processkit` runner and containment model.
 * Adopt an application-wide Tokio subsystem or structured-task crate and move the coordinator and all workers into its lifecycle model.
 
-## Decision Outcome
+## Decision outcome
 
 Chosen option: **compose `CancellationToken`, `oneshot`, `watch`, and `TaskTracker` behind a small capability-oriented CRFty job API while retaining operation-specific workers**, because these maintained primitives implement the generic synchronization contracts while CRFty retains only its domain reports, cleanup sequencing, worker ownership, and process policy.
 
 The primitive composition is the selected direction. The process implementation and final join-ownership boundary remain open implementation decisions recorded below.
 
-### Common Contract
+### Common contract
 
 Each started job creates a fresh `tokio_util::sync::CancellationToken`. The raw token remains private. A controller-facing cancellation capability can request cancellation, while a worker-facing context exposes only observation through `is_cancelled()` and `cancelled()`. This prevents ordinary worker code from acquiring broader cancellation authority merely because `CancellationToken` itself is cloneable and bidirectional.
 
@@ -90,9 +90,9 @@ The supervisor API should use private construction and, if practical, typestate 
 
 The coordinator uses one generic monitoring loop for terminal report polling and telemetry snapshots. Operation-specific closures translate telemetry into session progress and rates. Cancellation does not itself mean `Stopped`, `Cancelled`, or `Idle`; the operation closure returns the validated domain report after its cleanup.
 
-### Compiler and Static-Analysis Enforcement
+### Compiler and static-analysis enforcement
 
-Rust's ownership model can enforce that the terminal sender and join authority are not duplicated, but Rust cannot prove that a cooperative worker checks its token or that an external descendant really exited. The common API therefore uses the compiler for ownership invariants and contract tests for temporal and operating-system behavior.
+Rust's ownership model can enforce that the terminal sender and join authority are not duplicated, but Rust cannot prove that a cooperative worker checks its token or that an external descendant really exited. The common API therefore uses the compiler for ownership invariants and contract tests for temporal and operating-system behaviour.
 
 The enforcement is:
 
@@ -107,7 +107,7 @@ The enforcement is:
 
 `#[must_use]` is a lint and can be explicitly suppressed, so it is not linear typing. The design relies on Rust's affine ownership, private constructors, capability wrappers, RAII, and tests together rather than claiming the compiler can enforce cooperative cancellation.
 
-### Process Containment Direction
+### Process containment direction
 
 The cancellation token does not replace process containment. Token observation must trigger a process owner that kills the correct containment unit, drains or closes pipes without deadlock, waits or reaps the leader and descendants, joins reader threads, and only then returns the domain report.
 
@@ -117,13 +117,13 @@ Three process-layer choices remain viable:
 * Migrate to `process-wrap`, which describes itself as the more flexible successor to `command-group` and composes standard-library and Tokio commands with process groups, sessions, Windows Job Objects, and Tokio kill-on-drop.
 * Spike `processkit`, which provides cancellation-aware streaming and run-to-completion APIs, Windows Job Objects, Linux cgroup v2 with process-group fallback, BSD process reapers or process groups, kill-on-drop, and an observable containment mechanism.
 
-`processkit` is the only researched option that could materially change the architecture rather than merely replace a wrapper. Linux cgroup v2 can contain descendants that escape a POSIX process group by calling `setsid()`, but the crate remains async-first and falls back when a suitable cgroup is unavailable. Adoption requires proving that it preserves ab-av1 and FFmpeg streaming parsers, Windows packaging and Job Object behavior, Linux fallback behavior, cancellation precedence, and exact kill/wait/reap ordering.
+`processkit` is the only researched option that could materially change the architecture rather than merely replace a wrapper. Linux cgroup v2 can contain descendants that escape a POSIX process group by calling `setsid()`, but the crate remains async-first and falls back when a suitable cgroup is unavailable. Adoption requires proving that it preserves ab-av1 and FFmpeg streaming parsers, Windows packaging and Job Object behaviour, Linux fallback behaviour, cancellation precedence, and exact kill/wait/reap ordering.
 
 `process-wrap` is the conservative alternative if CRFty wants a supported successor to `command-group` without adopting a full process runner. It does not itself provide the terminal-report or worker-supervision contract.
 
 The process choice in this record concerns CRFty-owned direct processes. ADR-021 separately places internal process ownership inside ab-av1 so its library operation cannot detach sample producers or leave sample-copy FFmpeg outside terminal settlement.
 
-### Counterexamples and Failure History
+### Counterexamples and failure history
 
 * **Detached worker after apparently successful cancellation:** Dropping either a standard-library or Tokio `JoinHandle` detaches its worker. A handle that only cancels on drop can therefore leave a remux, vendor, or runtime worker executing after its owner has disappeared. The supervisor must retain unique join authority and shutdown must separately prove worker termination.
 * **Cleanup skipped by cancellation race:** `CancellationToken::run_until_cancelled` drops the wrapped future when cancellation wins and is biased toward future completion on a simultaneous ready poll. Wrapping the current ab-av1 operation wholesale could skip its provisional explicit finalization or classify a completion/cancellation tie according to helper polling order rather than CRFty policy.
@@ -139,9 +139,9 @@ The process choice in this record concerns CRFty-owned direct processes. ADR-021
 * **Lost owner on timeout:** A polling API that consumes the handle on timeout can drop the only cancel-on-drop guard or join authority. Timeout polling must retain the handle.
 * **Channel closure mistaken for cancellation:** A panic before report publication drops the sender. Treating disconnection as ordinary cancellation would hide an infrastructure failure and could commit incomplete evidence.
 
-### Open Implementation Decisions
+### Open implementation decisions
 
-1. **Join ownership:** Prefer one engine supervisor as the exclusive owner of all joinable worker handles because ab-av1 currently uses a shared runtime thread, but decide whether remux and vendor jobs should instead carry per-job join capabilities. The public `JobHandle` must not claim to prove thread termination unless it actually joins.
+1. **Join ownership:** Prefer one engine supervisor as the exclusive owner of all joinable worker handles because ab-av1 uses a shared runtime thread, but decide whether remux and vendor jobs should instead carry per-job join capabilities. The public `JobHandle` must not claim to prove thread termination unless it actually joins.
 2. **Terminal report meaning:** The selected meaning is “operation cleanup and process settlement completed,” while the worker ledger and join owner separately prove executor/thread termination. Confirm that every domain consumer can tolerate this small distinction.
 3. **Completion-versus-cancellation precedence:** Define a race table for simultaneous completion, cancellation, timeout, channel disconnection, and cleanup failure. Do not inherit the answer accidentally from `select!` branch order or `run_until_cancelled` fairness.
 4. **Cleanup failure after cancellation:** Decide whether this becomes a cancellation report carrying cleanup evidence, a common infrastructure error, or a driver-fatal error. A plain `Cancelled` outcome must not hide a process that could not be terminated or reaped.
@@ -165,18 +165,18 @@ The process choice in this record concerns CRFty-owned direct processes. ADR-021
 * Bad: The shared handle remains generic over operation-specific report and telemetry types.
 * Bad: A local composition layer is still required because no established crate covers CRFty's mix of standard threads, Tokio tasks, domain reports, blocking HTTP, and external process trees.
 * Bad: Cooperative blocking operations remain bounded by their polling or I/O timeout before they can observe the token.
-* Bad: Stronger process containment may require an async process-layer migration and platform-specific fallback behavior.
+* Bad: Stronger process containment may require an async process-layer migration and platform-specific fallback behaviour.
 * Bad: Compile-time ownership cannot prove cancellation responsiveness or operating-system cleanup; adversarial integration tests remain necessary.
 
-## Verification Strategy
+## Verification strategy
 
-The common job-contract tests must cover pre-cancel, cloned and idempotent cancel, successful completion disarming drop, timeout retaining ownership and drop cancellation, handle drop, sender disconnection, worker panic, final telemetry snapshot, cancellation while telemetry is continuously ready, force-before-registration, fresh vendor tokens, and new-job rejection after shutdown begins.
+The common job-contract tests must cover pre-cancel, cloned and idempotent cancel, successful completion disarming drop, timeout retaining ownership and drop cancellation, handle drop, sender disconnection, and worker panic. They must also cover final telemetry, cancellation under continuous telemetry, force-before-registration, fresh vendor tokens, and new-job rejection after shutdown begins.
 
-Implementation validation must cover remux cancellation followed by parser and reader cleanup, vendor cancellation during a stalled response body, a child that spawns a grandchild, a Unix descendant that calls `setsid()`, Windows Job Object settlement, both stdout and stderr filling concurrently, and driver shutdown proving every registered worker is joined or explicitly classified under the chosen timeout policy. ab-av1-specific real-process lifecycle tests are tracked separately and are not completion criteria for this record.
+Implementation validation must cover remux cancellation followed by parser and reader cleanup, vendor cancellation during a stalled response body, a child that spawns a grandchild, a Unix descendant that calls `setsid()`, and Windows Job Object settlement. It must also cover concurrent stdout and stderr pressure and driver shutdown proving every registered worker is joined or explicitly classified under the chosen timeout policy. ab-av1-specific real-process lifecycle tests are tracked separately and are not completion criteria for this record.
 
 Use ordinary barriers and controllable fake workers for protocol races. Loom is appropriate only if CRFty adds a custom atomic state machine; it cannot directly model real network calls or operating-system processes.
 
-## More Information
+## More information
 
 See ADR-015, which retains the rule that statistics and prediction provenance derive from validated facts; cancellation telemetry is not such a fact. ADR-021 selects the upstream ab-av1 operation boundary, its research is recorded in [`docs/design/ab-av1-library-lifecycle-research.md`](../design/ab-av1-library-lifecycle-research.md), and its implementation-validation contract is tracked separately.
 
@@ -192,7 +192,7 @@ Implementation locations at the time this decision was recorded:
 
 Primary implementation and failure-history references:
 
-* Tokio's [`CancellationToken` documentation](https://docs.rs/tokio-util/latest/tokio_util/sync/struct.CancellationToken.html) defines sticky sync/async observation, child-token behavior, `DropGuard`, simultaneous completion fairness, and the cancellation-safety limitation of `run_until_cancelled`.
+* Tokio's [`CancellationToken` documentation](https://docs.rs/tokio-util/latest/tokio_util/sync/struct.CancellationToken.html) defines sticky sync/async observation, child-token behaviour, `DropGuard`, simultaneous completion fairness, and the cancellation-safety limitation of `run_until_cancelled`.
 * Tokio's [`oneshot::Receiver` documentation](https://docs.rs/tokio/latest/tokio/sync/oneshot/struct.Receiver.html) documents one-value delivery, sender-drop errors, cancel-safe awaiting, `try_recv()`, and `blocking_recv()`.
 * Tokio's [`watch` documentation](https://docs.rs/tokio/latest/tokio/sync/watch/) defines a thread-safe channel that retains only the latest value and warns that long-lived borrows can block producers.
 * Tokio's [`TaskTracker` documentation](https://docs.rs/tokio-util/latest/tokio_util/task/struct.TaskTracker.html) explicitly separates asking tasks to cancel from waiting until tracked tasks and destructors have exited; [`TaskTrackerToken`](https://docs.rs/tokio-util/latest/tokio_util/task/task_tracker/struct.TaskTrackerToken.html) is a transferable lifetime permit removed on drop.

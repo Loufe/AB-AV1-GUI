@@ -1,0 +1,20 @@
+extends: substitution
+message: "Use '%s' instead of '%s'."
+ignorecase: true
+level: error
+swap:
+  '(?:in order to|as a means to)': to
+  '(?:previous|prior) to': before
+  '(?:utilize|make use of)': use
+  'a (?:large )?number of': many
+  'as a result of': because of
+  'at (?:the present time|this point in time)': now
+  'based on the fact that': because
+  'because of the fact that': because
+  'due to the fact that': because
+  'has the ability to': can
+  'in the event that': if
+  'perform an assessment of': assess
+  'take into account': consider
+  'the question as to whether': whether
+  'with regard to': regarding

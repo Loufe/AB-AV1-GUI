@@ -1,4 +1,4 @@
-# Rewrite Plan
+# Rewrite plan
 
 Living state of the V3 rewrite. Update when a phase lands or a direction is decided. Decisions get an ADR; long-form design goes in `docs/design/`.
 

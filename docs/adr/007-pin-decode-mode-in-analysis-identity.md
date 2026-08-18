@@ -3,26 +3,26 @@ status: accepted
 date: 2026-07-20
 ---
 
-# Pin the Actual Decode Mode in the Analysis Identity
+# Pin the actual decode mode in the analysis identity
 
-## Context and Problem Statement
+## Context and problem statement
 
-A CRF search measures VMAF against decoded frames. Hardware decoders (Cuvid, QSV) and software decoding can produce different decoded frames for the same bitstream, so their measurements are not interchangeable. `AnalysisProfile` is the exact-match cache key for durable analyses (`FileRecord.analyses`), and the question is whether the decode mode belongs inside that identity (and if so, at what granularity) given that decode availability is resolved per machine and per file, and that the hardware→software retry ladder makes the mode a run can *actually* use diverge from the mode its spec requested.
+A CRF search measures VMAF against decoded frames. Hardware decoders (Cuvid, QSV) and software decoding can produce different decoded frames for the same bitstream, so their measurements are not interchangeable. `AnalysisProfile` is the exact-match cache key for durable analyses (`FileRecord.analyses`). Decode availability resolves per machine and file, while the hardware→software retry ladder can make the mode a run uses differ from the mode its spec requested. The identity must therefore decide whether to include decode mode and at what granularity.
 
-## Decision Drivers
+## Decision drivers
 
 * A reused analysis must describe measurements the current execution would reproduce
-* Decode resolution is machine- and file-dependent; specs must stay honest about what was requested versus what ran
+* Decode resolution depends on the machine and file; specs must stay honest about what was requested versus what ran
 * The retry ladder records results under a profile the spec did not request
 * Hardware decode is parity-mandatory and participates in analysis reuse, a rule settled in prose during design (now in `docs/POLICY.md`); the rewrite needs it pinned as a record
 
-## Considered Options
+## Considered options
 
 * Keep the actual `DecodeMode` (decoder-granular) in `AnalysisProfile`
 * Key by a coarse hardware/software bit only
 * Exclude decode mode from the identity and treat measurements as universal
 
-## Decision Outcome
+## Decision outcome
 
 Chosen option: **keep the actual `DecodeMode` in `AnalysisProfile`**, because it is the only option under which a cache hit is a claim the current execution can reproduce.
 

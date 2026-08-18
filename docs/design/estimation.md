@@ -4,7 +4,7 @@ Status: working design note; recorded verdicts are authoritative and survive, ev
 
 ## Purpose and boundary
 
-Estimation predicts work that has not happened: how long a job will run, and how much smaller its output will be. History records what happened and what each record claims; estimation is a model over that record. History's contract is truthfulness and provenance. Estimation's contract is calibration and honest uncertainty.
+Estimation predicts work that has not happened: how long a job takes and how much smaller its output is. History records what happened and what each record claims; estimation is a model over that record. History's contract is truthfulness and provenance. Estimation's contract is calibration and honest uncertainty.
 
 This document covers the model, its evidence seam, how uncertainty is expressed, and how an estimator is judged. Which observations exist, which collectors run, how records are stored, and how views render are all outside it.
 
@@ -28,7 +28,7 @@ Labels are stable and cited bare.
 
 Estimation reads History as evidence and never writes to it. Three parts of that seam are unsettled.
 
-**Read shape.** `EstimationModel::from_state` walks every content record and every conversion run on each estimation round (read from source). That is affordable against an in-memory journal and not obviously affordable against an indexed store holding a large history. The alternative is estimation describing a cohort and the store answering a query, which makes estimator cohorts part of the storage workload. The choice constrains storage engine selection and therefore precedes it.
+**Read shape.** `EstimationModel::from_state` walks every content record and every conversion run on each estimation round (read from source). That is affordable against an in-memory journal but unproven against an indexed store holding a large history. The alternative is estimation describing a cohort and the store answering a query, which makes estimator cohorts part of the storage workload. The choice constrains storage engine selection and therefore precedes it.
 
 **Admissibility authority.** `EstimationModel::from_state` reaches past `StatFact` into `state.conversion_runs` to harvest analyze rates from analyzed-only runs (read from source). That is the estimator judging which History records are eligible. The clean rule is that History decides what an observation is and what it claims, and estimation decides which observations are useful for a given prediction.
 
@@ -50,14 +50,14 @@ Read from source, across `main` and the current tree.
 
 The live ETA runs a different mechanism on different evidence yet answers the same user question as the pre-run estimate. Whether the two may disagree, and by how much, is unsettled.
 
-ab-av1's three predictions cross the IPC boundary and are consumed unevenly (read from source). `predicted_percent_basis_points` reaches the user in exactly one place: the explanation attached to a not-worthwhile outcome, which reports what the best attempt would have saved. That is retrospective justification of a decision already taken, not a forward-looking estimate. `predicted_size` and `predicted_duration_ms` reach no consumer at all. The most trustworthy estimate available, the encoder's own measurement of the file in front of the user, is therefore the one least surfaced.
+ab-av1's three predictions cross the IPC boundary and are consumed unevenly (read from source). `predicted_percent_basis_points` reaches the user in exactly one place: the explanation attached to a not-worthwhile outcome, which reports what the highest-saving attempt measured. That is retrospective justification of a decision already taken, not a forward-looking estimate. `predicted_size` and `predicted_duration_ms` reach no consumer at all. The most trustworthy estimate available, the encoder's own measurement of the file in front of the user, is therefore the one least surfaced.
 
 ## Shipped position
 
 Read from source.
 
 - `EstimationModel`, `TimeEstimate`, `EstimateBasis`, and `HistoricalTier` are re-exported from `crfty-core` and consumed by no caller. No History-backed estimate reaches a user.
-- The only forward-looking value a user sees is the active job's ETA from `crfty-engine/src/rate.rs`: a sliding-window progress velocity that stays absent through a warm-up period rather than reporting early and wrong. E1 is already the shipped behavior there.
+- The only forward-looking value a user sees is the active job's ETA from `crfty-engine/src/rate.rs`: a sliding-window progress velocity that stays absent through a warm-up period rather than reporting early and wrong. E1 is already the shipped behaviour there.
 - No size estimator exists in any crate.
 - The Analysis view's empty state tells the user that estimates appear after a basic scan. Nothing delivers them.
 - The historical ladder is `(codec, resolution bucket)`, then codec, then a global pool, answering from the first tier holding three rate samples, as the median of phase time over video duration, graded `Precise` or `Estimated`.
@@ -67,7 +67,7 @@ V2 baseline, read from source on `main`.
 - Time: the same rate quantity, grouped `(codec, resolution bucket)`, reported as P50 with a P25 to P75 range, over four fallback tiers with sample thresholds of ten and five, graded high, medium, low, or none. The grade reached the user as a prefix on the rendered value: no prefix for high, one tilde for medium, two tildes for low, and the absent-value placeholder when the grade was none. Uncertainty was therefore presentation, never a number, and the P25 to P75 range it was computed from was never shown.
 - Size: the mean reduction percent of peers matched on codec and width, then the mean over all converted records, then a hardcoded constant. Applied to file size less an audio size derived from audio bitrate and duration.
 
-A successor estimator was recorded when the projections were designed, and this document is now its only surviving record: a kernel-weighted quantile estimator, weighting samples by similarity across codec and resolution instead of partitioning them into hard buckets, validated by backtesting predicted against actual durations before it replaces the ladder. Its claimed advantage is that a dissimilar sample is weighted toward zero rather than promoted to authority by a sample-count cliff, which is the ladder's structural defect (carried reasoning; never implemented or measured). The V2 quartile math and its sample threshold were deliberately not ported, because reproducing them would have frozen accidental behavior as specification.
+A successor estimator was recorded when the projections were designed, and this document is its only surviving record. It is a kernel-weighted quantile estimator that weights samples by codec and resolution similarity instead of partitioning them into hard buckets. Backtesting predicted durations against actual durations is required before it replaces the ladder. Its claimed advantage is that a dissimilar sample approaches zero weight rather than gaining authority at a sample-count cliff, which is the ladder's structural defect (carried reasoning; never implemented or measured). The V2 quartile math and its sample threshold were deliberately not ported because reproducing them would have frozen accidental behaviour as specification.
 
 ## Stage leakage
 

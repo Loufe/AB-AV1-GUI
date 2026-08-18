@@ -1,0 +1,16 @@
+extends: existence
+message: "Name the responsible component, actor, or decision instead of using '%s'."
+ignorecase: true
+level: error
+tokens:
+  - '(?<=^|\s)I(?=[\s,])'
+  - "\\bI(?:'m|'d|'ll|'ve)\\b"
+  - '\bme\b'
+  - '\bmy\b'
+  - '\bmine\b'
+  - '\bwe\b'
+  - "\\bwe(?:'re|'ve|'d|'ll)\\b"
+  - '\bour\b'
+  - '\bours\b'
+  - '\bus\b'
+  - "\\blet's\\b"

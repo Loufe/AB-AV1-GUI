@@ -3,13 +3,13 @@ status: accepted
 date: 2026-08-16
 ---
 
-# Own Output Promotion as a Journaled Transaction
+# Own output promotion as a journaled transaction
 
-## Context and Problem Statement
+## Context and problem statement
 
-An encode produces a new file while the input still exists, and in replace mode the new file takes the input's own path. A crash, a force stop, an adapter panic, or a failed encode can land at any byte of that process, and the Python application encoded toward the destination directly, which is what made its same-path replacement unsafe. V3 has to decide who owns the commit, where partial output lives, which files an interrupted run is allowed to delete on restart, and how a restart tells a finished output from an abandoned fragment.
+An encode produces a new file while the input still exists, and in replace mode the new file takes the input's own path. A crash, a force stop, an adapter panic, or a failed encode can land at any byte of that process, and the Python application encoded toward the destination directly, which is what made its same-path replacement unsafe. V3 has to decide who owns the commit, where partial output lives, which files an interrupted run is allowed to delete on restart, and how restart recovery distinguishes a finished output from an abandoned fragment.
 
-## Decision Drivers
+## Decision drivers
 
 * An interruption must never leave the user without either the original file or a complete output
 * A partial encode must never be mistaken for a finished one
@@ -17,16 +17,16 @@ An encode produces a new file while the input still exists, and in replace mode 
 * The encoder is a third-party tool and must not be trusted with commit semantics
 * Hardlinked siblings of a replaced input must keep their bytes
 
-## Considered Options
+## Considered options
 
 * Encode directly to the final path, as the Python application did
 * Delegate commit and overwrite semantics to the encoder, using ab-av1's overwrite-input handling and its temp registry
 * Remove the original first, then rename the finished encode into place
 * Own a staging-and-promotion transaction in the application, journaled at every step
 
-## Decision Outcome
+## Decision outcome
 
-Chosen option: **an application-owned journaled transaction**, because it is the only option under which an interruption at any point leaves either the old file or the new one, never neither and never a blend, and under which recovery can prove which paths it is authorized to touch.
+Chosen option: **an application-owned journaled transaction**. It is the only option where an interruption always leaves either the old file or the new one, never neither or a blend, and where recovery can prove which paths it is authorized to touch.
 
 Mechanics, fixed by this record:
 
@@ -36,7 +36,7 @@ Mechanics, fixed by this record:
 * `OutputReady` records a verified staging artifact, where verification means an AV1 check with a minimum size rather than a size test alone, and the ready record is accepted only if it pins the same file id the staging record pinned.
 * Promotion renames staging over the final path, syncs the parent directory where the platform supports it, and journals `OutputCommitted` only after the promoted file re-verifies to the staging content key and size. Because a rename replaces a single directory entry, hardlinked siblings of a replaced input keep the original bytes.
 * Retiring the original is a separate two-step transition, `RetireOriginalIntent` then `OriginalRetired`, taken only in the retire-original replacement mode. A replacement whose destination is the input file itself is rejected at planning, so a same-path replacement can never schedule the deletion of its own output.
-* Every rename and every removal is preceded by an exact `DestructiveIdentity` comparison (filesystem file id, size, modification time) on each path it will touch: promotion revalidates staging and the destination preimage, retirement revalidates the committed output and the original, and staging removal revalidates the staging file. A mismatch aborts the step and settles the transaction as a conflict instead of acting.
+* Every rename and every removal is preceded by an exact `DestructiveIdentity` comparison (filesystem file id, size, modification time) on each path it touches: promotion revalidates staging and the destination preimage, retirement revalidates the committed output and the original, and staging removal revalidates the staging file. A mismatch aborts the step and settles the transaction as a conflict instead of acting.
 * Every failure settles through one abandonment path: `AbandonStagingIntent` records the staging identity actually observed, the file is removed under that identity, and `Abandoned` is journaled. Encode-start failure, cancellation, encode failure, adapter panic, and internal error all route through it, so no failure mode has its own cleanup code.
 * The recovery decision is pure. `recover_output` maps a transaction plus filesystem facts to one action, and the engine only executes what it returns; startup repeats this per unsettled transaction until it settles. A promotion that already happened is recognized rather than repeated, because a ready transaction whose staging is gone and whose destination carries the expected content key folds straight to committed. Without ffprobe an unsettled transaction is left untouched rather than settled blind.
 
@@ -50,10 +50,10 @@ Mechanics, fixed by this record:
 * Bad: Parent-directory syncing is a no-op on Windows, so the durability of the rename itself rests on the platform there
 * Bad: A conflict deliberately leaves both files in place and needs a human decision, so the safe outcome is not a self-healing one
 
-## More Information
+## More information
 
 Implementation: the transaction type, its state machine, delta validation, and the pure `recover_output` policy are in `crates/crfty-core/src/output.rs`; the filesystem actions and identity guards are in `crates/crfty-engine/src/output.rs`; the flow that drives it is `crates/crfty-engine/src/coordinator/output_flow.rs`, with failure routing in `coordinator/job.rs` and the startup sweep in `coordinator/recovery.rs`.
 
-Crash behavior is covered end to end in `crates/crfty-engine/tests/durability.rs`, including promotion with retirement, startup recovery of an active partial staging transaction, staging left behind before its record was durable, abandonment authorizing only the observed partial, a changed destination becoming a conflict without deletion, overwrite policy enforced before staging exists, restage after a failed attempt, and same-path replacement preserving a hardlink sibling.
+Crash behaviour has end-to-end coverage in `crates/crfty-engine/tests/durability.rs`. Cases include promotion with retirement, partial-staging recovery, staging left before its record became durable, identity-authorized abandonment, changed-destination conflict without deletion, pre-staging overwrite policy, restaging after failure, and hardlink-preserving same-path replacement.
 
-Related: ADR-004 (the journal these transitions append to), ADR-002 (the reducer that validates them), ADR-019 (the content identity a promoted output is verified against), and ADR-018, which is adjacent but decides job cancellation and completion rather than the output commit this record owns.
+Related records are ADR-004 for the journal these transitions append to, ADR-002 for the reducer that validates them, and ADR-019 for the promoted output's content identity. ADR-018 is adjacent but decides job cancellation and completion rather than this record's output commit.

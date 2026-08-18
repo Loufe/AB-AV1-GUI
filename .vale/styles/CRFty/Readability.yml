@@ -1,0 +1,6 @@
+extends: metric
+message: "Flesch-Kincaid grade level: %s. This score is informational."
+level: suggestion
+formula: |
+  (0.39 * (words / sentences)) + (11.8 * (syllables / words)) - 15.59
+condition: "> -100"

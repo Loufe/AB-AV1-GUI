@@ -1,6 +1,6 @@
-# Conversion Policy
+# Conversion policy
 
-Policy is the single authority on what CRFty will do with a file: whether it is eligible, whether an earlier judgment already answers for it, which stored analysis may be reused, and which of Analyze, Encode, Remux, or Skip a claimed job becomes. It is pure domain logic in `crates/crfty-core/src/policy.rs`, taking facts as arguments and returning a decision. No scanner, worker, shell command, or view repeats any of these checks.
+Policy is the single authority on what CRFty does with a file: whether it is eligible, whether an earlier judgment already answers for it, which stored analysis may be reused, and which of Analyze, Encode, Remux, or Skip a claimed job becomes. It is pure domain logic in `crates/crfty-core/src/policy.rs`, taking facts as arguments and returning a decision. No scanner, worker, shell command, or view repeats any of these checks.
 
 ## Where policy runs
 
@@ -24,7 +24,7 @@ The container fact is taken from the file extension: a case-insensitive `.mkv` i
 
 At claim, a media-fact skip outranks everything, including verdict reuse and the remux branch. At enqueue, the same eligibility check runs last, and only when the cached metadata has been shown fresh, so a file whose facts are unknown or stale is accepted rather than pre-judged.
 
-There are no audio controls; ab-av1's defaults apply. Audio stream metadata is probed for History display only and takes no part in eligibility or remux decisions.
+CRFty has no audio controls; ab-av1's defaults apply. Audio stream metadata is probed for History display only and takes no part in eligibility or remux decisions.
 
 ## Remux
 
@@ -61,7 +61,7 @@ Content identity is the sampled probabilistic `ContentKey`, so duplicate reuse a
 
 ## Analysis reuse and VMAF targets
 
-Each content record stores analyses as a map from `AnalysisProfile` to a map from the successful `VmafTarget` to the result. The profile is the reuse identity: preset, maximum encoded percent, sample count, sample duration, thorough flag, decode mode, and the ab-av1, FFmpeg, and encoder revisions. Reuse requires exact profile equality, so a tool upgrade or a settings change simply re-searches.
+Each content record stores analyses as a map from `AnalysisProfile` to a map from the successful `VmafTarget` to the result. The profile is the reuse identity: preset, maximum encoded percent, sample count, sample duration, thorough flag, decode mode, and the ab-av1, FFmpeg, and encoder revisions. Reuse requires exact profile equality, so a tool upgrade or settings change starts a new search.
 
 Selection for a requested target T works as follows.
 

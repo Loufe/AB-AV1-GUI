@@ -1,4 +1,4 @@
-# Event Stream and IPC
+# Event stream and IPC
 
 Status: design note; records the contract the accepted ADRs compose into
 
@@ -34,7 +34,7 @@ It does not settle whether History should be served by request/response rather t
 
 ## Progress hygiene
 
-Rate smoothing is engine-side, one implementation serving the search, encode, and remux phases: fps over a ~3 s sliding window, and ETA a progress-velocity `Option` that is absent during warm-up (early velocity readings swing wildly while encoder pipelines fill) and whenever remaining work is unknown. Absence is always the type, never a sentinel value.
+Rate smoothing is engine-side, with one implementation serving the search, encode, and remux phases. It reports fps over a ~3 s sliding window and ETA as a progress-velocity `Option`. ETA stays absent during warm-up, when encoder pipelines make early velocity unstable, and whenever remaining work is unknown. Absence is always the type, never a sentinel value.
 
 ## Frontend fold
 

@@ -1,0 +1,31 @@
+extends: capitalization
+message: "Use sentence case in the heading '%s'."
+scope: heading
+match: $sentence
+level: error
+exceptions:
+  - CRFty UI
+  - FFmpeg/SVT lifecycle fixture
+  - HandBrake
+  - Event stream and IPC
+  - Package and CLI boundary
+  - Selected public API family
+  - The seam with History
+  - Two-phase CONVERT
+  - UI design verdicts
+  - What V3 already knows
+  - Windows Job Object evidence
+  - ab-av1 library lifecycle and cancellation research
+  - AV1
+  - CRFty
+  - FFmpeg
+  - GitHub
+  - JSON
+  - Linux
+  - React
+  - Rust
+  - SVT-AV1
+  - Tauri
+  - TypeScript
+  - VMAF
+  - Windows

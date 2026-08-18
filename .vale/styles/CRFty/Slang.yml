@@ -1,0 +1,10 @@
+extends: existence
+message: "Replace internet slang such as '%s' with direct wording."
+ignorecase: true
+level: error
+tokens:
+  - 'tl;dr'
+  - ymmv
+  - rtfm
+  - imo
+  - fwiw

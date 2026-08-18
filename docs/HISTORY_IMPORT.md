@@ -38,7 +38,7 @@ Only `path` and `status` are required. Every other field is optional and omitted
 | `duration_ms` | integer | Source duration in milliseconds. |
 | `output_size` | integer | Byte size of the conversion output (converted records). |
 | `encoding_time_ms` | integer | Wall-clock encoding time in milliseconds. |
-| `crf_thousandths` | integer | CRF × 1000 (e.g. CRF 30 → `30000`). |
+| `crf_thousandths` | integer | CRF × 1000 (for example, CRF 30 → `30000`). |
 | `vmaf_hundredths` | integer | Achieved VMAF × 100, at most `10000`. |
 | `target` | integer 0-100 | VMAF target the result satisfied. |
 | `requested_target` | integer 0-100 | Originally requested VMAF target (not-worthwhile records). |
@@ -53,7 +53,7 @@ Records are keyed by the normalized form of `path`, and the same rule is applied
 2. replace backslashes with forward slashes,
 3. lowercase (ASCII).
 
-Emit paths in the spelling most likely to match how the app will see the file. On Windows, `std::fs::canonicalize` resolves mapped drive letters to UNC (`\\server\share\…`), so paths on network shares should be emitted in UNC form; local paths keep their drive letter. Duplicate keys within one file are allowed; the reducer keeps the first and counts the rest as skipped. Paths already parked or adopted are also skipped, including after a restart. Records whose files have moved will simply never match and can be retired from the parked inbox later.
+Emit paths in the spelling most likely to match how the app resolves the file. On Windows, `std::fs::canonicalize` resolves mapped drive letters to UNC (`\\server\share\…`), so paths on network shares should be emitted in UNC form; local paths keep their drive letter. Duplicate keys within one file are allowed; the reducer keeps the first and counts the rest as skipped. Paths already parked or adopted are also skipped, including after a restart. Records whose files have moved never match and can be retired from the parked inbox later.
 
 All import paths are cleartext PII. The privacy scrub defined in `docs/HISTORY.md` must cover parked map keys, adopted-path guards, retained provenance, path-keyed History rows, and journal deltas containing those values.
 

@@ -1,0 +1,20 @@
+extends: existence
+message: "Replace corporate idiom '%s' with direct wording."
+ignorecase: true
+level: error
+tokens:
+  - at the end of the day
+  - back to the drawing board
+  - hit the ground running
+  - get the ball rolling
+  - low-hanging fruit
+  - thrown under the bus
+  - think outside the box
+  - touch base
+  - no brainer
+  - move the goalposts
+  - win-win
+  - circle back
+  - all hands on deck
+  - take this offline
+  - elephant in the room

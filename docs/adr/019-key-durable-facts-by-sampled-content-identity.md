@@ -3,13 +3,13 @@ status: accepted
 date: 2026-08-16
 ---
 
-# Key Durable Facts by Sampled Content Identity
+# Key durable facts by sampled content identity
 
-## Context and Problem Statement
+## Context and problem statement
 
 Analyses and verdicts are expensive to produce and they describe content, not locations, but the Python application keyed them by path hash: renaming or moving a file discarded its history, and two copies of the same video were searched twice. V3 needs one durable key for reusable facts, and choosing it means deciding what the key is derived from, how much of a multi-gigabyte file may be read to compute it, and what the resulting equality is allowed to authorize.
 
-## Decision Drivers
+## Decision drivers
 
 * A move or a rename must not discard an analysis or a verdict
 * Content already judged once must not be searched again, wherever it now lives
@@ -17,14 +17,14 @@ Analyses and verdicts are expensive to produce and they describe content, not lo
 * Durable facts must survive reinstall and data-directory relocation
 * No destructive action may rest on a probabilistic claim
 
-## Considered Options
+## Considered options
 
 * Key durable facts by path, as the Python application did
 * Key by a full-file hash, with collision confirmation
 * Key by a sampled hash over a probe-derived header plus fixed regions of the file
 * Key by a sampled hash salted per install
 
-## Decision Outcome
+## Decision outcome
 
 Chosen option: **a sampled content hash**, because it makes a moved file the same file at bounded cost, and because the facts it keys are advisory rather than destructive, which is what makes probabilistic equality an honest fit rather than a compromise.
 
@@ -41,13 +41,13 @@ Mechanics, fixed by this record:
 ### Consequences
 
 * Good: A moved, renamed, or copied file keeps its analyses and its verdict, and a duplicate costs a skip rather than a search
-* Good: Identity cost is bounded, so a very large file is keyed as cheaply as a small one
+* Good: Identity cost is bounded, so a large file is keyed as cheaply as a small one
 * Good: A restored or migrated data directory still matches the media it describes
 * Bad: Equality is probabilistic, because files differing only outside the sampled regions collide, so every destructive path must carry its own exact-identity check
 * Bad: The header includes probe-reported duration, codec, and dimensions, so a probe reporting different values for unchanged bytes yields a different key and a re-analysis
 * Bad: The key is deterministic and unsalted, so anyone holding a history file plus candidate media can test which media it describes; it identifies content rather than location, and it crosses IPC as the record map key, so it is not treated as a secret
 
-## More Information
+## More information
 
 Implementation: the digest and its stability guards are in `crates/crfty-engine/src/media.rs`; the key and identity types are in `crates/crfty-core/src/output.rs` and `crates/crfty-core/src/media.rs`; the state shape is `DurableState` in `crates/crfty-core/src/state.rs`; the duplicate rule is in `crates/crfty-core/src/policy.rs`; destructive revalidation is in `crates/crfty-engine/src/output.rs`.
 

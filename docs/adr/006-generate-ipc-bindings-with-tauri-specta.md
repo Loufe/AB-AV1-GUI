@@ -3,13 +3,13 @@ status: accepted
 date: 2026-07-19
 ---
 
-# Generate IPC Bindings with tauri-specta
+# Generate IPC bindings with tauri-specta
 
-## Context and Problem Statement
+## Context and problem statement
 
 The frontend must never hand-author IPC or domain types: every cross-boundary type is generated from Rust, and the delta stream must be ordered. The shell crate that owns this boundary needs a bindings toolchain, a transport, and a placement inside the workspace.
 
-## Decision Drivers
+## Decision drivers
 
 * IPC drift must be a compile error, not a review concern
 * The delta stream requires strict ordering; Tauri's event system does not guarantee it under rapid emission
@@ -17,7 +17,7 @@ The frontend must never hand-author IPC or domain types: every cross-boundary ty
 * Generated output must be verifiable in CI, not trusted to dev-time habits
 * The shell contains wiring only (ADR-001); reconnect handling must not grow domain logic
 
-## Considered Options
+## Considered options
 
 * tauri-specta over one `tauri::ipc::Channel` stream
 * tauri-specta typed events for the delta stream
@@ -27,9 +27,9 @@ The frontend must never hand-author IPC or domain types: every cross-boundary ty
 * Emit empty-payload invalidation events and let the frontend refetch (GitButler's sync model; rejected: it cost them hand-built dedupe and focus guards for hazards a sequenced stream excludes structurally, and CRFty's whole state fits in one snapshot)
 * Send Rust-side view models (display strings) across the wire (rejected: presentation churn belongs in TypeScript, and generated types make raw-fact transfer safe)
 
-## Decision Outcome
+## Decision outcome
 
-Chosen option: **tauri-specta over one `tauri::ipc::Channel` stream**, because Channels are ordered by construction and specta types a `Channel<T>` in exactly the position this design uses (a command argument), while typed events inherit the event system's ordering weakness and TauRPC would replace the whole command surface to improve a position we do not use.
+Chosen option: **tauri-specta over one `tauri::ipc::Channel` stream**. Channels are ordered by construction, and specta types a `Channel<T>` in exactly the position this design uses: a command argument. Typed events inherit the event system's ordering weakness, while TauRPC would replace the whole command surface to improve a position CRFty does not use.
 
 Mechanics, fixed by this record:
 
@@ -49,6 +49,6 @@ Mechanics, fixed by this record:
 * Bad: A release-candidate toolchain must be pinned and bumped by hand
 * Bad: The forwarder holds a second folded copy of durable state
 
-## More Information
+## More information
 
 See `docs/design/event-stream.md` (delta lanes, coalescing, and reconnect), `docs/design/prior-art.md` (the shipped-app lessons behind the pins and the export gate), ADR-001, ADR-002, ADR-004, and tauri-specta issue #198 (Channel support is limited to command arguments, the one position used).

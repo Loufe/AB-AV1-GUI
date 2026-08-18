@@ -16,7 +16,7 @@ This is a research artifact, not an implementation specification or authority to
 
 1. CRFty's use of `tokio_util::sync::CancellationToken` is an application-internal choice and does not require ab-av1 to expose or depend publicly on that type.
 2. ab-av1 needs an awaited terminal lifecycle for embedded operations. Returning `Cancelled` or another terminal outcome must mean internal producers have stopped, every owned process leader has been reaped, the selected platform containment unit has received and acknowledged its strongest available termination operation, and explicit temporary cleanup has been attempted. POSIX cannot let an ordinary parent reap arbitrary grandchildren, so descendant reaping must not be promised beyond the active platform mechanism.
-3. Drop behavior is a last-resort safety net, not proof of terminal cleanup. Rust has no asynchronous `Drop`, Tokio process reaping after kill-on-drop is best effort, and fallible temporary cleanup cannot report errors from a destructor.
+3. Drop behaviour is a last-resort safety net, not proof of terminal cleanup. Rust has no asynchronous `Drop`, Tokio process reaping after kill-on-drop is best effort, and fallible temporary cleanup cannot report errors from a destructor.
 4. Every task and subprocess started by an operation needs an accountable owner. Dropping an ordinary Tokio `JoinHandle` detaches its task, and dropping a Tokio child does not kill it unless kill-on-drop is enabled.
 5. Cancellation must first prevent internal producers from starting more subprocesses, then terminate active containment units, await internal task termination and child reaping, and finally clean temporary state. Draining a global child registry before detached producers stop creates a spawn-after-cleanup race.
 6. Process and temporary ownership should be operation-local rather than process-global. This prevents one operation from finalizing another operation's resources and avoids forcing a permanent global one-job policy merely because the current CLI has global registries.
@@ -67,7 +67,7 @@ Tokio's [`JoinSet`](https://docs.rs/tokio/latest/tokio/task/struct.JoinSet.html)
 
 ### Subprocess ownership
 
-Streamed encode, VMAF, and XPSNR commands call `kill_on_drop(true)`, but [`process::child`](https://github.com/alexheretic/ab-av1/blob/629cfaa/src/process/child.rs) registers their streams in a process-global collection only when an `AddOnDropChunkStream` is dropped. The global `wait()` function owns Ctrl-C behavior and may return without a deterministic terminate-and-reap result.
+Streamed encode, VMAF, and XPSNR commands call `kill_on_drop(true)`, but [`process::child`](https://github.com/alexheretic/ab-av1/blob/629cfaa/src/process/child.rs) registers their streams in a process-global collection only when an `AddOnDropChunkStream` is dropped. The global `wait()` function owns Ctrl-C behaviour and may return without a deterministic terminate-and-reap result.
 
 [`sample::copy`](https://github.com/alexheretic/ab-av1/blob/629cfaa/src/sample.rs) invokes FFmpeg through `tokio::process::Command::output()` without kill-on-drop or registration in the global running-process collection. If the detached sample producer is cancelled while awaiting this command, neither the task nor the FFmpeg child is covered by the current global finalization convention.
 
@@ -174,7 +174,7 @@ operation.cancel().await?;
 
 Watchexec's [`Job`](https://docs.rs/watchexec-supervisor/latest/watchexec_supervisor/job/struct.Job.html) is a mature example of a background supervisor with explicit ordered controls, stop, wait, restart, and signaling. [`tokio-process-tools`](https://docs.rs/tokio-process-tools/latest/tokio_process_tools/) likewise exposes explicit wait, cancel, abort, terminate, and kill operations and treats automatic Drop cleanup as a fallback. That shape is appropriate when the library owns a long-lived service, restart policy, or independently controlled background actor.
 
-It is rejected for the initial ab-av1 API because a background operation generally requires spawning and therefore binds behavior to an executor and task ownership model; independently droppable event, control, and join handles multiply abandonment states; and restart, pause, and service-manager semantics are not requirements of a finite encode/search operation. CRFty already owns the runtime thread and application-level job handle, so reproducing that layer upstream would split supervision authority.
+It is rejected for the initial ab-av1 API because a background operation generally requires spawning and therefore binds behaviour to an executor and task ownership model. Independently droppable event, control, and join handles multiply abandonment states. Restart, pause, and service-manager semantics are not requirements of a finite encode or search operation. CRFty already owns the runtime thread and application-level job handle, so reproducing that layer upstream would split supervision authority.
 
 ### Rejected alternative: public stream plus manual finalization
 
@@ -202,16 +202,16 @@ This option follows the existing typed CRF-search seam and requires fewer initia
 * [`processkit`](https://docs.rs/processkit/latest/processkit/) provides a broader Tokio runner with cancellation, capture, streaming, and kernel-backed containment. It reports whether Linux obtained cgroup v2 or fell back to a process group, which is more honest than claiming identical containment on every host.
 * [`tempfile::TempDir`](https://docs.rs/tempfile/latest/tempfile/struct.TempDir.html) distinguishes best-effort Drop cleanup from explicit fallible `close()`, matching the required dual cleanup contract.
 
-### Evidence limiting or refuting a single obvious API
+### Evidence limiting or refuting a single API
 
 * axum and tonic demonstrate generic shutdown futures, but they do not provide ab-av1's progress-stream, output-commit, or temporary-file semantics.
 * Watchexec demonstrates that an explicit `Job` can be the correct public abstraction when restart, remote control, priorities, or multiple signals matter. Its feature set is broader than ab-av1 presently needs.
 * SQLx documents that Rust's lack of async Drop requires an explicit [`Pool::close`](https://docs.rs/sqlx/latest/sqlx/pool/struct.Pool.html#method.close) for deterministic cleanup even though Drop handles local fallback cleanup. This refutes relying on an operation future's destructor as the complete contract.
-* `tokio-process-tools` provides a correctness-focused process lifecycle but its automatic asynchronous Drop termination requires a multithreaded Tokio runtime. CRFty currently embeds ab-av1 on a current-thread runtime, so it is evidence and a possible component rather than an assumed drop-in solution.
+* `tokio-process-tools` provides a correctness-focused process lifecycle but its automatic asynchronous Drop termination requires a multithreaded Tokio runtime. CRFty embeds ab-av1 on a current-thread runtime, so it is evidence and a possible component rather than an assumed drop-in solution.
 * [`async-scoped`](https://docs.rs/async-scoped/latest/async_scoped/) documents the caveats and even unsafe surface involved in guaranteeing non-`'static` async scopes across cancellation. A narrow ab-av1 design should prefer ordinary owned futures and tasks over importing a generalized scoped-concurrency model without need.
 * `process-wrap`'s Tokio `KillOnDrop` configures the underlying Tokio child. Its Unix `ProcessGroupChild` overrides `start_kill()` and `wait()` but has no Drop implementation that invokes group termination, so bare `KillOnDrop` is not a whole-process-group Drop guarantee on Unix. ab-av1 needs its own `ManagedChild` Drop guard around the wrapper.
 * `process-wrap`'s Unix group wait uses `waitpid(-pgid, ...)`. POSIX wait calls can reap only children of the caller, so this does not prove that arbitrary grandchildren were reaped; after group SIGKILL and leader wait, orphaned grandchildren are the responsibility of their parent or the host subreaper.
-* `processkit` supplies more of the desired lifecycle directly, including cgroup v2 when available, but its supervision, pipelines, limits, retries, capture policies, and public `CancellationToken` integration are substantially broader than ab-av1 needs. Its own platform and container documentation explains both that typical Linux systemd or container placement can prevent cgroup controller use and force a process-group fallback and that an ordinary process cannot reap an orphaned grandchild that was reparented to PID 1, so adopting it would not create a universal stronger guarantee.
+* `processkit` supplies more of the desired lifecycle directly, including cgroup v2 when available, but its supervision, pipelines, limits, retries, capture policies, and public `CancellationToken` integration exceed ab-av1's needs. Its platform documentation explains that typical Linux systemd or container placement can prevent cgroup controller use and force a process-group fallback. It also explains that an ordinary process cannot reap an orphaned grandchild reparented to PID 1, so adoption would not create a universally stronger guarantee.
 
 ## Selected lifecycle contracts
 
@@ -251,7 +251,7 @@ The library contract permits overlapping operations because operation-local owne
 
 ### Stable package and API surface
 
-Add a library target to the existing `ab-av1` package rather than creating a second published package. Keep CLI parsing and presentation behind the default `cli` feature so `cargo install ab-av1` retains its behavior while `default-features = false` library consumers avoid Clap, `indicatif`, terminal detection, signal handling, logger initialization, and process exit.
+Add a library target to the existing `ab-av1` package rather than creating a second published package. Keep CLI parsing and presentation behind the default `cli` feature so `cargo install ab-av1` retains its behaviour while `default-features = false` library consumers avoid Clap, `indicatif`, terminal detection, signal handling, logger initialization, and process exit.
 
 Expose an immutable `Engine` or equivalent built from explicit FFmpeg, FFprobe, temporary-root, and cache configuration. Expose narrow search and encode request builders, typed non-terminal event enums, typed successful results, `Outcome<T>`, and a structured operation error. Keep fields private and use `#[non_exhaustive]` only on reported enums that are expected to grow; builders avoid making every request-field addition a semver break.
 
@@ -261,7 +261,7 @@ The terms that most accurately describe the direction are **structured concurren
 
 ## Reviewable upstream patch sequence
 
-1. Add the library target and default `cli` feature, move terminal rendering behind that feature, and keep `cargo install` behavior unchanged without publishing command internals.
+1. Add the library target and default `cli` feature, move terminal rendering behind that feature, and keep `cargo install` behaviour unchanged without publishing command internals.
 2. Introduce private engine/toolchain configuration and route FFmpeg version discovery and FFprobe through explicit configured paths.
 3. Introduce `ManagedCommand` and `ManagedChild` over `process-wrap`, then migrate every FFmpeg and FFprobe spawn, including sample-copy retries, while preserving the current parsers.
 4. Replace global temporary state with an operation-local temporary namespace and make explicit cleanup fallible.
@@ -269,11 +269,11 @@ The terms that most accurately describe the direction are **structured concurren
 6. Add narrow request, event, result, outcome, and error types plus the caller-driven operation methods; adapt the CLI to those same methods.
 7. Remove the prototype's global `finish_job()` and `cancel_job()` surface once CRFty consumes the owned operation boundary.
 
-The patch touches package/module boundaries, command presentation, every subprocess construction site, temporary ownership, sample production, cache/tool identity, and the CRFty adapter. It is a lifecycle refactor rather than a cancellation-token parameter addition. The sequence above keeps each review centered on one ownership boundary and leaves the real-process validation matrix outside the patch sequence.
+The patch touches package/module boundaries, command presentation, every subprocess construction site, temporary ownership, sample production, cache/tool identity, and the CRFty adapter. It is a lifecycle refactor rather than a cancellation-token parameter addition. The sequence above keeps each review centred on one ownership boundary and leaves the real-process validation matrix outside the patch sequence.
 
 ## Assessment of the existing CRFty prototype
 
-The prototype lives in the `Loufe/ab-av1` `lib-target` and `crfty-library-api` branches and currently backs CRFty's pinned dependency.
+The prototype lives in the `Loufe/ab-av1` `lib-target` and `crfty-library-api` branches and backs CRFty's pinned dependency.
 
 Useful exploratory work includes:
 
@@ -306,7 +306,7 @@ The prototype may supply implementation pieces after each is independently justi
 
 ## Residual maintainer choices
 
-The architecture no longer depends on unresolved lifecycle choices. Upstream review may still choose exact type and method names, callback argument ownership, builder ergonomics, event granularity, cache backend, and whether `process-wrap` is accepted or its narrow behavior is implemented another way. Any substitute must preserve the selected operation, containment, Drop-fallback, settlement, race-precedence, toolchain, temporary-ownership, concurrency, and semver contracts.
+The architecture no longer depends on unresolved lifecycle choices. Upstream review may still choose exact type and method names, callback argument ownership, builder ergonomics, event granularity, cache backend, and whether `process-wrap` is accepted or its narrow behaviour is implemented another way. Any substitute must preserve the selected operation, containment, Drop-fallback, settlement, race-precedence, toolchain, temporary-ownership, concurrency, and semver contracts.
 
 The maintainer may also prefer a separate published core package instead of the selected same-package library target. That packaging choice is acceptable if the CLI still consumes the identical operation implementation and library consumers do not inherit terminal dependencies. It does not reopen the lifecycle decision.
 

@@ -3,13 +3,13 @@ status: accepted
 date: 2026-07-21
 ---
 
-# Project Imported History Separately
+# Project imported history separately
 
-## Context and Problem Statement
+## Context and problem statement
 
 History, Statistics, and estimation are pure projections, but imported records need a dedicated projection path. Imported records exist before they acquire a content identity, several normalized paths can later resolve to one content key, and imported analysis facts cannot safely become reusable v3 analysis results because they lack a trusted profile, decode mode, and tool revisions. Forcing these facts through `StatFact` would either invent media facts or lose the path-level guards required to prevent re-import after adoption and restart.
 
-## Decision Drivers
+## Decision drivers
 
 * Preserve every consumed import-path key across adoption and restart
 * Keep one content record when several imported paths identify the same bytes
@@ -20,20 +20,20 @@ History, Statistics, and estimation are pure projections, but imported records n
 * Keep projections pure and native run totals native
 * Make every new path-bearing durable field visible to privacy scrubbing
 
-## Considered Options
+## Considered options
 
 * Project parked and adopted imported records through a dedicated accumulator, retain one deterministic summary on the content record, and guard every adopted path globally
 * Store all imported summaries on each content record
 * Convert imported records into native runs, analyses, and `StatFact`s
 * Remove imported facts from Statistics and History at adoption
 
-## Decision Outcome
+## Decision outcome
 
 Chosen option: **a dedicated imported-history projection path with a complete global consumed-key set**, because it preserves sparse source facts and all re-import guards while retaining the one-record-per-content invariant.
 
 `DurableState.parked` contains unresolved `ImportedHistoryRecord`s by `ImportPath`. Every successful adoption moves its path into `DurableState.adopted_imports`; retirement removes a parked record without consuming its path. `FileRecord.imported` retains one `ImportedProvenance` for display and projection continuity. When several paths resolve to one content, the retained summary is selected by newest `decided_at`, then status strength (`Converted` > `NotWorthwhile` > `Analyzed` > `Scanned`), then the lexicographically smaller normalized path. All paths still enter the global guard set.
 
-`ParkedAdopted` carries the imported facts and replay validation requires them to equal the currently parked value. A fold could clone prior state before removal, but carrying the facts makes the journal transition self-describing and auditable. A native verdict always wins over an imported verdict.
+`ParkedAdopted` carries the imported facts and replay validation requires them to equal the parked value. A fold could clone prior state before removal, but carrying the facts makes the journal transition self-describing and auditable. A native verdict always wins over an imported verdict.
 
 Statistics has a private accumulator shared by native and imported inputs, not a fabricated `StatFact`. Parked and adopted `Converted` records contribute the facts they actually carry; both sizes are still required for size totals, reduction bins, and cumulative savings. A known codec counts even when sizes are absent. Imported `NotWorthwhile` contributes only its count, while `Scanned` and `Analyzed` do not affect Statistics. Imported records never increment native `RunTotals`. Codec counts sort by count descending, then the typed codec's canonical ascending order, independent of content insertion order.
 
@@ -53,7 +53,7 @@ One-to-one adoption into otherwise undecided content preserves Statistics exactl
 * Bad: `FileRecord.imported` is a deterministic summary, not a complete audit list; the complete consumed-path history lives in `adopted_imports`
 * Bad: Imported analyzed history may say Analyzed while the current Analysis model correctly offers only reusable SCANNED-level data
 
-## More Information
+## More information
 
 History, Statistics, and estimation remain pure projections. Statistics stays ephemeral, and the Rust oracle remains synchronized with TypeScript through fixtures.
 

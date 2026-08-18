@@ -3,15 +3,15 @@ status: accepted
 date: 2026-08-18
 ---
 
-# Drive ab-av1 Through an Owned Operation
+# Drive ab-av1 through an owned operation
 
-## Context and Problem Statement
+## Context and problem statement
 
 ADR-003 selected an in-process pinned ab-av1 adapter, and ADR-018 defines CRFty's private job supervision contract. The current fork exposes typed command streams followed by global `finish_job()` or `cancel_job()` calls. That boundary cannot connect the stream to the correct cleanup authority through ownership, and upstream ab-av1 can detach its sample producer while sample-copy FFmpeg remains outside global finalization.
 
 CRFty needs a regular semver library boundary that preserves typed progress while making a terminal result mean that ab-av1's tasks, process trees, pipes, and temporary state have settled. The boundary must not require ab-av1 to expose CRFty's private `CancellationToken` or duplicate CRFty's background job supervisor.
 
-## Decision Drivers
+## Decision drivers
 
 * Make incorrect lifecycle composition difficult through Rust ownership and private constructors
 * Keep cancellation intent distinct from acknowledged terminal settlement
@@ -22,14 +22,14 @@ CRFty needs a regular semver library boundary that preserves typed progress whil
 * Support CRFty's current-thread Tokio runtime without requiring `LocalSet`
 * Keep the public dependency and semver surface narrow
 
-## Considered Options
+## Considered options
 
 * Caller-driven async operation with a generic shutdown future and synchronous observer
 * Background operation handle with event, control, and join capabilities
 * Public command stream followed by manual global finalization
 * Continue treating the ab-av1 CLI and NDJSON as the supported process boundary
 
-## Decision Outcome
+## Decision outcome
 
 Chosen option: **Caller-driven async operation with a generic shutdown future and synchronous observer**, because ab-av1 performs finite one-shot work and should own its internal lifecycle without also owning CRFty's executor task, remote-control handle, or application policy.
 
@@ -41,7 +41,7 @@ Every FFmpeg and FFprobe invocation uses a private operation-owned managed proce
 
 The terminal contract follows the strongest evidence each platform can supply. Windows waits for Job Object completion. Unix broadcasts SIGKILL to the process group and reaps FFmpeg or FFprobe itself, but an ordinary POSIX parent cannot reap arbitrary grandchildren; orphan reaping belongs to their parent or the host subreaper. This limitation is accepted for the trusted pinned FFmpeg and FFprobe toolchain, which is not expected to daemonize or escape its group, and must be revisited if the child threat model broadens.
 
-Cancellation force-terminates the containment unit immediately. ab-av1's samples and CRFty's staging output are disposable on cancellation, so graceful FFmpeg finalization would add platform-specific behavior and latency without producing an artifact CRFty can promote. A graceful policy may be added later as an explicit opt-in.
+Cancellation force-terminates the containment unit immediately. ab-av1's samples and CRFty's staging output are disposable on cancellation, so graceful FFmpeg finalization would add platform-specific behaviour and latency without producing an artifact CRFty can promote. A graceful policy may be added later as an explicit opt-in.
 
 The domain disposition, whether success or operation failure, has precedence if it and cancellation are observed in the same root poll. Once that disposition linearizes, later cancellation cannot reclassify it or hide a real operation error, but mandatory settlement still runs. Cancellation observed before that point returns `Cancelled` only when settlement succeeds. Process, pipe, task, or temporary-cleanup failure returns a structured error that preserves both the initiating disposition and all settlement failures.
 
@@ -64,7 +64,7 @@ Direct process spawning and unowned task spawning outside ab-av1's private lifec
 * Bad: The change reaches package structure, command presentation, every subprocess path, sample task ownership, temporary state, tool configuration, cache identity, and the CRFty adapter.
 * Bad: `process-wrap` supplies containment primitives rather than the complete operation protocol, so ab-av1 still owns a focused lifecycle layer.
 
-## More Information
+## More information
 
 This record owns the operation-lifecycle boundary, ADR-003 owns the adapter choice, and ADR-018 owns CRFty-private supervision. The evidence, counterexamples, `process-wrap` Drop caveat, public API comparison, race rules, and reviewable upstream patch sequence are in [`docs/design/ab-av1-library-lifecycle-research.md`](../design/ab-av1-library-lifecycle-research.md).
 

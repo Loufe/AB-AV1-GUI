@@ -1,0 +1,6 @@
+extends: existence
+message: "Write both compound terms in full instead of '%s'."
+ignorecase: true
+level: error
+tokens:
+  - '\w+- and \w+-'

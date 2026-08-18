@@ -1,0 +1,7 @@
+extends: existence
+message: "Remove end punctuation from the heading."
+scope: heading
+nonword: true
+level: error
+tokens:
+  - '[a-z][.?!]$'

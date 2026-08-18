@@ -24,9 +24,13 @@ cargo clippy --workspace --all-targets --all-features --locked -- -D warnings
 cargo test --workspace --all-features --locked
 cargo deny check
 rumdl check . --deny-config-warnings
+vale --glob='!{**/AGENTS.md,**/CLAUDE.md,docs/templates/*.md}' --minAlertLevel=error README.md ui/README.md docs
+vale --glob='!{**/AGENTS.md,**/CLAUDE.md,docs/templates/*.md}' --filter='.Name == "CRFty.Readability"' --minAlertLevel=suggestion --no-exit README.md ui/README.md docs
 ```
 
 The frontend gate runs from `ui/`; see `ui/AGENTS.md`.
+
+The first Vale command is blocking. The second reports Flesch-Kincaid grade levels for reference and never blocks. CI pins rumdl 0.2.56 and Vale 3.17.1 with archive checksums; local agents use the executables on `PATH` and do not enforce those versions.
 
 ## Strict rules
 

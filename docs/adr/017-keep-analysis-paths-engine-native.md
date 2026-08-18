@@ -3,25 +3,25 @@ status: accepted
 date: 2026-07-21
 ---
 
-# Keep Analysis Paths Engine-Native
+# Keep analysis paths engine-native
 
-## Context and Problem Statement
+## Context and problem statement
 
 Level 0 must discover paths without probing or hashing them, retain arbitrary native path spellings for later filesystem and process operations, and present rows to a JSON/TypeScript frontend. The current `PathHash` implementation canonicalizes and then calls `to_string_lossy`, making a display conversion part of identity. The current cache binding also discards the filesystem ID already observed by the engine and treats two absent modification times as a size-only freshness match.
 
 No portable metadata-only test can prove that file bytes are unchanged when a writer preserves file ID, size, and modification time. The current `ContentKey` is also sampled for large files and includes ffprobe-derived metadata, so it is a probable-content identity rather than a bytewise proof. The contract must state those limits instead of promising impossible certainty.
 
-## Decision Drivers
+## Decision drivers
 
 * Operational paths must not be reconstructed from lossy display strings
 * Non-Unicode Unix paths and native Windows wide strings must not collide in Analysis identity
-* Windows case, verbatim, UNC, reserved-name, and long-path behavior must defer to native filesystem operations rather than string rewriting
+* Windows case, verbatim, UNC, reserved-name, and long-path behaviour must defer to native filesystem operations rather than string rewriting
 * Atomic replacement with preserved size and mtime must invalidate a cache hit
 * Unknown and coarse timestamps must not become size-only freshness
 * Replace-mode output recognition must happen before an old source binding is overwritten
 * The contract must remain honest about sampled identity and adversarial metadata restoration
 
-## Considered Options
+## Considered options
 
 * Use normalized display paths as row identity
 * Use `PathHash` as Level 0 row identity
@@ -29,7 +29,7 @@ No portable metadata-only test can prove that file bytes are unchanged when a wr
 * Use opaque generation-scoped row IDs backed by an engine-native path registry
 * Replace every persisted `PathBuf` with a tagged native byte/wide-unit schema
 
-## Decision Outcome
+## Decision outcome
 
 Chosen option: **use opaque generation-scoped row IDs backed by an engine-native path registry**, because a row needs stable identity before any canonicalization, stat, probe, or content sample has occurred.
 
@@ -37,7 +37,7 @@ Chosen option: **use opaque generation-scoped row IDs backed by an engine-native
 
 Display text may be lossy only when explicitly marked as such and is never round-tripped into an operation. `PathHash` is not computed at Level 0. When Basic Scan or queue discovery needs it, `ph2` hashes canonical native Unix `OsStr` bytes or Windows wide units under a platform domain separator. It does not call `to_string_lossy` or lowercase. Operational Windows paths retain their verbatim spelling. Alternate Level-0 spellings may remain separate rows and are joined later by filesystem/probable-content identity.
 
-| Path case | Discovery/native registry | `ph2` / identity behavior | Durable action behavior |
+| Path case | Discovery/native registry | `ph2` / identity behaviour | Durable action behaviour |
 | --- | --- | --- | --- |
 | Unix Unicode | Supported | Canonical `OsStr` bytes | Supported |
 | Unix non-Unicode | Supported; display is marked lossy when needed | Raw canonical bytes; distinct invalid byte sequences do not collapse through replacement characters | Queue/analyze/convert deferred unless the path round-trips through the current JSON `PathBuf` representation |
@@ -96,7 +96,7 @@ Size/mtime equality alone never recognizes a settled output. The common same-siz
 * Bad: Some native paths are discoverable but intentionally ineligible for durable actions until a wider path-persistence change lands
 * Bad: Metadata and sampled hashing still cannot prove absence of adversarial in-place changes
 
-## More Information
+## More information
 
 See ADR-001, ADR-004, ADR-014, and ADR-015.
 
@@ -105,4 +105,4 @@ Implementation references:
 * Rust's [`std::fs::symlink_metadata`](https://doc.rust-lang.org/std/fs/fn.symlink_metadata.html) queries an entry without following a symbolic link; Level 0 uses this at traversal roots and before descending into a directory.
 * Rust's [`OsStr::to_string_lossy`](https://doc.rust-lang.org/std/ffi/struct.OsStr.html#method.to_string_lossy) replaces non-Unicode data with `U+FFFD`. This is why display text carries an explicit `lossy` flag and is never reused as operational identity.
 * Rust's Windows [`MetadataExt::file_attributes`](https://doc.rust-lang.org/std/os/windows/fs/trait.MetadataExt.html#tymethod.file_attributes) exposes native file attributes. Discovery checks [`FILE_ATTRIBUTE_REPARSE_POINT`](https://learn.microsoft.com/windows/win32/fileio/file-attribute-constants#file_attribute_reparse_point) so junctions and other reparse-backed directories cannot bypass the no-follow rule.
-* [dua-cli](https://github.com/Byron/dua-cli#limitations) is comparable Rust filesystem UI prior art: it may display symbolic-link entries but does not follow them during traversal. CRFty currently takes the stricter permitted option of omitting nested link/reparse entries while retaining directly configured roots as typed traversal failures.
+* [dua-cli](https://github.com/Byron/dua-cli#limitations) is comparable Rust filesystem UI prior art: it may display symbolic-link entries but does not follow them during traversal. CRFty takes the stricter permitted option of omitting nested link/reparse entries while retaining directly configured roots as typed traversal failures.

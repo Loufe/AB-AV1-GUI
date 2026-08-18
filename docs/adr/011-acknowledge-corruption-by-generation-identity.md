@@ -3,13 +3,13 @@ status: accepted
 date: 2026-07-20
 ---
 
-# Acknowledge Corruption by Generation Identity
+# Acknowledge corruption by generation identity
 
-## Context and Problem Statement
+## Context and problem statement
 
 A journal that fails replay validation degrades the driver: reads keep working over the valid prefix, mutation is rejected, and the file is preserved byte-identical as evidence (ADR-004, ADR-009). Recovery discards the unreadable suffix (an irreversible, operator-consented data discard). The acknowledgement protocol must guarantee the operator discards exactly the bytes they were shown, and the rewrite must never widen the loss beyond that suffix, even across crashes and failed rebuilds.
 
-## Decision Drivers
+## Decision drivers
 
 * Consent must bind to specific bytes: an acknowledgement issued against one corruption must never discard a different, later one
 * No crash window may lose the valid prefix or leave no journal at all
@@ -17,7 +17,7 @@ A journal that fails replay validation degrades the driver: reads keep working o
 * A failed or interrupted recovery must be retryable, not fatal
 * Degraded state lives outside `AppState` (ADR-002), so the reducer cannot own the acknowledgement
 
-## Considered Options
+## Considered options
 
 * A global "degraded acknowledged" boolean command
 * Acknowledge by signature of the unreadable suffix, computed at detection
@@ -25,7 +25,7 @@ A journal that fails replay validation degrades the driver: reads keep working o
 * Archive by copying, then atomically replace the journal with a compacted snapshot of the valid prefix
 * A sidecar ack-file consumed at next startup
 
-## Decision Outcome
+## Decision outcome
 
 Chosen option: **acknowledge by suffix signature, archive by copy, rebuild by forced compaction**.
 
@@ -41,6 +41,6 @@ On a match the driver copies the journal to a timestamped `.corrupt-` sibling (f
 * Bad: The UI must echo the signature it observed rather than sending a bare confirmation
 * Bad: Archives accumulate until manually deleted, acceptable for an event that should be rare and evidence-worthy
 
-## More Information
+## More information
 
 See ADR-002, ADR-004 (the journal format this record recovers), and ADR-009 (the compaction barrier it reuses).

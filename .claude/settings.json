@@ -1,5 +1,26 @@
 {
   "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "if": "Bash(git push *)",
+            "command": "cd \"$CLAUDE_PROJECT_DIR\" || { echo 'Documentation hook could not enter the repository root.' >&2; exit 2; }; rumdl check . --deny-config-warnings >&2 || { echo 'Push blocked: rumdl failed.' >&2; exit 2; }; vale --glob='!{**/AGENTS.md,**/CLAUDE.md,docs/templates/*.md}' --minAlertLevel=error README.md ui/README.md docs >&2 || { echo 'Push blocked: Vale failed.' >&2; exit 2; }",
+            "timeout": 120,
+            "statusMessage": "Checking documentation before push"
+          },
+          {
+            "type": "command",
+            "if": "Bash(rtk git push *)",
+            "command": "cd \"$CLAUDE_PROJECT_DIR\" || { echo 'Documentation hook could not enter the repository root.' >&2; exit 2; }; rumdl check . --deny-config-warnings >&2 || { echo 'Push blocked: rumdl failed.' >&2; exit 2; }; vale --glob='!{**/AGENTS.md,**/CLAUDE.md,docs/templates/*.md}' --minAlertLevel=error README.md ui/README.md docs >&2 || { echo 'Push blocked: Vale failed.' >&2; exit 2; }",
+            "timeout": 120,
+            "statusMessage": "Checking documentation before push"
+          }
+        ]
+      }
+    ],
     "WorktreeCreate": [
       {
         "hooks": [

@@ -1,0 +1,8 @@
+extends: existence
+message: "Replace the unsupported superlative '%s' with a verifiable claim."
+ignorecase: true
+level: error
+tokens:
+  - 'best(?![ -]effort| practices?| CRF)'
+  - simplest
+  - fastest

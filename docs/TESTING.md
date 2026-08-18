@@ -1,6 +1,6 @@
-# Testing Strategy
+# Testing strategy
 
-The semantic load is carried by pure-domain tests in `crfty-core` and real-process contract tests in `crfty-engine`. Everything else exists to keep those two honest: generated artifacts are diffed rather than trusted, the frontend mirrors of Rust logic are checked against fixtures exported from Rust, and process behavior is proven against actual child processes rather than mocks of them.
+The semantic load is carried by pure-domain tests in `crfty-core` and real-process contract tests in `crfty-engine`. Everything else exists to keep those two honest: generated artifacts are diffed rather than trusted, the frontend mirrors of Rust logic are checked against fixtures exported from Rust, and process behaviour is proven against actual child processes rather than mocks of them.
 
 ## Gates
 
@@ -25,7 +25,7 @@ Lint discipline extends to tests. Tests run under the same workspace lints as pr
 
 Each file is a contract with a stated subject, not a grab bag.
 
-- `durability.rs`, the largest suite: data-directory locking, journal replay, torn-tail truncation, byte-identical preservation of a corrupt journal, corruption acknowledgement and recovery, compaction into a snapshot head, group commit as one atomic replay record, the crash sentinel, persist-before-emit ordering across restart, telemetry pressure showing that lossy telemetry coalesces while the terminal value wins, event-stream overflow severing the stream instead of blocking the driver, history import parking and adoption, and the full output ledger: promotion, original retirement, startup recovery of partial staging, abandonment authorizing only the observed artifact, conflicts without deletion, overwrite policy before staging, and the hardlink-preserving same-path replacement.
+- `durability.rs`, the largest suite, covers data-directory locking, journal replay, torn-tail truncation, byte-identical preservation of a corrupt journal, corruption acknowledgement and recovery, compaction into a snapshot head, group commit, and the crash sentinel. It also covers persist-before-emit ordering across restart, lossy telemetry coalescing under pressure while the terminal value wins, event-stream overflow, and history import parking and adoption. Output-ledger coverage includes promotion, original retirement, partial-staging recovery, identity-authorized abandonment, conflicts without deletion, pre-staging overwrite policy, and hardlink-preserving same-path replacement.
 - `ab_av1_process.rs`: the native adapter's process contract and the hardware-to-software retry ladder, driven by a fixture binary rather than real media.
 - `ab_av1_real_media.rs`: `#[ignore]`d and gated behind the `contract-test-fixture` feature. One test drives real search, encode, cancellation, adapter panic, and a subsequent successful job through the coordinator, which is where cancellation, child cleanup, panic containment, and reuse after every failure mode are actually proven.
 - `remux_process.rs` and `process_supervisor.rs`: process trees. Concurrent draining of large stdout and stderr streams, diagnostic tail retention, spawn failure, timeout terminating the process group, descendants that keep or close their pipes, cancellation before spawn, and cancellation terminating the native process tree and joining its readers.
@@ -44,13 +44,13 @@ Those fixtures are what make the frontend mirrors safe. `ui/src/lib/store/fold.t
 
 Process fixtures replace tools rather than mocking them. The `crfty-contract-fixture` and `crfty-process-fixture` binaries, both behind the `contract-test-fixture` feature, stand in for FFmpeg, ffprobe, and misbehaving children so process lifecycle can be tested deterministically and without media. Vendor tests inject a fake `Fetch` implementation instead of standing up a server, and the real-tool suites locate binaries through `CRFTY_FFMPEG` and `CRFTY_FFPROBE`.
 
-Policy is tested rule by rule against `evaluate_eligibility`, `select_analysis`, `evaluate_enqueue`, and `select_job_action` directly: the post-rotation pixel floor, the AV1 container decisions, exact-then-lowest-qualifying target selection, decode-mode identity in reuse, verdict freshness against the settled output identity, enqueue and claim gating with and without fresh facts, fail-open on absent enqueue facts, and the fallback-floor rule for `NotWorthwhile`.
+Policy is tested rule by rule against `evaluate_eligibility`, `select_analysis`, `evaluate_enqueue`, and `select_job_action` directly. Coverage includes the post-rotation pixel floor, AV1 container decisions, exact-then-lowest-qualifying target selection, decode-mode reuse identity, verdict freshness, enqueue and claim gating, absent-fact fail-open behaviour, and the `NotWorthwhile` fallback-floor rule.
 
 V2 is a read-only oracle, consulted through `git show main:<path>` and frozen as committed fixtures when a semantic is worth keeping. Generation scripts are throwaway and never committed; frozen fixtures are hand-maintained spec data afterwards. The only committed Python is `tools/export_history_v3.py` and its test, run with `uvx pytest tools/test_export_history_v3.py` and never imported by the build.
 
 ## Rules
 
 - Pure logic requires focused tests in the same change.
-- Process behavior requires real-process contract tests in addition to unit tests.
+- Process behaviour requires real-process contract tests in addition to unit tests.
 - Human-oriented process output is never parsed as an application contract, so it is never the thing a test asserts on.
 - Prefer making an invalid state unrepresentable over testing that it does not occur. Two implementations kept equivalent by a test harness is a defect to eliminate; the Rust-to-TypeScript mirrors are tolerated only because a generated golden fixture, not review, keeps them equal.

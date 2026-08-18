@@ -1,0 +1,13 @@
+extends: existence
+message: "Remove the redundant wording '%s'."
+ignorecase: true
+level: error
+tokens:
+  - ATM machine
+  - GPS system
+  - GUI interface
+  - ISBN number
+  - LCD display
+  - PDF format
+  - PIN number
+  - UPC code

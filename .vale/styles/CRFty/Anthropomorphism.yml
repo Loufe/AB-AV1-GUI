@@ -1,0 +1,6 @@
+extends: existence
+message: "Do not attribute human qualities such as '%s' to software or hardware."
+ignorecase: true
+level: error
+raw:
+  - '\b(?:adapter|API|app|application|backend|cache|code|consumer|driver|engine|enqueue|frontend|hardware|journal|queue|reducer|restart|software|system)\b(?:\s+\w+){0,3}\s+(?:sees|tells)\b'

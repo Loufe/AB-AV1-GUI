@@ -12,13 +12,13 @@ Nothing is stored under the name History. History rows and Statistics are contex
 
 Facts flow one way. The analysis level a file stands at, the analysis it may reuse, and its eligibility for the queue are all decided from current freshness-checked evidence about the file on disk, never from History:
 
-- Analysis level is split at the type level. `assess_analysis_levels` returns `applicable`, meaning what the current file and execution settings can actually reuse, alongside `historical`, meaning the best tier known to have been reached. Historical achievement, including an imported Converted or Analyzed summary, raises only `historical`.
+- Analysis level is split at the type level. `assess_analysis_levels` returns `applicable`, meaning what the current file and execution settings can actually reuse, alongside `historical`, meaning the highest tier known to have been reached. Historical achievement, including an imported Converted or Analyzed summary, raises only `historical`.
 - A historical analysis is not a reusable analysis. Analysis identity is profile-exact per ADR-007, pin decode mode in analysis identity, so only a native search recorded under a permitted profile can be selected for reuse. An imported Analyzed fact is display-only and never enters `FileRecord.analyses`.
 - Queue eligibility reads the path binding, the live destructive identity, timestamp reliability, and the standing verdict, per ADR-013, filter queue adds at enqueue. It consults neither History rows, nor Statistics, nor the parked import inbox.
 
 Estimation is the one sanctioned consumer in the other direction: completed phase spans and settled sizes feed the cohorts behind size and time predictions. It reads History and never writes to it; its model, evidence seam, and open questions are in `docs/design/estimation.md`.
 
-One seam does run from historical records into current state, and it is deliberately narrow. An imported record adopts onto a content record only when a fresh observation of the file at its recorded path confirms it, either by matching size and modification time or by the replace-mode case where the file now at that path is already the AV1 output. Adoption is the one-time route for V2 history and is governed by ADR-015; a record that no longer describes the file retires and decides nothing.
+One seam does run from historical records into current state, and it is deliberately narrow. An imported record adopts onto a content record only when a fresh observation confirms the file at its recorded path. Confirmation requires either matching size and modification time or the replace-mode case where the file at that path is already the AV1 output. Adoption is the one-time route for V2 history and is governed by ADR-015; a record that no longer describes the file retires and decides nothing.
 
 ## Predictions and measurements are separate observations
 
@@ -32,7 +32,7 @@ No consumer may present a prediction as a measurement. The distinction lives in 
 
 ## Sizes are measured or absent
 
-Byte sizes reach History from verified identities only, joined in a fixed order: live completion evidence, then the promoted artifact identity in the output transaction, then the summary an adopted import carried, and finally the record's own inspected size for the input while the output stays unknown.
+Byte sizes reach History from verified identities only. The fixed join order is live completion evidence, the promoted artifact identity in the output transaction, the summary from an adopted import, and the record's inspected input size while the output stays unknown.
 
 Human-readable FFmpeg output is not a size source. The stream summaries FFmpeg prints when an encode ends are display text rounded to a unit FFmpeg chose, and the engine does not treat human-oriented process output as an application contract. Such a figure must never be stored as a size, and a value derived from one must never be presented as a measurement.
 
@@ -50,7 +50,7 @@ Scrubbing removes readable path data from the current records and leaves everyth
 
 Scrubbing is idempotent. Scrubbing an already-scrubbed store changes nothing, and a scrubbed store is a valid store rather than a degraded one.
 
-Scrubbing is not erasure, and must never be described to users as if it were. State persists through an append-only journal (ADR-004, persist state in an append-only journal) compacted by atomic replacement with a snapshot head line (ADR-009, compact the journal into a snapshot head line), and nothing below the application, not the filesystem and not any backup, snapshot, or replica underneath it, is asked to forget bytes it already wrote. A scrub changes the records the application serves from that point forward. It offers no physical-erasure guarantee.
+Scrubbing is not erasure, and must never be described to users as if it were. State persists through an append-only journal (ADR-004, persist state in an append-only journal) compacted by atomic replacement with a snapshot head line (ADR-009, compact the journal into a snapshot head line). Nothing below the application is asked to forget bytes it already wrote, including the filesystem and any underlying backup, snapshot, or replica. A scrub changes the records the application serves from that point forward. It offers no physical-erasure guarantee.
 
 Log scrubbing is a different mechanism under a different contract (ADR-014, scrub paths inside the log sink) and is not governed by this rule.
 

@@ -1,0 +1,40 @@
+name: Documentation
+
+on:
+  push:
+    branches: [rewrite]
+  pull_request:
+    branches: [rewrite]
+
+permissions:
+  contents: read
+
+jobs:
+  lint:
+    name: Lint
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+      - name: Install pinned documentation linters
+        env:
+          RUMDL_ARCHIVE: rumdl-v0.2.56-x86_64-unknown-linux-gnu.tar.gz
+          RUMDL_SHA256: ffed7ebd877a661c916ba82a27aed56adf1590f2fb42b18b07b689db96614730
+          VALE_ARCHIVE: vale_3.17.1_Linux_64-bit.tar.gz
+          VALE_SHA256: db947f89f2292e6a0381a61de155f6a5f5cb4cb460ca178ea412ef605559cefd
+        run: |
+          mkdir -p "$RUNNER_TEMP/docs-bin"
+          curl --fail --location --silent --show-error --output "$RUNNER_TEMP/$RUMDL_ARCHIVE" "https://github.com/rvben/rumdl/releases/download/v0.2.56/$RUMDL_ARCHIVE"
+          echo "$RUMDL_SHA256  $RUNNER_TEMP/$RUMDL_ARCHIVE" | sha256sum --check --strict
+          tar --extract --gzip --file "$RUNNER_TEMP/$RUMDL_ARCHIVE" --directory "$RUNNER_TEMP/docs-bin"
+          curl --fail --location --silent --show-error --output "$RUNNER_TEMP/$VALE_ARCHIVE" "https://github.com/vale-cli/vale/releases/download/v3.17.1/$VALE_ARCHIVE"
+          echo "$VALE_SHA256  $RUNNER_TEMP/$VALE_ARCHIVE" | sha256sum --check --strict
+          tar --extract --gzip --file "$RUNNER_TEMP/$VALE_ARCHIVE" --directory "$RUNNER_TEMP/docs-bin" vale
+          echo "$RUNNER_TEMP/docs-bin" >> "$GITHUB_PATH"
+      - name: Check Markdown structure
+        run: rumdl check . --deny-config-warnings
+      - name: Check authored prose
+        run: vale --glob='!{**/AGENTS.md,**/CLAUDE.md,docs/templates/*.md}' --minAlertLevel=error README.md ui/README.md docs
+      - name: Report Flesch-Kincaid scores
+        if: always()
+        run: vale --glob='!{**/AGENTS.md,**/CLAUDE.md,docs/templates/*.md}' --filter='.Name == "CRFty.Readability"' --minAlertLevel=suggestion --no-exit README.md ui/README.md docs

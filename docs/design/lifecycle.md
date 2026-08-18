@@ -1,4 +1,4 @@
-# App Lifecycle
+# App lifecycle
 
 Status: design note; the cancellation section is pending the supervision unification recorded in ADR-018
 

@@ -1,0 +1,8 @@
+extends: existence
+message: "Use an input-neutral UI verb instead of '%s', unless the instruction specifically requires a mouse."
+ignorecase: true
+level: error
+tokens:
+  - click
+  - 'click on'
+  - swipe

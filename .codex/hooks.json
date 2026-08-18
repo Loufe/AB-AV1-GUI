@@ -1,0 +1,18 @@
+{
+  "description": "Block pushes when repository documentation checks fail.",
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "command=$(jq -r '.tool_input.command // empty') || { echo 'Documentation hook could not inspect the pending command.' >&2; exit 2; }; printf '%s\\n' \"$command\" | grep -Eq '(^|[;&|][[:space:]]*)(rtk[[:space:]]+)?git[[:space:]]+push([[:space:]]|$)' || exit 0; root=$(git rev-parse --show-toplevel) || { echo 'Documentation hook could not find the repository root.' >&2; exit 2; }; cd \"$root\" || { echo 'Documentation hook could not enter the repository root.' >&2; exit 2; }; rumdl check . --deny-config-warnings >&2 || { echo 'Push blocked: rumdl failed.' >&2; exit 2; }; vale --glob='!{**/AGENTS.md,**/CLAUDE.md,docs/templates/*.md}' --minAlertLevel=error README.md ui/README.md docs >&2 || { echo 'Push blocked: Vale failed.' >&2; exit 2; }",
+            "timeout": 120,
+            "statusMessage": "Checking documentation before push"
+          }
+        ]
+      }
+    ]
+  }
+}

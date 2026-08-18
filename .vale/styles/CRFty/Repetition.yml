@@ -1,0 +1,6 @@
+extends: repetition
+message: "Remove the repeated word '%s'."
+level: error
+alpha: true
+tokens:
+  - '[^\s]+'

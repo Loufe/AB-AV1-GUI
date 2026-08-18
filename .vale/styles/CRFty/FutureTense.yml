@@ -1,0 +1,6 @@
+extends: existence
+message: "State the present behaviour instead of using '%s'; put future commitments in a roadmap or release plan."
+ignorecase: true
+level: error
+tokens:
+  - '\bwill\b'

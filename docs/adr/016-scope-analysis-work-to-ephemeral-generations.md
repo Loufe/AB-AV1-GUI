@@ -3,15 +3,15 @@ status: accepted
 date: 2026-07-21
 ---
 
-# Scope Analysis Work to Ephemeral Generations
+# Scope analysis work to ephemeral generations
 
-## Context and Problem Statement
+## Context and problem statement
 
 The Analysis view must stream a large directory tree before probing finishes, cancel obsolete work when the selected roots change, reject late worker results, and recover coherently when the webview reconnects. Its rows are a working view over filesystem observations and durable content facts, not new durable facts themselves. Putting the tree in the journal would persist stale filesystem topology; keeping it only in React would let engine work and UI state diverge.
 
 The application already has one ordered stream and reducer-owned standing ephemeral state for the conversion session, tools, aggregates, and telemetry. Analysis needs the same ownership discipline without sending the complete tree after every incremental batch.
 
-## Decision Drivers
+## Decision drivers
 
 * Obsolete discovery and probe workers must be unable to mutate a newer view
 * Reconnect must restore one coherent current tree without replaying missed transient batches
@@ -20,7 +20,7 @@ The application already has one ordered stream and reducer-owned standing epheme
 * Filesystem paths, cancellation handles, workers, and child processes must remain outside pure core state
 * UI expansion, selection, sorting, and scroll position must not become domain state
 
-## Considered Options
+## Considered options
 
 * Persist the Analysis tree in `DurableState`
 * Keep the tree and generation entirely in the frontend
@@ -28,13 +28,13 @@ The application already has one ordered stream and reducer-owned standing epheme
 * Own a foldable ephemeral Analysis model in core and mirror it in the shell
 * Publish a complete Analysis snapshot after every batch
 
-## Decision Outcome
+## Decision outcome
 
 Chosen option: **own a foldable ephemeral Analysis model in core, scoped by a reducer-allocated generation, and mirror it in the shell**, because this keeps the reducer as the final stale-result guard while allowing the engine and UI to consume bounded incremental deltas.
 
 The complete ownership split is:
 
-| State | Authority | Lifetime | Contents | Reconnect behavior |
+| State | Authority | Lifetime | Contents | Reconnect behaviour |
 | --- | --- | --- | --- | --- |
 | Durable facts | Core `DurableState` | Journaled across restarts | Stable media observations, full path bindings, content records, native analyses, verdicts, runs, outputs, imported provenance | Included in `AppSnapshot` |
 | Analysis standing model | Core `AppState.analysis` | Process-local, not journaled | Current generation id, activity, public row facts, future scan/applicability facts | Shell sends one complete `AnalysisDelta::Reset` immediately after `AppSnapshot` |
@@ -47,7 +47,7 @@ No projection or renderer performs filesystem access. Durable facts enter only t
 
 The reducer allocates a monotonically increasing `AnalysisGenerationId` with `begin_analysis_generation` when new roots or an explicit rescan supersede the current generation. Callers never choose a generation. Every engine batch, completion, failure, and row-targeted command carries the generation. `apply_analysis_mutation` rejects a non-next Reset and every live mutation that does not name the current generation. Cancellation is an optimization; this reducer gate is the correctness boundary. Discovery commands and the driver registry connect to these primitives.
 
-| Event | Core transition | Engine action | Late/stale behavior |
+| Event | Core transition | Engine action | Late/stale behaviour |
 | --- | --- | --- | --- |
 | Select roots / explicit rescan | Allocate next id; Reset to `Discovering` and no rows | Create native registry and cancel the prior registry | Prior-generation work may finish but mutation is rejected |
 | Discovery batch | Upsert rows for current id | Retain native paths under the same row ids | Unknown/stale generation is rejected |
@@ -61,7 +61,7 @@ The reducer allocates a monotonically increasing `AnalysisGenerationId` with `be
 
 Normal operation uses bounded `AnalysisDelta` batches. The driver and shell fold those deltas into standing Analysis state. On subscription, the shell emits the durable `AppSnapshot` first and then one Analysis replacement delta containing the complete current ephemeral snapshot. No live delta can interleave with that replay because subscription already holds the stream lock. A process restart starts with no Analysis generation and discovers again; journal replay never reconstructs the tree.
 
-All Analysis deltas use the driver's post-durable position. Discovery-only updates have no durable deltas, so the same ordering is harmless there. This extends the existing `SessionAggregates` rule: a consumer never sees a projection of a fact before the fact itself.
+All Analysis deltas use the driver's post-durable position. Discovery-only updates have no durable deltas, so the same ordering is harmless there. This extends the existing `SessionAggregates` rule: a consumer never receives a fact's projection before the fact itself.
 
 Starting a new generation cancels the prior driver-local generation and immediately replaces its public state. Late results remain harmless even if the underlying OS operation cannot be interrupted.
 
@@ -115,7 +115,7 @@ Native analysis reuse is exact except for the documented target relation:
 * Bad: The shell retains another standing ephemeral model for reconnect
 * Bad: Restart intentionally discards in-progress discovery and scanning
 
-## More Information
+## More information
 
 See ADR-002, ADR-004, ADR-006, ADR-007, and ADR-015 (which carries the projection and imported-history provenance decisions).
 

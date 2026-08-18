@@ -3,26 +3,26 @@ status: accepted
 date: 2026-07-19
 ---
 
-# Forbid First-Party Unsafe Rust
+# Forbid first-party unsafe Rust
 
-## Context and Problem Statement
+## Context and problem statement
 
 CRFty is a long-lived desktop process that owns durable state while coordinating untrusted media tools. Native FFmpeg bindings or scattered operating-system calls would move memory-safety and lifetime risks into that process.
 
-## Decision Drivers
+## Decision drivers
 
 * Keep first-party memory safety compiler-enforced
 * Isolate process crashes and unsafe transitive code behind external tools
 * Make dependency and platform risk visible during review
 * Support Windows and Linux process-tree containment
 
-## Considered Options
+## Considered options
 
 * Permit unsafe Rust wherever required
 * Use native FFmpeg bindings
 * Forbid unsafe in first-party crates and isolate a platform exception only if proven necessary
 
-## Decision Outcome
+## Decision outcome
 
 Chosen option: **Forbid unsafe Rust in first-party crates**, because safe process and filesystem APIs cover the planned architecture and FFmpeg does not need to share the application address space.
 
@@ -34,6 +34,6 @@ If platform acceptance tests prove safe wrappers insufficient, update this recor
 * Good: Native media crashes remain outside the durable process
 * Bad: Some platform containment approaches may require a separately reviewed exception
 
-## More Information
+## More information
 
 See `docs/design/lifecycle.md` (panic containment and platform process containment) and `docs/design/prior-art.md` (the dependency and native-binding findings behind this record).

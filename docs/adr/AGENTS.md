@@ -1,4 +1,4 @@
-# Architecture Decision Records
+# Architecture decision records
 
 CRFty uses [MADR](https://adr.github.io/madr/) for decisions that affect multiple modules, choose between competing architectures, establish lasting conventions, or would be costly to reverse.
 
@@ -24,19 +24,19 @@ date: YYYY-MM-DD
 
 # Short Title
 
-## Context and Problem Statement
+## Context and problem statement
 
 Describe the decision and why it is needed.
 
-## Decision Drivers
+## Decision drivers
 
 * Driver
 
-## Considered Options
+## Considered options
 
 * Option
 
-## Decision Outcome
+## Decision outcome
 
 Chosen option: **Option**, because reason.
 
@@ -45,7 +45,7 @@ Chosen option: **Option**, because reason.
 * Good: Benefit
 * Bad: Accepted trade-off
 
-## More Information
+## More information
 
 Link related ADRs, research notes, or implementation paths. Never link issues; see `docs/AGENTS.md`.
 ```

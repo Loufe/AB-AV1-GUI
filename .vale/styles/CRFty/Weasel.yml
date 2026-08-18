@@ -1,0 +1,19 @@
+extends: existence
+message: "Replace vague or condescending wording such as '%s' with a precise statement."
+ignorecase: true
+level: error
+tokens:
+  - clearly
+  - obviously
+  - obvious
+  - simple
+  - simply
+  - easy
+  - easily
+  - of course
+  - everyone knows
+  - exceedingly
+  - extremely
+  - remarkably
+  - surprisingly
+  - very

@@ -1,0 +1,32 @@
+extends: substitution
+message: "Use Canadian spelling '%s' instead of '%s'."
+ignorecase: true
+level: error
+swap:
+  '\bbehavior\b': behaviour
+  '\bbehaviors\b': behaviours
+  '\bbehavioral\b': behavioural
+  '\bcolor\b': colour
+  '\bcolors\b': colours
+  '\bcolored\b': coloured
+  '\bcoloring\b': colouring
+  '\bcenter\b': centre
+  '\bcenters\b': centres
+  '\bcentered\b': centred
+  '\bcentering\b': centring
+  '\bfavor\b': favour
+  '\bfavors\b': favours
+  '\bfavored\b': favoured
+  '\bfavoring\b': favouring
+  '\bhonor\b': honour
+  '\bhonors\b': honours
+  '\bhonored\b': honoured
+  '\bhonoring\b': honouring
+  '\blabor\b': labour
+  '\bneighbor\b': neighbour
+  '\bneighbors\b': neighbours
+  '\bgray\b': grey
+  '\btraveled\b': travelled
+  '\btraveling\b': travelling
+  '\bcanceled\b': cancelled
+  '\bcanceling\b': cancelling

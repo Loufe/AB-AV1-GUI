@@ -1,8 +1,8 @@
-# Analysis Pipeline
+# Analysis pipeline
 
 The Analysis view is a generation-scoped, ephemeral tree over durable media facts. Discovery streams names without probing. A user-requested Basic Scan then consumes the discovered file rows from the engine's native-path registry; it never traverses the roots again and no projection or renderer touches the filesystem.
 
-## Basic Scan
+## Basic scan
 
 `analysis_basic_scan(generation)` changes a `Discovered` or `Ready` generation to `BasicScanning`. The engine snapshots the current ffprobe executable and runs a fixed native-thread pool:
 

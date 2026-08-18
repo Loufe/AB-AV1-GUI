@@ -1,0 +1,10 @@
+extends: existence
+message: "Replace hedge '%s' with the evidence or uncertainty it represents."
+ignorecase: true
+level: error
+tokens:
+  - I would argue that
+  - arguably
+  - appears to be
+  - ', so to speak'
+  - to a certain degree

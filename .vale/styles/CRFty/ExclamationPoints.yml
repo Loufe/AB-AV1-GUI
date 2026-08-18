@@ -1,0 +1,6 @@
+extends: existence
+message: "Replace the exclamation point with neutral technical prose."
+nonword: true
+level: error
+tokens:
+  - '\w!(?:\s|$)'

@@ -1,0 +1,6 @@
+extends: existence
+message: "Write the singular or plural explicitly instead of '%s'."
+level: error
+nonword: true
+tokens:
+  - '\b\w+\(s\)'

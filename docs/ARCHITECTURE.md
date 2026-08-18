@@ -1,8 +1,8 @@
-# CRFty Architecture
+# CRFty architecture
 
-CRFty is a desktop application for quality-targeted AV1 conversion: it searches for the lowest CRF that still meets a VMAF target, then encodes at that CRF. V3 is a ground-up Rust and Tauri rewrite of the Python application retained on `main`, delivering that product's intentional behavior without its accidental semantics or compatibility machinery.
+CRFty is a desktop application for quality-targeted AV1 conversion: it searches for the lowest CRF that still meets a VMAF target, then encodes at that CRF. V3 is a ground-up Rust and Tauri rewrite of the Python application retained on `main`, delivering that product's intentional behaviour without its accidental semantics or compatibility machinery.
 
-This file is an index and stays one. Each subsystem's behavior is contracted in its own document, each cross-module decision in an ADR, and nothing is specified in two places.
+This file is an index and stays one. Each subsystem's behaviour is contracted in its own document, each cross-module decision in an ADR, and nothing is specified in two places.
 
 ## Guiding principle
 
@@ -47,7 +47,7 @@ V3 targets packaged Windows and Linux desktop use. The following stay outside th
 
 - automatic installation updates (the manual release check remains),
 - portable mode,
-- tray behavior and native notifications,
+- tray behaviour and native notifications,
 - pause as a first-class state, and the resource automation behind it (user, low-disk, and low-battery triggers), since Stop covers the need,
 - stall watchdogs,
 - full-file duplicate confirmation,

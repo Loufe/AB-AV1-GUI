@@ -1,0 +1,10 @@
+extends: substitution
+message: "Use '%s' instead of '%s'."
+ignorecase: true
+level: error
+nonword: true
+swap:
+  '\b(?:eg|e\.g\.)(?=[\s,;]|$)': for example
+  '\b(?:ie|i\.e\.)(?=[\s,;]|$)': that is
+  '\bviz\.(?=[\s,;]|$)': namely
+  '\bergo\b': therefore

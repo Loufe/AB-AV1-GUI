@@ -3,13 +3,13 @@ status: accepted
 date: 2026-07-20
 ---
 
-# Compact the Journal Into a Snapshot Head Line
+# Compact the journal into a snapshot head line
 
-## Context and Problem Statement
+## Context and problem statement
 
 The append-only journal (ADR-004) grows without bound: long-lived installs accumulate dead upserts and startup replay cost. Compaction must rewrite live state through a crash-safe writer barrier without breaking replay identity, recovery semantics, or the runtime-id derivation that depends on sequence numbering. The journal format also had no room to evolve: the version rode inside each delta envelope, so a record of any future shape failed as a parse error (indistinguishable from corruption) instead of "unsupported schema".
 
-## Decision Drivers
+## Decision drivers
 
 * A compacted journal must replay to exactly the state the old one folded to
 * Sequence numbering must continue across compactions (recovery identity, runtime-id derivation)
@@ -19,14 +19,14 @@ The append-only journal (ADR-004) grows without bound: long-lived installs accum
 * A running conversion is never interrupted by compaction
 * No new dependencies
 
-## Considered Options
+## Considered options
 
 * Snapshot in a sidecar file, then truncate the journal
 * In-place rewrite guarded by a marker record
 * Every line a version-tagged record; compaction atomically replaces the file with a single snapshot head line
 * Per-record checksums for corruption detection
 
-## Decision Outcome
+## Decision outcome
 
 Chosen option: **version-tagged lines with an atomic snapshot-head replace**. Every journal line is `{schema_version, record}` where the record is either `Deltas` (a sequenced batch) or `Snapshot` (folded state stamped with app version, timestamp, and the base sequence the next batch must carry). Replay probes the version alone before decoding the record, so an unknown schema reports "unsupported journal schema" instead of a parse error. A snapshot is only legal as the first line; one appearing later is semantic corruption.
 
@@ -42,7 +42,7 @@ A single-file replace was chosen over a sidecar-plus-truncate because it keeps e
 * Bad: Compaction waits for quiescence, so a machine that never idles between work can exceed the size targets until the next barrier
 * Bad: The snapshot line duplicates fold logic's trust: a bug that folds bad state would be baked into the compacted head (mitigated by semantic replay validation before any compaction)
 
-## More Information
+## More information
 
 The journal format and single-writer rule this record extends are ADR-004; the corruption-acknowledgment path that shares its writer barrier is ADR-011.
 
