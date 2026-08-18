@@ -45,10 +45,12 @@ Read from source, across `main` and the current tree.
 | Per-file time | after basic scan | scheduling | P50 with a P25 to P75 range | implemented, unwired |
 | Per-file time | after analyze | scheduling | ab-av1 prediction | implemented, unwired |
 | Queue total time | queued | when work finishes | present | absent |
-| Predicted output size | after analyze | expectation setting | ab-av1 prediction | recorded, never surfaced |
+| Predicted output size | after analyze | expectation setting | ab-av1 prediction | recorded; surfaced only after the fact |
 | Live ETA | during a run | when work finishes | progress velocity | shipped |
 
 The live ETA runs a different mechanism on different evidence yet answers the same user question as the pre-run estimate. Whether the two may disagree, and by how much, is unsettled.
+
+ab-av1's three predictions cross the IPC boundary and are consumed unevenly (read from source). `predicted_percent_basis_points` reaches the user in exactly one place: the explanation attached to a not-worthwhile outcome, which reports what the best attempt would have saved. That is retrospective justification of a decision already taken, not a forward-looking estimate. `predicted_size` and `predicted_duration_ms` reach no consumer at all. The most trustworthy estimate available, the encoder's own measurement of the file in front of the user, is therefore the one least surfaced.
 
 ## Shipped position
 
