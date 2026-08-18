@@ -16,7 +16,7 @@ The engine currently represents the same one-shot supervision contract with four
 
 The coordinator adapts the ab-av1 and remux handles through `ActiveJobCancellation` and maintains two polling loops with the same result, timeout, telemetry, and cancellation behavior. Each implementation must independently get pre-registration cancellation, channel disconnection, cancel-on-drop, terminal cleanup, worker termination, and subprocess settlement right.
 
-The ab-av1 library lifecycle is a related but separate external-boundary decision tracked in [issue #104](https://github.com/Loufe/AB-AV1-GUI/issues/104) and [`docs/design/ab-av1-library-lifecycle-research.md`](../design/ab-av1-library-lifecycle-research.md). This record decides how CRFty requests cancellation and owns worker completion; it does not prescribe whether ab-av1 ultimately accepts a generic shutdown future or exposes an explicit operation handle.
+The ab-av1 library lifecycle is a related but separate external-boundary decision selected by proposed [ADR-021](021-drive-ab-av1-through-an-owned-operation.md), with evidence in [issue #104](https://github.com/Loufe/AB-AV1-GUI/issues/104) and [`docs/design/ab-av1-library-lifecycle-research.md`](../design/ab-av1-library-lifecycle-research.md). ADR-021 gives ab-av1 a generic shutdown future and keeps its owned settlement inside that finite operation; this record decides how CRFty produces that signal, owns the executor worker, and publishes the terminal report.
 
 Four guarantees must remain distinct:
 
@@ -121,13 +121,13 @@ Three process-layer choices remain viable:
 
 `process-wrap` is the conservative alternative if CRFty wants a supported successor to `command-group` without adopting a full process runner. It does not itself provide the terminal-report or worker-supervision contract.
 
-The process choice in this record concerns CRFty-owned direct processes. Issue #104 separately decides what process ownership must live inside ab-av1 so its library operation cannot detach internal sample producers or leave sample-copy FFmpeg outside terminal settlement.
+The process choice in this record concerns CRFty-owned direct processes. ADR-021 separately places internal process ownership inside ab-av1 so its library operation cannot detach sample producers or leave sample-copy FFmpeg outside terminal settlement.
 
 ### Counterexamples and Failure History
 
 * **Detached worker after apparently successful cancellation:** Dropping either a standard-library or Tokio `JoinHandle` detaches its worker. A handle that only cancels on drop can therefore leave a remux, vendor, or runtime worker executing after its owner has disappeared. The supervisor must retain unique join authority and shutdown must separately prove worker termination.
 * **Cleanup skipped by cancellation race:** `CancellationToken::run_until_cancelled` drops the wrapped future when cancellation wins and is biased toward future completion on a simultaneous ready poll. Wrapping the current ab-av1 operation wholesale could skip its provisional explicit finalization or classify a completion/cancellation tie according to helper polling order rather than CRFty policy.
-* **Detached ab-av1 sample producer:** Upstream `sample_encode::run` uses `spawn_local` for sample production, and dropping its ordinary `JoinHandle` detaches the task. That producer invokes sample-copy FFmpeg through an unmanaged `.output()` path, so draining the prototype's global child registry can race with later process creation. The selected upstream lifecycle must stop producers before terminating and reaping their owned process trees.
+* **Detached ab-av1 sample producer:** Upstream `sample_encode::run` uses `spawn_local` for sample production, and dropping its ordinary `JoinHandle` detaches the task. That producer invokes sample-copy FFmpeg through an unmanaged `.output()` path, so draining the prototype's global child registry can race with later process creation. ADR-021 requires the upstream lifecycle to stop producers before terminating containment units, reaping direct children, and completing the strongest descendant settlement the platform can prove.
 * **Blocking task that ignores abort:** Tokio documents that an already running `spawn_blocking` task cannot be aborted and may keep runtime shutdown waiting indefinitely. Moving the vendor downloader into `spawn_blocking` would change scheduling without making its blocking read interruptible.
 * **Stalled vendor download:** A worker blocked inside a synchronous Reqwest read cannot observe the token until the I/O call returns or its timeout fires. Cancellation latency is therefore bounded by the configured network timeout, not by token wakeup latency.
 * **Premature terminal report:** If operation code owns the report sender, it can send `Cancelled` before subprocess settlement or finalization and then fail or panic during cleanup. Returning a report to a private outer sender prevents this ordering error by construction.
@@ -178,7 +178,7 @@ Use ordinary barriers and controllable fake workers for protocol races. Loom is 
 
 ## More Information
 
-See issue #85 and ADR-015, which supersedes ADR-012 and retains the rule that statistics and prediction provenance derive from validated facts; cancellation telemetry is not such a fact. The upstream ab-av1 boundary research is recorded in [`docs/design/ab-av1-library-lifecycle-research.md`](../design/ab-av1-library-lifecycle-research.md) and [issue #104](https://github.com/Loufe/AB-AV1-GUI/issues/104); its implementation-validation contract is tracked separately in [issue #105](https://github.com/Loufe/AB-AV1-GUI/issues/105).
+See issue #85 and ADR-015, which supersedes ADR-012 and retains the rule that statistics and prediction provenance derive from validated facts; cancellation telemetry is not such a fact. Proposed ADR-021 selects the upstream ab-av1 operation boundary, its research is recorded in [`docs/design/ab-av1-library-lifecycle-research.md`](../design/ab-av1-library-lifecycle-research.md) and [issue #104](https://github.com/Loufe/AB-AV1-GUI/issues/104), and its implementation-validation contract is tracked separately in [issue #105](https://github.com/Loufe/AB-AV1-GUI/issues/105).
 
 Implementation locations at the time of this proposal:
 
