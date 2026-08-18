@@ -17,6 +17,8 @@ Engine and queue foundations are complete and contract-tested: pinned ab-av1 ada
 - No first-party unsafe Rust: ADR-005; engine-owned data-dir lock: ADR-008
 - Durable facts keyed by sampled content identity: ADR-019
 - Output promotion owned as a journaled transaction: ADR-020
+- One supervision kit for job cancellation and completion, not yet implemented: ADR-018
+- The caller-driven owned ab-av1 operation, pending upstream: ADR-021
 
 ## Open questions
 
@@ -24,7 +26,6 @@ Engine and queue foundations are complete and contract-tested: pinned ab-av1 ada
 - History observation and export contract: fields, budgets, consumers
 - Serving History by request/response instead of the frontend fold
 - Estimation as a subsystem separate from History: consumers, evidence seam, uncertainty, evaluation (`docs/design/estimation.md`)
-- One supervision kit for job cancellation and completion: ADR-018 proposed
-- Upstream acceptance and implementation of the caller-driven owned ab-av1 operation: ADR-021 proposed (alexheretic/ab-av1#371)
+- Whether the ab-av1 maintainer accepts the operation boundary ADR-021 selects (alexheretic/ab-av1#371)
 
 Issue conventions: AGENTS.md "GitHub issues". Milestone: `v3.0`.

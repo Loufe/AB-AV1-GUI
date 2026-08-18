@@ -16,7 +16,7 @@ The engine currently represents the same one-shot supervision contract with four
 
 The coordinator adapts the ab-av1 and remux handles through `ActiveJobCancellation` and maintains two polling loops with the same result, timeout, telemetry, and cancellation behavior. Each implementation must independently get pre-registration cancellation, channel disconnection, cancel-on-drop, terminal cleanup, worker termination, and subprocess settlement right.
 
-The ab-av1 library lifecycle is a related but separate external-boundary decision selected by [ADR-021](021-drive-ab-av1-through-an-owned-operation.md), with evidence in [issue #104](https://github.com/Loufe/AB-AV1-GUI/issues/104) and [`docs/design/ab-av1-library-lifecycle-research.md`](../design/ab-av1-library-lifecycle-research.md). ADR-021 gives ab-av1 a generic shutdown future and keeps its owned settlement inside that finite operation; this record decides how CRFty produces that signal, owns the executor worker, and publishes the terminal report.
+The ab-av1 library lifecycle is a related but separate external-boundary decision selected by [ADR-021](021-drive-ab-av1-through-an-owned-operation.md), with evidence in [`docs/design/ab-av1-library-lifecycle-research.md`](../design/ab-av1-library-lifecycle-research.md). ADR-021 gives ab-av1 a generic shutdown future and keeps its owned settlement inside that finite operation; this record decides how CRFty produces that signal, owns the executor worker, and publishes the terminal report.
 
 Four guarantees must remain distinct:
 
@@ -172,13 +172,13 @@ The process choice in this record concerns CRFty-owned direct processes. ADR-021
 
 The common job-contract tests must cover pre-cancel, cloned and idempotent cancel, successful completion disarming drop, timeout retaining ownership and drop cancellation, handle drop, sender disconnection, worker panic, final telemetry snapshot, cancellation while telemetry is continuously ready, force-before-registration, fresh vendor tokens, and new-job rejection after shutdown begins.
 
-Implementation validation must cover remux cancellation followed by parser and reader cleanup, vendor cancellation during a stalled response body, a child that spawns a grandchild, a Unix descendant that calls `setsid()`, Windows Job Object settlement, both stdout and stderr filling concurrently, and driver shutdown proving every registered worker is joined or explicitly classified under the chosen timeout policy. ab-av1-specific real-process lifecycle tests are tracked separately in [issue #105](https://github.com/Loufe/AB-AV1-GUI/issues/105) and are not research completion criteria for this record.
+Implementation validation must cover remux cancellation followed by parser and reader cleanup, vendor cancellation during a stalled response body, a child that spawns a grandchild, a Unix descendant that calls `setsid()`, Windows Job Object settlement, both stdout and stderr filling concurrently, and driver shutdown proving every registered worker is joined or explicitly classified under the chosen timeout policy. ab-av1-specific real-process lifecycle tests are tracked separately and are not completion criteria for this record.
 
 Use ordinary barriers and controllable fake workers for protocol races. Loom is appropriate only if CRFty adds a custom atomic state machine; it cannot directly model real network calls or operating-system processes.
 
 ## More Information
 
-See issue #85 and ADR-015, which retains the rule that statistics and prediction provenance derive from validated facts; cancellation telemetry is not such a fact. ADR-021 selects the upstream ab-av1 operation boundary, its research is recorded in [`docs/design/ab-av1-library-lifecycle-research.md`](../design/ab-av1-library-lifecycle-research.md) and [issue #104](https://github.com/Loufe/AB-AV1-GUI/issues/104), and its implementation-validation contract is tracked separately in [issue #105](https://github.com/Loufe/AB-AV1-GUI/issues/105).
+See ADR-015, which retains the rule that statistics and prediction provenance derive from validated facts; cancellation telemetry is not such a fact. ADR-021 selects the upstream ab-av1 operation boundary, its research is recorded in [`docs/design/ab-av1-library-lifecycle-research.md`](../design/ab-av1-library-lifecycle-research.md), and its implementation-validation contract is tracked separately.
 
 Implementation locations at the time this decision was recorded:
 

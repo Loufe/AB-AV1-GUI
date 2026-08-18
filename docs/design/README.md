@@ -14,7 +14,7 @@ Every document opens with a title, a status line, then purpose and boundary.
 
 ## Ownership and linking
 
-Each document has one owning issue, recorded in that issue's body and not in the document. Any number of issues may link a document.
+A working note has one owning issue, recorded in that issue's body and not in the note. A stable reference has no owner, because no work closes it. Any number of issues may link a document.
 
 ## Lifecycle
 

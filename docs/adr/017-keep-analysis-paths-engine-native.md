@@ -47,9 +47,9 @@ Display text may be lossy only when explicitly marked as such and is never round
 | Verbatim and UNC paths | Retained as native `PathBuf` values | Canonical native result is hashed; prefixes are not rewritten as display text | Supported when the OS operation and JSON round trip support the path |
 | Reserved-name spellings | Never synthesized or string-normalized | Existing filesystem object only; ordinary OS errors surface | No alias or fallback is invented |
 | Long paths | No application length limit | Hash input is the full canonical native path | OS/configuration support is authoritative |
-| Symlink / Windows reparse entry during traversal | Entry may be shown, but directory traversal does not follow it | A directly targeted file canonicalizes to its target identity | #55 uses `symlink_metadata`/reparse detection to prevent traversal cycles |
+| Symlink / Windows reparse entry during traversal | Entry may be shown, but directory traversal does not follow it | A directly targeted file canonicalizes to its target identity | Traversal uses `symlink_metadata` and reparse detection to prevent cycles |
 
-The existing JSON journal cannot serialize arbitrary non-Unicode `PathBuf` values reversibly. This record does not silently widen that durable schema. Discovery and Basic Scan can operate through the native registry. #55 must add the typed `PathNotPersistable` action result before exposing queue, analysis, conversion, open, or reveal commands for a row that cannot round trip through their current boundary. Full durable support remains a separate cross-cutting decision replacing persisted/IPC `PathBuf` fields with tagged Unix-byte/Windows-wide-unit data. This ADR does not claim that later schema is implemented.
+The existing JSON journal cannot serialize arbitrary non-Unicode `PathBuf` values reversibly. This record does not silently widen that durable schema. Discovery and Basic Scan can operate through the native registry. The typed `PathNotPersistable` action result must exist before exposing queue, analysis, conversion, open, or reveal commands for a row that cannot round trip through their current boundary. Full durable support remains a separate cross-cutting decision replacing persisted/IPC `PathBuf` fields with tagged Unix-byte/Windows-wide-unit data. This ADR does not claim that later schema is implemented.
 
 Freshness uses full destructive identity. `TimestampReliability` is an engine fact: core never guesses filesystem granularity or consults a clock. The engine conservatively classifies a missing mtime as `Unknown` and an exact-second, future, or at-most-two-seconds-old mtime as `CoarseOrRecent`; false negatives cause re-observation rather than stale reuse. Queue discovery carries this judgment with its identity, so its optimization obeys the same gate as Basic Scan.
 
@@ -71,7 +71,7 @@ Freshness uses full destructive identity. `TimestampReliability` is an engine fa
 | Missing file | `Missing` | Row becomes unavailable; no cache reuse |
 | Stat/identity inspection failure | `Unavailable` | Surface failure; no cache reuse |
 
-`PathBinding` retains the observed `DestructiveIdentity` alongside the probable `ContentKey`; queue discovery also carries full destructive identity rather than a weak `FileStamp`. The engine compares destructive identity before probing, after probing, and after sampling. `ObservationStability` is the typed core outcome; the current media adapter maps instability to `io::ErrorKind::Interrupted`, and #55/#56 carry it as a typed row failure. Because `PathBinding` is durable and `ph2` deliberately replaces the old path namespace, this change advances the journal schema to 14; schema mismatch is reported before payload decoding rather than treating an older binding shape as corruption.
+`PathBinding` retains the observed `DestructiveIdentity` alongside the probable `ContentKey`; queue discovery also carries full destructive identity rather than a weak `FileStamp`. The engine compares destructive identity before probing, after probing, and after sampling. `ObservationStability` is the typed core outcome; the current media adapter maps instability to `io::ErrorKind::Interrupted`, which discovery and Basic Scan carry as a typed row failure. Because `PathBinding` is durable and `ph2` deliberately replaces the old path namespace, this change advances the journal schema to 14; schema mismatch is reported before payload decoding rather than treating an older binding shape as corruption.
 
 Replace-mode handling has strict precedence:
 
@@ -98,7 +98,7 @@ Size/mtime equality alone never recognizes a settled output. The common same-siz
 
 ## More Information
 
-See issues #28, #42, #51, #52, #53, #55, and #56; ADR-001, ADR-004, ADR-015, and ADR-014.
+See ADR-001, ADR-004, ADR-014, and ADR-015.
 
 Implementation references:
 

@@ -2,7 +2,7 @@
 
 History is the durable record of what conversion work actually happened, and the evidence that Statistics and estimates are computed from.
 
-This document states only the rules that are settled and verified against the shipped core today. Issue #96 owns growing it into the full logical contract; the storage model behind it is not decided here and is not described here.
+This document states only the rules that are settled and verified against the shipped core today. It is not yet the full logical contract, and the storage model behind it is not decided here.
 
 ## History reports outcomes; it does not decide them
 

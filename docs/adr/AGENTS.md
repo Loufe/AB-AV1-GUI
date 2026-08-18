@@ -47,5 +47,5 @@ Chosen option: **Option**, because reason.
 
 ## More Information
 
-Link related ADRs, research, issues, or implementation changes.
+Link related ADRs, research notes, or implementation paths. Never link issues; see `docs/AGENTS.md`.
 ```

@@ -1,8 +1,6 @@
 # App Lifecycle
 
-Status: design note; the cancellation section is pending the supervision unification proposed in ADR-018  
-Owning issue: [#85](https://github.com/Loufe/AB-AV1-GUI/issues/85)  
-Last updated: 2026-08-16
+Status: design note; the cancellation section is pending the supervision unification recorded in ADR-018
 
 ## Purpose and boundary
 

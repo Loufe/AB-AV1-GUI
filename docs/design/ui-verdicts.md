@@ -1,8 +1,6 @@
 # UI Design Verdicts
 
-Status: stable reference; code comments cite the bare D-labels defined here  
-Owning issue: [#36](https://github.com/Loufe/AB-AV1-GUI/issues/36)  
-Last updated: 2026-08-16
+Status: stable reference; code comments cite the bare D-labels defined here
 
 ## Purpose and boundary
 

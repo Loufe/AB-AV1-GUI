@@ -2,15 +2,11 @@
 
 Status: living research note; not an accepted design or implementation specification
 
-Owning issue: [#95](https://github.com/Loufe/AB-AV1-GUI/issues/95)
-
-Related issues: [#57](https://github.com/Loufe/AB-AV1-GUI/issues/57), [#92](https://github.com/Loufe/AB-AV1-GUI/issues/92), [#93](https://github.com/Loufe/AB-AV1-GUI/issues/93), [#94](https://github.com/Loufe/AB-AV1-GUI/issues/94), [#96](https://github.com/Loufe/AB-AV1-GUI/issues/96), [#100](https://github.com/Loufe/AB-AV1-GUI/issues/100)
-
 ## Purpose and boundary
 
 This note records what a first measurement pass established about two candidate sources of History evidence: the per-sample and per-attempt facts that ab-av1 already produces during a quality search and then discards, and the content-complexity features that cheap FFmpeg collectors can compute before any encode begins.
 
-It does not select fields, choose between typed content columns and versioned feature payloads, or authorize the collectors in issue #100. It settles nothing about the material-improvement threshold, which belongs to #92, or about the evidence-quality contract, which belongs to #93.
+It does not select fields, choose between typed content columns and versioned feature payloads, or authorize any collector to run in production.
 
 The measurement harness is standalone research tooling that lives outside this repository and is never committed to it, so its method appears here as prose and its output appears here as tables. The section below records where it lives, because this note is the only durable pointer to it.
 
@@ -201,15 +197,15 @@ Consequently:
 
 - Which discarded attempt and sample facts the adapter retains, and what shape the resulting observation takes.
 - Whether the window feature pass runs automatically or on request, given that its cost is a few percent of the search it informs but is spent before the user has asked for a search.
-- Whether content features become typed fields or versioned payloads. Features that move with analysis parameters have to carry those parameters, and the resolution pair above is the first measured input to that choice; #96 owns the decision.
+- Whether content features become typed fields or versioned payloads. Features that move with analysis parameters have to carry those parameters, and the resolution pair above is the first measured input to that choice, which the History logical model owns.
 - What fills the spatial slot, once a collector for it actually produces values.
-- The material-improvement threshold and minimum coverage, which #92 owns and which must be fixed before results are seen, not after.
+- The material-improvement threshold and minimum coverage, which must be fixed before results are seen, not after. The evaluation contract they belong to is in `docs/design/estimation.md`.
 
-## Exit criteria for issue #95
+## Exit criteria
 
 - The outstanding fixtures are collected, so that motion, grain, recompression, and non-animated content are represented.
 - A held-out comparison against the baseline is reported with error, bias, and coverage, split by source film and by machine and tool version.
 - Collection overhead is measured independently of prediction quality, on more than one host.
 - Each surviving feature has a stage, a cost, a defined absence behavior, and its analysis parameters recorded with it.
 - Facts that this note labels unverified are either measured or dropped.
-- The evidence semantics that survive are reconciled with #93 before #96 fixes the logical model and #100 implements collectors.
+- The evidence semantics that survive are reconciled with the evidence-quality contract before the History logical model is fixed and any collector is implemented.

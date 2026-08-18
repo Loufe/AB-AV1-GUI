@@ -18,7 +18,7 @@ History, Statistics, and estimation are pure projections, but imported records n
 * Define deterministic collision and codec tie rules
 * Keep imported analysis display-only until a fresh v3 analysis exists
 * Keep projections pure and native run totals native
-* Make every new path-bearing durable field visible to privacy scrubbing (#51)
+* Make every new path-bearing durable field visible to privacy scrubbing
 
 ## Considered Options
 
@@ -57,4 +57,4 @@ One-to-one adoption into otherwise undecided content preserves Statistics exactl
 
 History, Statistics, and estimation remain pure projections. Statistics stays ephemeral, and the Rust oracle remains synchronized with TypeScript through fixtures.
 
-Path-bearing privacy surfaces for #51 are `DurableState.parked` keys, `DurableState.adopted_imports`, `ImportedProvenance.import_path`, `HistoryRowKey::Parked`, and journal deltas carrying import paths. See issues #39, #42, #51, and #52, plus ADR-004.
+The path-bearing privacy surfaces are `DurableState.parked` keys, `DurableState.adopted_imports`, `ImportedProvenance.import_path`, `HistoryRowKey::Parked`, and journal deltas carrying import paths. See ADR-004.

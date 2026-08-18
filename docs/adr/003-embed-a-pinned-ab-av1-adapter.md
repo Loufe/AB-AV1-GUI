@@ -51,7 +51,7 @@ The dependency is a fork pinned to an exact reviewed commit and built with a `li
 
 ### The NDJSON contingency, and what it would still cost
 
-Upstream PR 368 (`crf-search --stdout-format json`) is the contingency's prerequisite and remains tracked upstream. Issue #29, which planned the V2 cutover to that stream, was closed as superseded: its only consumer would have been the Python parser. Two upstream deferrals bound what the contingency could deliver even after PR 368 lands: encode-update messages are a later PR, so encode progress would still come from human FFmpeg output, and structured error reasons were deferred too, so failure detection would still be exit code plus the "Failed to find a suitable crf" string. Upstream issue 369 (`sample-encode-update`) no longer matters to the rewrite at all, because the typed `crf_search::Update` stream already carries sample status.
+Upstream PR 368 (`crf-search --stdout-format json`) is the contingency's prerequisite and remains tracked upstream. The planned V2 cutover to that stream was abandoned as superseded: its only consumer would have been the Python parser. Two upstream deferrals bound what the contingency could deliver even after PR 368 lands: encode-update messages are a later PR, so encode progress would still come from human FFmpeg output, and structured error reasons were deferred too, so failure detection would still be exit code plus the "Failed to find a suitable crf" string. Upstream issue 369 (`sample-encode-update`) no longer matters to the rewrite at all, because the typed `crf_search::Update` stream already carries sample status.
 
 ### Boundary for future backends
 

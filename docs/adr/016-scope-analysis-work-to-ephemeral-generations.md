@@ -45,7 +45,7 @@ The complete ownership split is:
 
 No projection or renderer performs filesystem access. Durable facts enter only through durable commands; a row is a projection, not another durable fact.
 
-The reducer allocates a monotonically increasing `AnalysisGenerationId` with `begin_analysis_generation` when new roots or an explicit rescan supersede the current generation. Callers never choose a generation. Every engine batch, completion, failure, and row-targeted command carries the generation. `apply_analysis_mutation` rejects a non-next Reset and every live mutation that does not name the current generation. Cancellation is an optimization; this reducer gate is the correctness boundary. #55 connects these primitives to discovery commands and the driver registry.
+The reducer allocates a monotonically increasing `AnalysisGenerationId` with `begin_analysis_generation` when new roots or an explicit rescan supersede the current generation. Callers never choose a generation. Every engine batch, completion, failure, and row-targeted command carries the generation. `apply_analysis_mutation` rejects a non-next Reset and every live mutation that does not name the current generation. Cancellation is an optimization; this reducer gate is the correctness boundary. Discovery commands and the driver registry connect to these primitives.
 
 | Event | Core transition | Engine action | Late/stale behavior |
 | --- | --- | --- | --- |
@@ -102,7 +102,7 @@ Native analysis reuse is exact except for the documented target relation:
 | Overwrite/output settings | Do not affect a CRF-search measurement |
 | `AnalysisIntent::Refresh` | Explicitly bypasses reuse even when the applicable level is `Analyzed` |
 
-`AnalysisLevelAssessment` is the foundation contract; #57 adds it and the prediction/confidence fields to streamed rows after Basic Scan facts land.
+`AnalysisLevelAssessment` is the foundation contract; it and the prediction and confidence fields join streamed rows once Basic Scan facts land.
 
 ### Consequences
 
@@ -117,7 +117,7 @@ Native analysis reuse is exact except for the documented target relation:
 
 ## More Information
 
-See issues #42, #53, #55, #56, #57, and #59; ADR-002, ADR-004, ADR-006, ADR-007, and ADR-015 (which carries the projection and imported-history provenance decisions).
+See ADR-002, ADR-004, ADR-006, ADR-007, and ADR-015 (which carries the projection and imported-history provenance decisions).
 
 Implementation references:
 

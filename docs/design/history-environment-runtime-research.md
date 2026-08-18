@@ -2,19 +2,15 @@
 
 Status: living research note; not an accepted design or implementation specification
 
-Owning issue: [#94](https://github.com/Loufe/AB-AV1-GUI/issues/94)
-
-Related issues: [#92](https://github.com/Loufe/AB-AV1-GUI/issues/92), [#93](https://github.com/Loufe/AB-AV1-GUI/issues/93), [#95](https://github.com/Loufe/AB-AV1-GUI/issues/95), [#96](https://github.com/Loufe/AB-AV1-GUI/issues/96), [#97](https://github.com/Loufe/AB-AV1-GUI/issues/97), [#99](https://github.com/Loufe/AB-AV1-GUI/issues/99), [#102](https://github.com/Loufe/AB-AV1-GUI/issues/102), [#103](https://github.com/Loufe/AB-AV1-GUI/issues/103)
-
 ## Purpose and boundary
 
-This note synthesizes the investigation behind issue #94: which platform, execution, and runtime facts might make History and estimation more truthful, which operating-system sources can provide them, and what the available evidence establishes about their semantics and suitability.
+This note synthesizes an investigation into which platform, execution, and runtime facts might make History and estimation more truthful, which operating-system sources can provide them, and what the available evidence establishes about their semantics and suitability.
 
-It does not select physical tables, finalize the History observation model, or authorize the collectors in issue #99. Those decisions depend on the consumer and collection budgets from #92, the evidence-quality contract from #93, the sample/content research from #95, and the logical model from #96. Two findings recorded here are decided elsewhere as well: managed FFmpeg artifact durability belongs to #102 and Windows group-spawn failure cleanup to #103.
+It does not select physical tables, finalize the History observation model, or authorize any collector to run in production. Two findings recorded here are decided elsewhere: managed FFmpeg artifact durability and Windows group-spawn failure cleanup, both open hazards in `docs/design/porting-hazards.md`.
 
 The labels below mean:
 
-- **candidate required**: structurally necessary to interpret an observation; still subject to #92 and #93.
+- **candidate required**: structurally necessary to interpret an observation; still subject to the estimation consumers and the evidence-quality contract.
 - **candidate best effort**: promising and inexpensive, but absence must be a normal typed result.
 - **experimental**: retain only if fixtures and held-out evaluation prove value.
 - **reject for initial production**: poor portability, attribution, privacy, or cost currently outweighs demonstrated value.
@@ -132,7 +128,7 @@ A fact may train or adjust a prediction only if the same fact is available at th
 
 ## Evidence representation constraints
 
-Issue #93 owns the final evidence types. Missing values must remain explicit rather than becoming zero, free-form operating-system errors must remain outside the portable core, and operational diagnostics must be bounded and privacy-scrubbed. Units and names must preserve source semantics; for example, Linux `max_resident_kib` and Windows `job_peak_memory_bytes` must not be collapsed into a generic peak-memory field, nor should storage-layer bytes and all-I/O transfer bytes share one name.
+The evidence-quality contract owns the final evidence types, not this note. Missing values must remain explicit rather than becoming zero, free-form operating-system errors must remain outside the portable core, and operational diagnostics must be bounded and privacy-scrubbed. Units and names must preserve source semantics; for example, Linux `max_resident_kib` and Windows `job_peak_memory_bytes` must not be collapsed into a generic peak-memory field, nor should storage-layer bytes and all-I/O transfer bytes share one name.
 
 ## FFmpeg, SVT, and supervisor collection boundary
 
@@ -142,7 +138,7 @@ FFmpeg and SVT are the best sources for facts about the media pipeline and encod
 | --- | --- | --- |
 | Requested encoder/search settings | V3's typed request and pinned ab-av1 adapter arguments | Authoritative intent; do not reconstruct by parsing logs |
 | Encoder-effective settings | Revision-scoped compatibility contract or preflight validation; otherwise allowlisted SVT startup evidence | Record separately from requested intent; never assume equality when the encoder can map, clamp, or reject |
-| Managed FFmpeg/encoder identity | Checksummed vendor manifest and discovered revisions | Authoritative only while the exact managed artifact remains obtainable; [#102](https://github.com/Loufe/AB-AV1-GUI/issues/102) owns artifact durability |
+| Managed FFmpeg/encoder identity | Checksummed vendor manifest and discovered revisions | Authoritative only while the exact managed artifact remains obtainable, which the pinned upstream archives no longer are |
 | Explicit/override runtime identity | Allowlisted `ffmpeg -version` fields plus SVT startup version when emitted | Corroborating evidence with typed absence; never retain the complete banner/build configuration |
 | Encode/search progress | Existing typed ab-av1 adapter updates; FFmpeg `-progress` for direct FFmpeg operations such as remux | Operational machine-readable source; retain durable fields only for a named History consumer |
 | Process/job CPU and memory | Linux terminal `wait4` for the FFmpeg leader/waited lineage; Windows Job accounting for the contained tree | Preferred source-qualified attempt evidence because it survives leader hard kill and avoids a human benchmark parser; never imply equal scope |
@@ -160,7 +156,7 @@ All workloads were synthetic lavfi inputs with null outputs. No media path, proc
 
 The Windows fixture used FFmpeg 8.1.2. Five successful trials emitted two lines: real/user/system time followed by `maxrss`. Two failures during input initialization or encoder selection emitted only `maxrss`; a parser must therefore support partial terminal evidence rather than one atomic benchmark record.
 
-The Linux fixture used a retained BtbN FFmpeg 8.1 build from the same release family as V3's pin, with its published SHA-256 verified before extraction. It is not the exact pinned build: BtbN had already deleted V3's July 19 daily artifact under its [documented retention policy](https://github.com/BtbN/FFmpeg-Builds#release-retention-policy). The deletion reaches past this fixture: fresh managed installs and cache-miss media-contract CI runs now fail outright, because the pinned archive they resolve is gone. [Issue #102](https://github.com/Loufe/AB-AV1-GUI/issues/102) owns that separate managed-install failure.
+The Linux fixture used a retained BtbN FFmpeg 8.1 build from the same release family as V3's pin, with its published SHA-256 verified before extraction. It is not the exact pinned build: BtbN had already deleted V3's July 19 daily artifact under its [documented retention policy](https://github.com/BtbN/FFmpeg-Builds#release-retention-policy). The deletion reaches past this fixture: fresh managed installs and cache-miss media-contract CI runs now fail outright, because the pinned archive they resolve is gone. That managed-install failure is a separate open hazard.
 
 On the Linux fixture, normal SVT encodes emitted both benchmark lines. `SIGINT` and `SIGTERM` allowed FFmpeg to emit full benchmark output; `SIGKILL` emitted none. The pinned ab-av1 fork calls `AsyncGroupChild::kill`, which [`command-group` 5.0.1 documents](https://docs.rs/command-group/5.0.1/command_group/struct.AsyncGroupChild.html#method.kill) and implements as process-group `SIGKILL` on Unix and `TerminateJobObject` on Windows. Therefore stopped/cancelled V3 attempts cannot rely on FFmpeg benchmark evidence.
 
@@ -272,7 +268,7 @@ Querying the inner Job returned zero limit flags and no active-process limit eve
 
 A second outer Job set UI restriction flag `0x1`. Nested assignment still succeeded on Windows build 10.0.26100 and the inner Job again accounted the child subtree, despite current Microsoft prose saying default nesting requires neither Job to set UI limits. Treat this as one platform observation, not a portability guarantee; assignment remains fallible and needs deterministic cleanup.
 
-That cleanup is currently defective in `command-group` 5.0.1. Both [Windows spawn paths](https://github.com/watchexec/command-group/blob/v5.0.1/src/stdlib/windows.rs) create raw Job/completion-port handles through its [Job helper](https://github.com/watchexec/command-group/blob/v5.0.1/src/winres.rs), spawn the child suspended, and return immediately on `AssignProcessToJobObject` or thread-resumption error before an owning group wrapper exists. Rust child drop does not terminate/reap the process, and the raw handles have no error-path owner. [Issue #103](https://github.com/Loufe/AB-AV1-GUI/issues/103) owns the dependency fix and regression tests; resource-accounting exposure remains here and in #99.
+That cleanup is currently defective in `command-group` 5.0.1. Both [Windows spawn paths](https://github.com/watchexec/command-group/blob/v5.0.1/src/stdlib/windows.rs) create raw Job/completion-port handles through its [Job helper](https://github.com/watchexec/command-group/blob/v5.0.1/src/winres.rs), spawn the child suspended, and return immediately on `AssignProcessToJobObject` or thread-resumption error before an owning group wrapper exists. Rust child drop does not terminate/reap the process, and the raw handles have no error-path owner. The dependency fix and its regression tests are tracked as a separate open hazard; the resource-accounting exposure it creates is recorded here.
 
 This supports terminal-boundary collection rather than polling, but it does not yet prove that `command-group` can expose the snapshot without changing handle, wait, cancellation, or completion-port behavior. It also does not test CPU-rate limits, affinity restrictions, cancellation, very fast children, or restricted host Jobs whose handles V3 cannot access. The throwaway source was removed after recording the fixture.
 

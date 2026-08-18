@@ -1,10 +1,8 @@
 # ab-av1 library lifecycle and cancellation research
 
-* Status: completed research basis for ADR-021
-* Upstream coordination: [alexheretic/ab-av1#371](https://github.com/alexheretic/ab-av1/issues/371)
-* Tracking issue: [#104](https://github.com/Loufe/AB-AV1-GUI/issues/104)
-* Implementation validation: [#105](https://github.com/Loufe/AB-AV1-GUI/issues/105)
-* Related CRFty decisions: [ADR-003](../adr/003-embed-a-pinned-ab-av1-adapter.md), [ADR-018](../adr/018-unify-job-cancellation-and-completion.md), [ADR-021](../adr/021-drive-ab-av1-through-an-owned-operation.md)
+Status: completed research basis for ADR-021
+
+Related decisions: [ADR-003](../adr/003-embed-a-pinned-ab-av1-adapter.md), [ADR-018](../adr/018-unify-job-cancellation-and-completion.md), [ADR-021](../adr/021-drive-ab-av1-through-an-owned-operation.md). Upstream coordination: [alexheretic/ab-av1#371](https://github.com/alexheretic/ab-av1/issues/371).
 
 ## Purpose and boundary
 
@@ -271,7 +269,7 @@ The terms that most accurately describe the direction are **structured concurren
 6. Add narrow request, event, result, outcome, and error types plus the caller-driven operation methods; adapt the CLI to those same methods.
 7. Remove the prototype's global `finish_job()` and `cancel_job()` surface once CRFty consumes the owned operation boundary.
 
-The patch touches package/module boundaries, command presentation, every subprocess construction site, temporary ownership, sample production, cache/tool identity, and the CRFty adapter. It is a lifecycle refactor rather than a cancellation-token parameter addition. The sequence above keeps each review centered on one ownership boundary and leaves the real-process validation matrix in issue #105.
+The patch touches package/module boundaries, command presentation, every subprocess construction site, temporary ownership, sample production, cache/tool identity, and the CRFty adapter. It is a lifecycle refactor rather than a cancellation-token parameter addition. The sequence above keeps each review centered on one ownership boundary and leaves the real-process validation matrix out of it.
 
 ## Assessment of the existing CRFty prototype
 
@@ -311,10 +309,6 @@ The prototype may supply implementation pieces after each is independently justi
 The architecture no longer depends on unresolved lifecycle choices. Upstream review may still choose exact type and method names, callback argument ownership, builder ergonomics, event granularity, cache backend, and whether `process-wrap` is accepted or its narrow behavior is implemented another way. Any substitute must preserve the selected operation, containment, Drop-fallback, settlement, race-precedence, toolchain, temporary-ownership, concurrency, and semver contracts.
 
 The maintainer may also prefer a separate published core package instead of the selected same-package library target. That packaging choice is acceptable if the CLI still consumes the identical operation implementation and library consumers do not inherit terminal dependencies. It does not reopen the lifecycle decision.
-
-## Coordination boundary
-
-CRFty's private supervision remains in ADR-018 and issue #85. ADR-021 records the selected adapter boundary. Issue #105 owns implementation and real-process contract validation; neither test implementation nor its results are research completion criteria. Upstream issue #371 owns maintainer coordination and any eventual pull-request authorization.
 
 ## Primary sources
 

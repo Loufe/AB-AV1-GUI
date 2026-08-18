@@ -49,7 +49,7 @@ Engine configuration contains explicit FFmpeg and FFprobe paths, temporary root,
 
 The existing `ab-av1` package gains a library target, while CLI parsing and presentation remain behind the default `cli` feature. Public request construction uses builders with private fields. Public events, results, outcomes, and errors do not expose Clap, `indicatif`, `process-wrap`, Tokio synchronization types, cache types, stdout, stderr, logger initialization, or process exit.
 
-Direct process spawning and unowned task spawning outside ab-av1's private lifecycle modules are denied with Clippy `disallowed_methods`; lifecycle handles and terminal results are `#[must_use]`; and releases review `cargo-public-api` output and run `cargo-semver-checks`. These checks reinforce the ownership boundary but do not replace real-process validation tracked by issue #105.
+Direct process spawning and unowned task spawning outside ab-av1's private lifecycle modules are denied with Clippy `disallowed_methods`; lifecycle handles and terminal results are `#[must_use]`; and releases review `cargo-public-api` output and run `cargo-semver-checks`. These checks reinforce the ownership boundary but do not replace real-process validation.
 
 ### Consequences
 
@@ -68,4 +68,4 @@ Direct process spawning and unowned task spawning outside ab-av1's private lifec
 
 This record owns the operation-lifecycle boundary, ADR-003 owns the adapter choice, and ADR-018 owns CRFty-private supervision. The evidence, counterexamples, `process-wrap` Drop caveat, public API comparison, race rules, and reviewable upstream patch sequence are in [`docs/design/ab-av1-library-lifecycle-research.md`](../design/ab-av1-library-lifecycle-research.md).
 
-Coordination: [CRFty issue #104](https://github.com/Loufe/AB-AV1-GUI/issues/104), [upstream ab-av1 issue #371](https://github.com/alexheretic/ab-av1/issues/371), and implementation-validation [issue #105](https://github.com/Loufe/AB-AV1-GUI/issues/105).
+Upstream coordination: [ab-av1 issue #371](https://github.com/alexheretic/ab-av1/issues/371).

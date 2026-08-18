@@ -1,8 +1,6 @@
 # Event Stream and IPC
 
-Status: design note; records the contract the accepted ADRs compose into  
-Owning issue: [#78](https://github.com/Loufe/AB-AV1-GUI/issues/78)  
-Last updated: 2026-08-16
+Status: design note; records the contract the accepted ADRs compose into
 
 ## Purpose and boundary
 

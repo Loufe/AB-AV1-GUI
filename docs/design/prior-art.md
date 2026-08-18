@@ -1,5 +1,7 @@
 # Prior art: shipped applications read against the V3 design
 
+Status: stable reference; superseded only by a better reading of the same sources
+
 ## Purpose and boundary
 
 This note preserves the prior-art study behind the V3 architecture: what was read, what each codebase actually does, and which conclusion it supports or contradicts. It exists so that a decision recorded elsewhere can be traced back to the shipped evidence that motivated it, rather than to memory.
@@ -7,10 +9,6 @@ This note preserves the prior-art study behind the V3 architecture: what was rea
 It decides nothing. Every lesson below either informs an ADR, which owns the decision, or records a possibility that was considered and declined. Where a lesson has an owning ADR, this note names it; where none exists, the lesson is evidence still looking for a decision, and that is stated explicitly.
 
 Statements about what these projects do are source-reading findings against the pinned snapshots linked below. Conclusions about what to adopt or reject are this project's own inferences. None of this is an endorsement of the V3 design by those projects, and none of it is a criticism of theirs: each was read as a working system solving its own problem under its own constraints.
-
-## Status
-
-Stable reference. No owning issue. Superseded only by a better reading of the same sources.
 
 ## Handy
 
