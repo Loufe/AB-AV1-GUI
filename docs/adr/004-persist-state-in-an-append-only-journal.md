@@ -7,10 +7,7 @@ date: 2026-07-19
 
 ## Context and Problem Statement
 
-Queue and history mutations must survive crashes without allowing the UI to display
-state that was never made durable. The application state fits in memory and has one
-writer, so a database would duplicate transaction ownership already enforced by the
-driver.
+Queue and history mutations must survive crashes without allowing the UI to display state that was never made durable. The application state fits in memory and has one writer, so a database would duplicate transaction ownership already enforced by the driver.
 
 ## Decision Drivers
 
@@ -28,12 +25,9 @@ driver.
 
 ## Decision Outcome
 
-Chosen option: **An append-only single-writer journal**, because it matches reducer
-transactions while remaining recoverable, inspectable, and redactable.
+Chosen option: **An append-only single-writer journal**, because it matches reducer transactions while remaining recoverable, inspectable, and redactable.
 
-The driver appends and syncs durable deltas before emitting them to the UI. Ephemeral
-telemetry is represented separately and is never journaled. Compaction rewrites live
-state through a crash-safe writer barrier.
+The driver appends and syncs durable deltas before emitting them to the UI. Ephemeral telemetry is represented separately and is never journaled. Compaction rewrites live state through a crash-safe writer barrier.
 
 ### Consequences
 

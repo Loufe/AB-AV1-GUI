@@ -1,40 +1,14 @@
 # History import file (version 1)
 
-CRFty can import conversion history through a versioned JSON exchange file.
-The app knows nothing about any older history format: a standalone converter
-script shipped in this repository (`tools/export_history_v3.py`, stdlib-only
-Python run against a V2 `conversion_history.json`) reads the old history,
-performs all source-format interpretation (path recovery, timestamp parsing,
-float scrubbing, status mapping), and emits this schema. The app strictly
-parses it: a malformed or unknown-version file is rejected whole, never
-salvaged record by record.
+CRFty can import conversion history through a versioned JSON exchange file. The app knows nothing about any older history format: a standalone converter script shipped in this repository (`tools/export_history_v3.py`, stdlib-only Python run against a V2 `conversion_history.json`) reads the old history, performs all source-format interpretation (path recovery, timestamp parsing, float scrubbing, status mapping), and emits this schema. The app strictly parses it: a malformed or unknown-version file is rejected whole, never salvaged record by record.
 
-Reader: `crfty-engine/src/history_import.rs`. Import flow: records land in
-`DurableState.parked`, keyed by normalized source path; when a queued file is
-prepared, its path spellings are matched against the parked inbox and each
-hit is adopted (verdict and provenance onto the observed content record) or
-retired (the file no longer matches). The inbox empties itself.
+Reader: `crfty-engine/src/history_import.rs`. Import flow: records land in `DurableState.parked`, keyed by normalized source path; when a queued file is prepared, its path spellings are matched against the parked inbox and each hit is adopted (verdict and provenance onto the observed content record) or retired (the file no longer matches). The inbox empties itself.
 
-Every adopted path is also inserted into `DurableState.adopted_imports`, the
-complete durable re-import guard. A content record retains one deterministic
-`ImportedProvenance` summary even when several path spellings resolve to the
-same content. The winner is the newest decision, then the strongest status
-(`converted`, `not_worthwhile`, `analyzed`, `scanned`), then the
-lexicographically smaller normalized path. A native verdict is never replaced
-by an imported verdict. Retirement does not consume a path, so a corrected
-record can be imported later.
+Every adopted path is also inserted into `DurableState.adopted_imports`, the complete durable re-import guard. A content record retains one deterministic `ImportedProvenance` summary even when several path spellings resolve to the same content. The winner is the newest decision, then the strongest status (`converted`, `not_worthwhile`, `analyzed`, `scanned`), then the lexicographically smaller normalized path. A native verdict is never replaced by an imported verdict. Retirement does not consume a path, so a corrected record can be imported later.
 
-Parked and adopted records appear in History and Statistics without inventing
-missing values. History omits `scanned`, uses a path-keyed sparse row before
-adoption, and uses a content-keyed sparse row afterward. Statistics counts
-imported `converted` and `not_worthwhile` facts but keeps them out of native
-run totals. Exact Statistics equality across adoption applies to a one-to-one
-move into otherwise undecided content; several paths or an existing native
-verdict deliberately collapse to one content result.
+Parked and adopted records appear in History and Statistics without inventing missing values. History omits `scanned`, uses a path-keyed sparse row before adoption, and uses a content-keyed sparse row afterward. Statistics counts imported `converted` and `not_worthwhile` facts but keeps them out of native run totals. Exact Statistics equality across adoption applies to a one-to-one move into otherwise undecided content; several paths or an existing native verdict deliberately collapse to one content result.
 
-An imported `analyzed` status is display-only. It is not a reusable v3 CRF
-search because the source does not carry a trusted analysis profile, decoder
-mode, or tool revisions. It therefore never enters `FileRecord.analyses`.
+An imported `analyzed` status is display-only. It is not a reusable v3 CRF search because the source does not carry a trusted analysis profile, decoder mode, or tool revisions. It therefore never enters `FileRecord.analyses`.
 
 ## Container
 
@@ -51,10 +25,7 @@ mode, or tool revisions. It therefore never enters `FileRecord.analyses`.
 
 ## Record
 
-Only `path` and `status` are required. Every other field is optional and
-omitted when the source had nothing honest to say. All numbers are integers
-(never floats), and 64-bit values must stay within JSON-safe integer range
-except `modified_ns`, which is a decimal string.
+Only `path` and `status` are required. Every other field is optional and omitted when the source had nothing honest to say. All numbers are integers (never floats), and 64-bit values must stay within JSON-safe integer range except `modified_ns`, which is a decimal string.
 
 | Field | Type | Meaning |
 |---|---|---|
@@ -76,33 +47,18 @@ except `modified_ns`, which is a decimal string.
 
 ## Path matching
 
-Records are keyed by the normalized form of `path`, and the same rule is
-applied to a queued file's canonical and absolute spellings at prepare time:
+Records are keyed by the normalized form of `path`, and the same rule is applied to a queued file's canonical and absolute spellings at prepare time:
 
-1. strip Windows verbatim prefixes (`\\?\UNC\server\share\…` →
-   `\\server\share\…`, `\\?\C:\…` → `C:\…`),
+1. strip Windows verbatim prefixes (`\\?\UNC\server\share\…` → `\\server\share\…`, `\\?\C:\…` → `C:\…`),
 2. replace backslashes with forward slashes,
 3. lowercase (ASCII).
 
-Emit paths in the spelling most likely to match how the app will see the
-file. On Windows, `std::fs::canonicalize` resolves mapped drive letters to
-UNC (`\\server\share\…`), so paths on network shares should be emitted in
-UNC form; local paths keep their drive letter. Duplicate keys within one
-file are allowed; the reducer keeps the first and counts the rest as
-skipped. Paths already parked or adopted are also skipped, including after a
-restart. Records whose files have moved will simply never match and can be
-retired from the parked inbox later.
+Emit paths in the spelling most likely to match how the app will see the file. On Windows, `std::fs::canonicalize` resolves mapped drive letters to UNC (`\\server\share\…`), so paths on network shares should be emitted in UNC form; local paths keep their drive letter. Duplicate keys within one file are allowed; the reducer keeps the first and counts the rest as skipped. Paths already parked or adopted are also skipped, including after a restart. Records whose files have moved will simply never match and can be retired from the parked inbox later.
 
-All import paths are cleartext PII. The privacy scrub defined in
-`docs/HISTORY.md` must cover parked map keys, adopted-path guards, retained
-provenance, path-keyed History rows, and journal deltas containing those
-values.
+All import paths are cleartext PII. The privacy scrub defined in `docs/HISTORY.md` must cover parked map keys, adopted-path guards, retained provenance, path-keyed History rows, and journal deltas containing those values.
 
 ## What deliberately does not cross
 
-- CRF-search caches: analysis identity in v3 is profile-exact (ADR-007), so
-  a search from another toolchain can never honestly qualify for reuse.
-- Probe caches (audio streams, bitrate), estimates, first-seen timestamps:
-  recomputable or valueless.
-- Anonymized records: a hashed path can never match a real file; the
-  converter reports and drops them.
+- CRF-search caches: analysis identity in v3 is profile-exact (ADR-007), so a search from another toolchain can never honestly qualify for reuse.
+- Probe caches (audio streams, bitrate), estimates, first-seen timestamps: recomputable or valueless.
+- Anonymized records: a hashed path can never match a real file; the converter reports and drops them.

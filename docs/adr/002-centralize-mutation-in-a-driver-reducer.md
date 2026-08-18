@@ -7,9 +7,7 @@ date: 2026-07-19
 
 ## Context and Problem Statement
 
-The application coordinates UI commands, scans, long-running conversions, durable
-history, and high-rate telemetry. Sharing mutable containers would require lock
-ordering and notification rules to remain correct by convention.
+The application coordinates UI commands, scans, long-running conversions, durable history, and high-rate telemetry. Sharing mutable containers would require lock ordering and notification rules to remain correct by convention.
 
 ## Decision Drivers
 
@@ -28,13 +26,9 @@ ordering and notification rules to remain correct by convention.
 
 ## Decision Outcome
 
-Chosen option: **One synchronous driver plus a pure reducer**, because it eliminates
-lock ordering and makes mutation, persistence, and notification a single ordered
-flow.
+Chosen option: **One synchronous driver plus a pure reducer**, because it eliminates lock ordering and makes mutation, persistence, and notification a single ordered flow.
 
-Commands enter through a bounded lossless channel. High-rate telemetry uses a
-separate coalescing path. The reducer performs no I/O or clock access and returns
-deltas, effects, and replies for the driver to interpret.
+Commands enter through a bounded lossless channel. High-rate telemetry uses a separate coalescing path. The reducer performs no I/O or clock access and returns deltas, effects, and replies for the driver to interpret.
 
 ### Consequences
 

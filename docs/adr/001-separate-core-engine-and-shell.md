@@ -7,9 +7,7 @@ date: 2026-07-19
 
 ## Context and Problem Statement
 
-The Python application relies on conventions to keep conversion logic independent
-of Tkinter. V3 needs dependency boundaries that prevent domain code, process code,
-and Tauri integration from becoming coupled.
+The Python application relies on conventions to keep conversion logic independent of Tkinter. V3 needs dependency boundaries that prevent domain code, process code, and Tauri integration from becoming coupled.
 
 ## Decision Drivers
 
@@ -28,12 +26,9 @@ and Tauri integration from becoming coupled.
 
 ## Decision Outcome
 
-Chosen option: **Core, engine, and thin shell**, because each boundary removes an
-entire category of accidental dependency.
+Chosen option: **Core, engine, and thin shell**, because each boundary removes an entire category of accidental dependency.
 
-`crfty-core` has no filesystem, process, clock, async-runtime, or UI dependency.
-`crfty-engine` may use processes and the filesystem but cannot depend on Tauri. The
-future shell may depend on both and contains only IPC and application wiring.
+`crfty-core` has no filesystem, process, clock, async-runtime, or UI dependency. `crfty-engine` may use processes and the filesystem but cannot depend on Tauri. The future shell may depend on both and contains only IPC and application wiring.
 
 ### Consequences
 
