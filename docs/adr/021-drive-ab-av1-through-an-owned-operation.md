@@ -1,5 +1,5 @@
 ---
-status: proposed
+status: accepted
 date: 2026-08-18
 ---
 
@@ -7,7 +7,7 @@ date: 2026-08-18
 
 ## Context and Problem Statement
 
-ADR-003 selected an in-process pinned ab-av1 adapter, and ADR-018 proposes CRFty's private job supervision contract. The current fork exposes typed command streams followed by global `finish_job()` or `cancel_job()` calls. That boundary cannot connect the stream to the correct cleanup authority through ownership, and upstream ab-av1 can detach its sample producer while sample-copy FFmpeg remains outside global finalization.
+ADR-003 selected an in-process pinned ab-av1 adapter, and ADR-018 defines CRFty's private job supervision contract. The current fork exposes typed command streams followed by global `finish_job()` or `cancel_job()` calls. That boundary cannot connect the stream to the correct cleanup authority through ownership, and upstream ab-av1 can detach its sample producer while sample-copy FFmpeg remains outside global finalization.
 
 CRFty needs a regular semver library boundary that preserves typed progress while making a terminal result mean that ab-av1's tasks, process trees, pipes, and temporary state have settled. The boundary must not require ab-av1 to expose CRFty's private `CancellationToken` or duplicate CRFty's background job supervisor.
 
@@ -66,6 +66,6 @@ Direct process spawning and unowned task spawning outside ab-av1's private lifec
 
 ## More Information
 
-This record refines but does not supersede ADR-003. ADR-018 remains the separate CRFty-private supervision decision. The evidence, counterexamples, `process-wrap` Drop caveat, public API comparison, race rules, and reviewable upstream patch sequence are in [`docs/design/ab-av1-library-lifecycle-research.md`](../design/ab-av1-library-lifecycle-research.md).
+This record owns the operation-lifecycle boundary, ADR-003 owns the adapter choice, and ADR-018 owns CRFty-private supervision. The evidence, counterexamples, `process-wrap` Drop caveat, public API comparison, race rules, and reviewable upstream patch sequence are in [`docs/design/ab-av1-library-lifecycle-research.md`](../design/ab-av1-library-lifecycle-research.md).
 
 Coordination: [CRFty issue #104](https://github.com/Loufe/AB-AV1-GUI/issues/104), [upstream ab-av1 issue #371](https://github.com/alexheretic/ab-av1/issues/371), and implementation-validation [issue #105](https://github.com/Loufe/AB-AV1-GUI/issues/105).

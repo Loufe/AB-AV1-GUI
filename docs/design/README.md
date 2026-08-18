@@ -6,7 +6,7 @@ Long-form design and research for the rewrite. Decisions and the reasoning behin
 
 - `docs/*.md`: settled behavior contracts, stating verified behavior only.
 - `docs/design/*.md`: working research and design notes, including material that is not yet settled.
-- `docs/adr/*.md`: decision records, one decision each, immutable once accepted.
+- `docs/adr/*.md`: living records of current decisions, one decision each.
 
 ## Header
 

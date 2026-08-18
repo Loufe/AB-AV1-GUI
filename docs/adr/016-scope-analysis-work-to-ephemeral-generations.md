@@ -7,32 +7,18 @@ date: 2026-07-21
 
 ## Context and Problem Statement
 
-The Analysis view must stream a large directory tree before probing finishes,
-cancel obsolete work when the selected roots change, reject late worker
-results, and recover coherently when the webview reconnects. Its rows are a
-working view over filesystem observations and durable content facts, not new
-durable facts themselves. Putting the tree in the journal would persist stale
-filesystem topology; keeping it only in React would let engine work and UI
-state diverge.
+The Analysis view must stream a large directory tree before probing finishes, cancel obsolete work when the selected roots change, reject late worker results, and recover coherently when the webview reconnects. Its rows are a working view over filesystem observations and durable content facts, not new durable facts themselves. Putting the tree in the journal would persist stale filesystem topology; keeping it only in React would let engine work and UI state diverge.
 
-The application already has one ordered stream and reducer-owned standing
-ephemeral state for the conversion session, tools, aggregates, and telemetry.
-Analysis needs the same ownership discipline without sending the complete tree
-after every incremental batch.
+The application already has one ordered stream and reducer-owned standing ephemeral state for the conversion session, tools, aggregates, and telemetry. Analysis needs the same ownership discipline without sending the complete tree after every incremental batch.
 
 ## Decision Drivers
 
 * Obsolete discovery and probe workers must be unable to mutate a newer view
-* Reconnect must restore one coherent current tree without replaying missed
-  transient batches
-* Incremental batches must remain bounded; full-tree replacement per batch is
-  unacceptable
-* Durable observations and their Analysis presentation must appear in causal
-  order on the stream
-* Filesystem paths, cancellation handles, workers, and child processes must
-  remain outside pure core state
-* UI expansion, selection, sorting, and scroll position must not become domain
-  state
+* Reconnect must restore one coherent current tree without replaying missed transient batches
+* Incremental batches must remain bounded; full-tree replacement per batch is unacceptable
+* Durable observations and their Analysis presentation must appear in causal order on the stream
+* Filesystem paths, cancellation handles, workers, and child processes must remain outside pure core state
+* UI expansion, selection, sorting, and scroll position must not become domain state
 
 ## Considered Options
 
@@ -44,10 +30,7 @@ after every incremental batch.
 
 ## Decision Outcome
 
-Chosen option: **own a foldable ephemeral Analysis model in core, scoped by a
-reducer-allocated generation, and mirror it in the shell**, because this keeps
-the reducer as the final stale-result guard while allowing the engine and UI to
-consume bounded incremental deltas.
+Chosen option: **own a foldable ephemeral Analysis model in core, scoped by a reducer-allocated generation, and mirror it in the shell**, because this keeps the reducer as the final stale-result guard while allowing the engine and UI to consume bounded incremental deltas.
 
 The complete ownership split is:
 
@@ -60,17 +43,9 @@ The complete ownership split is:
 | Analysis presentation | UI Analysis store | Webview lifetime | Normalized generated rows plus current activity | Snapshot clears it; the following Reset replaces it |
 | Interaction state | UI components/store | Webview lifetime | Expansion, selection, sorting, columns, scroll | Reconciled by `(generation, row_id)`; never sent to core |
 
-No projection or renderer performs filesystem access. Durable facts enter only
-through durable commands; a row is a projection, not another durable fact.
+No projection or renderer performs filesystem access. Durable facts enter only through durable commands; a row is a projection, not another durable fact.
 
-The reducer allocates a monotonically increasing `AnalysisGenerationId` with
-`begin_analysis_generation` when new roots or an explicit rescan supersede the
-current generation. Callers never choose a generation. Every engine batch,
-completion, failure, and row-targeted command carries the generation.
-`apply_analysis_mutation` rejects a non-next Reset and every live mutation
-that does not name the current generation. Cancellation is an optimization;
-this reducer gate is the correctness boundary. #55 connects these primitives
-to discovery commands and the driver registry.
+The reducer allocates a monotonically increasing `AnalysisGenerationId` with `begin_analysis_generation` when new roots or an explicit rescan supersede the current generation. Callers never choose a generation. Every engine batch, completion, failure, and row-targeted command carries the generation. `apply_analysis_mutation` rejects a non-next Reset and every live mutation that does not name the current generation. Cancellation is an optimization; this reducer gate is the correctness boundary. #55 connects these primitives to discovery commands and the driver registry.
 
 | Event | Core transition | Engine action | Late/stale behavior |
 | --- | --- | --- | --- |
@@ -84,22 +59,11 @@ to discovery commands and the driver registry.
 | Webview reconnect | No core transition | None | Shell replays durable Snapshot, then complete Analysis Reset under one lock |
 | Process restart | `AnalysisSnapshot::default()` | Registry starts empty | Durable facts survive; the directory tree is intentionally rediscovered |
 
-Normal operation uses bounded `AnalysisDelta` batches. The driver and shell
-fold those deltas into standing Analysis state. On subscription, the shell
-emits the durable `AppSnapshot` first and then one Analysis replacement delta
-containing the complete current ephemeral snapshot. No live delta can
-interleave with that replay because subscription already holds the stream
-lock. A process restart starts with no Analysis generation and discovers
-again; journal replay never reconstructs the tree.
+Normal operation uses bounded `AnalysisDelta` batches. The driver and shell fold those deltas into standing Analysis state. On subscription, the shell emits the durable `AppSnapshot` first and then one Analysis replacement delta containing the complete current ephemeral snapshot. No live delta can interleave with that replay because subscription already holds the stream lock. A process restart starts with no Analysis generation and discovers again; journal replay never reconstructs the tree.
 
-All Analysis deltas use the driver's post-durable position. Discovery-only
-updates have no durable deltas, so the same ordering is harmless there. This
-extends the existing `SessionAggregates` rule: a consumer never sees a
-projection of a fact before the fact itself.
+All Analysis deltas use the driver's post-durable position. Discovery-only updates have no durable deltas, so the same ordering is harmless there. This extends the existing `SessionAggregates` rule: a consumer never sees a projection of a fact before the fact itself.
 
-Starting a new generation cancels the prior driver-local generation and
-immediately replaces its public state. Late results remain harmless even if
-the underlying OS operation cannot be interrupted.
+Starting a new generation cancels the prior driver-local generation and immediately replaces its public state. Late results remain harmless even if the underlying OS operation cannot be interrupted.
 
 | Requested work | Conversion active | Basic Scan active | Vendor install/check active |
 | --- | --- | --- | --- |
@@ -108,8 +72,7 @@ the underlying OS operation cannot be interrupted.
 | Conversion | Existing single conversion worker continues | Allowed; it never borrows Analysis state or permits | Existing vendor/session policy applies |
 | Vendor install/check | Existing conversion policy applies | Rejected until scan stops/cancels | Serialized by existing vendor activity |
 
-Current Analysis level and historical achievement are separate fields derived
-by `assess_analysis_levels`; neither is persisted as a mutable flag.
+Current Analysis level and historical achievement are separate fields derived by `assess_analysis_levels`; neither is persisted as a mutable flag.
 
 | Current facts for the freshly selected `ContentKey` | Applicable level | Historical achievement |
 | --- | --- | --- |
@@ -122,9 +85,7 @@ by `assess_analysis_levels`; neither is persisted as a mutable flag.
 | Native or adopted `NotWorthwhile` verdict | Does not establish reusable `Analyzed` | `Analyzed`; its separate floor policy may still skip a conversion |
 | Applicable Converted/Remuxed content verdict | `Converted` | `Converted` |
 
-Historical achievement is the maximum of native analyses, verdicts, adopted
-provenance, and any still-parked path summary. Imported analysis is never
-inserted into `FileRecord.analyses`.
+Historical achievement is the maximum of native analyses, verdicts, adopted provenance, and any still-parked path summary. Imported analysis is never inserted into `FileRecord.analyses`.
 
 Native analysis reuse is exact except for the documented target relation:
 
@@ -141,8 +102,7 @@ Native analysis reuse is exact except for the documented target relation:
 | Overwrite/output settings | Do not affect a CRF-search measurement |
 | `AnalysisIntent::Refresh` | Explicitly bypasses reuse even when the applicable level is `Analyzed` |
 
-`AnalysisLevelAssessment` is the foundation contract; #57 adds it and the
-prediction/confidence fields to streamed rows after Basic Scan facts land.
+`AnalysisLevelAssessment` is the foundation contract; #57 adds it and the prediction/confidence fields to streamed rows after Basic Scan facts land.
 
 ### Consequences
 
@@ -157,25 +117,11 @@ prediction/confidence fields to streamed rows after Basic Scan facts land.
 
 ## More Information
 
-See issues #42, #53, #55, #56, #57, and #59; ADR-002, ADR-004, ADR-006,
-ADR-007, and ADR-015 (which supersedes ADR-012 and carries the projection and
-imported-history provenance decisions).
+See issues #42, #53, #55, #56, #57, and #59; ADR-002, ADR-004, ADR-006, ADR-007, and ADR-015 (which carries the projection and imported-history provenance decisions).
 
 Implementation references:
 
-* Rust's [`std::fs::read_dir`](https://doc.rust-lang.org/std/fs/fn.read_dir.html)
-  documentation specifies that entry order is platform/filesystem dependent,
-  may change between calls, and must be explicitly sorted for reproducible
-  output. It also notes that advancing the iterator can independently fail.
-* [`walkdir::WalkDir`](https://docs.rs/walkdir/latest/walkdir/struct.WalkDir.html)
-  demonstrates the standard iterator-of-results error model and link-following
-  controls, but its depth-first traversal does not provide this ADR's
-  breadth-first row-allocation contract.
-* [`ignore::WalkBuilder`](https://docs.rs/ignore/latest/ignore/struct.WalkBuilder.html)
-  is useful prior art for non-followed links and iterator/visitor traversal.
-  Its ignore-file, hidden-file, and glob semantics are intentionally not part
-  of Analysis discovery.
-* [ripgrep's deterministic-output discussion](https://github.com/BurntSushi/ripgrep/blob/master/FAQ.md#how-can-i-get-results-in-a-consistent-order)
-  documents that its sorted output disables parallel traversal. Level 0 makes
-  the same ordering-over-parallelism tradeoff because stable row IDs and
-  batches are part of the public contract.
+* Rust's [`std::fs::read_dir`](https://doc.rust-lang.org/std/fs/fn.read_dir.html) documentation specifies that entry order is platform/filesystem dependent, may change between calls, and must be explicitly sorted for reproducible output. It also notes that advancing the iterator can independently fail.
+* [`walkdir::WalkDir`](https://docs.rs/walkdir/latest/walkdir/struct.WalkDir.html) demonstrates the standard iterator-of-results error model and link-following controls, but its depth-first traversal does not provide this ADR's breadth-first row-allocation contract.
+* [`ignore::WalkBuilder`](https://docs.rs/ignore/latest/ignore/struct.WalkBuilder.html) is useful prior art for non-followed links and iterator/visitor traversal. Its ignore-file, hidden-file, and glob semantics are intentionally not part of Analysis discovery.
+* [ripgrep's deterministic-output discussion](https://github.com/BurntSushi/ripgrep/blob/master/FAQ.md#how-can-i-get-results-in-a-consistent-order) documents that its sorted output disables parallel traversal. Level 0 makes the same ordering-over-parallelism tradeoff because stable row IDs and batches are part of the public contract.

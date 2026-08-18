@@ -7,9 +7,7 @@ date: 2026-07-19
 
 ## Context and Problem Statement
 
-The Python application parses human-oriented ab-av1 subprocess output. V3 needs a
-typed quality-search and encoding boundary with deterministic cancellation and
-cleanup in a long-lived process.
+The Python application parses human-oriented ab-av1 subprocess output. V3 needs a typed quality-search and encoding boundary with deterministic cancellation and cleanup in a long-lived process.
 
 ## Decision Drivers
 
@@ -27,13 +25,11 @@ cleanup in a long-lived process.
 
 ## Decision Outcome
 
-Chosen option: **Pin a minimally patched ab-av1 library adapter**, because the
-real-process lifecycle proof demonstrated typed progress, cancellation, cleanup,
-and successful second-job recovery.
+Chosen option: **Pin a minimally patched ab-av1 library adapter**, because it provides typed progress and errors while making upstream changes compile-time integration work.
 
-The engine permits only one active ab-av1 job. The exact dependency revision and
-patch remain adapter-private. Structured NDJSON is retained only as a contingency
-if native platform containment cannot satisfy the lifecycle contract.
+The initial real-process prototype demonstrated typed progress, cancellation, cleanup, and successful second-job recovery for the path it exercised. It did not cover the detached sample producer or the unmanaged sample-copy FFmpeg path; ADR-021 owns the complete operation-lifecycle boundary.
+
+The engine permits only one active ab-av1 job. The exact dependency revision and patch remain adapter-private. Structured NDJSON is retained only as a contingency if native platform containment cannot satisfy the lifecycle contract.
 
 ### Consequences
 

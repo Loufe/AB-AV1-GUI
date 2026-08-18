@@ -25,6 +25,7 @@ cargo fmt --all -- --check
 cargo clippy --workspace --all-targets --all-features --locked -- -D warnings
 cargo test --workspace --all-features --locked
 cargo deny check
+rumdl check .
 ```
 
 The frontend gate runs from `ui/`; see `ui/AGENTS.md`.
@@ -120,6 +121,4 @@ only for read-only inspection, merges, and worktree management.
   delete the branch. Don't leave finished worktrees, dead branches, or unpushed
   merges behind.
 
-Architecture decisions: MADR records in `docs/adr/` (see its AGENTS.md; accepted
-ADRs are immutable, so supersede rather than rewrite). Current rewrite state,
-decided directions, and open questions: `docs/PLAN.md`.
+Architecture decisions: living MADR records in `docs/adr/` (see its AGENTS.md; edit decisions in place and delete records that are no longer current). Current rewrite state, decided directions, and open questions: `docs/PLAN.md`.

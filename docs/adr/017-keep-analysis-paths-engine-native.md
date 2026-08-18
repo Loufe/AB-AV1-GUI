@@ -7,34 +7,19 @@ date: 2026-07-21
 
 ## Context and Problem Statement
 
-Level 0 must discover paths without probing or hashing them, retain arbitrary
-native path spellings for later filesystem and process operations, and present
-rows to a JSON/TypeScript frontend. The current `PathHash` implementation
-canonicalizes and then calls `to_string_lossy`, making a display conversion
-part of identity. The current cache binding also discards the filesystem ID
-already observed by the engine and treats two absent modification times as a
-size-only freshness match.
+Level 0 must discover paths without probing or hashing them, retain arbitrary native path spellings for later filesystem and process operations, and present rows to a JSON/TypeScript frontend. The current `PathHash` implementation canonicalizes and then calls `to_string_lossy`, making a display conversion part of identity. The current cache binding also discards the filesystem ID already observed by the engine and treats two absent modification times as a size-only freshness match.
 
-No portable metadata-only test can prove that file bytes are unchanged when a
-writer preserves file ID, size, and modification time. The current
-`ContentKey` is also sampled for large files and includes ffprobe-derived
-metadata, so it is a probable-content identity rather than a bytewise proof.
-The contract must state those limits instead of promising impossible
-certainty.
+No portable metadata-only test can prove that file bytes are unchanged when a writer preserves file ID, size, and modification time. The current `ContentKey` is also sampled for large files and includes ffprobe-derived metadata, so it is a probable-content identity rather than a bytewise proof. The contract must state those limits instead of promising impossible certainty.
 
 ## Decision Drivers
 
 * Operational paths must not be reconstructed from lossy display strings
-* Non-Unicode Unix paths and native Windows wide strings must not collide in
-  Analysis identity
-* Windows case, verbatim, UNC, reserved-name, and long-path behavior must defer
-  to native filesystem operations rather than string rewriting
+* Non-Unicode Unix paths and native Windows wide strings must not collide in Analysis identity
+* Windows case, verbatim, UNC, reserved-name, and long-path behavior must defer to native filesystem operations rather than string rewriting
 * Atomic replacement with preserved size and mtime must invalidate a cache hit
 * Unknown and coarse timestamps must not become size-only freshness
-* Replace-mode output recognition must happen before an old source binding is
-  overwritten
-* The contract must remain honest about sampled identity and adversarial
-  metadata restoration
+* Replace-mode output recognition must happen before an old source binding is overwritten
+* The contract must remain honest about sampled identity and adversarial metadata restoration
 
 ## Considered Options
 
@@ -46,25 +31,11 @@ certainty.
 
 ## Decision Outcome
 
-Chosen option: **use opaque generation-scoped row IDs backed by an
-engine-native path registry**, because a row needs stable identity before any
-canonicalization, stat, probe, or content sample has occurred.
+Chosen option: **use opaque generation-scoped row IDs backed by an engine-native path registry**, because a row needs stable identity before any canonicalization, stat, probe, or content sample has occurred.
 
-`AnalysisGenerationId` and `AnalysisRowId` form the public identity. The
-engine assigns row IDs monotonically as deterministic breadth-first entries
-are accepted and stores the untouched operational `PathBuf`, source root, and
-parent relationship in a generation-scoped registry. Core and UI rows carry
-only opaque IDs, parent IDs, display-only text, and facts. Every row-targeted
-command echoes the generation and row ID; the engine resolves the native path
-and rejects stale or unknown references.
+`AnalysisGenerationId` and `AnalysisRowId` form the public identity. The engine assigns row IDs monotonically as deterministic breadth-first entries are accepted and stores the untouched operational `PathBuf`, source root, and parent relationship in a generation-scoped registry. Core and UI rows carry only opaque IDs, parent IDs, display-only text, and facts. Every row-targeted command echoes the generation and row ID; the engine resolves the native path and rejects stale or unknown references.
 
-Display text may be lossy only when explicitly marked as such and is never
-round-tripped into an operation. `PathHash` is not computed at Level 0. When
-Basic Scan or queue discovery needs it, `ph2` hashes canonical native Unix
-`OsStr` bytes or Windows wide units under a platform domain separator. It does
-not call `to_string_lossy` or lowercase. Operational Windows paths retain
-their verbatim spelling. Alternate Level-0 spellings may remain separate rows
-and are joined later by filesystem/probable-content identity.
+Display text may be lossy only when explicitly marked as such and is never round-tripped into an operation. `PathHash` is not computed at Level 0. When Basic Scan or queue discovery needs it, `ph2` hashes canonical native Unix `OsStr` bytes or Windows wide units under a platform domain separator. It does not call `to_string_lossy` or lowercase. Operational Windows paths retain their verbatim spelling. Alternate Level-0 spellings may remain separate rows and are joined later by filesystem/probable-content identity.
 
 | Path case | Discovery/native registry | `ph2` / identity behavior | Durable action behavior |
 | --- | --- | --- | --- |
@@ -78,23 +49,9 @@ and are joined later by filesystem/probable-content identity.
 | Long paths | No application length limit | Hash input is the full canonical native path | OS/configuration support is authoritative |
 | Symlink / Windows reparse entry during traversal | Entry may be shown, but directory traversal does not follow it | A directly targeted file canonicalizes to its target identity | #55 uses `symlink_metadata`/reparse detection to prevent traversal cycles |
 
-The existing JSON journal cannot serialize arbitrary non-Unicode `PathBuf`
-values reversibly. This record does not silently widen that durable schema.
-Discovery and Basic Scan can operate through the native registry. #55 must add
-the typed `PathNotPersistable` action result before exposing queue, analysis,
-conversion, open, or reveal commands for a row that cannot round trip through
-their current boundary. Full durable support remains a separate cross-cutting
-decision replacing persisted/IPC `PathBuf` fields with tagged
-Unix-byte/Windows-wide-unit data. This ADR does not claim that later schema is
-implemented.
+The existing JSON journal cannot serialize arbitrary non-Unicode `PathBuf` values reversibly. This record does not silently widen that durable schema. Discovery and Basic Scan can operate through the native registry. #55 must add the typed `PathNotPersistable` action result before exposing queue, analysis, conversion, open, or reveal commands for a row that cannot round trip through their current boundary. Full durable support remains a separate cross-cutting decision replacing persisted/IPC `PathBuf` fields with tagged Unix-byte/Windows-wide-unit data. This ADR does not claim that later schema is implemented.
 
-Freshness uses full destructive identity. `TimestampReliability` is an engine
-fact: core never guesses filesystem granularity or consults a clock. The
-engine conservatively classifies a missing mtime as `Unknown` and an
-exact-second, future, or at-most-two-seconds-old mtime as `CoarseOrRecent`;
-false negatives cause re-observation rather than stale reuse. Queue discovery
-carries this judgment with its identity, so its optimization obeys the same
-gate as Basic Scan.
+Freshness uses full destructive identity. `TimestampReliability` is an engine fact: core never guesses filesystem granularity or consults a clock. The engine conservatively classifies a missing mtime as `Unknown` and an exact-second, future, or at-most-two-seconds-old mtime as `CoarseOrRecent`; false negatives cause re-observation rather than stale reuse. Queue discovery carries this judgment with its identity, so its optimization obeys the same gate as Basic Scan.
 
 | Current condition | Pre-observation decision | After stable observation |
 | --- | --- | --- |
@@ -114,16 +71,7 @@ gate as Basic Scan.
 | Missing file | `Missing` | Row becomes unavailable; no cache reuse |
 | Stat/identity inspection failure | `Unavailable` | Surface failure; no cache reuse |
 
-`PathBinding` retains the observed `DestructiveIdentity` alongside the
-probable `ContentKey`; queue discovery also carries full destructive identity
-rather than a weak `FileStamp`. The engine compares destructive identity
-before probing, after probing, and after sampling. `ObservationStability` is
-the typed core outcome; the current media adapter maps instability to
-`io::ErrorKind::Interrupted`, and #55/#56 carry it as a typed row failure.
-Because `PathBinding` is durable and `ph2` deliberately replaces the old path
-namespace, this change advances the journal schema to 14; schema mismatch is
-reported before payload decoding rather than treating an older binding shape
-as corruption.
+`PathBinding` retains the observed `DestructiveIdentity` alongside the probable `ContentKey`; queue discovery also carries full destructive identity rather than a weak `FileStamp`. The engine compares destructive identity before probing, after probing, and after sampling. `ObservationStability` is the typed core outcome; the current media adapter maps instability to `io::ErrorKind::Interrupted`, and #55/#56 carry it as a typed row failure. Because `PathBinding` is durable and `ph2` deliberately replaces the old path namespace, this change advances the journal schema to 14; schema mismatch is reported before payload decoding rather than treating an older binding shape as corruption.
 
 Replace-mode handling has strict precedence:
 
@@ -132,17 +80,10 @@ Replace-mode handling has strict precedence:
 3. Compare the current identity with the run's full settled output identity.
 4. Recognize an exact match as the settled Level 3 output.
 5. Otherwise apply ordinary cache freshness or full observation.
-6. After observation, compare probable content identity with known settled
-   output identities.
+6. After observation, compare probable content identity with known settled output identities.
 7. Only then update the path binding and invoke imported-history adoption.
 
-Size/mtime equality alone never recognizes a settled output. The common
-same-size/same-mtime atomic-replacement case is detected by file-ID change.
-In-place mutation that restores file ID, size, and mtime is outside the
-metadata fast path's guarantee and requires re-observation or full hashing to
-prove. Large-file `ContentKey` equality remains explicitly probabilistic; the
-UI and policy use terms such as probable duplicate rather than bytewise
-identical.
+Size/mtime equality alone never recognizes a settled output. The common same-size/same-mtime atomic-replacement case is detected by file-ID change. In-place mutation that restores file ID, size, and mtime is outside the metadata fast path's guarantee and requires re-observation or full hashing to prove. Large-file `ContentKey` equality remains explicitly probabilistic; the UI and policy use terms such as probable duplicate rather than bytewise identical.
 
 ### Consequences
 
@@ -152,32 +93,16 @@ identical.
 * Good: Unknown timestamps no longer become size-only cache hits
 * Good: Replace-mode outputs retain their Level 3 relationship
 * Bad: The engine must retain a native registry for the current generation
-* Bad: Some native paths are discoverable but intentionally ineligible for
-  durable actions until a wider path-persistence change lands
-* Bad: Metadata and sampled hashing still cannot prove absence of adversarial
-  in-place changes
+* Bad: Some native paths are discoverable but intentionally ineligible for durable actions until a wider path-persistence change lands
+* Bad: Metadata and sampled hashing still cannot prove absence of adversarial in-place changes
 
 ## More Information
 
-See issues #28, #42, #51, #52, #53, #55, and #56; ADR-001, ADR-004, ADR-015
-(which supersedes ADR-012), and ADR-014.
+See issues #28, #42, #51, #52, #53, #55, and #56; ADR-001, ADR-004, ADR-015, and ADR-014.
 
 Implementation references:
 
-* Rust's [`std::fs::symlink_metadata`](https://doc.rust-lang.org/std/fs/fn.symlink_metadata.html)
-  queries an entry without following a symbolic link; Level 0 uses this at
-  traversal roots and before descending into a directory.
-* Rust's [`OsStr::to_string_lossy`](https://doc.rust-lang.org/std/ffi/struct.OsStr.html#method.to_string_lossy)
-  replaces non-Unicode data with `U+FFFD`. This is why display text carries an
-  explicit `lossy` flag and is never reused as operational identity.
-* Rust's Windows
-  [`MetadataExt::file_attributes`](https://doc.rust-lang.org/std/os/windows/fs/trait.MetadataExt.html#tymethod.file_attributes)
-  exposes native file attributes. Discovery checks
-  [`FILE_ATTRIBUTE_REPARSE_POINT`](https://learn.microsoft.com/windows/win32/fileio/file-attribute-constants#file_attribute_reparse_point)
-  so junctions and other reparse-backed directories cannot bypass the
-  no-follow rule.
-* [dua-cli](https://github.com/Byron/dua-cli#limitations) is comparable Rust
-  filesystem UI prior art: it may display symbolic-link entries but does not
-  follow them during traversal. CRFty currently takes the stricter permitted
-  option of omitting nested link/reparse entries while retaining directly
-  configured roots as typed traversal failures.
+* Rust's [`std::fs::symlink_metadata`](https://doc.rust-lang.org/std/fs/fn.symlink_metadata.html) queries an entry without following a symbolic link; Level 0 uses this at traversal roots and before descending into a directory.
+* Rust's [`OsStr::to_string_lossy`](https://doc.rust-lang.org/std/ffi/struct.OsStr.html#method.to_string_lossy) replaces non-Unicode data with `U+FFFD`. This is why display text carries an explicit `lossy` flag and is never reused as operational identity.
+* Rust's Windows [`MetadataExt::file_attributes`](https://doc.rust-lang.org/std/os/windows/fs/trait.MetadataExt.html#tymethod.file_attributes) exposes native file attributes. Discovery checks [`FILE_ATTRIBUTE_REPARSE_POINT`](https://learn.microsoft.com/windows/win32/fileio/file-attribute-constants#file_attribute_reparse_point) so junctions and other reparse-backed directories cannot bypass the no-follow rule.
+* [dua-cli](https://github.com/Byron/dua-cli#limitations) is comparable Rust filesystem UI prior art: it may display symbolic-link entries but does not follow them during traversal. CRFty currently takes the stricter permitted option of omitting nested link/reparse entries while retaining directly configured roots as typed traversal failures.

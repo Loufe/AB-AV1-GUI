@@ -1,7 +1,7 @@
 # Documentation
 
-- Do not insert hard line breaks within Markdown prose paragraphs.
-- Keep each prose paragraph on one physical line, regardless of rendered length.
+- Do not manually hard-wrap Markdown prose to a fixed column width.
+- Keep each prose paragraph on one physical source line and let the editor or rendered view wrap it visually.
 - Preserve line breaks that are structurally required by front matter, headings, tables, lists, block quotes, and code blocks.
 - Documentation states durable current truth. Rewrite it in place as understanding changes.
 - Documentation owns decisions and the reasoning behind them. Issues link a document; they do not restate it.

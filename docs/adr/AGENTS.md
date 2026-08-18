@@ -4,21 +4,21 @@ CRFty uses [MADR](https://adr.github.io/madr/) for decisions that affect multipl
 
 Do not create ADRs for contained implementation details, routine refactors, or bug fixes.
 
-## Naming and lifecycle
+## Naming and maintenance
 
 - Store ADRs in `docs/adr/` as `NNN-short-title.md`.
 - Use lowercase, hyphenated, present-tense imperative titles.
 - Number records sequentially.
-- Use `proposed`, `accepted`, `deprecated`, or `superseded by NNN` status.
-- Keep accepted ADRs immutable, and never delete a replaced record. Immutability covers the decision: repairing a dead link or a renamed path is editorial and allowed, changing what was decided requires a superseding ADR.
-- Record supersession at both ends. The superseding ADR names every record it replaces by number, in its context and under More Information; each replaced record's status reads `superseded by NNN`, naming its successor.
+- Every committed ADR is accepted. Do not use a separate proposal or acceptance lifecycle.
+- Treat ADRs as living records of the current architectural truth. When a decision changes, edit the existing ADR in place so its context, options, outcome, consequences, and references describe the new truth.
+- When an ADR no longer represents a current decision, delete it and remove every reference to it from code comments and documentation in the same change. Git history preserves the old record; do not keep deprecated, superseded, or tombstone ADRs.
 - Record one decision per ADR and link related records.
 
 ## Template
 
 ```markdown
 ---
-status: proposed | accepted | deprecated | superseded by NNN
+status: accepted
 date: YYYY-MM-DD
 ---
 

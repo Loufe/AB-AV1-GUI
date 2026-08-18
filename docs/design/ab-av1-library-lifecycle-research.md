@@ -1,10 +1,10 @@
 # ab-av1 library lifecycle and cancellation research
 
-Status: completed research basis for proposed ADR-021  
-Upstream coordination: [alexheretic/ab-av1#371](https://github.com/alexheretic/ab-av1/issues/371)  
-Tracking issue: [#104](https://github.com/Loufe/AB-AV1-GUI/issues/104)  
-Implementation validation: [#105](https://github.com/Loufe/AB-AV1-GUI/issues/105)  
-Related CRFty decisions: [ADR-003](../adr/003-embed-a-pinned-ab-av1-adapter.md), [ADR-018](../adr/018-unify-job-cancellation-and-completion.md), [ADR-021](../adr/021-drive-ab-av1-through-an-owned-operation.md)
+* Status: completed research basis for ADR-021
+* Upstream coordination: [alexheretic/ab-av1#371](https://github.com/alexheretic/ab-av1/issues/371)
+* Tracking issue: [#104](https://github.com/Loufe/AB-AV1-GUI/issues/104)
+* Implementation validation: [#105](https://github.com/Loufe/AB-AV1-GUI/issues/105)
+* Related CRFty decisions: [ADR-003](../adr/003-embed-a-pinned-ab-av1-adapter.md), [ADR-018](../adr/018-unify-job-cancellation-and-completion.md), [ADR-021](../adr/021-drive-ab-av1-through-an-owned-operation.md)
 
 ## Purpose and boundary
 
@@ -12,7 +12,7 @@ This note records an upstream-first investigation of the lifecycle boundary ab-a
 
 The source review used a fresh clone of alexheretic/ab-av1 at v0.11.6 commit [`629cfaa`](https://github.com/alexheretic/ab-av1/tree/629cfaa) without adding or consulting the CRFty fork while deriving the findings. The existing `Loufe/ab-av1` prototype was compared only afterward and is treated as exploratory evidence rather than the source of the design.
 
-This is a research artifact, not an implementation specification or authority to open an upstream PR. It recommends a public lifecycle, progress boundary, and process-management direction; proposed ADR-021 owns the CRFty decision, while implementation and real-process validation belong in separately tracked issues.
+This is a research artifact, not an implementation specification or authority to open an upstream PR. It recommends a public lifecycle, progress boundary, and process-management direction; ADR-021 owns the CRFty decision, while implementation and real-process validation belong in separately tracked issues.
 
 ## Current conclusions
 
@@ -302,9 +302,9 @@ The prototype may supply implementation pieces after each is independently justi
 
 ## Relationship to CRFty decisions
 
-[ADR-003](../adr/003-embed-a-pinned-ab-av1-adapter.md) accepted an embedded, pinned ab-av1 adapter. Its core integration direction remains compatible with this research, but its statement that the real-process prototype demonstrated the complete lifecycle is too broad: the proof did not cover the detached sample producer and unmanaged sample-copy FFmpeg path. Because accepted ADRs are immutable, proposed ADR-021 refines that boundary instead of rewriting or superseding ADR-003.
+[ADR-003](../adr/003-embed-a-pinned-ab-av1-adapter.md) records the embedded, pinned ab-av1 adapter decision. Its core integration direction remains compatible with this research, but its statement that the real-process prototype demonstrated the complete lifecycle was too broad: the proof did not cover the detached sample producer and unmanaged sample-copy FFmpeg path. ADR-003 now reflects that corrected scope, while ADR-021 owns the separate operation-lifecycle boundary.
 
-[ADR-018](../adr/018-unify-job-cancellation-and-completion.md) concerns CRFty's private cancellation, terminal-report, telemetry, and worker-ownership contract. It requires an awaited ab-av1 terminal lifecycle without permanently naming the prototype's `finish_job()` or `cancel_job()` functions. Proposed ADR-021 selects the generic cancellation-future boundary between that private supervisor and ab-av1.
+[ADR-018](../adr/018-unify-job-cancellation-and-completion.md) concerns CRFty's private cancellation, terminal-report, telemetry, and worker-ownership contract. It requires an awaited ab-av1 terminal lifecycle without permanently naming the prototype's `finish_job()` or `cancel_job()` functions. ADR-021 selects the generic cancellation-future boundary between that private supervisor and ab-av1.
 
 ## Residual maintainer choices
 
@@ -314,7 +314,7 @@ The maintainer may also prefer a separate published core package instead of the 
 
 ## Coordination boundary
 
-CRFty's private supervision remains in ADR-018 and issue #85. Proposed ADR-021 records the selected adapter boundary. Issue #105 owns implementation and real-process contract validation; neither test implementation nor its results are research completion criteria. Upstream issue #371 owns maintainer coordination and any eventual pull-request authorization.
+CRFty's private supervision remains in ADR-018 and issue #85. ADR-021 records the selected adapter boundary. Issue #105 owns implementation and real-process contract validation; neither test implementation nor its results are research completion criteria. Upstream issue #371 owns maintainer coordination and any eventual pull-request authorization.
 
 ## Primary sources
 

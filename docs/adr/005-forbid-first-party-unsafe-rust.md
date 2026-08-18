@@ -7,9 +7,7 @@ date: 2026-07-19
 
 ## Context and Problem Statement
 
-CRFty is a long-lived desktop process that owns durable state while coordinating
-untrusted media tools. Native FFmpeg bindings or scattered operating-system calls
-would move memory-safety and lifetime risks into that process.
+CRFty is a long-lived desktop process that owns durable state while coordinating untrusted media tools. Native FFmpeg bindings or scattered operating-system calls would move memory-safety and lifetime risks into that process.
 
 ## Decision Drivers
 
@@ -26,13 +24,9 @@ would move memory-safety and lifetime risks into that process.
 
 ## Decision Outcome
 
-Chosen option: **Forbid unsafe Rust in first-party crates**, because safe process and
-filesystem APIs cover the planned architecture and FFmpeg does not need to share the
-application address space.
+Chosen option: **Forbid unsafe Rust in first-party crates**, because safe process and filesystem APIs cover the planned architecture and FFmpeg does not need to share the application address space.
 
-If platform acceptance tests prove safe wrappers insufficient, one small platform
-crate may supersede this decision with a documented safe interface and audited unsafe
-blocks. Dependencies are locked, denied against policy, vetted, and inventoried.
+If platform acceptance tests prove safe wrappers insufficient, update this record to permit one small platform crate with a documented safe interface and audited unsafe blocks. Dependencies are locked, denied against policy, vetted, and inventoried.
 
 ### Consequences
 

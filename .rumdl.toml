@@ -1,0 +1,6 @@
+[global]
+disable = ["MD013"]
+
+[per-file-ignores]
+"**/CLAUDE.md" = ["MD041"]
+"docs/templates/*.md" = ["MD041"]

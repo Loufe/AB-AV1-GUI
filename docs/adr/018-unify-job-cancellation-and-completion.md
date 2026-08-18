@@ -1,5 +1,5 @@
 ---
-status: proposed
+status: accepted
 date: 2026-08-16
 ---
 
@@ -16,7 +16,7 @@ The engine currently represents the same one-shot supervision contract with four
 
 The coordinator adapts the ab-av1 and remux handles through `ActiveJobCancellation` and maintains two polling loops with the same result, timeout, telemetry, and cancellation behavior. Each implementation must independently get pre-registration cancellation, channel disconnection, cancel-on-drop, terminal cleanup, worker termination, and subprocess settlement right.
 
-The ab-av1 library lifecycle is a related but separate external-boundary decision selected by proposed [ADR-021](021-drive-ab-av1-through-an-owned-operation.md), with evidence in [issue #104](https://github.com/Loufe/AB-AV1-GUI/issues/104) and [`docs/design/ab-av1-library-lifecycle-research.md`](../design/ab-av1-library-lifecycle-research.md). ADR-021 gives ab-av1 a generic shutdown future and keeps its owned settlement inside that finite operation; this record decides how CRFty produces that signal, owns the executor worker, and publishes the terminal report.
+The ab-av1 library lifecycle is a related but separate external-boundary decision selected by [ADR-021](021-drive-ab-av1-through-an-owned-operation.md), with evidence in [issue #104](https://github.com/Loufe/AB-AV1-GUI/issues/104) and [`docs/design/ab-av1-library-lifecycle-research.md`](../design/ab-av1-library-lifecycle-research.md). ADR-021 gives ab-av1 a generic shutdown future and keeps its owned settlement inside that finite operation; this record decides how CRFty produces that signal, owns the executor worker, and publishes the terminal report.
 
 Four guarantees must remain distinct:
 
@@ -57,11 +57,11 @@ This design is an application of **structured job supervision**: cooperative can
 
 ## Decision Outcome
 
-Proposed option: **compose `CancellationToken`, `oneshot`, `watch`, and `TaskTracker` behind a small capability-oriented CRFty job API while retaining operation-specific workers**, because these maintained primitives implement the generic synchronization contracts while CRFty retains only its domain reports, cleanup sequencing, worker ownership, and process policy.
+Chosen option: **compose `CancellationToken`, `oneshot`, `watch`, and `TaskTracker` behind a small capability-oriented CRFty job API while retaining operation-specific workers**, because these maintained primitives implement the generic synchronization contracts while CRFty retains only its domain reports, cleanup sequencing, worker ownership, and process policy.
 
-This record remains `proposed`. The primitive composition is the preferred direction, but the process implementation and final join-ownership boundary remain undecided pending the investigations under **Open Decisions Before Acceptance**.
+The primitive composition is the selected direction. The process implementation and final join-ownership boundary remain open implementation decisions recorded below.
 
-### Proposed Common Contract
+### Common Contract
 
 Each started job creates a fresh `tokio_util::sync::CancellationToken`. The raw token remains private. A controller-facing cancellation capability can request cancellation, while a worker-facing context exposes only observation through `is_cancelled()` and `cancelled()`. This prevents ordinary worker code from acquiring broader cancellation authority merely because `CancellationToken` itself is cloneable and bidirectional.
 
@@ -94,7 +94,7 @@ The coordinator uses one generic monitoring loop for terminal report polling and
 
 Rust's ownership model can enforce that the terminal sender and join authority are not duplicated, but Rust cannot prove that a cooperative worker checks its token or that an external descendant really exited. The common API therefore uses the compiler for ownership invariants and contract tests for temporal and operating-system behavior.
 
-The proposed enforcement is:
+The enforcement is:
 
 * keep `JobHandle`, join authority, worker permits, and terminal senders non-`Clone`
 * mark `JobHandle` and important completion results `#[must_use]`, and deny `unused_must_use` in engine code
@@ -139,10 +139,10 @@ The process choice in this record concerns CRFty-owned direct processes. ADR-021
 * **Lost owner on timeout:** A polling API that consumes the handle on timeout can drop the only cancel-on-drop guard or join authority. Timeout polling must retain the handle.
 * **Channel closure mistaken for cancellation:** A panic before report publication drops the sender. Treating disconnection as ordinary cancellation would hide an infrastructure failure and could commit incomplete evidence.
 
-### Open Decisions Before Acceptance
+### Open Implementation Decisions
 
 1. **Join ownership:** Prefer one engine supervisor as the exclusive owner of all joinable worker handles because ab-av1 currently uses a shared runtime thread, but decide whether remux and vendor jobs should instead carry per-job join capabilities. The public `JobHandle` must not claim to prove thread termination unless it actually joins.
-2. **Terminal report meaning:** The proposed meaning is “operation cleanup and process settlement completed,” while the worker ledger and join owner separately prove executor/thread termination. Confirm that every domain consumer can tolerate this small distinction.
+2. **Terminal report meaning:** The selected meaning is “operation cleanup and process settlement completed,” while the worker ledger and join owner separately prove executor/thread termination. Confirm that every domain consumer can tolerate this small distinction.
 3. **Completion-versus-cancellation precedence:** Define a race table for simultaneous completion, cancellation, timeout, channel disconnection, and cleanup failure. Do not inherit the answer accidentally from `select!` branch order or `run_until_cancelled` fairness.
 4. **Cleanup failure after cancellation:** Decide whether this becomes a cancellation report carrying cleanup evidence, a common infrastructure error, or a driver-fatal error. A plain `Cancelled` outcome must not hide a process that could not be terminated or reaped.
 5. **Shutdown timeout policy:** Decide whether an unresponsive vendor thread blocks shutdown, is deliberately abandoned until process exit, or escalates to application termination. No cancellation crate can safely kill an arbitrary Rust thread.
@@ -172,15 +172,15 @@ The process choice in this record concerns CRFty-owned direct processes. ADR-021
 
 The common job-contract tests must cover pre-cancel, cloned and idempotent cancel, successful completion disarming drop, timeout retaining ownership and drop cancellation, handle drop, sender disconnection, worker panic, final telemetry snapshot, cancellation while telemetry is continuously ready, force-before-registration, fresh vendor tokens, and new-job rejection after shutdown begins.
 
-Implementation validation must cover remux cancellation followed by parser and reader cleanup, vendor cancellation during a stalled response body, a child that spawns a grandchild, a Unix descendant that calls `setsid()`, Windows Job Object settlement, both stdout and stderr filling concurrently, and driver shutdown proving every registered worker is joined or explicitly classified under the chosen timeout policy. ab-av1-specific real-process lifecycle tests are tracked separately in [issue #105](https://github.com/Loufe/AB-AV1-GUI/issues/105) and are not research completion criteria for this proposed record.
+Implementation validation must cover remux cancellation followed by parser and reader cleanup, vendor cancellation during a stalled response body, a child that spawns a grandchild, a Unix descendant that calls `setsid()`, Windows Job Object settlement, both stdout and stderr filling concurrently, and driver shutdown proving every registered worker is joined or explicitly classified under the chosen timeout policy. ab-av1-specific real-process lifecycle tests are tracked separately in [issue #105](https://github.com/Loufe/AB-AV1-GUI/issues/105) and are not research completion criteria for this record.
 
 Use ordinary barriers and controllable fake workers for protocol races. Loom is appropriate only if CRFty adds a custom atomic state machine; it cannot directly model real network calls or operating-system processes.
 
 ## More Information
 
-See issue #85 and ADR-015, which supersedes ADR-012 and retains the rule that statistics and prediction provenance derive from validated facts; cancellation telemetry is not such a fact. Proposed ADR-021 selects the upstream ab-av1 operation boundary, its research is recorded in [`docs/design/ab-av1-library-lifecycle-research.md`](../design/ab-av1-library-lifecycle-research.md) and [issue #104](https://github.com/Loufe/AB-AV1-GUI/issues/104), and its implementation-validation contract is tracked separately in [issue #105](https://github.com/Loufe/AB-AV1-GUI/issues/105).
+See issue #85 and ADR-015, which retains the rule that statistics and prediction provenance derive from validated facts; cancellation telemetry is not such a fact. ADR-021 selects the upstream ab-av1 operation boundary, its research is recorded in [`docs/design/ab-av1-library-lifecycle-research.md`](../design/ab-av1-library-lifecycle-research.md) and [issue #104](https://github.com/Loufe/AB-AV1-GUI/issues/104), and its implementation-validation contract is tracked separately in [issue #105](https://github.com/Loufe/AB-AV1-GUI/issues/105).
 
-Implementation locations at the time of this proposal:
+Implementation locations at the time this decision was recorded:
 
 * `crates/crfty-engine/src/ab_av1/runtime.rs`
 * `crates/crfty-engine/src/remux.rs`
