@@ -64,7 +64,7 @@ Read from source.
 
 V2 baseline, read from source on `main`.
 
-- Time: the same rate quantity, grouped `(codec, resolution bucket)`, reported as P50 with a P25 to P75 range, over four fallback tiers with sample thresholds of ten and five, graded high, medium, low, or none.
+- Time: the same rate quantity, grouped `(codec, resolution bucket)`, reported as P50 with a P25 to P75 range, over four fallback tiers with sample thresholds of ten and five, graded high, medium, low, or none. The grade reached the user as a prefix on the rendered value: no prefix for high, one tilde for medium, two tildes for low, and the absent-value placeholder when the grade was none. Uncertainty was therefore presentation, never a number, and the P25 to P75 range it was computed from was never shown.
 - Size: the mean reduction percent of peers matched on codec and width, then the mean over all converted records, then a hardcoded constant. Applied to file size less an audio size derived from audio bitrate and duration.
 
 A successor estimator was recorded when the projections were designed, and this document is now its only surviving record: a kernel-weighted quantile estimator, weighting samples by similarity across codec and resolution instead of partitioning them into hard buckets, validated by backtesting predicted against actual durations before it replaces the ladder. Its claimed advantage is that a dissimilar sample is weighted toward zero rather than promoted to authority by a sample-count cliff, which is the ladder's structural defect (carried reasoning; never implemented or measured). The V2 quartile math and its sample threshold were deliberately not ported, because reproducing them would have frozen accidental behavior as specification.
