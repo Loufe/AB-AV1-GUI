@@ -65,7 +65,7 @@ V2 baseline, read from source on `main`.
 - Time: the same rate quantity, grouped `(codec, resolution bucket)`, reported as P50 with a P25 to P75 range, over four fallback tiers with sample thresholds of ten and five, graded high, medium, low, or none.
 - Size: the mean reduction percent of peers matched on codec and width, then the mean over all converted records, then a hardcoded constant. Applied to file size less an audio size derived from audio bitrate and duration.
 
-ADR-012 recorded the ladder and named its successor: a kernel-weighted quantile estimator weighting samples by similarity instead of hard buckets, validated by backtesting predicted against actual durations before replacing the ladder. ADR-015 supersedes ADR-012 in full and does not carry that successor forward, so the direction has no live record. The V2 quartile math and its sample threshold were deliberately not ported, because reproducing them would have frozen accidental behavior as specification.
+A successor estimator was recorded when the projections were designed, and this document is now its only surviving record: a kernel-weighted quantile estimator, weighting samples by similarity across codec and resolution instead of partitioning them into hard buckets, validated by backtesting predicted against actual durations before it replaces the ladder. Its claimed advantage is that a dissimilar sample is weighted toward zero rather than promoted to authority by a sample-count cliff, which is the ladder's structural defect (carried reasoning; never implemented or measured). The V2 quartile math and its sample threshold were deliberately not ported, because reproducing them would have frozen accidental behavior as specification.
 
 ## Stage leakage
 
