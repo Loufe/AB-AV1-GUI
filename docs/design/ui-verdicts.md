@@ -4,9 +4,9 @@ Status: stable reference; code comments cite the bare D-labels defined here
 
 ## Purpose and boundary
 
-Recorded design decisions for the V3 frontend. They were judged during the native UI design passes and are labeled D2 through D11; code comments cite the bare labels. This document is the authoritative record and survives the closure of its owning issue, because the labels remain cited from source.
+Recorded design decisions for the V3 frontend. They were judged during the native UI design passes and are labeled D2 through D11; code comments cite the bare labels. This document is the authoritative record and outlives the work that produced it, because the labels remain cited from source.
 
-It records what was decided, not how a view is built. Implementation work lives in the owning issue and its children.
+It records what was decided, not how a view is built.
 
 - **D2, theme ownership**: the light/dark elevation tier is frontend-only state; the backend and journal store none of it. The tier is the single source of truth: shadcn component vocabulary resolves against it rather than holding its own colors.
 - **D3, design tokens**: raw values live in `:root`/`.dark` as CSS custom properties and `@theme inline` references them, because literal colors in a plain `@theme` would be inlined at build time and break runtime theme switching.

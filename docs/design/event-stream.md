@@ -6,7 +6,7 @@ Status: design note; records the contract the accepted ADRs compose into
 
 How engine state reaches the UI and how commands come back. The decisions behind this design are ADR-002 (driver reducer), ADR-004 (durable/ephemeral split), and ADR-006 (generated bindings); this document records the contract they compose into.
 
-It does not settle whether History should be served by request/response rather than folded in the frontend. That question is open in the owning issue.
+It does not settle whether History should be served by request/response rather than folded in the frontend. That question is open.
 
 ## One ordered stream
 

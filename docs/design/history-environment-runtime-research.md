@@ -6,7 +6,7 @@ Status: living research note; not an accepted design or implementation specifica
 
 This note synthesizes an investigation into which platform, execution, and runtime facts might make History and estimation more truthful, which operating-system sources can provide them, and what the available evidence establishes about their semantics and suitability.
 
-It does not select physical tables, finalize the History observation model, or authorize any collector to run in production. Two findings recorded here are decided elsewhere: managed FFmpeg artifact durability and Windows group-spawn failure cleanup, both open hazards in `docs/design/porting-hazards.md`.
+It does not select physical tables, finalize the History observation model, or authorize any collector to run in production. Two findings recorded here are not resolved here: managed FFmpeg artifact durability and Windows group-spawn failure cleanup are both open hazards in `docs/design/porting-hazards.md`.
 
 The labels below mean:
 

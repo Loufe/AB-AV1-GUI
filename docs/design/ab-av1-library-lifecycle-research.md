@@ -269,7 +269,7 @@ The terms that most accurately describe the direction are **structured concurren
 6. Add narrow request, event, result, outcome, and error types plus the caller-driven operation methods; adapt the CLI to those same methods.
 7. Remove the prototype's global `finish_job()` and `cancel_job()` surface once CRFty consumes the owned operation boundary.
 
-The patch touches package/module boundaries, command presentation, every subprocess construction site, temporary ownership, sample production, cache/tool identity, and the CRFty adapter. It is a lifecycle refactor rather than a cancellation-token parameter addition. The sequence above keeps each review centered on one ownership boundary and leaves the real-process validation matrix out of it.
+The patch touches package/module boundaries, command presentation, every subprocess construction site, temporary ownership, sample production, cache/tool identity, and the CRFty adapter. It is a lifecycle refactor rather than a cancellation-token parameter addition. The sequence above keeps each review centered on one ownership boundary and leaves the real-process validation matrix outside the patch sequence.
 
 ## Assessment of the existing CRFty prototype
 

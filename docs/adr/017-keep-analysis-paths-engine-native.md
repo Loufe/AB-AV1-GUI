@@ -71,7 +71,7 @@ Freshness uses full destructive identity. `TimestampReliability` is an engine fa
 | Missing file | `Missing` | Row becomes unavailable; no cache reuse |
 | Stat/identity inspection failure | `Unavailable` | Surface failure; no cache reuse |
 
-`PathBinding` retains the observed `DestructiveIdentity` alongside the probable `ContentKey`; queue discovery also carries full destructive identity rather than a weak `FileStamp`. The engine compares destructive identity before probing, after probing, and after sampling. `ObservationStability` is the typed core outcome; the current media adapter maps instability to `io::ErrorKind::Interrupted`, which discovery and Basic Scan carry as a typed row failure. Because `PathBinding` is durable and `ph2` deliberately replaces the old path namespace, this change advances the journal schema to 14; schema mismatch is reported before payload decoding rather than treating an older binding shape as corruption.
+`PathBinding` retains the observed `DestructiveIdentity` alongside the probable `ContentKey`; queue discovery also carries full destructive identity rather than a weak `FileStamp`. The engine compares destructive identity before probing, after probing, and after sampling. `ObservationStability` is the typed core outcome; the current media adapter maps instability to `io::ErrorKind::Interrupted`, and Basic Scan carries it as a typed row failure. Because `PathBinding` is durable and `ph2` deliberately replaces the old path namespace, this change advances the journal schema to 14; schema mismatch is reported before payload decoding rather than treating an older binding shape as corruption.
 
 Replace-mode handling has strict precedence:
 

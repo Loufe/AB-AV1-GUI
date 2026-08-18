@@ -1,6 +1,6 @@
 # CRFty UI
 
-React + TypeScript frontend for the CRFty Tauri shell (issue #36 is the design record). Managed with pnpm.
+React + TypeScript frontend for the CRFty Tauri shell; the recorded design verdicts are in `docs/design/ui-verdicts.md`. Managed with pnpm.
 
 ```bash
 pnpm install
