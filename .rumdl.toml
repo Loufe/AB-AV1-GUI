@@ -4,3 +4,10 @@ disable = ["MD013"]
 [per-file-ignores]
 "**/CLAUDE.md" = ["MD041"]
 "docs/templates/*.md" = ["MD041"]
+
+[MD040]
+style = "consistent"
+unknown-language-action = "error"
+
+[MD044]
+names = ["GitHub", "JavaScript", "VMAF", "SVT-AV1", "ab-av1", "Tokio", "Linux"]

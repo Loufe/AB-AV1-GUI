@@ -25,7 +25,7 @@ cargo fmt --all -- --check
 cargo clippy --workspace --all-targets --all-features --locked -- -D warnings
 cargo test --workspace --all-features --locked
 cargo deny check
-rumdl check .
+rumdl check . --deny-config-warnings
 ```
 
 The frontend gate runs from `ui/`; see `ui/AGENTS.md`.
