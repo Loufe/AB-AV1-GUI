@@ -87,8 +87,6 @@ An estimator is admissible when it is measured against the one it would replace,
 
 **Sufficiency.** What makes evidence admissible under E1: sample count, dispersion, relevance to the file being estimated, or a combination. The current global tier answers any file from any three conversions; that is measured on this machine and describes nothing about the file in front of it. The answer determines whether the tier survives.
 
-**Uncertainty.** Point, interval, or absent. The recorded presentation ramp in `docs/design/ui-verdicts.md` has three states and no interval concept, so choosing an interval changes it.
-
 **Promise level.** Whether accuracy is promised per file, per folder aggregate, or only as a bounded range. Measured evidence in `docs/design/history-content-evidence-research.md` records three files agreeing on every predictor either estimator uses whose outcomes span a factor of seven in predicted output size. That is the headroom a per-file promise must cover.
 
 **Size estimation.** Whether a pre-analysis size estimate can exist at all under E1, what its basis is (video stream or whole file), and whether V2's audio-copy correction was intentional semantics worth keeping.
@@ -97,9 +95,7 @@ An estimator is admissible when it is measured against the one it would replace,
 
 **Live ETA consistency.** Whether the pre-run estimate and the in-run ETA are required to agree, and what happens when they do not.
 
-**Cold start.** What a new installation shows before any local evidence exists, given that E1 forbids inventing a starting value.
-
-**Estimator family.** Keep the median ladder, restore a spread over it, or pursue the kernel-weighted quantile successor.
+**Cold start.** What a new installation shows before any local evidence exists, given that E1 forbids inventing a starting value. E4 covers installations holding imported evidence; the evidence-free case remains open.
 
 ## Distillation
 
