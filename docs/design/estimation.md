@@ -24,6 +24,12 @@ Labels are stable and cited bare.
 
 **E1, no fabricated estimate.** An estimate is emitted only when evidence supports it. Where it does not, the value is absent, and absence is a display state rather than a failure. V2's terminal fallback to a hardcoded reduction constant is prohibited and must not reappear in any form, including as a seeded default, a placeholder, or a clamped floor. The boundary of this verdict is open; see sufficiency below.
 
+**E2, point uncertainty.** An estimate reaches the user as a point value through the three-state presentation ramp in `docs/design/ui-verdicts.md`. No interval is shown; the ramp's states, not a number, carry confidence.
+
+**E3, estimator family.** The estimator family is the kernel-weighted quantile successor recorded under Shipped position, built first rather than after a shipped median ladder. The ladder survives only as the evaluation comparator, and adoption still passes the evaluation contract below.
+
+**E4, imported evidence.** Observations imported from the V2 history are admissible as a cold-start prior in a toolchain-unversioned quality class, down-weighted until native evidence dominates. They never gain native standing, because the producing toolchain, effective preset, and decode mode cannot be established after the fact.
+
 ## The seam with History
 
 Estimation reads History as evidence and never writes to it. Three parts of that seam are unsettled.
