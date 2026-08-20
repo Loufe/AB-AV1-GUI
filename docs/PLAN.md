@@ -26,7 +26,7 @@ Engine and queue foundations are complete and contract-tested: pinned ab-av1 ada
 - Failed and stopped runs are browsable behind default-off History filters and excluded from Statistics aggregates; deliberately throttled runs carry a provenance flag and never enter unthrottled time cohorts
 - Export and the portable bundle ship post-3.0 while import stays in V3; pooled research over contributed bundles is the bundle's long-term consumer (`docs/design/history-bundle.md`)
 - Runnable intermediate: durable observations for every terminal outcome, History browsing, and import v1; 3.0-complete adds Statistics, the failed and stopped filters, wired scrub, and enriched import
-- Estimation verdicts: point uncertainty through the presentation ramp, the kernel-weighted quantile successor built first, imported V2 evidence as a down-weighted cold-start prior (`docs/design/estimation.md`)
+- Estimation verdicts: point uncertainty through the presentation ramp, the kernel-weighted quantile successor built first, imported V2 evidence as a down-weighted cold-start prior, and size estimation on a video-stream basis (`docs/design/estimation.md`)
 
 ## Open questions
 

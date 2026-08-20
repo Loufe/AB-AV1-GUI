@@ -30,6 +30,8 @@ Labels are stable and cited bare.
 
 **E4, imported evidence.** Observations imported from the V2 history are admissible as a cold-start prior in a toolchain-unversioned quality class, down-weighted until native evidence dominates. They never gain native standing, because the producing toolchain, effective preset, and decode mode cannot be established after the fact.
 
+**E5, video-stream basis.** A size estimate, wherever one exists under E1, is learned from and applied to video-stream bytes, with non-video bytes carried through unchanged. The encode copies them: the adapter requests no audio codec, and the pinned fork defaults the output audio stream to copy (read from source). The basis follows the output audio policy, so if a future encode re-encodes or downmixes audio, the carried bytes change with it. V2's audio-copy correction is kept as semantics and rejected as formula; the V2 baseline below records why. Realizing the basis requires per-stream audio bitrate and duration on both the historical record and the estimated file, and a derived audio size is estimator input, never a stored size measurement.
+
 ## The seam with History
 
 Estimation reads History as evidence and never writes to it. Three parts of that seam are unsettled.
@@ -71,7 +73,8 @@ Read from source.
 V2 baseline, read from source on `main`.
 
 - Time: the same rate quantity, grouped `(codec, resolution bucket)`, reported as P50 with a P25 to P75 range, over four fallback tiers with sample thresholds of ten and five, graded high, medium, low, or none. The grade reached the user as a prefix on the rendered value: no prefix for high, one tilde for medium, two tildes for low, and the absent-value placeholder when the grade was none. Uncertainty was therefore presentation, never a number, and the P25 to P75 range it was computed from was never shown.
-- Size: the mean reduction percent of peers matched on codec and width, then the mean over all converted records, then a hardcoded constant. Applied to file size less an audio size derived from audio bitrate and duration.
+- Size: the mean reduction percent of peers matched on codec and width, then the mean over all converted records, then a hardcoded constant. Applied to file size less an audio size derived from audio bitrate and duration, on the premise that audio is copied unchanged. The premise is true at runtime and entirely accidental: the encode command carries no audio argument, and V2's audio-conversion settings are accepted by `process_video` and never reach an encode. Their one consumer is the record writer, which infers `output_audio_codec` from the dead setting instead of probing the artifact, so records claim opus for every input whose audio is neither aac nor opus while the actual output carries copied input audio. The V3 import does not carry that field; no V2 record of it may be projected as fact.
+- Size, derived bias: the ratio V2 learns is whole-file reduction, one minus output size over input size, while the base it multiplies is video-only bytes. The historical corpus's audio share is therefore charged twice, and savings are under-predicted by that share on every estimate. It follows that the correction is worse than the uncorrected whole-file estimate unless the estimated file's audio share is roughly double the historical average, so the formula must not be ported.
 
 A successor estimator was recorded when the projections were designed, and this document is its only surviving record. It is a kernel-weighted quantile estimator that weights samples by codec and resolution similarity instead of partitioning them into hard buckets. Backtesting predicted durations against actual durations is required before it replaces the ladder. Its claimed advantage is that a dissimilar sample approaches zero weight rather than gaining authority at a sample-count cliff, which is the ladder's structural defect (carried reasoning; never implemented or measured). The V2 quartile math and its sample threshold were deliberately not ported because reproducing them would have frozen accidental behaviour as specification.
 
@@ -89,7 +92,7 @@ An estimator is admissible when it is measured against the one it would replace,
 
 **Promise level.** Whether accuracy is promised per file, per folder aggregate, or only as a bounded range. Measured evidence in `docs/design/history-content-evidence-research.md` records three files agreeing on every predictor either estimator uses whose outcomes span a factor of seven in predicted output size. That is the headroom a per-file promise must cover.
 
-**Size estimation.** Whether a pre-analysis size estimate can exist at all under E1, what its basis is (video stream or whole file), and whether V2's audio-copy correction was intentional semantics worth keeping.
+**Size estimation.** Whether a pre-analysis size estimate can exist at all under E1. The basis and the fate of V2's correction are settled by E5.
 
 **Read shape and admissibility authority.** As above.
 
