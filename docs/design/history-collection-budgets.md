@@ -1,6 +1,6 @@
 # History collection budgets
 
-Status: working design note; candidate caps are proposals with recorded derivations, and no cap is authoritative until `docs/PLAN.md` records it as decided
+Status: working design note; the freeze outcome is recorded in `docs/PLAN.md`, and the derivations and thresholds here are what the measurement spikes cite
 
 ## Purpose and boundary
 
@@ -22,6 +22,7 @@ It selects no fields and no collectors, defines no observation shapes, and measu
 - A cap binds the increment attributable to History collection, not work the stage already performs. Basic Scan's probe and identity sampling and startup's tool discovery are existing costs outside these budgets.
 - A share cap is evaluated at selection time as an aggregate over the representative workload, never enforced per file at runtime. Per-file share varies inversely with attempt count and search length: the window pass measured 1.37 to 3.92 percent across successful searches and 10.68 percent against a search that failed after one attempt, with nothing wrong.
 - A cap binds History collection reads, not operational streams the pipeline already consumes. The adapter's typed updates and the remux `-progress` output sit outside every cap here, including the polling prohibition.
+- An absolute time cap binds reads of memory-resident local OS accounting only; costs that vary with storage or network are governed by shape constraints and relative tripwires, never absolute times. Every recorded measurement ran on one NVMe-backed host, and no network-storage fixture exists yet.
 
 ## Candidate caps
 
@@ -31,7 +32,7 @@ It selects no fields and no collectors, defines no observation shapes, and measu
 | Lifecycle boundaries (job claim, attempt start, attempt reap, job terminal) | absolute per boundary | 1 ms, boundary reads only, no periodic sampling |
 | Basic Scan | absolute per file | no added process, no added file read, 1 ms added CPU |
 | Startup | absolute on the critical path | 10 ms aggregate, no process launch |
-| Browsing | absolute | first History paint under 100 ms at 50,000 records (decided), extended to filters, sorts, and the Statistics recompute |
+| Browsing | absolute | first History paint under 100 ms at 50,000 records (decided) |
 
 ### Quality search: 5 percent, aggregate
 
@@ -65,24 +66,22 @@ The content-feature pass runs with Analyze and never during Basic Scan, so the s
 
 ### Browsing: one tripwire for the whole surface
 
-First History paint under 100 ms at 50,000 records is decided in `docs/PLAN.md` as a regression tripwire. The proposal here is that the same tripwire covers filter toggles, sort changes, and the Statistics recompute at the same corpus size, because a fast first paint into a view whose interactions stall does not keep the guardrail's promise. For an interaction the measured quantity is input to settled frame over the same corpus, so the guardrail keeps one number and one fixture set.
+First History paint under 100 ms at 50,000 records is decided in `docs/PLAN.md` as a regression tripwire. The proposal to extend it to filter toggles, sort changes, and the Statistics recompute was dropped at the freeze as not worth a recorded decision; a measured interaction regression reopens it.
 
 ## Storage is a cost these caps do not bind
 
-The caps above bind stage time. Retained sample and attempt evidence costs bytes instead: the measured corpus kept roughly one in six of the attempt observations its searches paid for, and retaining the rest multiplies durable rows per search severalfold. No byte cap is derived here, because journal growth is bounded by compaction and no record-size measurement against the representative workload exists yet. The freeze should either record a per-run size tripwire or record that storage is deliberately unbudgeted, so that silence does not read as a decision. Field selection is the natural revisit trigger: the decision that fixes the observation shape is the same one that makes a bytes-per-search measurement possible, and no collector ships ahead of it.
+The caps above bind stage time. Retained sample and attempt evidence costs bytes instead: the measured corpus kept roughly one in six of the attempt observations its searches paid for, and retaining the rest multiplies durable rows per search severalfold. No byte cap is derived here, because journal growth is bounded by compaction and no record-size measurement against the representative workload exists yet. The freeze records no storage tripwire. Field selection is the natural revisit trigger: the decision that fixes the observation shape is the same one that makes a bytes-per-search measurement possible, and no collector ships ahead of it.
 
 ## The workload every tripwire assumes
 
-Each tripwire above measures against a representative workload, and no such fixture corpus exists yet. Defining it belongs to the measurement work that consumes these caps, and no tripwire is acceptance-testable before that corpus lands.
+Each tripwire above measures against a representative workload, and no such fixture corpus exists yet. Defining it belongs to the measurement work that consumes these caps, and no tripwire is acceptance-testable before that corpus lands. The corpus must span storage classes, local NVMe and network-attached spinning disks at least, because scan and demux costs vary by orders of magnitude across storage while CPU-bound costs do not.
 
-## Open decisions
+## Freeze outcome
 
-- The aggregate reading of the share cap, and whether 5 percent is the right ceiling.
-- Whether the polling prohibition at lifecycle boundaries is absolute for the release or admits a measured exception.
-- The startup number, and whether the compatibility probe runs after first paint or at first claim.
-- Whether the browsing tripwire covers interactions and Statistics or first paint alone.
-- A storage tripwire, or an explicit decision not to set one.
+- The 5% aggregate share, the periodic-sampling prohibition, the scan and startup shape rules, and the probe at first claim are recorded in `docs/PLAN.md`.
+- The absolute millisecond values above survive as spike pass-or-fail thresholds only; they are documented targets, never shipped mechanisms.
+- The browsing tripwire stays first paint alone, and storage stays deliberately unbudgeted; neither carries a recorded decision beyond this note.
 
 ## Distillation
 
-Frozen caps are recorded as decided in `docs/PLAN.md`, derivations worth keeping move into the contract documents that replace the research notes, and this note is deleted when the freeze lands.
+Derivations worth keeping move into the contract documents that replace the research notes, and this note is deleted once the measurement spikes stop citing it.

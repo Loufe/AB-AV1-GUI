@@ -1,6 +1,6 @@
 # History consumer matrix
 
-Status: working design note; parity rows record verified fact, and every proposal awaits `docs/PLAN.md`
+Status: working design note; the proposals below are recorded as decided in `docs/PLAN.md` (the metric tag as ADR-022), and parity rows await distillation into `docs/HISTORY.md`
 
 ## Purpose and boundary
 
@@ -13,7 +13,6 @@ It selects no storage engine, designs no estimator (`docs/design/estimation.md`)
 - **decided**: recorded in `docs/PLAN.md`, or a product decision restated here as its durable home.
 - **read from source**: established by reading first-party code.
 - **derived**: computed from cited facts, with the derivation stated.
-- **proposal**: a recommendation this note makes; nothing under the label is authoritative until `docs/PLAN.md` records it.
 
 ## The decided consumer floor
 
@@ -92,27 +91,27 @@ The V2 queue operation column and skip breakdown read current freshness-checked 
 
 ## Fields the durable model does not yet hold
 
-**Per-stream audio bitrate (proposal).** `AudioStreamMeta` holds codec and channels today (read from source). The floor and E5 require bitrate per stream. It parses from ffprobe output Basic Scan already fetches, inside the scan cap in `docs/design/history-collection-budgets.md`, and stays absent where the container omits it.
+**Per-stream audio bitrate (decided).** `AudioStreamMeta` holds codec and channels today (read from source). The floor and E5 require bitrate per stream. It arrives by extending the field list of the single ffprobe call Basic Scan already makes, adding no process and no file read, and stays absent where the container omits it. The scan's `-show_entries` allowlist excludes bitrate today, so the fetch list grows while the invocation count does not (read from source).
 
-**First-observed and last-updated (proposal).** No durable type carries either; `Verdict.decided_at` and run timestamps exist (read from source). The content record gains a first-observed stamp folded once at its first `MediaObserved` and never overwritten, and a last-updated stamp refreshed by any fold that changes the record. The stamps must live on the record: compaction folds the journal into one snapshot line, so replay-derived stamps do not survive it (read from source). V2's writers disagreed with each other here, so there is no intentional V2 semantic to preserve (read from source).
+**First-observed and last-updated (decided).** No durable type carries either; `Verdict.decided_at` and run timestamps exist (read from source). The content record gains a first-observed stamp folded once at its first `MediaObserved` and never overwritten, and a last-updated stamp refreshed by any fold that changes the record. The stamps must live on the record: compaction folds the journal into one snapshot line, so replay-derived stamps do not survive it (read from source). V2's writers disagreed with each other here, so there is no intentional V2 semantic to preserve (read from source).
 
 ## Metric-tagged quality evidence
 
-**Read from source.** `VmafTarget` and `VmafScore` are bare newtypes threading the analysis map key, verdicts, `StatFact`, the statistics payload, and import. The vendored interface exposes a `min_xpsnr` argument the adapter sets to none, telemetry classifies XPSNR sample work, and a search runs under exactly one quality flag. Upstream requests for further quality metrics recur.
+**Read from source.** `VmafTarget` and `VmafScore` are bare newtypes threading the analysis map key, verdicts, `StatFact`, the statistics payload, and import. The vendored interface exposes a `min_xpsnr` argument the adapter sets to none, telemetry classifies XPSNR sample work, and a search runs under exactly one quality flag. Upstream requests for further quality metrics recur (alexheretic/ab-av1#205, alexheretic/ab-av1#331, alexheretic/ab-av1#343).
 
-**Proposal.** A quality metric enum, VMAF and XPSNR initially, tags every durable target and score. The metric joins the analysis identity, extending the ADR-007 precedent of pinning decode mode there, so a VMAF result never answers an XPSNR request. Verdict-carried values are self-describing, statistics spreads never blend metrics, and imported V2 evidence is tagged VMAF. No XPSNR code path is wired until a consumer asks; the tag is schema insurance. Before the first journaled release the change is a refactor plus fixture regeneration; after it, a journal migration.
+**Decided (ADR-022).** A quality metric enum, VMAF its sole initial variant, tags every durable target and score. The metric joins the analysis identity, extending the ADR-007 precedent of pinning decode mode there, so a VMAF result never answers an XPSNR request. Verdict-carried values are self-describing, statistics spreads never blend metrics, and imported V2 evidence is tagged VMAF. No XPSNR code path is wired until a consumer asks; the tag is schema insurance. Before the first journaled release the change is a refactor plus fixture regeneration; after it, a journal migration.
 
 ## The not-worthwhile row
 
 **Read from source.** V2 persisted a free-text `skip_reason`; the typed verdict carrying the requested target and fallback floor supersedes it. The user-facing explanation composes from the highest-saving attempt's measurement and reads the live run today.
 
-**Proposal.** The verdict embeds that highest-saving measurement, metric-tagged, so adopted imports and any future run pruning keep their explanation. The embedded value is a prediction and stays typed as one, per the prediction and measurement rule in `docs/HISTORY.md`.
+**Decided.** The verdict embeds that highest-saving measurement, metric-tagged, so adopted imports and any future run pruning keep their explanation. The embedded value is a prediction and stays typed as one, per the prediction and measurement rule in `docs/HISTORY.md`.
 
 ## Field dispositions
 
-A field is a free option when it is already in output the stage fetched, observed rather than inferred, and identity-free; such a field may ship with a speculative browsing or statistics consumer (proposal). Inferred facts rot unread: V2 recorded `output_audio_codec` by inference from a dead setting, wrongly on most records, and no consumer existed to notice (read from source).
+A field is a free option when the stage's existing probe invocation can return it without added I/O, it is observed rather than inferred, and it is identity-free; such a field may ship with a speculative browsing or statistics consumer (decided). Inferred facts rot unread: V2 recorded `output_audio_codec` by inference from a dead setting, wrongly on most records, and no consumer existed to notice (read from source).
 
-| V2 field | Disposition (proposal) |
+| V2 field | Disposition (decided) |
 | --- | --- |
 | `filename_hash` | superseded by the sampled content key (ADR-019) |
 | `predicted_output_size` | superseded by `SearchMeasurement.predicted_size` |
@@ -128,12 +127,11 @@ A field is a free option when it is already in output the stage fetched, observe
 
 Import v1 carries status, sizes, modification time, codec, dimensions, duration, encode time, CRF, VMAF, targets, and one decision timestamp (read from source). V2 records hold more than the importer keeps (read from source on `main`).
 
-The enriched scope is the delta between the floor above and import v1 (derived, proposal). It adds per-run CRF-search time, first-seen and last-updated, per-stream audio evidence including bitrate, and the recorded video bitrate, an observation the view derivation cannot reconstruct where audio evidence is missing. Every imported quality value is tagged VMAF. Preset is deliberately not carried: E4 records that the effective preset cannot be established after the fact, which is why imported evidence sits in a toolchain-unversioned class.
+The enriched scope is the delta between the floor above and import v1 (derived, decided). It adds per-run CRF-search time, first-seen and last-updated, per-stream audio evidence including bitrate, and the recorded video bitrate, an observation the view derivation cannot reconstruct where audio evidence is missing. Every imported quality value is tagged VMAF. Preset is deliberately not carried: E4 records that the effective preset cannot be established after the fact, which is why imported evidence sits in a toolchain-unversioned class.
 
 ## Open decisions
 
-- Whether `docs/PLAN.md` records the proposals here: the metric tag, the two field additions, the embedded not-worthwhile measurement, the field dispositions, and the enriched import scope.
-- The stored shape of first-observed and last-updated, and which folds refresh the second.
+- Which folds refresh the last-updated stamp.
 - How statistics spreads render when a second metric first appears.
 
 ## Distillation
