@@ -20,7 +20,7 @@ It selects no fields and no collectors, defines no observation shapes, and measu
 
 - A cap binds the aggregate of all collectors at its surface, not each collector separately. The user experiences the sum, and per-collector caps invite additive creep.
 - A cap binds the increment attributable to History collection, not work the stage already performs. Basic Scan's probe and identity sampling and startup's tool discovery are existing costs outside these budgets.
-- A share cap is evaluated at selection time as an aggregate over the representative workload, never enforced per file at runtime. Per-file share varies inversely with attempt count: the window pass measured 3.87 percent on a three-attempt search, and the same collector on a two-attempt search of that file lands near 5.8 percent with nothing wrong.
+- A share cap is evaluated at selection time as an aggregate over the representative workload, never enforced per file at runtime. Per-file share varies inversely with attempt count and search length: the window pass measured 1.37 to 3.92 percent across successful searches and 10.68 percent against a search that failed after one attempt, with nothing wrong.
 - A cap binds History collection reads, not operational streams the pipeline already consumes. The adapter's typed updates and the remux `-progress` output sit outside every cap here, including the polling prohibition.
 
 ## Candidate caps
@@ -35,11 +35,11 @@ It selects no fields and no collectors, defines no observation shapes, and measu
 
 ### Quality search: 5 percent, aggregate
 
-**Measured.** On the four collected fixtures the whole-file packet pass cost 0.03 to 0.07 percent of the search it would inform, and the window filter pass cost 2.29 to 3.87 percent. The spatial pass cost 1.28 to 5.80 percent while producing no usable value.
+**Measured.** Across the twenty collected fixtures the window filter pass cost 1.37 to 3.92 percent of every successful search it would inform, spanning animation, film, live action, motion, grain, and three frame sizes. The whole-file packet pass cost 0.03 to 0.67 percent on moderate-bitrate fixtures and 15.33 percent on the 86 Mbps grain-heavy fixture. The spatial pass produced no usable value on any of the twenty fixtures.
 
-**Derived.** The share form is stable because the candidate passes and the search scale with the same drivers, sample count and pixel rate, where absolute seconds do not transfer across content lengths. The worst measured admissible set, packet plus window on the shortest search, totals 3.94 percent.
+**Derived.** The share form is stable for decode-bound passes because they and the search scale with the same drivers, sample count and pixel rate. It is not stable for whole-file demux, whose cost scales with container bytes and storage speed, so the packet pass as designed blows through any search-relative ceiling on high-bitrate sources. Excluding that byte-bound outlier, the worst measured packet-plus-window total stays 3.94 percent, on the shortest successful search.
 
-**Policy.** Five percent aggregate. It admits the packet and window passes together with margin for host variance, and it refuses the spatial pass as measured alongside them: a spatial collector must displace the window pass or get cheaper. Applying that selection pressure is what the cap is for.
+**Policy.** Five percent aggregate. It admits the window pass across every measured content class with margin for host variance, and it refuses the spatial pass as measured alongside it. It also refuses whole-file demux on high-bitrate sources: a surviving packet collector must bound its reads instead of scaling with container bytes. Applying that selection pressure is what the cap is for.
 
 **Read from source.** Retaining the sample and attempt facts ab-av1 already streams to the adapter adds no process and no pass, so its stage cost is negligible by construction; its cost is storage, covered below.
 
@@ -69,7 +69,7 @@ First History paint under 100 ms at 50,000 records is decided in `docs/PLAN.md` 
 
 ## Storage is a cost these caps do not bind
 
-The caps above bind stage time. Retained sample and attempt evidence costs bytes instead: the measured run kept roughly one fifth of the attempt observations its searches paid for, and retaining the rest multiplies durable rows per search severalfold. No byte cap is derived here, because journal growth is bounded by compaction and no record-size measurement against the representative workload exists yet. The freeze should either record a per-run size tripwire or record that storage is deliberately unbudgeted, so that silence does not read as a decision. Field selection is the natural revisit trigger: the decision that fixes the observation shape is the same one that makes a bytes-per-search measurement possible, and no collector ships ahead of it.
+The caps above bind stage time. Retained sample and attempt evidence costs bytes instead: the measured corpus kept roughly one in six of the attempt observations its searches paid for, and retaining the rest multiplies durable rows per search severalfold. No byte cap is derived here, because journal growth is bounded by compaction and no record-size measurement against the representative workload exists yet. The freeze should either record a per-run size tripwire or record that storage is deliberately unbudgeted, so that silence does not read as a decision. Field selection is the natural revisit trigger: the decision that fixes the observation shape is the same one that makes a bytes-per-search measurement possible, and no collector ships ahead of it.
 
 ## The workload every tripwire assumes
 
