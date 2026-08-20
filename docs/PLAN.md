@@ -31,7 +31,7 @@ Engine and queue foundations are complete and contract-tested: pinned ab-av1 ada
 ## Open questions
 
 - Durable state model and storage engine for first-class History
-- History observation contract: field selection and the consumer-to-evidence matrix
+- History observation contract: field selection and the consumer-to-evidence matrix (`docs/design/history-consumer-matrix.md`)
 - Serving History by request/response instead of the frontend fold
 - Estimation as a subsystem separate from History: sufficiency, promise level, evidence seam, evaluation (`docs/design/estimation.md`)
 - Whether the ab-av1 maintainer accepts the operation boundary ADR-021 selects (alexheretic/ab-av1#371)
