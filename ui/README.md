@@ -31,7 +31,7 @@ Pure tests stay beside their source as `*.test.ts`. Tests that require a real DO
 
 - `src/components/ui/` — shadcn (Base UI) primitives after the house pass: token colours only, house radius/density, reviewed in both themes.
 - `src/components/layout/` — sidebar shell and the `VIEWS`/`DEV_VIEWS` registries.
-- `src/features/<view>/` — one folder per view; Settings reads the store, the other views ship empty states until they grow selectors over it.
+- `src/features/<view>/` — one folder per view. Queue, History, Statistics, and Settings consume production state; Analysis remains a disabled empty state. The [alpha scope](../docs/design/alpha.md) defines its first usable workflow.
 - `src/lib/bindings.ts` — generated from the Rust types (see AGENTS.md); excluded from oxfmt/oxlint.
 - `src/lib/ipc/` — `isTauri()` guard, event-stream subscription, and command helpers over the generated bindings.
 - `src/lib/store/` — the state layer (D5): `fold.ts` mirrors `crfty_core::fold`, verified against generated `fold-fixtures.json` (see AGENTS.md); `app-store.ts`/`progress-store.ts` are the Zustand containers (telemetry separate so progress ticks skip tree subscribers); `connect.ts` is the single stream consumer with the sequence tripwire.
