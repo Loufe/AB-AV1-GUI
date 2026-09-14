@@ -26,14 +26,14 @@ describe("Statistics display model", () => {
   it("communicates partial conversion-size coverage without altering totals", () => {
     const partial = statisticsPayload({ converted_files: 5, sized_converted_files: 3 });
     expect(coverageMessage(partial)).toBe(
-      "3 of 5 converted standings include both sizes; savings and reduction statistics cover only those files.",
+      "3 of 5 converted standings include both sizes; output-size reduction statistics cover only those files.",
     );
     expect(
       coverageMessage(statisticsPayload({ converted_files: 5, sized_converted_files: 5 })),
     ).toBeNull();
   });
 
-  it("formats negative and positive savings without losing the sign", () => {
+  it("formats negative and positive reductions without losing the sign", () => {
     expect(formatSignedFileSize(-GIB)).toBe("−1.00 GB");
     expect(formatSignedFileSize(GIB)).toBe("1.00 GB");
     expect(formatSignedFileSize(0)).toBe("0 B");
@@ -77,16 +77,16 @@ describe("Statistics display model", () => {
 
   it("preserves daily order and downward cumulative movement", () => {
     const rows = cumulativeRows([
-      { epoch_day: 20_000, cumulative_saved_bytes: 2 * GIB },
-      { epoch_day: 20_001, cumulative_saved_bytes: -GIB },
-      { epoch_day: 20_002, cumulative_saved_bytes: 3 * GIB },
+      { epoch_day: 20_000, cumulative_reduction_bytes: 2 * GIB },
+      { epoch_day: 20_001, cumulative_reduction_bytes: -GIB },
+      { epoch_day: 20_002, cumulative_reduction_bytes: 3 * GIB },
     ]);
     expect(rows.map(({ date }) => date)).toEqual([
       formatEpochDay(20_000),
       formatEpochDay(20_001),
       formatEpochDay(20_002),
     ]);
-    expect(rows.map(({ savedBytes }) => savedBytes)).toEqual([2 * GIB, -GIB, 3 * GIB]);
+    expect(rows.map(({ reductionBytes }) => reductionBytes)).toEqual([2 * GIB, -GIB, 3 * GIB]);
   });
 
   it("keeps every terminal run outcome distinct", () => {

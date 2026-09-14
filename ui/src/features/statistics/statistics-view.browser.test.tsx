@@ -46,8 +46,8 @@ function richPayload(offset = currentUtcOffsetMinutes()): StatisticsPayload {
     not_worthwhile_files: 3,
     total_input_bytes: 3 * GIB,
     total_output_bytes: 4 * GIB,
-    total_saved_bytes: -GIB,
-    remux_saved_bytes: GIB / 2,
+    total_reduction_bytes: -GIB,
+    remux_size_change_bytes: GIB / 2,
     total_time_ms: 3_600_000,
     gigabytes_per_hour: 3,
     reduction_bins: [1, 0, 0, 0, 0, 0, 0, 0, 0, 0],
@@ -56,9 +56,9 @@ function richPayload(offset = currentUtcOffsetMinutes()): StatisticsPayload {
       { codec: "H264", count: 1 },
       { codec: "Hevc", count: 1 },
     ],
-    cumulative_savings: [
-      { epoch_day: 20_000, cumulative_saved_bytes: GIB },
-      { epoch_day: 20_001, cumulative_saved_bytes: -GIB },
+    cumulative_reduction: [
+      { epoch_day: 20_000, cumulative_reduction_bytes: GIB },
+      { epoch_day: 20_001, cumulative_reduction_bytes: -GIB },
     ],
     first_epoch_day: 20_000,
     last_epoch_day: 20_001,
@@ -99,11 +99,11 @@ describe("StatisticsView request lifecycle", () => {
     await renderApp(<StatisticsHarness active />, { appState: { statistics: initial } });
 
     await expect.element(page.getByText("Refreshing statistics…")).toBeVisible();
-    await expect.element(page.getByText("Conversion net savings").first()).toBeVisible();
+    await expect.element(page.getByText("Output-size reduction").first()).toBeVisible();
     acknowledgement.resolve(null);
     await expect.element(page.getByText("Refreshing statistics…")).toBeVisible();
 
-    setStatistics({ ...initial, total_saved_bytes: 2 * GIB });
+    setStatistics({ ...initial, total_reduction_bytes: 2 * GIB });
 
     await expect.element(page.getByText("Refreshing statistics…")).not.toBeInTheDocument();
     await expect.element(page.getByText("2.00 GB").first()).toBeVisible();
@@ -125,7 +125,7 @@ describe("StatisticsView request lifecycle", () => {
       .toHaveTextContent(
         "statistics request failed (engine_unavailable): projection worker stopped Showing the last valid response.",
       );
-    await expect.element(page.getByText("Conversion net savings").first()).toBeVisible();
+    await expect.element(page.getByText("Output-size reduction").first()).toBeVisible();
   });
 
   it("requests on activation and focus regain only while active", async () => {
@@ -156,12 +156,12 @@ describe("StatisticsView request lifecycle", () => {
     });
 
     await expect.element(page.getByText("Loading statistics")).toBeVisible();
-    await expect.element(page.getByText("Conversion net savings")).not.toBeInTheDocument();
+    await expect.element(page.getByText("Output-size reduction")).not.toBeInTheDocument();
     await expect.poll(() => tauri.callsFor("request_statistics").length).toBe(1);
     expect(requestPayloads(tauri)).toEqual([{ utcOffsetMinutes: currentOffset }]);
 
     setStatistics(richPayload(currentOffset));
-    await expect.element(page.getByText("Conversion net savings").first()).toBeVisible();
+    await expect.element(page.getByText("Output-size reduction").first()).toBeVisible();
   });
 
   it("re-requests when a snapshot clears the non-replayed answer", async () => {
@@ -199,7 +199,7 @@ describe("StatisticsView payload presentation", () => {
     await expect
       .element(
         page.getByText(
-          "1 of 2 converted standings include both sizes; savings and reduction statistics cover only those files.",
+          "1 of 2 converted standings include both sizes; output-size reduction statistics cover only those files.",
         ),
       )
       .toBeVisible();
@@ -245,7 +245,7 @@ describe("StatisticsView payload presentation", () => {
     const remuxOnly = statisticsPayload({
       utc_offset_minutes: currentUtcOffsetMinutes(),
       remuxed_files: 2,
-      remux_saved_bytes: GIB,
+      remux_size_change_bytes: GIB,
     });
     const rendered = await renderApp(<StatisticsHarness active />, {
       appState: { statistics: remuxOnly },
@@ -253,7 +253,7 @@ describe("StatisticsView payload presentation", () => {
 
     await expect.element(page.getByText("Outcomes and coverage")).toBeVisible();
     await expect.element(page.getByText("No statistics yet")).not.toBeInTheDocument();
-    await expect.element(page.getByText("Remux savings")).toBeVisible();
+    await expect.element(page.getByText("Remux size change")).toBeVisible();
 
     const notWorthwhileOnly = statisticsPayload({
       utc_offset_minutes: currentUtcOffsetMinutes(),

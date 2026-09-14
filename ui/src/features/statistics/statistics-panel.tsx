@@ -48,8 +48,8 @@ import {
   runOutcomeRows,
 } from "./statistics-display";
 
-const SAVINGS_CONFIG = {
-  savedBytes: { label: "Cumulative savings", color: "var(--chart-1)" },
+const REDUCTION_CONFIG = {
+  reductionBytes: { label: "Output-size reduction", color: "var(--chart-1)" },
 } satisfies ChartConfig;
 
 const FILES_CONFIG = {
@@ -66,8 +66,8 @@ interface Metric {
 function StatStrip({ payload }: { payload: StatisticsPayload }) {
   const metrics: Metric[] = [
     {
-      label: "Conversion net savings",
-      value: formatSignedFileSize(payload.total_saved_bytes),
+      label: "Output-size reduction",
+      value: formatSignedFileSize(payload.total_reduction_bytes),
       description: `${payload.sized_converted_files.toLocaleString()} converted files with both sizes`,
       icon: HardDrive,
     },
@@ -146,15 +146,15 @@ function TooltipRow({ name, value }: { name: string; value: string }) {
   );
 }
 
-function CumulativeSavingsCard({ payload }: { payload: StatisticsPayload }) {
+function CumulativeReductionCard({ payload }: { payload: StatisticsPayload }) {
   const gradientId = useId().replace(/:/g, "");
-  const rows = cumulativeRows(payload.cumulative_savings);
+  const rows = cumulativeRows(payload.cumulative_reduction);
 
   return (
     <Card>
       <CardHeader>
         <CardTitle>
-          <h2>Cumulative conversion savings</h2>
+          <h2>Cumulative output-size reduction</h2>
         </CardTitle>
         <CardDescription>
           Daily local-calendar totals; the line can fall when outputs grow
@@ -167,15 +167,15 @@ function CumulativeSavingsCard({ payload }: { payload: StatisticsPayload }) {
           </p>
         ) : (
           <ChartContainer
-            config={SAVINGS_CONFIG}
+            config={REDUCTION_CONFIG}
             className="aspect-auto h-64 w-full"
-            aria-label="Daily cumulative conversion savings chart"
+            aria-label="Daily cumulative output-size reduction chart"
           >
             <AreaChart data={rows} accessibilityLayer margin={{ left: 4, right: 12, top: 8 }}>
               <defs>
                 <linearGradient id={gradientId} x1="0" y1="0" x2="0" y2="1">
-                  <stop offset="5%" stopColor="var(--color-savedBytes)" stopOpacity={0.5} />
-                  <stop offset="95%" stopColor="var(--color-savedBytes)" stopOpacity={0.04} />
+                  <stop offset="5%" stopColor="var(--color-reductionBytes)" stopOpacity={0.5} />
+                  <stop offset="95%" stopColor="var(--color-reductionBytes)" stopOpacity={0.04} />
                 </linearGradient>
               </defs>
               <CartesianGrid vertical={false} />
@@ -201,17 +201,20 @@ function CumulativeSavingsCard({ payload }: { payload: StatisticsPayload }) {
                   <ChartTooltipContent
                     indicator="line"
                     formatter={(value) => (
-                      <TooltipRow name="Net savings" value={formatSignedFileSize(Number(value))} />
+                      <TooltipRow
+                        name="Output-size reduction"
+                        value={formatSignedFileSize(Number(value))}
+                      />
                     )}
                   />
                 }
               />
               <Area
-                dataKey="savedBytes"
+                dataKey="reductionBytes"
                 type="linear"
                 baseValue={0}
                 fill={`url(#${gradientId})`}
-                stroke="var(--color-savedBytes)"
+                stroke="var(--color-reductionBytes)"
                 strokeWidth={2}
                 isAnimationActive={false}
               />
@@ -222,11 +225,11 @@ function CumulativeSavingsCard({ payload }: { payload: StatisticsPayload }) {
           <details className="selectable text-xs text-muted-foreground">
             <summary className="w-fit cursor-pointer text-foreground">View daily values</summary>
             <table className="mt-2 w-full max-w-sm border-collapse text-left">
-              <caption className="sr-only">Daily cumulative conversion savings</caption>
+              <caption className="sr-only">Daily cumulative output-size reduction</caption>
               <thead>
                 <tr className="border-b border-border">
                   <th className="py-1 font-medium">Local date</th>
-                  <th className="py-1 text-right font-medium">Net savings</th>
+                  <th className="py-1 text-right font-medium">Output-size reduction</th>
                 </tr>
               </thead>
               <tbody>
@@ -234,7 +237,7 @@ function CumulativeSavingsCard({ payload }: { payload: StatisticsPayload }) {
                   <tr key={row.date} className="border-b border-border/50 last:border-0">
                     <td className="py-1">{row.date}</td>
                     <td className="py-1 text-right tabular-nums">
-                      {formatSignedFileSize(row.savedBytes)}
+                      {formatSignedFileSize(row.reductionBytes)}
                     </td>
                   </tr>
                 ))}
@@ -473,8 +476,8 @@ function OutcomeDetailsCard({ payload }: { payload: StatisticsPayload }) {
           </dl>
         </section>
 
-        <section aria-labelledby="statistics-savings-heading">
-          <h3 id="statistics-savings-heading" className="mb-2 font-medium">
+        <section aria-labelledby="statistics-size-heading">
+          <h3 id="statistics-size-heading" className="mb-2 font-medium">
             Size facts
           </h3>
           <dl className="grid gap-1 text-sm text-muted-foreground">
@@ -491,15 +494,15 @@ function OutcomeDetailsCard({ payload }: { payload: StatisticsPayload }) {
               </dd>
             </div>
             <div className="flex justify-between gap-4">
-              <dt>Conversion net savings</dt>
+              <dt>Output-size reduction</dt>
               <dd className="text-foreground tabular-nums">
-                {formatSignedFileSize(payload.total_saved_bytes)}
+                {formatSignedFileSize(payload.total_reduction_bytes)}
               </dd>
             </div>
             <div className="flex justify-between gap-4">
-              <dt>Remux savings</dt>
+              <dt>Remux size change</dt>
               <dd className="text-foreground tabular-nums">
-                {formatSignedFileSize(payload.remux_saved_bytes)}
+                {formatSignedFileSize(payload.remux_size_change_bytes)}
               </dd>
             </div>
             <div className="flex justify-between gap-4">
@@ -566,7 +569,7 @@ export function StatisticsPanel({ payload }: { payload: StatisticsPayload }) {
           <span>{coverage}</span>
         </p>
       )}
-      <CumulativeSavingsCard payload={payload} />
+      <CumulativeReductionCard payload={payload} />
       <div className="grid gap-4 xl:grid-cols-2">
         <ReductionHistogramCard payload={payload} />
         <CodecBreakdownCard payload={payload} />

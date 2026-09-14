@@ -9,10 +9,11 @@
 //!
 //! Semantics deliberately diverge from the Python application where V2
 //! behavior was an accident of loose `None` handling; the projection ADR
-//! enumerates each divergence. The load-bearing ones: savings totals and the
-//! cumulative series share one both-sizes-known rule, negative savings are
-//! represented (never clamped into a bin), dates come from run completion,
-//! and remux outcomes stay out of conversion-savings/VMAF aggregates.
+//! enumerates each divergence. The load-bearing ones: output-size reduction
+//! totals and the cumulative series share one both-sizes-known rule, negative
+//! reductions are represented (never clamped into a bin), dates come from run
+//! completion, and remux outcomes stay out of conversion reduction/VMAF
+//! aggregates.
 
 use std::collections::BTreeMap;
 
@@ -67,10 +68,11 @@ pub(crate) struct StatFact {
 }
 
 impl StatFact {
-    /// Savings in bytes when both sizes are known. Negative when the output
-    /// grew; `None` never contributes to savings aggregates.
+    /// Signed output-size reduction in bytes when both sizes are known: source
+    /// logical size minus produced-file logical size. Negative when the output
+    /// grew; `None` never contributes to reduction aggregates.
     #[must_use]
-    pub(crate) fn saved_bytes(&self) -> Option<i128> {
+    pub(crate) fn size_reduction_bytes(&self) -> Option<i128> {
         let input = self.input_size_bytes?;
         let output = self.output_size_bytes?;
         Some(i128::from(input) - i128::from(output))
@@ -238,15 +240,15 @@ pub struct CodecCount {
     pub count: u32,
 }
 
-/// One point of the cumulative savings series: a local calendar day (days
-/// since the Unix epoch in the requester's timezone) and the running total
-/// through that day. The series can dip when an output grew.
+/// One point of the cumulative output-size reduction series: a local
+/// calendar day (days since the Unix epoch in the requester's timezone) and
+/// the running total through that day. The series can dip when an output grew.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, specta::Type)]
-pub struct CumulativeSavingsPoint {
+pub struct CumulativeReductionPoint {
     #[specta(type = crate::JsNumber)]
     pub epoch_day: i64,
     #[specta(type = crate::JsNumber)]
-    pub cumulative_saved_bytes: i64,
+    pub cumulative_reduction_bytes: i64,
 }
 
 /// Terminal run outcomes counted across every conversion run, independent of
@@ -262,16 +264,16 @@ pub struct RunTotals {
     pub failed: u32,
 }
 
-/// The exhaustive Statistics answer. Conversion savings, VMAF, CRF, and time
-/// aggregates cover converted verdicts only; remux facts are counted and
-/// summed separately and never blend into conversion aggregates.
+/// The exhaustive Statistics answer. Conversion output-size reduction, VMAF,
+/// CRF, and time aggregates cover converted verdicts only; remux facts are
+/// counted and summed separately and never blend into conversion aggregates.
 #[derive(Debug, Clone, PartialEq, Serialize, specta::Type)]
 pub struct StatisticsPayload {
     /// The requester-supplied offset the calendar bucketing used.
     pub utc_offset_minutes: i32,
     pub converted_files: u32,
     /// Converted facts that carried both sizes and therefore contribute to
-    /// savings totals, bins, and the cumulative series.
+    /// output-size reduction totals, bins, and the cumulative series.
     pub sized_converted_files: u32,
     pub remuxed_files: u32,
     pub not_worthwhile_files: u32,
@@ -281,9 +283,9 @@ pub struct StatisticsPayload {
     pub total_output_bytes: u64,
     /// Negative when outputs grew past their inputs overall.
     #[specta(type = crate::JsNumber)]
-    pub total_saved_bytes: i64,
+    pub total_reduction_bytes: i64,
     #[specta(type = crate::JsNumber)]
-    pub remux_saved_bytes: i64,
+    pub remux_size_change_bytes: i64,
     /// Analyzing plus encoding time across converted facts.
     #[specta(type = crate::JsNumber)]
     pub total_time_ms: u64,
@@ -301,7 +303,7 @@ pub struct StatisticsPayload {
     /// Source codecs of converted facts, most frequent first; ties use the
     /// codec enum's ascending canonical order.
     pub codecs: Vec<CodecCount>,
-    pub cumulative_savings: Vec<CumulativeSavingsPoint>,
+    pub cumulative_reduction: Vec<CumulativeReductionPoint>,
     #[specta(type = Option<crate::JsNumber>)]
     pub first_epoch_day: Option<i64>,
     #[specta(type = Option<crate::JsNumber>)]
@@ -361,7 +363,7 @@ struct StatisticsAccumulator {
     not_worthwhile_files: u32,
     total_input: u128,
     total_output: u128,
-    remux_saved: i128,
+    remux_size_change: i128,
     total_time_ms: u64,
     reductions: Vec<f64>,
     vmaf_values: Vec<f64>,
@@ -369,7 +371,7 @@ struct StatisticsAccumulator {
     reduction_bins: Vec<u32>,
     grew_count: u32,
     codecs: BTreeMap<VideoCodec, u32>,
-    daily_savings: BTreeMap<i64, i128>,
+    daily_reduction: BTreeMap<i64, i128>,
     first_epoch_day: Option<i64>,
     last_epoch_day: Option<i64>,
 }
@@ -394,7 +396,7 @@ impl StatisticsAccumulator {
             not_worthwhile_files: 0,
             total_input: 0,
             total_output: 0,
-            remux_saved: 0,
+            remux_size_change: 0,
             total_time_ms: 0,
             reductions: Vec::new(),
             vmaf_values: Vec::new(),
@@ -402,7 +404,7 @@ impl StatisticsAccumulator {
             reduction_bins: vec![0; REDUCTION_BIN_COUNT],
             grew_count: 0,
             codecs: BTreeMap::new(),
-            daily_savings: BTreeMap::new(),
+            daily_reduction: BTreeMap::new(),
             first_epoch_day: None,
             last_epoch_day: None,
         }
@@ -421,8 +423,8 @@ impl StatisticsAccumulator {
             }),
             StatFactKind::Remuxed => {
                 self.remuxed_files = self.remuxed_files.saturating_add(1);
-                if let Some(saved) = fact.saved_bytes() {
-                    self.remux_saved = self.remux_saved.saturating_add(saved);
+                if let Some(change) = fact.size_reduction_bytes() {
+                    self.remux_size_change = self.remux_size_change.saturating_add(change);
                 }
             }
             StatFactKind::NotWorthwhile { .. } => {
@@ -484,14 +486,14 @@ impl StatisticsAccumulator {
         self.sized_converted_files = self.sized_converted_files.saturating_add(1);
         self.total_input = self.total_input.saturating_add(u128::from(input));
         self.total_output = self.total_output.saturating_add(u128::from(output));
-        let saved = i128::from(input) - i128::from(output);
-        let entry = self.daily_savings.entry(day).or_default();
-        *entry = entry.saturating_add(saved);
+        let reduction = i128::from(input) - i128::from(output);
+        let entry = self.daily_reduction.entry(day).or_default();
+        *entry = entry.saturating_add(reduction);
 
         if input == 0 {
             return;
         }
-        let percent = 100.0 * saved as f64 / input as f64;
+        let percent = 100.0 * reduction as f64 / input as f64;
         self.reductions.push(percent);
         if percent < 0.0 {
             self.grew_count = self.grew_count.saturating_add(1);
@@ -505,17 +507,17 @@ impl StatisticsAccumulator {
     }
 
     fn finish(self, runs: RunTotals) -> StatisticsPayload {
-        let total_saved = i128::try_from(self.total_input).unwrap_or(i128::MAX)
+        let total_reduction = i128::try_from(self.total_input).unwrap_or(i128::MAX)
             - i128::try_from(self.total_output).unwrap_or(i128::MAX);
         let mut running = 0i128;
-        let cumulative_savings = self
-            .daily_savings
+        let cumulative_reduction = self
+            .daily_reduction
             .iter()
-            .map(|(day, saved)| {
-                running = running.saturating_add(*saved);
-                CumulativeSavingsPoint {
+            .map(|(day, reduction)| {
+                running = running.saturating_add(*reduction);
+                CumulativeReductionPoint {
                     epoch_day: *day,
-                    cumulative_saved_bytes: clamp_to_i64(running),
+                    cumulative_reduction_bytes: clamp_to_i64(running),
                 }
             })
             .collect();
@@ -546,8 +548,8 @@ impl StatisticsAccumulator {
             not_worthwhile_files: self.not_worthwhile_files,
             total_input_bytes: u64::try_from(self.total_input).unwrap_or(u64::MAX),
             total_output_bytes: u64::try_from(self.total_output).unwrap_or(u64::MAX),
-            total_saved_bytes: clamp_to_i64(total_saved),
-            remux_saved_bytes: clamp_to_i64(self.remux_saved),
+            total_reduction_bytes: clamp_to_i64(total_reduction),
+            remux_size_change_bytes: clamp_to_i64(self.remux_size_change),
             total_time_ms: self.total_time_ms,
             gigabytes_per_hour,
             reduction_percent: spread(&self.reductions),
@@ -556,7 +558,7 @@ impl StatisticsAccumulator {
             reduction_bins: self.reduction_bins,
             grew_count: self.grew_count,
             codecs,
-            cumulative_savings,
+            cumulative_reduction,
             first_epoch_day: self.first_epoch_day,
             last_epoch_day: self.last_epoch_day,
             runs,
@@ -1095,12 +1097,12 @@ mod tests {
         let state = DurableState::default();
         let payload = statistics(&state, 0);
         assert_eq!(payload.converted_files, 0);
-        assert_eq!(payload.total_saved_bytes, 0);
+        assert_eq!(payload.total_reduction_bytes, 0);
         assert_eq!(payload.reduction_percent, None);
         assert_eq!(payload.vmaf, None);
         assert_eq!(payload.gigabytes_per_hour, None);
         assert_eq!(payload.reduction_bins, vec![0; 10]);
-        assert!(payload.cumulative_savings.is_empty());
+        assert!(payload.cumulative_reduction.is_empty());
         assert_eq!(payload.first_epoch_day, None);
         assert!(history_rows(&state).is_empty());
     }
@@ -1130,7 +1132,7 @@ mod tests {
         assert_eq!(payload.converted_files, 1);
         assert_eq!(payload.sized_converted_files, 1);
         assert_eq!(payload.not_worthwhile_files, 1);
-        assert_eq!(payload.total_saved_bytes, 6_000);
+        assert_eq!(payload.total_reduction_bytes, 6_000);
         assert_eq!(payload.total_time_ms, 120_000);
         assert_eq!(payload.runs, RunTotals::default());
 
@@ -1280,7 +1282,7 @@ mod tests {
         assert_eq!(payload.sized_converted_files, 1);
         assert_eq!(payload.total_input_bytes, 10_000_000_000);
         assert_eq!(payload.total_output_bytes, 4_000_000_000);
-        assert_eq!(payload.total_saved_bytes, 6_000_000_000);
+        assert_eq!(payload.total_reduction_bytes, 6_000_000_000);
         assert_eq!(payload.total_time_ms, 300_000);
         // 60% reduction lands in the 60-70% bin.
         assert_eq!(payload.reduction_bins.get(6), Some(&1));
@@ -1295,7 +1297,7 @@ mod tests {
             .gigabytes_per_hour
             .expect("converted statistics include throughput");
         assert!((throughput - 111.76).abs() < 0.01);
-        assert_eq!(payload.cumulative_savings.len(), 1);
+        assert_eq!(payload.cumulative_reduction.len(), 1);
         assert_eq!(payload.first_epoch_day, Some(20_000));
         assert_eq!(payload.runs.converted, 1);
     }
@@ -1361,10 +1363,10 @@ mod tests {
         assert_eq!(fact.finished_at, UnixMillis(DAY_MS * 19_000));
 
         let payload = statistics(&state, 0);
-        // Counted as converted, but never enters savings totals or bins.
+        // Counted as converted, but never enters reduction totals or bins.
         assert_eq!(payload.converted_files, 1);
         assert_eq!(payload.sized_converted_files, 0);
-        assert_eq!(payload.total_saved_bytes, 0);
+        assert_eq!(payload.total_reduction_bytes, 0);
         assert_eq!(payload.reduction_bins.iter().sum::<u32>(), 0);
 
         let rows = history_rows(&state);
@@ -1406,8 +1408,8 @@ mod tests {
         let payload = statistics(&state, 0);
         assert_eq!(payload.converted_files, 1);
         assert_eq!(payload.remuxed_files, 1);
-        assert_eq!(payload.total_saved_bytes, 5_000);
-        assert_eq!(payload.remux_saved_bytes, 100);
+        assert_eq!(payload.total_reduction_bytes, 5_000);
+        assert_eq!(payload.remux_size_change_bytes, 100);
         assert_eq!(payload.vmaf.map(|spread| spread.count), Some(1));
         assert_eq!(payload.codecs.len(), 1);
 
@@ -1430,22 +1432,22 @@ mod tests {
         let payload = statistics(&state, 0);
         assert_eq!(payload.grew_count, 1);
         assert_eq!(payload.reduction_bins.iter().sum::<u32>(), 1);
-        assert_eq!(payload.total_saved_bytes, 3_000);
-        assert_eq!(payload.cumulative_savings.len(), 2);
+        assert_eq!(payload.total_reduction_bytes, 3_000);
+        assert_eq!(payload.cumulative_reduction.len(), 2);
         assert_eq!(
             payload
-                .cumulative_savings
+                .cumulative_reduction
                 .first()
-                .expect("first savings point")
-                .cumulative_saved_bytes,
+                .expect("first reduction point")
+                .cumulative_reduction_bytes,
             6_000
         );
         assert_eq!(
             payload
-                .cumulative_savings
+                .cumulative_reduction
                 .get(1)
-                .expect("second savings point")
-                .cumulative_saved_bytes,
+                .expect("second reduction point")
+                .cumulative_reduction_bytes,
             3_000
         );
         let reduction = payload
@@ -1636,7 +1638,7 @@ mod tests {
     proptest! {
         #[test]
         #[expect(clippy::expect_used, reason = "test assertion")]
-        fn savings_identities_hold(
+        fn reduction_identities_hold(
             sizes in proptest::collection::vec(
                 (0u64..1_000_000_000_000, 0u64..1_000_000_000_000),
                 0..40,
@@ -1647,12 +1649,12 @@ mod tests {
 
             let expected_input: u128 = sizes.iter().map(|(input, _)| u128::from(*input)).sum();
             let expected_output: u128 = sizes.iter().map(|(_, output)| u128::from(*output)).sum();
-            let expected_saved = i128::try_from(expected_input)
+            let expected_reduction = i128::try_from(expected_input)
                 .expect("generated input total fits i128")
                 - i128::try_from(expected_output).expect("generated output total fits i128");
             prop_assert_eq!(u128::from(payload.total_input_bytes), expected_input);
             prop_assert_eq!(u128::from(payload.total_output_bytes), expected_output);
-            prop_assert_eq!(i128::from(payload.total_saved_bytes), expected_saved);
+            prop_assert_eq!(i128::from(payload.total_reduction_bytes), expected_reduction);
 
             // Every sized fact lands in exactly one bin or the grew counter.
             let binned: u32 = payload.reduction_bins.iter().sum();
@@ -1660,10 +1662,10 @@ mod tests {
             prop_assert_eq!(binned + payload.grew_count, with_reduction);
 
             // The cumulative series ends at the total (all facts carry sizes).
-            if let Some(last) = payload.cumulative_savings.last() {
-                prop_assert_eq!(last.cumulative_saved_bytes, payload.total_saved_bytes);
+            if let Some(last) = payload.cumulative_reduction.last() {
+                prop_assert_eq!(last.cumulative_reduction_bytes, payload.total_reduction_bytes);
             } else {
-                prop_assert_eq!(payload.total_saved_bytes, 0);
+                prop_assert_eq!(payload.total_reduction_bytes, 0);
             }
         }
 

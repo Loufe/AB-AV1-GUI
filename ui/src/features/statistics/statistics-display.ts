@@ -1,6 +1,6 @@
 import type {
   CodecCount,
-  CumulativeSavingsPoint,
+  CumulativeReductionPoint,
   RunTotals,
   StatisticsPayload,
   VideoCodec,
@@ -21,7 +21,7 @@ export interface CodecRow {
 
 export interface CumulativeRow {
   date: string;
-  savedBytes: number;
+  reductionBytes: number;
 }
 
 export interface OutcomeRow {
@@ -80,10 +80,10 @@ export function codecRows(codecs: readonly CodecCount[]): CodecRow[] {
 }
 
 /** Preserve the backend's daily local-calendar ordering and signed movement. */
-export function cumulativeRows(points: readonly CumulativeSavingsPoint[]): CumulativeRow[] {
-  return points.map(({ epoch_day, cumulative_saved_bytes }) => ({
+export function cumulativeRows(points: readonly CumulativeReductionPoint[]): CumulativeRow[] {
+  return points.map(({ epoch_day, cumulative_reduction_bytes }) => ({
     date: formatEpochDay(epoch_day),
-    savedBytes: cumulative_saved_bytes,
+    reductionBytes: cumulative_reduction_bytes,
   }));
 }
 
@@ -107,5 +107,5 @@ function formatVideoCodec(codec: VideoCodec): string {
 
 export function coverageMessage(payload: StatisticsPayload): string | null {
   if (payload.sized_converted_files === payload.converted_files) return null;
-  return `${payload.sized_converted_files.toLocaleString()} of ${payload.converted_files.toLocaleString()} converted standings include both sizes; savings and reduction statistics cover only those files.`;
+  return `${payload.sized_converted_files.toLocaleString()} of ${payload.converted_files.toLocaleString()} converted standings include both sizes; output-size reduction statistics cover only those files.`;
 }
