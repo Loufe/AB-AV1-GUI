@@ -26,7 +26,9 @@ use crfty_engine::{
     coordinator::{EngineConfig, EngineRuntime, PUBLIC_EVENT_CHANNEL_CAPACITY, ToolsConfig},
     driver::{DriverEvent, DriverHandle, DriverStartError},
     journal::JournalWriter,
+    media::MediaError,
     output::{ArtifactInspector, FixtureByteInspector, OutputManager},
+    process_supervisor::BoundedOutput,
     vendor::discovery::{CurrentTools, DiscoveredTools, MediaTools},
 };
 
@@ -1954,14 +1956,13 @@ impl ArtifactInspector for RejectingMediaInspector {
         FixtureByteInspector.inspect_file(path)
     }
 
-    fn inspect_media(&self, _path: &Path) -> std::io::Result<ArtifactIdentity> {
-        Err(std::io::Error::new(
-            std::io::ErrorKind::InvalidData,
-            "fixture rejects media",
-        ))
+    fn inspect_media(&self, _path: &Path) -> Result<ArtifactIdentity, MediaError> {
+        Err(MediaError::Rejected {
+            diagnostic: BoundedOutput::default(),
+        })
     }
 
-    fn verify_output(&self, path: &Path) -> std::io::Result<ArtifactIdentity> {
+    fn verify_output(&self, path: &Path) -> Result<ArtifactIdentity, MediaError> {
         self.inspect_media(path)
     }
 }

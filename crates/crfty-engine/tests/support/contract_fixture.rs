@@ -134,6 +134,26 @@ fn fake_ffprobe() -> Result<(), Box<dyn Error>> {
     {
         return Err(format!("fixture rejected {}", input.display()).into());
     }
+    // Hung probe with a live descendant: claim-time inputs named `hang-claim*`
+    // and verification stagings named `hang-verify*.part.*` never answer, so
+    // only a deadline or cancellation can end them, and the heartbeat proves
+    // whether the whole process group died with ffprobe.
+    if let Some(input) = env::args_os().next_back().map(PathBuf::from)
+        && input
+            .file_name()
+            .and_then(|name| name.to_str())
+            .is_some_and(|name| {
+                name.starts_with("hang-claim")
+                    || (name.contains("hang-verify") && name.contains(".part."))
+            })
+    {
+        let _child = Command::new(env::current_exe()?)
+            .arg("heartbeat")
+            .arg(input.with_extension("heartbeat"))
+            .spawn()?;
+        thread::sleep(Duration::from_secs(30));
+        return Ok(());
+    }
     let _concurrency = fake_probe_concurrency_guard()?;
     const PROBE: &str = r#"{
         "streams": [{

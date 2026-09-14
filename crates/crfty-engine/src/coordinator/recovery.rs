@@ -10,6 +10,7 @@ use crfty_core::{
 use crate::{
     driver::CommandSender,
     output::{MediaArtifactInspector, OutputManager},
+    process_supervisor::ProcessCancellation,
     vendor::discovery::MediaTools,
 };
 
@@ -21,8 +22,14 @@ pub(super) fn recover_startup(
     tools: Option<&MediaTools>,
     mut state: DurableState,
 ) -> DurableState {
-    let manager =
-        tools.map(|tools| OutputManager::new(MediaArtifactInspector::new(tools.ffprobe.clone())));
+    // Startup recovery runs before the job supervisor exists, so nothing can
+    // force-stop it; each verification probe is bounded by its deadline only.
+    let manager = tools.map(|tools| {
+        OutputManager::new(MediaArtifactInspector::new(
+            tools.ffprobe.clone(),
+            ProcessCancellation::new(),
+        ))
+    });
     let active: Vec<_> = state
         .queue
         .iter()

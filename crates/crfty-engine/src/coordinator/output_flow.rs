@@ -11,14 +11,14 @@ use crfty_core::{
 
 use crate::{
     driver::CommandSender,
-    output::{MediaArtifactInspector, OutputManager},
-    vendor::discovery::MediaTools,
+    failure::scrub_tail,
+    output::{MediaArtifactInspector, OutputError, OutputManager},
 };
 
 use super::job::SuccessfulJob;
 use super::output_path::resolve_output;
 use super::require_accepted;
-use super::session::{PhaseTracker, map_progress, publish_phase, terminal};
+use super::session::{JobServices, PhaseTracker, map_progress, publish_phase, terminal};
 
 pub(super) type MediaOutputManager = OutputManager<MediaArtifactInspector>;
 
@@ -98,13 +98,16 @@ pub(super) fn resolve_output_destination(
 }
 
 pub(super) fn begin_output(
-    commands: &CommandSender,
-    tools: &MediaTools,
+    services: JobServices<'_>,
     job: &ClaimedJob,
     destination: OutputDestination,
     tracker: &mut PhaseTracker,
 ) -> Result<Option<PreparedOutput>, String> {
-    let manager = OutputManager::new(MediaArtifactInspector::new(tools.ffprobe.clone()));
+    let commands = services.commands;
+    let manager = OutputManager::new(MediaArtifactInspector::new(
+        services.tools.ffprobe.clone(),
+        services.run.probes().clone(),
+    ));
     let mut transaction = match manager.plan(
         job.spec.run_id,
         &job.spec.input,
@@ -210,16 +213,18 @@ pub(super) fn finish_successful_output(
                 JobPhase::Verifying,
                 final_progress,
             );
-            terminal(
-                commands,
-                job,
-                tracker,
-                ItemOutcome::Failed(FailureFacts::new(
+            // A force-stopped verification is a stop, not a broken output.
+            let outcome = if error.is_cancelled() {
+                ItemOutcome::Stopped
+            } else {
+                ItemOutcome::Failed(output_failure(
                     FailureKind::OutputPromote,
-                    error.to_string(),
-                )),
-                final_telemetry,
-            )?;
+                    &error,
+                    job,
+                    &transaction,
+                ))
+            };
+            terminal(commands, job, tracker, outcome, final_telemetry)?;
             return Ok(());
         }
     };
@@ -244,9 +249,11 @@ pub(super) fn finish_successful_output(
                     commands,
                     job,
                     tracker,
-                    ItemOutcome::Failed(FailureFacts::new(
+                    ItemOutcome::Failed(output_failure(
                         FailureKind::OutputConflict,
-                        error.to_string(),
+                        &error,
+                        job,
+                        &transaction,
                     )),
                     final_telemetry,
                 )?;
@@ -267,6 +274,29 @@ pub(super) fn finish_successful_output(
         final_progress,
     );
     terminal(commands, job, tracker, outcome, final_telemetry)
+}
+
+/// Failure facts for an output-transaction error. A tool's stderr tail, when
+/// the error carries one, travels as a scrubbed diagnostic rather than
+/// message prose: it may quote the run's paths.
+fn output_failure(
+    kind: FailureKind,
+    error: &OutputError,
+    job: &ClaimedJob,
+    transaction: &OutputTransaction,
+) -> FailureFacts {
+    let facts = FailureFacts::new(kind, error.to_string());
+    match error.diagnostic() {
+        Some(diagnostic) => facts.with_diagnostic(scrub_tail(
+            String::from_utf8_lossy(diagnostic.as_bytes()).trim(),
+            &[
+                (job.spec.input.as_path(), "<input>"),
+                (transaction.staging.as_path(), "<staging>"),
+                (transaction.final_path.as_path(), "<output>"),
+            ],
+        )),
+        None => facts,
+    }
 }
 
 /// Maps a settled transaction plus the adapter's success facts to the

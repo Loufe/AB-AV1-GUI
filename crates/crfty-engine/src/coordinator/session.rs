@@ -17,13 +17,13 @@ use crfty_core::{
 use crate::{
     ab_av1::AbAv1Runtime,
     driver::CommandSender,
-    media::{DecodeResolver, MediaInspector},
+    media::{DecodeResolver, MediaError, MediaInspector},
     vendor::discovery::{CurrentTools, MediaTools},
 };
 
 use super::job::{run_encode, run_remux, search_with_fallback};
 use super::output_flow::{begin_output, resolve_output_destination};
-use super::supervision::ActiveCancellation;
+use super::supervision::{ActiveCancellation, RunScope};
 use super::{EngineConfig, require_accepted};
 use crate::clock::now_millis;
 
@@ -32,7 +32,9 @@ pub(super) struct JobServices<'a> {
     pub(super) commands: &'a CommandSender,
     pub(super) runtime: &'a AbAv1Runtime,
     pub(super) tools: &'a MediaTools,
-    pub(super) cancellation: &'a ActiveCancellation,
+    /// The run's cancellation scope: probes borrow its signal and adapter
+    /// jobs register with it, so Force Stop reaches both.
+    pub(super) run: &'a RunScope<'a>,
     /// Input media duration from the claim-time preflight probe; the total
     /// the encode/remux output position runs toward, so the ETA's remaining
     /// work is known. `None` (probe failed or reported zero) means no ETA.
@@ -149,8 +151,12 @@ pub(super) fn run_session(
                 return Err("reservation command returned an invalid reply".to_owned());
             }
         };
-        let observation = match inspector.observe(&reserved.input) {
+        // Opened before the claim-time probe so a Force Stop that lands while
+        // ffprobe is reading the input terminates it like any other run work.
+        let run = cancellation.begin_run(run_id);
+        let observation = match inspector.observe(&reserved.input, run.probes()) {
             Ok(observation) => Some(Box::new(observation)),
+            Err(MediaError::Cancelled) => None,
             Err(error) => {
                 tracing::warn!(
                     "media preflight failed; continuing without reusable facts: {error}"
@@ -167,8 +173,24 @@ pub(super) fn run_session(
             observation
                 .as_ref()
                 .map_or(crfty_core::DecodeMode::Software, |observed| {
-                    decoder_resolver.resolve(execution.decode_preference, &observed.metadata.codec)
+                    decoder_resolver.resolve(
+                        execution.decode_preference,
+                        &observed.metadata.codec,
+                        run.probes(),
+                    )
                 });
+        if run.probes().is_cancelled() {
+            require_accepted(
+                "abandon force-stopped reservation",
+                commands.submit(Command::Worker(WorkerCommand::AbandonReservation {
+                    item_id: reserved.item_id,
+                    claim_id,
+                    run_id,
+                    at: now_millis(),
+                })),
+            )?;
+            continue;
+        }
         // The observed file's normalized spellings, matched against the
         // parked import inbox by the reducer during preparation.
         let import_paths = crate::history_import::import_path_candidates(&reserved.input);
@@ -220,14 +242,7 @@ pub(super) fn run_session(
                 at: now_millis(),
             })),
         )?;
-        process_job(
-            commands,
-            runtime,
-            tools,
-            cancellation,
-            &job,
-            input_duration_ms,
-        )?;
+        process_job(commands, runtime, tools, &run, &job, input_duration_ms)?;
     }
     require_accepted(
         "finish worker session",
@@ -239,7 +254,7 @@ fn process_job(
     commands: &CommandSender,
     runtime: &AbAv1Runtime,
     tools: &MediaTools,
-    cancellation: &ActiveCancellation,
+    run: &RunScope<'_>,
     job: &ClaimedJob,
     input_duration_ms: Option<u64>,
 ) -> Result<(), String> {
@@ -248,7 +263,7 @@ fn process_job(
         commands,
         runtime,
         tools,
-        cancellation,
+        run,
         input_duration_ms,
     };
     publish_phase(commands, job.spec.run_id, &mut tracker, JobPhase::Preparing);
@@ -269,8 +284,7 @@ fn process_job(
             let Some(destination) = resolve_output_destination(commands, job, &mut tracker)? else {
                 return Ok(());
             };
-            let Some(output) = begin_output(commands, tools, job, destination, &mut tracker)?
-            else {
+            let Some(output) = begin_output(services, job, destination, &mut tracker)? else {
                 return Ok(());
             };
             return run_remux(services, job, output, &mut tracker);
@@ -289,14 +303,14 @@ fn process_job(
     let analysis = if let Some(selected) = job.spec.action.selected_analysis() {
         selected.clone()
     } else {
-        let searched =
-            match search_with_fallback(commands, runtime, tools, cancellation, job, &mut tracker) {
-                Ok(result) => result,
-                Err(outcome) => {
-                    terminal(commands, job, &mut tracker, outcome, None)?;
-                    return Ok(());
-                }
-            };
+        let searched = match search_with_fallback(commands, runtime, tools, run, job, &mut tracker)
+        {
+            Ok(result) => result,
+            Err(outcome) => {
+                terminal(commands, job, &mut tracker, outcome, None)?;
+                return Ok(());
+            }
+        };
         require_accepted(
             "record analysis",
             commands.submit(Command::Worker(WorkerCommand::RecordAnalysis {
@@ -322,7 +336,7 @@ fn process_job(
     let Some(destination) = destination else {
         return Err("encode job has no resolved output destination".to_owned());
     };
-    let Some(output) = begin_output(commands, tools, job, destination, &mut tracker)? else {
+    let Some(output) = begin_output(services, job, destination, &mut tracker)? else {
         return Ok(());
     };
     run_encode(services, job, output, analysis, &mut tracker)

@@ -1,6 +1,6 @@
 use std::{
     io,
-    process::{ChildStderr, ChildStdout, Command, ExitStatus, Output, Stdio},
+    process::{ChildStderr, ChildStdout, Command, ExitStatus},
 };
 
 use command_group::{CommandGroup, GroupChild};
@@ -81,22 +81,6 @@ fn containment_already_empty(error: &io::Error) -> bool {
     {
         false
     }
-}
-
-pub(crate) fn output(command: &mut Command) -> io::Result<Output> {
-    command
-        .stdin(Stdio::null())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped());
-    spawn_group(command)?.wait_with_output()
-}
-
-pub(crate) fn status(command: &mut Command) -> io::Result<ExitStatus> {
-    command
-        .stdin(Stdio::null())
-        .stdout(Stdio::null())
-        .stderr(Stdio::null());
-    spawn_group(command)?.wait()
 }
 
 fn spawn_group(command: &mut Command) -> io::Result<GroupChild> {
