@@ -354,57 +354,57 @@
   ],
   "formatEfficiency": [
     {
-      "savingsBytes": 0,
+      "reductionBytes": 0,
       "timeSeconds": 100,
       "expected": "—"
     },
     {
-      "savingsBytes": 1073741824,
+      "reductionBytes": 1073741824,
       "timeSeconds": 0,
       "expected": "—"
     },
     {
-      "savingsBytes": 1073741824,
+      "reductionBytes": 1073741824,
       "timeSeconds": 3600,
       "expected": "1.0 GB/h"
     },
     {
-      "savingsBytes": 2684354560,
+      "reductionBytes": 2684354560,
       "timeSeconds": 3600,
       "expected": "2.5 GB/h"
     },
     {
-      "savingsBytes": 5368709120,
+      "reductionBytes": 5368709120,
       "timeSeconds": 3600,
       "expected": "5.0 GB/h"
     },
     {
-      "savingsBytes": 10737418240,
+      "reductionBytes": 10737418240,
       "timeSeconds": 3600,
       "expected": "10 GB/h"
     },
     {
-      "savingsBytes": 10737418240,
+      "reductionBytes": 10737418240,
       "timeSeconds": 3599,
       "expected": "10 GB/h"
     },
     {
-      "savingsBytes": 1234567890,
+      "reductionBytes": 1234567890,
       "timeSeconds": 5432,
       "expected": "0.8 GB/h"
     },
     {
-      "savingsBytes": 429496730,
+      "reductionBytes": 429496730,
       "timeSeconds": 7200,
       "expected": "0.2 GB/h"
     },
     {
-      "savingsBytes": 107374182400,
+      "reductionBytes": 107374182400,
       "timeSeconds": 3600,
       "expected": "100 GB/h"
     },
     {
-      "savingsBytes": 1073741824,
+      "reductionBytes": 1073741824,
       "timeSeconds": 360000,
       "expected": "0.0 GB/h"
     }

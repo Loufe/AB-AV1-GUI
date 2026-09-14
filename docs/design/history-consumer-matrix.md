@@ -44,15 +44,15 @@ Read from source: every V2 Statistics aggregate has a wired V3 home in `Statisti
 | Average, min, max CRF | verdict-carried CRF | Terminal | `crf` spread |
 | Average, min, max size reduction | joined input and output sizes | Terminal | `reduction_percent` spread |
 | Size reduction histogram | joined sizes | Terminal | `reduction_bins` |
-| Total space saved | joined sizes | Terminal | `total_saved_bytes` |
+| Total output-size reduction | joined sizes | Terminal | `total_reduction_bytes` |
 | Throughput in gigabytes per hour | input bytes, analyzing and encoding spans | Terminal | `gigabytes_per_hour` |
 | Source codec distribution | observed codec | Scan + Terminal | `codecs` |
-| Cumulative space saved by day | joined sizes, terminal timestamp | Terminal | `cumulative_savings` |
+| Cumulative output-size reduction by day | joined sizes, terminal timestamp | Terminal | `cumulative_reduction` |
 | History range | terminal timestamps | Terminal | `first_epoch_day`, `last_epoch_day` |
 
-V3 exceeds the floor with aggregates V2 never had: remux savings, grew count, the not-worthwhile count, and terminal run totals including stopped, skipped, and failed (read from source).
+V3 exceeds the floor with aggregates V2 never had: remux size change, grew count, the not-worthwhile count, and terminal run totals including stopped, skipped, and failed (read from source).
 
-Two semantics differ deliberately. V2 keyed its date axis on `first_seen`, which its own worker overwrote on every terminal write, so the values coincided with conversion dates by accident (read from source). V3 keys on the terminal timestamp, keeping the intentional semantic. A converted fact missing either size still counts as converted while contributing nothing to savings, because absence and zero are different claims (`docs/HISTORY.md`).
+Two semantics differ deliberately. V2 keyed its date axis on `first_seen`, which its own worker overwrote on every terminal write, so the values coincided with conversion dates by accident (read from source). V3 keys on the terminal timestamp, keeping the intentional semantic. A converted fact missing either size still counts as converted while contributing nothing to output-size reduction, because absence and zero are different claims (`docs/HISTORY.md`).
 
 ## History browsing parity
 
