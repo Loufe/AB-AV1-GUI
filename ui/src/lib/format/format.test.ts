@@ -27,8 +27,8 @@ describe("formatCompactTime (V2 parity)", () => {
 
 describe("formatEfficiency (V2 parity)", () => {
   for (const c of fixtures.formatEfficiency) {
-    it(`${c.savingsBytes} B / ${c.timeSeconds}s → ${c.expected}`, () => {
-      expect(formatEfficiency(c.savingsBytes, c.timeSeconds)).toBe(c.expected);
+    it(`${c.reductionBytes} B / ${c.timeSeconds}s → ${c.expected}`, () => {
+      expect(formatEfficiency(c.reductionBytes, c.timeSeconds)).toBe(c.expected);
     });
   }
 });
