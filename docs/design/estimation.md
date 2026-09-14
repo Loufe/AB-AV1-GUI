@@ -36,7 +36,7 @@ Labels are stable and cited bare.
 
 Estimation reads History as evidence and never writes to it. Three parts of that seam are unsettled.
 
-**Read shape.** `EstimationModel::from_state` walks every content record and every conversion run on each estimation round (read from source). That is affordable against an in-memory journal but unproven against an indexed store holding a large history. The alternative is estimation describing a cohort and the store answering a query, which makes estimator cohorts part of the storage workload. The choice constrains storage engine selection and therefore precedes it.
+**Read shape.** `EstimationModel::from_state` walks every content record and every conversion run on each estimation round (read from source). That is affordable against an in-memory journal but unproven against an indexed store holding a large history. The alternative is estimation describing a cohort and the store answering a query. The alpha storage workload proves access to retained prediction and measurement facts; the final cohort strategy is resolved when the historical estimator is implemented and does not block that workload (`alpha.md`).
 
 **Admissibility authority.** `EstimationModel::from_state` reaches past `StatFact` into `state.conversion_runs` to harvest analyze rates from analyzed-only runs (read from source). That is the estimator judging which History records are eligible. The clean rule is that History decides what an observation is and what it claims, and estimation decides which observations are useful for a given prediction.
 

@@ -1,10 +1,12 @@
 # Rewrite plan
 
-Living state of the V3 rewrite. Update when a phase lands or a direction is decided. Decisions get an ADR; long-form design goes in `docs/design/`.
+Living state of the V3 rewrite. Decisions get an ADR; long-form design goes in `docs/design/`. GitHub issue bodies own active scope and execution order. The [alpha work](https://github.com/Loufe/AB-AV1-GUI/issues?q=is%3Aissue%20is%3Aopen%20label%3Aalpha) identifies the acceptance issue and required deliverables within the `v3.0` milestone.
 
 ## Current phase
 
-Engine and queue foundations are complete and contract-tested: pinned ab-av1 adapter, durable job coordinator, journal replay and crash recovery, the queue command surface, the bounded event stream, the Tauri shell, and the UI fold over golden fixtures. Current work is growing the views over the store: History, Statistics, and the final Queue integration. Analysis has generation-scoped streaming discovery and the bounded Basic Scan pipeline (`docs/ANALYSIS.md`); later tiers add estimates, actions, and presentation.
+The branch has the pinned ab-av1 adapter, job coordinator, journal recovery, queue commands, Tauri shell, and frontend stores with contract coverage. Queue, History, Statistics, and Settings have production views over the current model. Analysis has streaming discovery and bounded Basic Scan in the engine (`docs/ANALYSIS.md`), but its production view remains a disabled empty state. Known probe cancellation, Windows spawn cleanup, and terminal identity defects remain; existing coverage does not establish alpha readiness.
+
+The delivery target is the runnable alpha defined in [the alpha delivery scope](design/alpha.md). It combines a usable Analysis-to-Queue workflow with durable terminal observations, History browsing, import v1, and clean Windows and Linux installation. First-class History is still a redesign of the current projections. Historical estimation and richer collectors remain V3 work beyond alpha.
 
 ## Decided
 
@@ -28,13 +30,13 @@ Engine and queue foundations are complete and contract-tested: pinned ab-av1 ada
 - History browsing guardrail: first paint under 100 ms at 50,000 records, a regression tripwire rather than an engine-forcing constraint
 - Failed and stopped runs are browsable behind default-off History filters and excluded from Statistics aggregates; deliberately throttled runs carry a provenance flag and never enter unthrottled time cohorts
 - Export and the portable bundle ship post-3.0 while import stays in V3; pooled research over contributed bundles is the bundle's long-term consumer (`docs/design/history-bundle.md`)
-- Runnable intermediate: durable observations for every terminal outcome, History browsing, and import v1; 3.0-complete adds Statistics, the failed and stopped filters, wired scrub, and enriched import
+- Runnable alpha: the workflow and acceptance boundary in `docs/design/alpha.md`; 3.0-complete adds Statistics over first-class observations, the failed and stopped filters, wired scrub, and enriched import
 - Estimation verdicts: point uncertainty through the presentation ramp, the kernel-weighted quantile successor built first, imported V2 evidence as a down-weighted cold-start prior, and size estimation on a video-stream basis (`docs/design/estimation.md`)
 
 ## Open questions
 
 - Durable state model and storage engine for first-class History
-- Serving History by request/response instead of the frontend fold
+- The bounded History request/response shape and its invalidation contract; serving History from Rust is the selected direction
 - Estimation as a subsystem separate from History: sufficiency, promise level, evidence seam, evaluation (`docs/design/estimation.md`)
 - Whether the ab-av1 maintainer accepts the operation boundary ADR-021 selects (alexheretic/ab-av1#371)
 
