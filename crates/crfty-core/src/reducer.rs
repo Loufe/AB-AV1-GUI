@@ -11,10 +11,10 @@ use crate::{
     BasicScanDisposition, ClaimId, ClaimedJob, CompletionEvidence, ConfigDelta, ContentKey,
     CorruptionSignature, CurrentFileIdentity, DecodeMode, DecodePreference, DurableDelta,
     ExecutionSettings, FreshnessDecision, ImportPath, ImportedHistoryRecord, ItemOutcome,
-    JobAction, JobSpec, MediaObservation, Operation, OutputDelta, OutputTarget, OverwriteDecision,
-    PathHash, PhaseSpan, QueueItem, QueueItemId, QueueItemState, ReservedJob, RunId,
-    SessionAggregates, SessionState, Settings, SkipReason, StatisticsPayload, Telemetry,
-    ToolAvailability, ToolsState, UnixMillis, VendorActivity, apply_analysis_mutation,
+    JobAction, JobSpec, LocatedTools, MediaObservation, Operation, OutputDelta, OutputTarget,
+    OverwriteDecision, PathHash, PhaseSpan, QueueItem, QueueItemId, QueueItemState, ReservedJob,
+    RunId, SessionAggregates, SessionState, Settings, SkipReason, StatisticsPayload, Telemetry,
+    ToolAvailability, ToolPathSettings, ToolVerification, UnixMillis, apply_analysis_mutation,
     begin_analysis_generation, decide_freshness, evaluate_enqueue, fold, fold_config,
     select_job_action, statistics,
 };
@@ -30,7 +30,7 @@ pub enum Command {
     Session(SessionCommand),
     Settings(SettingsCommand),
     Worker(WorkerCommand),
-    Vendor(VendorCommand),
+    Tools(ToolsCommand),
     Projection(ProjectionCommand),
     History(HistoryCommand),
     System(SystemCommand),
@@ -135,14 +135,12 @@ pub enum SessionCommand {
     ForceStop,
 }
 
-/// User-initiated vendor operations. `Install` downloads and atomically
-/// activates the manifest-pinned FFmpeg build; `Check` re-runs discovery and
-/// the local update comparison. Both are serialized through
-/// [`VendorActivity`]: at most one vendor worker exists at a time.
+/// User-initiated tool operations. `Rediscover` re-runs discovery over the
+/// current Settings paths, publishing a fresh [`ToolAvailability`] whose
+/// verification starts over.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum VendorCommand {
-    Install,
-    Check,
+pub enum ToolsCommand {
+    Rediscover,
 }
 
 /// Read-model requests answered synchronously from durable state. The reply
@@ -209,17 +207,17 @@ pub enum WorkerCommand {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum SystemCommand {
     Shutdown,
-    /// Discovery facts from the engine: what is usable and whether the
-    /// compiled-in manifest is newer than the managed install. Never touches
-    /// the vendor activity — progress travels via `VendorProgress`.
+    /// Discovery facts from the engine: which tools were located and where.
+    /// Replaces the whole tool picture, so any earlier verification is void.
     ToolsDiscovered {
         availability: ToolAvailability,
-        update_available: bool,
     },
-    /// Vendor worker progress. The engine throttles emission; core has no
-    /// clock and applies whatever it is told.
-    VendorProgress {
-        activity: VendorActivity,
+    /// Capability probe outcome for `tools`. Applied only while those exact
+    /// tools are still the located ones; a result for tools that discovery
+    /// has since replaced is dropped rather than mislabelling the new ones.
+    ToolsProbed {
+        tools: LocatedTools,
+        verification: ToolVerification,
     },
     /// Operator consent to discard a corrupt journal tail whose identity is
     /// `signature`. The driver intercepts this before `apply` — degraded
@@ -245,7 +243,7 @@ pub enum EphemeralDelta {
     TelemetryCleared {
         run_id: RunId,
     },
-    ToolsChanged(ToolsState),
+    ToolsChanged(ToolAvailability),
     /// Answer to [`ProjectionCommand::RequestStatistics`]. Fire-and-forget:
     /// not part of the read model and never replayed on subscribe.
     Statistics(Box<StatisticsPayload>),
@@ -267,10 +265,18 @@ pub enum EphemeralDelta {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Effect {
     StartWorker,
-    KillActiveRun { run_id: RunId },
-    WriteSettings { settings: Settings },
-    VendorInstall,
-    VendorCheck,
+    KillActiveRun {
+        run_id: RunId,
+    },
+    WriteSettings {
+        settings: Settings,
+    },
+    /// Re-run media tool discovery over `configured`. Carries the paths so
+    /// the engine never reads reducer state; the driver keeps only the last
+    /// one in a batch because each run replaces the whole result.
+    DiscoverTools {
+        configured: ToolPathSettings,
+    },
     StopDriver,
 }
 
@@ -339,7 +345,13 @@ pub fn apply(state: &mut AppState, command: Command) -> Applied {
         Command::Session(command) => apply_session(state, command),
         Command::Settings(command) => apply_settings(state, command),
         Command::Worker(command) => apply_worker(state, command),
-        Command::Vendor(command) => apply_vendor(state, command),
+        Command::Tools(ToolsCommand::Rediscover) => {
+            let mut applied = Applied::accepted();
+            applied.effects.push(Effect::DiscoverTools {
+                configured: state.settings.tools.clone(),
+            });
+            applied
+        }
         Command::Projection(ProjectionCommand::RequestStatistics { utc_offset_minutes }) => {
             if utc_offset_minutes.abs() > MAX_UTC_OFFSET_MINUTES {
                 return Applied::rejected("UTC offset is outside a plausible range");
@@ -359,24 +371,26 @@ pub fn apply(state: &mut AppState, command: Command) -> Applied {
             applied.effects.push(Effect::StopDriver);
             applied
         }
-        Command::System(SystemCommand::ToolsDiscovered {
-            availability,
-            update_available,
-        }) => tools_transition(
-            state,
-            ToolsState {
-                availability,
-                activity: state.tools.activity.clone(),
-                update_available,
-            },
-        ),
-        Command::System(SystemCommand::VendorProgress { activity }) => tools_transition(
-            state,
-            ToolsState {
-                activity,
-                ..state.tools.clone()
-            },
-        ),
+        Command::System(SystemCommand::ToolsDiscovered { availability }) => {
+            tools_transition(state, availability)
+        }
+        Command::System(SystemCommand::ToolsProbed {
+            tools,
+            verification,
+        }) => match &state.tools {
+            ToolAvailability::Located { tools: located, .. } if *located == tools => {
+                tools_transition(
+                    state,
+                    ToolAvailability::Located {
+                        tools,
+                        verification,
+                    },
+                )
+            }
+            ToolAvailability::Located { .. } | ToolAvailability::Missing { .. } => {
+                Applied::accepted()
+            }
+        },
         Command::System(SystemCommand::AcknowledgeCorruption { .. }) => {
             Applied::rejected("corruption acknowledgement is handled by the driver")
         }
@@ -475,11 +489,8 @@ fn apply_analysis_state_command(state: &AppState, command: AnalysisCommand) -> A
             activity,
         },
         AnalysisCommand::BeginBasicScan { generation } => {
-            if let ToolAvailability::Missing { detail, .. } = &state.tools.availability {
-                return Applied::rejected(format!("media tools are unavailable: {detail}"));
-            }
-            if vendor_worker_active(&state.tools.activity) {
-                return Applied::rejected("a vendor operation is in progress");
+            if let Some(summary) = state.tools.blocking_summary() {
+                return Applied::rejected(format!("media tools are unavailable: {summary}"));
             }
             AnalysisDelta::ActivityChanged {
                 generation,
@@ -837,6 +848,11 @@ fn apply_settings(state: &AppState, command: SettingsCommand) -> Applied {
                     settings: settings.clone(),
                 });
             }
+            if settings.tools != state.settings.tools {
+                applied.effects.push(Effect::DiscoverTools {
+                    configured: settings.tools.clone(),
+                });
+            }
             applied.effects.push(Effect::WriteSettings { settings });
             applied
         }
@@ -1086,82 +1102,12 @@ fn count_skip(skipped: &mut Vec<(SkipReason, u32)>, reason: SkipReason) {
     }
 }
 
-fn tools_transition(state: &AppState, next: ToolsState) -> Applied {
+fn tools_transition(state: &AppState, next: ToolAvailability) -> Applied {
     let mut applied = Applied::accepted();
     if state.tools != next {
         applied.ephemeral.push(EphemeralDelta::ToolsChanged(next));
     }
     applied
-}
-
-/// Whether a vendor worker is (or is about to be) running. `Failed` and
-/// `Idle` are the only restable states.
-fn vendor_worker_active(activity: &VendorActivity) -> bool {
-    matches!(
-        activity,
-        VendorActivity::Checking | VendorActivity::Downloading { .. } | VendorActivity::Installing
-    )
-}
-
-/// Whether the installed tool binaries may currently be swapped out from
-/// under a starting session.
-fn vendor_swapping_tools(activity: &VendorActivity) -> bool {
-    matches!(
-        activity,
-        VendorActivity::Downloading { .. } | VendorActivity::Installing
-    )
-}
-
-fn apply_vendor(state: &AppState, command: VendorCommand) -> Applied {
-    if vendor_worker_active(&state.tools.activity) {
-        return Applied::rejected("a vendor operation is already in progress");
-    }
-    if state
-        .analysis
-        .current
-        .as_ref()
-        .is_some_and(|generation| generation.activity == AnalysisActivity::BasicScanning)
-    {
-        return Applied::rejected("vendor operations cannot run during Basic Scan");
-    }
-    match command {
-        VendorCommand::Install => {
-            // Idle-only swap: an install replaces the binaries a session
-            // worker would execute, so it is refused whenever a session or
-            // claimed item exists — including crash-recovered actives.
-            if state.session != SessionState::Idle {
-                return Applied::rejected("vendor install requires an idle session");
-            }
-            if active_run(state).is_some() {
-                return Applied::rejected(
-                    "vendor install cannot start while a queue item is active",
-                );
-            }
-            let mut applied = tools_transition(
-                state,
-                ToolsState {
-                    activity: VendorActivity::Downloading {
-                        received: 0,
-                        total: None,
-                    },
-                    ..state.tools.clone()
-                },
-            );
-            applied.effects.push(Effect::VendorInstall);
-            applied
-        }
-        VendorCommand::Check => {
-            let mut applied = tools_transition(
-                state,
-                ToolsState {
-                    activity: VendorActivity::Checking,
-                    ..state.tools.clone()
-                },
-            );
-            applied.effects.push(Effect::VendorCheck);
-            applied
-        }
-    }
 }
 
 fn apply_history(state: &AppState, command: HistoryCommand) -> Applied {
@@ -1200,11 +1146,8 @@ fn apply_history(state: &AppState, command: HistoryCommand) -> Applied {
 fn apply_session(state: &AppState, command: SessionCommand) -> Applied {
     match command {
         SessionCommand::Start if state.session == SessionState::Idle => {
-            if let ToolAvailability::Missing { detail, .. } = &state.tools.availability {
-                return Applied::rejected(format!("media tools are unavailable: {detail}"));
-            }
-            if vendor_swapping_tools(&state.tools.activity) {
-                return Applied::rejected("a vendor install is in progress");
+            if let Some(summary) = state.tools.blocking_summary() {
+                return Applied::rejected(format!("media tools are unavailable: {summary}"));
             }
             let mut applied = Applied::accepted();
             applied

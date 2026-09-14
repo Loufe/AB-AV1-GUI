@@ -10,13 +10,12 @@ use std::{
 
 use crfty_core::{
     AnalysisActivity, AnalysisDelta, AnalysisFileScan, AnalysisProfile, AnalysisRowEntry,
-    AnalysisSnapshot, EphemeralDelta, ExecutionSettings, ToolRevisions, ToolSource, VideoExtension,
-    fold_analysis,
+    AnalysisSnapshot, EphemeralDelta, ExecutionSettings, LocatedTool, LocatedTools, ToolRevisions,
+    ToolSource, VideoExtension, fold_analysis,
 };
 use crfty_engine::{
-    coordinator::{EngineConfig, EngineRuntime, ToolsConfig},
+    coordinator::{EngineConfig, EngineRuntime, FixedTools, ToolsConfig},
     driver::DriverEvent,
-    vendor::discovery::{CurrentTools, DiscoveredTools, MediaTools},
 };
 
 const FILE_COUNT: usize = 40;
@@ -314,12 +313,19 @@ fn config(directory: &Path, ffmpeg: PathBuf, ffprobe: PathBuf) -> EngineConfig {
     EngineConfig {
         journal_path: directory.join("journal.jsonl"),
         config_path: directory.join("config.json"),
-        vendor_root: directory.join("vendor"),
-        tools: ToolsConfig::Fixed(DiscoveredTools::Available(CurrentTools {
-            media: MediaTools { ffmpeg, ffprobe },
-            source: ToolSource::Explicit,
+        tools: ToolsConfig::Fixed(FixedTools {
+            tools: LocatedTools {
+                ffmpeg: LocatedTool {
+                    source: ToolSource::Environment,
+                    path: ffmpeg,
+                },
+                ffprobe: LocatedTool {
+                    source: ToolSource::Environment,
+                    path: ffprobe,
+                },
+            },
             revisions,
-        })),
+        }),
         execution: ExecutionSettings::production(profile, false),
     }
 }

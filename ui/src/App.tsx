@@ -12,8 +12,8 @@ import { AnalysisView } from "@/features/analysis/analysis-view";
 import { HistoryView } from "@/features/history/history-view";
 import { QueueView } from "@/features/queue/queue-view";
 import { SettingsView } from "@/features/settings/settings-view";
-import { closeAppWindow, fetchAppVersion, isTauri } from "@/lib/ipc";
-import { useAppStore } from "@/lib/store/app-store";
+import { closeAppWindow, fetchAppInfo, isTauri } from "@/lib/ipc";
+import { appStore, useAppStore } from "@/lib/store/app-store";
 import { connectStream } from "@/lib/store/connect";
 import { getTheme, setTheme, watchSystemTheme, type Theme } from "@/lib/theme";
 
@@ -105,10 +105,13 @@ export default function App() {
       return;
     }
     connectStream();
-    fetchAppVersion()
-      .then(setAppVersion)
+    fetchAppInfo()
+      .then((info) => {
+        setAppVersion(info.version);
+        appStore.setState((state) => ({ ...state, platform: info.platform }));
+      })
       .catch((error: unknown) => {
-        console.error("failed to fetch the shell version", error);
+        console.error("failed to fetch the shell app info", error);
       });
   }, []);
 

@@ -1,7 +1,7 @@
 import { page, userEvent } from "vitest/browser";
 import { describe, expect, it } from "vitest";
 
-import type { DurableState_Deserialize, QueueItem, Settings, ToolsState } from "@/lib/bindings";
+import type { DurableState_Deserialize, QueueItem, Settings, ToolAvailability } from "@/lib/bindings";
 import { appStore } from "@/lib/store/app-store";
 import { emptyDurableState } from "@/lib/store/fold";
 import { renderApp } from "@/test/browser/render";
@@ -22,19 +22,19 @@ function settings(): Settings {
     hardware_decode: true,
     privacy: { anonymize_logs: false, anonymize_history: false },
     log_folder: null,
+    tools: { ffmpeg: null, ffprobe: null },
   };
 }
 
-function tools(): ToolsState {
+function tools(): ToolAvailability {
   return {
-    availability: {
-      Available: {
-        source: "System",
-        revisions: { ab_av1: "1", ffmpeg: "2", encoder: "3" },
+    Located: {
+      tools: {
+        ffmpeg: { source: "SearchPath", path: "/usr/bin/ffmpeg" },
+        ffprobe: { source: "SearchPath", path: "/usr/bin/ffprobe" },
       },
+      verification: { Verified: { revisions: { ab_av1: "1", ffmpeg: "2", encoder: "3" } } },
     },
-    activity: "Idle",
-    update_available: false,
   };
 }
 

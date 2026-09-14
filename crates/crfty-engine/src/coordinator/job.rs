@@ -18,7 +18,7 @@ use crate::{
     failure::scrub_tail,
     rate::{RateSample, RateTracker},
     remux::{self, RemuxHandle, RemuxReport, RemuxRequest, RemuxTerminal},
-    vendor::discovery::MediaTools,
+    tools::MediaTools,
 };
 
 use super::output_flow::{

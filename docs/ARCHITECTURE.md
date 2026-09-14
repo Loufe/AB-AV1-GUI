@@ -11,7 +11,7 @@ The Python application held its invariants together with documentation and disci
 ## Workspace
 
 - `crfty-core`: pure domain. State, reducer, fold, policy, projections, and the journal codec, with no filesystem, process, clock, or async runtime.
-- `crfty-engine`: external processes and filesystem I/O. Driver, ab-av1 adapter, scanning, output settlement, vendoring, logging. No Tauri.
+- `crfty-engine`: external processes and filesystem I/O. Driver, ab-av1 adapter, scanning, output settlement, media tool discovery and verification, logging. No Tauri.
 - `crfty-shell`: the Tauri command and event bridge. No domain logic.
 - `ui/`: the React frontend, consuming generated bindings only.
 
@@ -32,7 +32,7 @@ Crates split on hard dependency boundaries (no Tauri, no process), never by topi
 | Events and IPC | `docs/design/event-stream.md`; ADR-006 (generate IPC bindings with tauri-specta) |
 | History and statistics | `docs/HISTORY.md`; ADR-015 (project imported history separately) |
 | V2 history import | `docs/HISTORY_IMPORT.md`; ADR-015 (project imported history separately) |
-| FFmpeg vendoring | ADR-010 (vendor pinned FFmpeg with checksummed atomic installs) |
+| Media tools | this file; ADR-023 (require a user-supplied FFmpeg toolchain) |
 | Privacy and logging | ADR-014 (scrub paths inside the log sink) |
 | Single-instance ownership | ADR-008 (take an engine-owned data-directory lock) |
 | Testing strategy and gates | `docs/TESTING.md` |
@@ -40,6 +40,12 @@ Crates split on hard dependency boundaries (no Tauri, no process), never by topi
 | Working research and design notes | `docs/design/` |
 
 History ownership is engine-side and single-boundary: an observation becomes durable only by passing through the reducer and its journal commit, and every History or Statistics view is a pure projection of that durable state rather than an independently maintained total. `docs/HISTORY.md` owns the rest, including the observation model, the transaction boundary an observation commits under, the query surface that serves those views, and how an active view learns that a mutation invalidated what it is showing.
+
+## Media tools
+
+CRFty runs the FFmpeg and ffprobe the user installed and never downloads them (ADR-023). The engine discovers each tool with a fixed precedence: the `CRFTY_FFMPEG` or `CRFTY_FFPROBE` environment override, then the path configured in Settings, then a search of `PATH`. An explicit tier that does not name a file fails closed and reports the tool missing rather than falling through. Discovery spawns nothing and runs at engine start, on request, and whenever the configured paths change; its result is ephemeral `ToolAvailability` on the event stream, replayed to every subscriber.
+
+Located tools are only pending. Each session start runs a bounded, cancellable capability probe before the first claim: ffprobe's JSON version document, a one-second synthetic `libsvtav1` encode, and a `libvmaf` comparison of two synthetic inputs, each judged by exit status. The probed FFmpeg version becomes the `ffmpeg` and `encoder` revision frozen into every claim, so a changed toolchain invalidates analysis reuse (ADR-007). A failed probe ends the session with a typed reason and no reserved item; missing tools reject session and Basic Scan starts while the queue, history, statistics, and settings stay usable. The Settings view shows the typed failures with their paths and per-platform install guidance.
 
 ## Release boundary
 

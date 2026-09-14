@@ -1,6 +1,9 @@
-//! FFmpeg-free startup contract: the durable engine starts, replays, and
-//! serves non-media commands when no tools are discovered, and startup
-//! recovery defers unsettled output transactions instead of settling blind.
+//! Media tool contract (ADR-023): the durable engine starts, replays, and
+//! serves non-media commands when no tools are located; startup recovery
+//! defers unsettled output transactions instead of settling blind; discovery
+//! honours its precedence and fails closed on explicit tiers; and the
+//! session-start capability probe gates the first claim, records provenance,
+//! and stays cancellable.
 #![forbid(unsafe_code)]
 
 use std::{
@@ -14,12 +17,13 @@ use std::{
 };
 
 use crfty_core::{
-    AnalysisIntent, AnalysisProfile, AnalysisResult, AppState, ClaimId, Command, Crf,
-    EphemeralDelta, ExecutionSettings, ItemOutcome, MediaTool, Operation, OutputDelta,
-    OutputTarget, OverwriteDecision, QueueAddRequest, QueueCommand, QueueItemId, QueueItemState,
-    Replacement, Reply, RunId, SearchMeasurement, SessionCommand, Settings, SettingsCommand,
-    ToolAvailability, ToolRevisions, ToolSource, ToolsState, UnixMillis, VmafScore, WorkerCommand,
-    apply,
+    AnalysisIntent, AnalysisProfile, AnalysisResult, AppState, ClaimId, Command, Crf, DurableDelta,
+    EphemeralDelta, ExecutionSettings, ItemOutcome, LocatedTool, LocatedTools, MediaTool,
+    Operation, OutputDelta, OutputTarget, OverwriteDecision, ProbeFailure, QueueAddRequest,
+    QueueCommand, QueueItemId, QueueItemState, Replacement, Reply, RunId, SearchMeasurement,
+    SessionCommand, SessionState, Settings, SettingsCommand, ToolAvailability, ToolCapability,
+    ToolLocationFailure, ToolPathSettings, ToolRevisions, ToolSource, ToolVerification,
+    ToolsCommand, UnixMillis, VmafScore, WorkerCommand, apply,
 };
 
 fn add_one(item_id: QueueItemId, input: PathBuf) -> QueueCommand {
@@ -39,11 +43,14 @@ fn add_one(item_id: QueueItemId, input: PathBuf) -> QueueCommand {
 }
 use crfty_engine::{
     ab_av1::AB_AV1_REVISION,
-    coordinator::{EngineConfig, EngineRuntime, ToolsConfig},
+    coordinator::{EngineConfig, EngineRuntime, FixedTools, ToolsConfig},
     driver::{DriverEvent, DriverHandle},
     journal::JournalWriter,
     output::{FixtureByteInspector, OutputManager},
-    vendor::discovery::{self, CurrentTools, DiscoveredTools, DiscoveryEnvironment, MediaTools},
+    tools::{
+        MediaTools,
+        discovery::{self, DiscoveryEnvironment},
+    },
 };
 
 /// `AbAv1Runtime` is a process-wide singleton; engine-starting tests in this
@@ -59,20 +66,44 @@ fn execution() -> ExecutionSettings {
     ExecutionSettings::production(profile, false)
 }
 
+/// Real discovery over an empty environment: nothing is located.
 fn missing_tools() -> ToolsConfig {
-    ToolsConfig::Fixed(DiscoveredTools::Missing {
-        missing: vec![MediaTool::Ffmpeg, MediaTool::Ffprobe],
-        detail: "fixture: no tools installed".to_owned(),
-    })
+    ToolsConfig::Discover(DiscoveryEnvironment::default())
 }
 
+fn fixture_revisions() -> ToolRevisions {
+    ToolRevisions {
+        ab_av1: "fixture".to_owned(),
+        ffmpeg: "fixture".to_owned(),
+        encoder: "fixture".to_owned(),
+    }
+}
+
+fn located(media: &MediaTools, source: ToolSource) -> LocatedTools {
+    LocatedTools {
+        ffmpeg: LocatedTool {
+            source,
+            path: media.ffmpeg.clone(),
+        },
+        ffprobe: LocatedTool {
+            source,
+            path: media.ffprobe.clone(),
+        },
+    }
+}
+
+/// Located tools for driver-only tests, where no process ever runs.
 fn fixture_available() -> ToolAvailability {
-    ToolAvailability::Available {
-        source: ToolSource::System,
-        revisions: ToolRevisions {
-            ab_av1: "fixture".to_owned(),
-            ffmpeg: "fixture".to_owned(),
-            encoder: "fixture".to_owned(),
+    ToolAvailability::Located {
+        tools: located(
+            &MediaTools {
+                ffmpeg: PathBuf::from("fixture-ffmpeg"),
+                ffprobe: PathBuf::from("fixture-ffprobe"),
+            },
+            ToolSource::SearchPath,
+        ),
+        verification: ToolVerification::Verified {
+            revisions: fixture_revisions(),
         },
     }
 }
@@ -110,7 +141,6 @@ fn engine_config(directory: &TestDirectory, tools: ToolsConfig) -> EngineConfig 
     EngineConfig {
         journal_path: directory.path().join("state.jsonl"),
         config_path: directory.path().join("config.json"),
-        vendor_root: directory.path().join("vendor"),
         tools,
         execution: execution(),
     }
@@ -167,15 +197,23 @@ fn startup_without_tools_replays_and_serves_non_media_commands() {
     );
     assert_eq!(snapshot.settings, settings);
     let availability = engine.events.recv().expect("availability event");
-    let DriverEvent::Ephemeral(EphemeralDelta::ToolsChanged(ToolsState {
-        availability: ToolAvailability::Missing { missing, detail },
-        ..
+    let DriverEvent::Ephemeral(EphemeralDelta::ToolsChanged(ToolAvailability::Missing {
+        failures,
     })) = availability
     else {
         panic!("expected missing-tools availability after the snapshot: {availability:?}");
     };
-    assert_eq!(missing, vec![MediaTool::Ffmpeg, MediaTool::Ffprobe]);
-    assert!(detail.contains("no tools installed"), "{detail}");
+    assert_eq!(
+        failures,
+        vec![
+            ToolLocationFailure::NotOnSearchPath {
+                tool: MediaTool::Ffmpeg
+            },
+            ToolLocationFailure::NotOnSearchPath {
+                tool: MediaTool::Ffprobe
+            },
+        ]
+    );
 
     assert_eq!(
         engine
@@ -249,7 +287,6 @@ fn startup_recovery_without_ffprobe_defers_output_settlement() {
         Command::Queue(add_one(QueueItemId(1), input.clone())),
         Command::System(crfty_core::SystemCommand::ToolsDiscovered {
             availability: fixture_available(),
-            update_available: false,
         }),
         Command::Session(SessionCommand::Start),
         Command::Worker(WorkerCommand::ReserveNext {
@@ -331,18 +368,16 @@ fn startup_recovery_without_ffprobe_defers_output_settlement() {
     let executable = std::env::current_exe().expect("test executable");
     let recovered = EngineRuntime::start(engine_config(
         &directory,
-        ToolsConfig::Fixed(DiscoveredTools::Available(CurrentTools {
-            media: MediaTools {
-                ffmpeg: executable.clone(),
-                ffprobe: executable,
-            },
-            source: ToolSource::System,
-            revisions: ToolRevisions {
-                ab_av1: "fixture".to_owned(),
-                ffmpeg: "fixture".to_owned(),
-                encoder: "fixture".to_owned(),
-            },
-        })),
+        ToolsConfig::Fixed(FixedTools {
+            tools: located(
+                &MediaTools {
+                    ffmpeg: executable.clone(),
+                    ffprobe: executable,
+                },
+                ToolSource::SearchPath,
+            ),
+            revisions: fixture_revisions(),
+        }),
     ))
     .expect("recovery with tools");
     let DriverEvent::Snapshot(snapshot) = recovered.events.recv().expect("recovered snapshot")
@@ -361,7 +396,7 @@ fn startup_recovery_without_ffprobe_defers_output_settlement() {
 }
 
 /// A PATH-style directory holding contract-fixture copies that answer the
-/// ffprobe JSON version probe.
+/// ffprobe JSON version document and the synthetic capability probes.
 #[expect(clippy::expect_used, reason = "fixture setup")]
 fn fixture_path_directory(directory: &TestDirectory) -> PathBuf {
     let fixture = PathBuf::from(env!("CARGO_BIN_EXE_crfty-contract-fixture"));
@@ -380,223 +415,151 @@ fn tool_file_name(binary: &str) -> String {
     }
 }
 
-#[test]
-fn discovery_reports_missing_when_no_tier_provides_tools() {
-    let directory = TestDirectory::new("discovery-none");
-    let report = discovery::discover_with(
-        &directory.path().join("vendor"),
-        &DiscoveryEnvironment::default(),
-    );
-    let DiscoveredTools::Missing { missing, detail } = report.tools else {
-        panic!("expected missing tools: {:?}", report.tools);
-    };
-    assert_eq!(missing, vec![MediaTool::Ffmpeg, MediaTool::Ffprobe]);
-    assert!(detail.contains("managed install"), "{detail}");
-    assert!(!report.update_available);
+fn fixture_media(path_dir: &Path) -> MediaTools {
+    MediaTools {
+        ffmpeg: path_dir.join(tool_file_name("ffmpeg")),
+        ffprobe: path_dir.join(tool_file_name("ffprobe")),
+    }
 }
 
-#[test]
-fn discovery_finds_system_tools_and_probes_their_revisions() {
-    let directory = TestDirectory::new("discovery-system");
-    let path_dir = fixture_path_directory(&directory);
-    let report = discovery::discover_with(
-        &directory.path().join("vendor"),
-        &DiscoveryEnvironment {
-            search_path: Some(path_dir.clone().into_os_string()),
-            ..DiscoveryEnvironment::default()
-        },
-    );
-    let DiscoveredTools::Available(current) = report.tools else {
-        panic!("expected system tools: {:?}", report.tools);
-    };
-    assert_eq!(current.source, ToolSource::System);
-    assert_eq!(
-        current.media.ffmpeg,
-        path_dir.join(tool_file_name("ffmpeg"))
-    );
-    assert_eq!(current.revisions.ab_av1, AB_AV1_REVISION);
-    assert_eq!(current.revisions.ffmpeg, "fixture-8.1.2");
-    assert_eq!(current.revisions.encoder, "fixture-8.1.2");
-    assert!(!report.update_available);
+fn search_path_environment(path_dir: &Path) -> DiscoveryEnvironment {
+    DiscoveryEnvironment {
+        ffmpeg_override: None,
+        ffprobe_override: None,
+        search_path: Some(path_dir.as_os_str().to_owned()),
+    }
 }
 
-#[test]
-fn invalid_explicit_path_is_fail_closed_despite_a_usable_path() {
-    let directory = TestDirectory::new("discovery-explicit-invalid");
-    let path_dir = fixture_path_directory(&directory);
-    let report = discovery::discover_with(
-        &directory.path().join("vendor"),
-        &DiscoveryEnvironment {
-            ffmpeg_override: Some(directory.path().join("missing-ffmpeg").into_os_string()),
-            ffprobe_override: None,
-            search_path: Some(path_dir.into_os_string()),
-        },
-    );
-    let DiscoveredTools::Missing { missing, detail } = report.tools else {
-        panic!("expected fail-closed missing tools: {:?}", report.tools);
-    };
-    assert_eq!(missing, vec![MediaTool::Ffmpeg]);
-    assert!(detail.contains("CRFTY_FFMPEG"), "{detail}");
-}
-
-#[test]
-fn explicit_paths_win_over_managed_and_path_tiers() {
-    let directory = TestDirectory::new("discovery-explicit");
-    let vendor_root = directory.path().join("vendor");
-    write_managed_install(&vendor_root, "some-older-build");
-    let path_dir = fixture_path_directory(&directory);
-    let report = discovery::discover_with(
-        &vendor_root,
-        &DiscoveryEnvironment {
-            ffmpeg_override: Some(path_dir.join(tool_file_name("ffmpeg")).into_os_string()),
-            ffprobe_override: Some(path_dir.join(tool_file_name("ffprobe")).into_os_string()),
-            search_path: None,
-        },
-    );
-    let DiscoveredTools::Available(current) = report.tools else {
-        panic!("expected explicit tools: {:?}", report.tools);
-    };
-    assert_eq!(current.source, ToolSource::Explicit);
-    assert_eq!(current.revisions.ffmpeg, "fixture-8.1.2");
-}
-
-#[test]
-#[expect(clippy::expect_used, reason = "test assertion")]
-fn system_tools_failing_the_version_probe_are_fail_closed() {
-    let directory = TestDirectory::new("discovery-probe-failure");
-    let path_dir = directory.path().join("bin");
-    fs::create_dir(&path_dir).expect("plain PATH directory");
-    fs::write(path_dir.join(tool_file_name("ffmpeg")), b"not a binary").expect("plain ffmpeg");
-    fs::write(path_dir.join(tool_file_name("ffprobe")), b"not a binary").expect("plain ffprobe");
-    let report = discovery::discover_with(
-        &directory.path().join("vendor"),
-        &DiscoveryEnvironment {
-            search_path: Some(path_dir.into_os_string()),
-            ..DiscoveryEnvironment::default()
-        },
-    );
-    let DiscoveredTools::Missing { missing, .. } = report.tools else {
-        panic!(
-            "unprobeable tools must not be available: {:?}",
-            report.tools
-        );
-    };
-    assert_eq!(missing, vec![MediaTool::Ffprobe]);
-}
-
+/// Directs the fixture's capability probe: see `fake_capability_probe`.
 #[expect(clippy::expect_used, reason = "fixture setup")]
-fn write_managed_install(vendor_root: &Path, version: &str) {
-    let bin = vendor_root.join("installs").join(version).join("bin");
-    fs::create_dir_all(&bin).expect("managed install directory");
-    fs::write(bin.join(tool_file_name("ffmpeg")), b"managed ffmpeg").expect("managed ffmpeg");
-    fs::write(bin.join(tool_file_name("ffprobe")), b"managed ffprobe").expect("managed ffprobe");
-    let record = format!(
-        concat!(
-            "{{\"version\": \"{version}\", ",
-            "\"ffmpeg\": \"installs/{version}/bin/{ffmpeg}\", ",
-            "\"ffprobe\": \"installs/{version}/bin/{ffprobe}\", ",
-            "\"ffmpeg_revision\": \"managed-ffmpeg-{version}\", ",
-            "\"encoder_revision\": \"managed-svt-{version}\"}}"
-        ),
-        version = version,
-        ffmpeg = tool_file_name("ffmpeg"),
-        ffprobe = tool_file_name("ffprobe"),
+fn write_probe_marker(path_dir: &Path, directive: &str) {
+    fs::write(path_dir.join("crfty-fixture-probe"), directive).expect("probe marker");
+}
+
+#[test]
+fn discovery_reports_every_tool_missing_when_no_tier_provides_one() {
+    let availability = discovery::discover(
+        &DiscoveryEnvironment::default(),
+        &ToolPathSettings::default(),
     );
-    fs::write(vendor_root.join("current.json"), record).expect("managed install record");
-}
-
-#[test]
-#[expect(clippy::expect_used, reason = "test assertion")]
-fn managed_install_provides_tools_from_metadata_without_probing() {
-    let directory = TestDirectory::new("discovery-managed");
-    let vendor_root = directory.path().join("vendor");
-    write_managed_install(&vendor_root, "some-older-build");
-    let stale = vendor_root.join("staging");
-    fs::create_dir_all(&stale).expect("stale staging directory");
-    fs::write(stale.join("download.partial"), b"stale bytes").expect("stale staging entry");
-    let report = discovery::discover_with(&vendor_root, &DiscoveryEnvironment::default());
-    let DiscoveredTools::Available(current) = report.tools else {
-        panic!("expected managed tools: {:?}", report.tools);
-    };
-    assert_eq!(current.source, ToolSource::Managed);
-    assert_eq!(current.revisions.ab_av1, AB_AV1_REVISION);
-    assert_eq!(current.revisions.ffmpeg, "managed-ffmpeg-some-older-build");
-    assert_eq!(current.revisions.encoder, "managed-svt-some-older-build");
-    // The plain metadata files were never spawned: managed revisions come
-    // from the install record alone.
-    assert!(
-        report.update_available,
-        "an install older than the compiled-in manifest must offer an update"
+    assert_eq!(
+        availability,
+        ToolAvailability::Missing {
+            failures: vec![
+                ToolLocationFailure::NotOnSearchPath {
+                    tool: MediaTool::Ffmpeg
+                },
+                ToolLocationFailure::NotOnSearchPath {
+                    tool: MediaTool::Ffprobe
+                },
+            ],
+        }
     );
-    assert!(!stale.exists(), "stale staging must be cleaned");
 }
 
 #[test]
-#[expect(clippy::expect_used, reason = "test assertion")]
-fn managed_install_matching_the_manifest_offers_no_update() {
-    let directory = TestDirectory::new("discovery-managed-current");
-    let vendor_root = directory.path().join("vendor");
-    let manifest =
-        crfty_engine::vendor::manifest::current().expect("manifest exists on CI platforms");
-    write_managed_install(&vendor_root, manifest.build);
-    let report = discovery::discover_with(&vendor_root, &DiscoveryEnvironment::default());
-    let DiscoveredTools::Available(current) = report.tools else {
-        panic!("expected managed tools: {:?}", report.tools);
-    };
-    assert_eq!(current.source, ToolSource::Managed);
-    assert!(!report.update_available);
-}
-
-#[test]
-#[expect(clippy::expect_used, reason = "test assertion")]
-fn corrupt_managed_record_falls_back_to_the_path_tier() {
-    let directory = TestDirectory::new("discovery-managed-corrupt");
-    let vendor_root = directory.path().join("vendor");
-    fs::create_dir_all(&vendor_root).expect("vendor root");
-    fs::write(vendor_root.join("current.json"), b"{ not json").expect("corrupt record");
+fn discovery_locates_search_path_tools_without_verifying_them() {
+    let directory = TestDirectory::new("discovery-search-path");
     let path_dir = fixture_path_directory(&directory);
-    let report = discovery::discover_with(
-        &vendor_root,
-        &DiscoveryEnvironment {
-            search_path: Some(path_dir.into_os_string()),
-            ..DiscoveryEnvironment::default()
-        },
+    let availability = discovery::discover(
+        &search_path_environment(&path_dir),
+        &ToolPathSettings::default(),
     );
-    let DiscoveredTools::Available(current) = report.tools else {
-        panic!("expected PATH fallback: {:?}", report.tools);
-    };
-    assert_eq!(current.source, ToolSource::System);
-    assert!(!report.update_available);
+    assert_eq!(
+        availability,
+        ToolAvailability::Located {
+            tools: located(&fixture_media(&path_dir), ToolSource::SearchPath),
+            verification: ToolVerification::Pending,
+        }
+    );
 }
 
 #[test]
-#[expect(clippy::expect_used, reason = "test assertion")]
-fn managed_record_escaping_the_vendor_root_is_rejected() {
-    let directory = TestDirectory::new("discovery-managed-escape");
-    let vendor_root = directory.path().join("vendor");
-    fs::create_dir_all(&vendor_root).expect("vendor root");
-    fs::write(
-        vendor_root.join("current.json"),
-        br#"{"version": "v", "ffmpeg": "../outside/ffmpeg", "ffprobe": "../outside/ffprobe", "ffmpeg_revision": "r", "encoder_revision": "r"}"#,
-    )
-    .expect("escaping record");
-    let report = discovery::discover_with(&vendor_root, &DiscoveryEnvironment::default());
-    assert!(
-        matches!(report.tools, DiscoveredTools::Missing { .. }),
-        "an escaping record must not resolve tools: {:?}",
-        report.tools
+fn settings_paths_win_over_the_search_path_and_fail_closed() {
+    let directory = TestDirectory::new("discovery-settings");
+    let path_dir = fixture_path_directory(&directory);
+    let media = fixture_media(&path_dir);
+
+    let configured = ToolPathSettings {
+        ffmpeg: Some(media.ffmpeg.clone()),
+        ffprobe: Some(media.ffprobe.clone()),
+    };
+    assert_eq!(
+        discovery::discover(&DiscoveryEnvironment::default(), &configured),
+        ToolAvailability::Located {
+            tools: located(&media, ToolSource::Settings),
+            verification: ToolVerification::Pending,
+        }
     );
-    assert!(!report.update_available);
+
+    // A configured path that names nothing is a defect to report, not a
+    // reason to fall through to whatever PATH holds.
+    let dangling = directory.path().join("missing-ffmpeg");
+    let half_configured = ToolPathSettings {
+        ffmpeg: Some(dangling.clone()),
+        ffprobe: None,
+    };
+    assert_eq!(
+        discovery::discover(&search_path_environment(&path_dir), &half_configured),
+        ToolAvailability::Missing {
+            failures: vec![ToolLocationFailure::SettingsPathIsNotAFile {
+                tool: MediaTool::Ffmpeg,
+                path: dangling,
+            }],
+        }
+    );
 }
 
-/// Waits for vendor-driven ephemeral tool updates until `predicate` accepts
-/// one, panicking on stream close.
-fn wait_for_tools_state(
+#[test]
+fn environment_overrides_win_over_settings_and_fail_closed() {
+    let directory = TestDirectory::new("discovery-environment");
+    let path_dir = fixture_path_directory(&directory);
+    let media = fixture_media(&path_dir);
+    let dangling = directory.path().join("missing-ffprobe");
+
+    // Settings name files that do not exist, yet the override wins outright.
+    let stale_settings = ToolPathSettings {
+        ffmpeg: Some(dangling.clone()),
+        ffprobe: Some(dangling.clone()),
+    };
+    let overrides = DiscoveryEnvironment {
+        ffmpeg_override: Some(media.ffmpeg.clone().into_os_string()),
+        ffprobe_override: Some(media.ffprobe.clone().into_os_string()),
+        search_path: None,
+    };
+    assert_eq!(
+        discovery::discover(&overrides, &stale_settings),
+        ToolAvailability::Located {
+            tools: located(&media, ToolSource::Environment),
+            verification: ToolVerification::Pending,
+        }
+    );
+
+    let broken_override = DiscoveryEnvironment {
+        ffmpeg_override: None,
+        ffprobe_override: Some(dangling.clone().into_os_string()),
+        search_path: Some(path_dir.as_os_str().to_owned()),
+    };
+    assert_eq!(
+        discovery::discover(&broken_override, &ToolPathSettings::default()),
+        ToolAvailability::Missing {
+            failures: vec![ToolLocationFailure::EnvironmentPathIsNotAFile {
+                tool: MediaTool::Ffprobe,
+                path: dangling,
+            }],
+        }
+    );
+}
+
+/// Drains events until `predicate` accepts one, returning everything seen up
+/// to and including it; panics on stream close or after ten seconds.
+fn drain_until(
     events: &std::sync::mpsc::Receiver<DriverEvent>,
-    predicate: impl Fn(&ToolsState) -> bool,
+    predicate: impl Fn(&DriverEvent) -> bool,
     what: &str,
-) -> ToolsState {
+) -> Vec<DriverEvent> {
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+    let mut seen = Vec::new();
     loop {
         let remaining = deadline
             .checked_duration_since(std::time::Instant::now())
@@ -604,85 +567,349 @@ fn wait_for_tools_state(
         let event = events
             .recv_timeout(remaining)
             .unwrap_or_else(|error| panic!("stream ended waiting for {what}: {error}"));
-        if let DriverEvent::Ephemeral(EphemeralDelta::ToolsChanged(tools)) = event
-            && predicate(&tools)
-        {
-            return tools;
+        let matched = predicate(&event);
+        seen.push(event);
+        if matched {
+            return seen;
         }
     }
 }
 
+fn wait_for_tools(
+    events: &std::sync::mpsc::Receiver<DriverEvent>,
+    predicate: impl Fn(&ToolAvailability) -> bool,
+    what: &str,
+) -> ToolAvailability {
+    let seen = drain_until(
+        events,
+        |event| {
+            matches!(
+                event,
+                DriverEvent::Ephemeral(EphemeralDelta::ToolsChanged(tools)) if predicate(tools)
+            )
+        },
+        what,
+    );
+    match seen.into_iter().next_back() {
+        Some(DriverEvent::Ephemeral(EphemeralDelta::ToolsChanged(tools))) => tools,
+        other => panic!("drained past the matching tools event: {other:?}"),
+    }
+}
+
+fn wait_for_session(events: &std::sync::mpsc::Receiver<DriverEvent>, expected: SessionState) {
+    let _seen = drain_until(
+        events,
+        |event| {
+            matches!(
+                event,
+                DriverEvent::Ephemeral(EphemeralDelta::SessionChanged(session)) if *session == expected
+            )
+        },
+        "session state change",
+    );
+}
+
+fn is_verified(tools: &ToolAvailability) -> bool {
+    matches!(
+        tools,
+        ToolAvailability::Located {
+            verification: ToolVerification::Verified { .. },
+            ..
+        }
+    )
+}
+
+fn is_pending(tools: &ToolAvailability) -> bool {
+    matches!(
+        tools,
+        ToolAvailability::Located {
+            verification: ToolVerification::Pending,
+            ..
+        }
+    )
+}
+
 #[test]
 #[expect(clippy::expect_used, reason = "test assertion")]
-fn vendor_check_rediscovers_tools_and_returns_to_idle() {
+fn session_start_probes_located_tools_and_records_their_revisions() {
     let _serial = ENGINE_GUARD.lock().expect("engine guard");
-    let directory = TestDirectory::new("vendor-check-cycle");
-    let executable = fixture_path_directory(&directory).join(tool_file_name("ffmpeg"));
-    let tools = ToolsConfig::Fixed(DiscoveredTools::Available(CurrentTools {
-        media: MediaTools {
-            ffmpeg: executable.clone(),
-            ffprobe: executable,
-        },
-        source: ToolSource::Explicit,
-        revisions: ToolRevisions {
-            ab_av1: "fixture".to_owned(),
-            ffmpeg: "fixture".to_owned(),
-            encoder: "fixture".to_owned(),
-        },
-    }));
-    let engine = EngineRuntime::start(engine_config(&directory, tools)).expect("engine start");
+    let directory = TestDirectory::new("probe-verifies");
+    let path_dir = fixture_path_directory(&directory);
+    let input = directory.path().join("video.mkv");
+    fs::write(&input, vec![7_u8; 8192]).expect("input media");
+    let engine = EngineRuntime::start(engine_config(
+        &directory,
+        ToolsConfig::Discover(search_path_environment(&path_dir)),
+    ))
+    .expect("engine start");
+    let pending = wait_for_tools(&engine.events, is_pending, "pending tools after startup");
+    assert_eq!(
+        pending,
+        ToolAvailability::Located {
+            tools: located(&fixture_media(&path_dir), ToolSource::SearchPath),
+            verification: ToolVerification::Pending,
+        }
+    );
+
     assert_eq!(
         engine
             .commands
-            .submit_vendor(crfty_core::VendorCommand::Check)
-            .expect("vendor check reply"),
+            .submit_queue(add_one(QueueItemId(1), input))
+            .expect("add reply"),
         Reply::Accepted
     );
-    // The reducer flips activity to Checking, then the vendor worker
-    // republishes discovery and settles back to Idle.
-    wait_for_tools_state(
-        &engine.events,
-        |tools| tools.activity == crfty_core::VendorActivity::Checking,
-        "checking activity",
+    assert_eq!(
+        engine
+            .commands
+            .submit_session(SessionCommand::Start)
+            .expect("start reply"),
+        Reply::Accepted
     );
-    let settled = wait_for_tools_state(
+    let verified = wait_for_tools(&engine.events, is_verified, "verified tools");
+    let ToolAvailability::Located {
+        verification: ToolVerification::Verified { revisions },
+        ..
+    } = verified
+    else {
+        unreachable!();
+    };
+    assert_eq!(revisions.ab_av1, AB_AV1_REVISION);
+    assert_eq!(revisions.ffmpeg, "fixture-8.1.2");
+    assert_eq!(revisions.encoder, "fixture-8.1.2");
+
+    // The probed revisions are the provenance frozen into the claim.
+    let seen = drain_until(
         &engine.events,
-        |tools| tools.activity == crfty_core::VendorActivity::Idle,
-        "idle after check",
+        |event| {
+            matches!(
+                event,
+                DriverEvent::Durable(DurableDelta::ItemPrepared { .. })
+            )
+        },
+        "prepared claim",
+    );
+    let Some(DriverEvent::Durable(DurableDelta::ItemPrepared { spec })) = seen.last() else {
+        unreachable!();
+    };
+    assert_eq!(spec.execution.profile.ab_av1_revision, AB_AV1_REVISION);
+    assert_eq!(spec.execution.profile.ffmpeg_revision, "fixture-8.1.2");
+    assert_eq!(spec.execution.profile.encoder_revision, "fixture-8.1.2");
+    engine.shutdown().expect("engine shutdown");
+}
+
+#[test]
+#[expect(clippy::expect_used, reason = "test assertion")]
+fn incapable_tools_fail_verification_and_never_reserve_an_item() {
+    let _serial = ENGINE_GUARD.lock().expect("engine guard");
+    let directory = TestDirectory::new("probe-incapable");
+    let path_dir = fixture_path_directory(&directory);
+    write_probe_marker(&path_dir, "missing=libsvtav1");
+    let input = directory.path().join("video.mkv");
+    fs::write(&input, vec![7_u8; 8192]).expect("input media");
+    let engine = EngineRuntime::start(engine_config(
+        &directory,
+        ToolsConfig::Discover(search_path_environment(&path_dir)),
+    ))
+    .expect("engine start");
+    let _pending = wait_for_tools(&engine.events, is_pending, "pending tools after startup");
+    assert_eq!(
+        engine
+            .commands
+            .submit_queue(add_one(QueueItemId(1), input))
+            .expect("add reply"),
+        Reply::Accepted
+    );
+    assert_eq!(
+        engine
+            .commands
+            .submit_session(SessionCommand::Start)
+            .expect("start reply"),
+        Reply::Accepted
+    );
+    let failed = wait_for_tools(
+        &engine.events,
+        |tools| {
+            matches!(
+                tools,
+                ToolAvailability::Located {
+                    verification: ToolVerification::Failed(_),
+                    ..
+                }
+            )
+        },
+        "failed verification",
+    );
+    let ToolAvailability::Located {
+        verification:
+            ToolVerification::Failed(ProbeFailure::Unsupported {
+                capability,
+                diagnostic,
+            }),
+        ..
+    } = failed
+    else {
+        panic!("expected an unsupported-capability failure: {failed:?}");
+    };
+    assert_eq!(capability, ToolCapability::Svtav1Encoder);
+    assert!(diagnostic.contains("libsvtav1"), "{diagnostic}");
+
+    // The session ends without a claim: the item is still queued.
+    let seen = drain_until(
+        &engine.events,
+        |event| {
+            matches!(
+                event,
+                DriverEvent::Ephemeral(EphemeralDelta::SessionChanged(SessionState::Idle))
+            )
+        },
+        "idle after failed verification",
     );
     assert!(
-        matches!(
-            settled.availability,
-            ToolAvailability::Available {
-                source: ToolSource::Explicit,
-                ..
-            }
-        ),
-        "{settled:?}"
+        !seen.iter().any(|event| matches!(
+            event,
+            DriverEvent::Durable(DurableDelta::ItemReserved { .. })
+        )),
+        "an unverified session must not reserve: {seen:?}"
+    );
+    engine.shutdown().expect("engine shutdown");
+}
+
+#[test]
+#[expect(clippy::expect_used, reason = "test assertion")]
+fn shutdown_terminates_a_hanging_probe_promptly() {
+    let _serial = ENGINE_GUARD.lock().expect("engine guard");
+    let directory = TestDirectory::new("probe-hang");
+    let path_dir = fixture_path_directory(&directory);
+    write_probe_marker(&path_dir, "hang");
+    let engine = EngineRuntime::start(engine_config(
+        &directory,
+        ToolsConfig::Discover(search_path_environment(&path_dir)),
+    ))
+    .expect("engine start");
+    let _pending = wait_for_tools(&engine.events, is_pending, "pending tools after startup");
+    assert_eq!(
+        engine
+            .commands
+            .submit_session(SessionCommand::Start)
+            .expect("start reply"),
+        Reply::Accepted
+    );
+    wait_for_session(&engine.events, SessionState::Running);
+    // Let the worker reach the hanging encoder step before pulling the plug.
+    std::thread::sleep(std::time::Duration::from_millis(500));
+    let started = std::time::Instant::now();
+    engine.shutdown().expect("engine shutdown");
+    assert!(
+        started.elapsed() < std::time::Duration::from_secs(10),
+        "shutdown waited on the hanging probe for {:?}",
+        started.elapsed()
     );
 }
 
 #[test]
 #[expect(clippy::expect_used, reason = "test assertion")]
-fn vendor_install_on_a_fixed_tool_engine_fails_typed() {
+fn rediscovery_and_changed_tool_paths_replace_the_located_tools() {
     let _serial = ENGINE_GUARD.lock().expect("engine guard");
-    let directory = TestDirectory::new("vendor-install-fixed");
-    let engine =
-        EngineRuntime::start(engine_config(&directory, missing_tools())).expect("engine start");
+    let directory = TestDirectory::new("rediscover");
+    let path_dir = fixture_path_directory(&directory);
+    let media = fixture_media(&path_dir);
+    let engine = EngineRuntime::start(engine_config(
+        &directory,
+        ToolsConfig::Discover(search_path_environment(&path_dir)),
+    ))
+    .expect("engine start");
+    let _pending = wait_for_tools(&engine.events, is_pending, "pending tools after startup");
+    // An empty queue: the session only probes, then finishes.
     assert_eq!(
         engine
             .commands
-            .submit_vendor(crfty_core::VendorCommand::Install)
-            .expect("vendor install reply"),
+            .submit_session(SessionCommand::Start)
+            .expect("start reply"),
         Reply::Accepted
     );
-    let failed = wait_for_tools_state(
-        &engine.events,
-        |tools| matches!(tools.activity, crfty_core::VendorActivity::Failed { .. }),
-        "typed install failure",
+    let _verified = wait_for_tools(&engine.events, is_verified, "verified tools");
+    wait_for_session(&engine.events, SessionState::Idle);
+
+    // Rediscovery starts verification over on the same tools.
+    assert_eq!(
+        engine
+            .commands
+            .submit_tools(ToolsCommand::Rediscover)
+            .expect("rediscover reply"),
+        Reply::Accepted
     );
-    let crfty_core::VendorActivity::Failed { detail } = failed.activity else {
-        unreachable!();
+    let republished = wait_for_tools(&engine.events, is_pending, "rediscovered tools");
+    assert_eq!(
+        republished,
+        ToolAvailability::Located {
+            tools: located(&media, ToolSource::SearchPath),
+            verification: ToolVerification::Pending,
+        }
+    );
+
+    // A changed Settings path rediscovers on its own, and a dangling one
+    // fails closed even though PATH still holds working tools.
+    let dangling = directory.path().join("missing-ffmpeg");
+    let mut settings = Settings::default();
+    settings.tools.ffmpeg = Some(dangling.clone());
+    assert_eq!(
+        engine
+            .commands
+            .submit_settings(SettingsCommand::Set {
+                settings: settings.clone(),
+            })
+            .expect("settings reply"),
+        Reply::Accepted
+    );
+    let missing = wait_for_tools(
+        &engine.events,
+        |tools| matches!(tools, ToolAvailability::Missing { .. }),
+        "missing after dangling settings path",
+    );
+    assert_eq!(
+        missing,
+        ToolAvailability::Missing {
+            failures: vec![ToolLocationFailure::SettingsPathIsNotAFile {
+                tool: MediaTool::Ffmpeg,
+                path: dangling.clone(),
+            }],
+        }
+    );
+    let start = engine
+        .commands
+        .submit_session(SessionCommand::Start)
+        .expect("start reply");
+    let Reply::Rejected { reason } = start else {
+        panic!("expected a fail-closed session start: {start:?}");
     };
-    assert!(detail.contains("fixed tool set"), "{detail}");
+    assert!(reason.contains("configured ffmpeg path"), "{reason}");
+    assert!(
+        !reason.contains(&dangling.to_string_lossy().into_owned()),
+        "rejection reasons never carry paths: {reason}"
+    );
+
+    settings.tools = ToolPathSettings {
+        ffmpeg: Some(media.ffmpeg.clone()),
+        ffprobe: Some(media.ffprobe.clone()),
+    };
+    assert_eq!(
+        engine
+            .commands
+            .submit_settings(SettingsCommand::Set { settings })
+            .expect("settings reply"),
+        Reply::Accepted
+    );
+    let configured = wait_for_tools(
+        &engine.events,
+        |tools| matches!(tools, ToolAvailability::Located { .. }),
+        "tools from settings paths",
+    );
+    assert_eq!(
+        configured,
+        ToolAvailability::Located {
+            tools: located(&media, ToolSource::Settings),
+            verification: ToolVerification::Pending,
+        }
+    );
+    engine.shutdown().expect("engine shutdown");
 }

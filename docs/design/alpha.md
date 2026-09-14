@@ -28,7 +28,7 @@ Storage selection proves these writes, deterministic pages, restart recovery, st
 
 ## Installation and product truthfulness
 
-CI-built alpha artifacts are exercised from an installed location with an empty managed-tool cache. Tool discovery, download authentication, extraction, execution, restart, and native conversion must pass on both supported platforms. The artifact source and redistribution material are settled before distributing media tools.
+CI-built alpha artifacts are exercised from an installed location, first with no media tools reachable and then with a user-installed FFmpeg configured through Settings. Tool discovery, the session-start capability probe, execution, restart, and native conversion must pass on both supported platforms, and the install guidance shown for each platform is followed on a clean machine.
 
 Filesystem work and History import and queries leave the interface responsive. Command failures remain inspectable in context; the complete notices panel can follow. A privacy control is enabled only when recording and import enforce its promise. Until then it is disabled and explicitly unavailable. Existing anonymized logs and anonymous records retain their protections, and records without readable paths expose no path actions.
 

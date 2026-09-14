@@ -6,6 +6,8 @@ import { pickPath } from "@/lib/ipc/path-picker";
 
 interface FolderInputProps {
   id: string;
+  /** Which native picker Browse opens; the text field accepts either. */
+  kind?: "File" | "Folder";
   value: string;
   placeholder: string;
   browseLabel: string;
@@ -17,6 +19,7 @@ interface FolderInputProps {
 
 export function FolderInput({
   id,
+  kind = "Folder",
   value,
   placeholder,
   browseLabel,
@@ -32,10 +35,10 @@ export function FolderInput({
     setPicking(true);
     setError(null);
     try {
-      const selected = await pickPath("Folder", value || null);
+      const selected = await pickPath(kind, kind === "Folder" ? value || null : null);
       if (selected !== null) onChange(selected);
     } catch (pickerError: unknown) {
-      setError(pickerError instanceof Error ? pickerError.message : "Folder picker failed");
+      setError(pickerError instanceof Error ? pickerError.message : "Path picker failed");
     } finally {
       setPicking(false);
     }

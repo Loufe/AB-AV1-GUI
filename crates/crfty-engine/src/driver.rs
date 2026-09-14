@@ -585,8 +585,7 @@ fn persist_settings(
                         Effect::WriteSettings { settings } => Some(settings.clone()),
                         Effect::StartWorker
                         | Effect::KillActiveRun { .. }
-                        | Effect::VendorInstall
-                        | Effect::VendorCheck
+                        | Effect::DiscoverTools { .. }
                         | Effect::StopDriver => None,
                     });
                 settings.map(|settings| (index, settings))
@@ -613,6 +612,9 @@ fn persist_settings(
             continue;
         }
         if let Err(reason) = &write_result {
+            // The settings stay as they were, so effects derived from the
+            // rejected values (tool rediscovery) must not run either.
+            applied.effects.clear();
             applied.ephemeral.push(EphemeralDelta::CommandRejected {
                 reason: reason.clone(),
             });
@@ -733,10 +735,13 @@ fn reconcile_effects(effects: Vec<Effect>, state: &AppState) -> Vec<Effect> {
             }
             Effect::StartWorker => {}
             Effect::WriteSettings { .. } => {}
-            Effect::KillActiveRun { .. }
-            | Effect::VendorInstall
-            | Effect::VendorCheck
-            | Effect::StopDriver => {
+            // Each discovery replaces the whole result, so only the last
+            // request in a batch needs to run.
+            Effect::DiscoverTools { .. } => {
+                reconciled.retain(|kept| !matches!(kept, Effect::DiscoverTools { .. }));
+                reconciled.push(effect);
+            }
+            Effect::KillActiveRun { .. } | Effect::StopDriver => {
                 if !reconciled.contains(&effect) {
                     reconciled.push(effect);
                 }
@@ -947,15 +952,25 @@ mod tests {
         for command in [
             add_command(1, "video.mkv"),
             Command::System(SystemCommand::ToolsDiscovered {
-                availability: ToolAvailability::Available {
-                    source: crfty_core::ToolSource::System,
-                    revisions: ToolRevisions {
-                        ab_av1: "fixture".to_owned(),
-                        ffmpeg: "fixture".to_owned(),
-                        encoder: "fixture".to_owned(),
+                availability: ToolAvailability::Located {
+                    tools: crfty_core::LocatedTools {
+                        ffmpeg: crfty_core::LocatedTool {
+                            source: crfty_core::ToolSource::SearchPath,
+                            path: PathBuf::from("fixture-ffmpeg"),
+                        },
+                        ffprobe: crfty_core::LocatedTool {
+                            source: crfty_core::ToolSource::SearchPath,
+                            path: PathBuf::from("fixture-ffprobe"),
+                        },
+                    },
+                    verification: crfty_core::ToolVerification::Verified {
+                        revisions: ToolRevisions {
+                            ab_av1: "fixture".to_owned(),
+                            ffmpeg: "fixture".to_owned(),
+                            encoder: "fixture".to_owned(),
+                        },
                     },
                 },
-                update_available: false,
             }),
             Command::Session(SessionCommand::Start),
             Command::Worker(WorkerCommand::ReserveNext {

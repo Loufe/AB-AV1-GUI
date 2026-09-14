@@ -4,6 +4,7 @@ import { getCurrentWindow } from "@tauri-apps/api/window";
 import {
   commands,
   type AnalysisIntent,
+  type AppInfo,
   type CommandError,
   type CorruptionSignature,
   type Operation,
@@ -33,9 +34,8 @@ export async function subscribeStream(onEvent: (event: ShellEvent) => void): Pro
   }
 }
 
-export async function fetchAppVersion(): Promise<string> {
-  const info = await commands.appInfo();
-  return info.version;
+export function fetchAppInfo(): Promise<AppInfo> {
+  return commands.appInfo();
 }
 
 /**

@@ -21,20 +21,20 @@ use crfty_core::{
     AppSnapshot, ConfigDelta, CorruptionReport, CorruptionSignature, DurableDelta, DurableState,
     EphemeralDelta, ExecutionSettings, Operation, OutputTarget, OverwriteDecision,
     ProjectionCommand, QueueAddRequest, QueueCommand, QueueItemId, Reply, RunId, SessionAggregates,
-    SessionCommand, SessionState, Settings, SettingsCommand, Telemetry, ToolsState, VendorCommand,
-    fold, fold_analysis, fold_config,
+    SessionCommand, SessionState, Settings, SettingsCommand, Telemetry, ToolAvailability,
+    ToolsCommand, fold, fold_analysis, fold_config,
 };
 use crfty_engine::{
     coordinator::{EngineConfig, EngineRuntime, ToolsConfig, UserCommandSender},
     driver::DriverEvent,
     os_actions::OsActionError,
+    tools::discovery::DiscoveryEnvironment,
 };
 use serde::Serialize;
 use tauri::{Manager, ipc::Channel};
 
 const JOURNAL_FILE_NAME: &str = "journal.jsonl";
 const CONFIG_FILE_NAME: &str = "config.json";
-const VENDOR_DIR_NAME: &str = "vendor";
 const LOG_DIR_NAME: &str = "logs";
 
 #[derive(Debug, Clone, Serialize, specta::Type)]
@@ -179,7 +179,7 @@ struct StreamState {
     /// one complete Reset after the durable snapshot on every subscription.
     analysis: AnalysisSnapshot,
     session: SessionState,
-    tools: ToolsState,
+    tools: ToolAvailability,
     /// Latest session aggregates, mirroring `AppState::aggregates` in the
     /// reducer. Aggregates are never journaled, so the subscribe replay is
     /// the only way a mid-session reconnect learns the running totals.
@@ -203,7 +203,7 @@ impl StreamState {
             model: AppSnapshot::default(),
             analysis: AnalysisSnapshot::default(),
             session: SessionState::Idle,
-            tools: ToolsState::default(),
+            tools: ToolAvailability::default(),
             aggregates: SessionAggregates::default(),
             telemetry: BTreeMap::new(),
             health,
@@ -333,8 +333,7 @@ impl Bridge {
         let config = EngineConfig {
             journal_path: data_dir.join(JOURNAL_FILE_NAME),
             config_path: data_dir.join(CONFIG_FILE_NAME),
-            vendor_root: data_dir.join(VENDOR_DIR_NAME),
-            tools: ToolsConfig::Discover,
+            tools: ToolsConfig::Discover(DiscoveryEnvironment::from_process()),
             execution: ExecutionSettings::production(AnalysisProfile::production(), false),
         };
         let mut runtime = EngineRuntime::start(config).map_err(|error| match error {
@@ -475,9 +474,9 @@ impl Bridge {
         map_reply(commands.submit_settings(SettingsCommand::Set { settings }))
     }
 
-    pub(crate) fn submit_vendor(&self, command: VendorCommand) -> Result<(), CommandError> {
+    pub(crate) fn submit_tools(&self, command: ToolsCommand) -> Result<(), CommandError> {
         let commands = self.commands()?;
-        map_reply(commands.submit_vendor(command))
+        map_reply(commands.submit_tools(command))
     }
 
     pub(crate) fn submit_projection(&self, command: ProjectionCommand) -> Result<(), CommandError> {
@@ -578,8 +577,8 @@ impl Bridge {
         true
     }
 
-    /// Joins every engine thread (driver, supervisor, session and vendor
-    /// workers, encoder runtime) on the way out. The Tauri event loop exits
+    /// Joins every engine thread (driver, supervisor, session worker,
+    /// encoder runtime) on the way out. The Tauri event loop exits
     /// the process instead of unwinding, so managed-state drops never run:
     /// this call from `RunEvent::Exit` is the only clean-shutdown path, and
     /// without it the crash sentinel stays armed and every next boot reports
@@ -938,9 +937,10 @@ mod tests {
             ephemeral(EphemeralDelta::SessionChanged(SessionState::Running)),
             &ids,
         );
-        let tools = ToolsState {
-            update_available: true,
-            ..ToolsState::default()
+        let tools = ToolAvailability::Missing {
+            failures: vec![crfty_core::ToolLocationFailure::NotOnSearchPath {
+                tool: crfty_core::MediaTool::Ffmpeg,
+            }],
         };
         absorb(
             &mut state,

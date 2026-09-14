@@ -23,7 +23,7 @@ pub mod release;
 pub mod remux;
 pub mod scan;
 pub mod sentinel;
-pub mod vendor;
+pub mod tools;
 
 mod clock;
 mod failure;

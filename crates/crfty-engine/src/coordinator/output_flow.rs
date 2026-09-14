@@ -12,7 +12,7 @@ use crfty_core::{
 use crate::{
     driver::CommandSender,
     output::{MediaArtifactInspector, OutputManager},
-    vendor::discovery::MediaTools,
+    tools::MediaTools,
 };
 
 use super::job::SuccessfulJob;

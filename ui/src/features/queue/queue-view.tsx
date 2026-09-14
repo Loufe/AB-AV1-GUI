@@ -20,7 +20,6 @@ import type {
   QueueItemEdit,
   QueueItemId,
   Settings,
-  ToolsState,
 } from "@/lib/bindings";
 import {
   forceStop,
@@ -38,6 +37,7 @@ import {
 } from "@/lib/ipc";
 import { pickPaths } from "@/lib/ipc/path-picker";
 import { useAppStore } from "@/lib/store/app-store";
+import { startBlockReason, verificationWarning } from "@/lib/tools";
 import { useProgressStore } from "@/lib/store/progress-store";
 
 import {
@@ -101,16 +101,6 @@ function isClearableCompleted(item: QueueItem): boolean {
   if (item.state === "Queued" || !("Finished" in item.state)) return false;
   const outcome = item.state.Finished;
   return typeof outcome === "string" || outcome?.Failed === undefined;
-}
-function toolBlockReason(tools: ToolsState | null): string | null {
-  if (tools === null) return "Checking media tools before the Queue can start.";
-  if (tools.availability.Missing !== undefined) return tools.availability.Missing.detail;
-  if (
-    tools.activity === "Installing" ||
-    (typeof tools.activity === "object" && tools.activity.Downloading !== undefined)
-  )
-    return "Media tools are being updated. The Queue can start when that finishes.";
-  return null;
 }
 function sameIds(left: readonly QueueItemId[], right: readonly QueueItemId[]): boolean {
   return left.length === right.length && left.every((id, index) => id === right[index]);
@@ -270,7 +260,8 @@ export function QueueView() {
     (row) => row.item.state !== "Queued" && !("Finished" in row.item.state),
   );
   const healthReason = health.unavailable ?? health.fatal ?? health.degraded?.reason ?? null;
-  const startBlock = toolBlockReason(tools);
+  const startBlock = startBlockReason(tools);
+  const toolWarning = verificationWarning(tools);
   const mutationPending = pendingAction !== null || interaction.kind !== "idle";
   const selectedAllRemovable =
     selectedRows.length > 0 && selectedRows.every((row) => isRemovable(row.item));
@@ -496,6 +487,15 @@ export function QueueView() {
         <p className="flex gap-2 rounded-md border border-warning/40 p-3 text-sm text-warning">
           <AlertTriangle className="size-4" aria-hidden="true" />
           {startBlock}
+        </p>
+      )}
+      {healthReason === null && startBlock === null && toolWarning !== null && (
+        <p
+          role="alert"
+          className="flex gap-2 rounded-md border border-warning/40 p-3 text-sm text-warning"
+        >
+          <AlertTriangle className="size-4" aria-hidden="true" />
+          {toolWarning}
         </p>
       )}
       {actionError !== null && (

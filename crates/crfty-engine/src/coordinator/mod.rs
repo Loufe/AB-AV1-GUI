@@ -1,8 +1,8 @@
-//! Engine runtime lifecycle: starting the driver, wiring the tool and
-//! vendor services around it, and the command surface callers hold.
+//! Engine runtime lifecycle: starting the driver, wiring tool discovery
+//! around it, and the command surface callers hold.
 //!
 //! The work itself lives in the submodules: startup recovery, supervision,
-//! vendor tasks, the session and job pipeline, and output settlement.
+//! the session and job pipeline, and output settlement.
 
 mod job;
 mod output_flow;
@@ -11,7 +11,6 @@ mod recovery;
 mod session;
 mod supervision;
 mod telemetry;
-mod vendor_task;
 
 use std::{
     collections::BTreeSet,
@@ -23,14 +22,18 @@ use std::{
 
 use crfty_core::{
     AnalysisGenerationId, AppSnapshot, Command, CorruptionSignature, DurableState,
-    ExecutionSettings, HistoryCommand, ProjectionCommand, QueueCommand, QueueItemState, Reply,
-    SessionCommand, SettingsCommand, SystemCommand, VendorCommand, VideoExtension,
+    ExecutionSettings, HistoryCommand, LocatedTools, ProjectionCommand, QueueCommand,
+    QueueItemState, Reply, SessionCommand, SettingsCommand, SystemCommand, ToolAvailability,
+    ToolRevisions, ToolVerification, ToolsCommand, VideoExtension,
 };
 
 use crate::{
     ab_av1::AbAv1Runtime,
     driver::{CommandSender, DriverEvent, DriverHandle, DriverStartError},
-    vendor::discovery::{self, DiscoveredTools, DiscoveryReport},
+    tools::{
+        MediaTools,
+        discovery::{self, DiscoveryEnvironment},
+    },
 };
 
 use self::recovery::recover_startup;
@@ -50,9 +53,6 @@ pub const PUBLIC_EVENT_CHANNEL_CAPACITY: usize = 1024;
 pub struct EngineConfig {
     pub journal_path: PathBuf,
     pub config_path: PathBuf,
-    /// Root of the managed vendor tree (`current.json`, `installs/`,
-    /// `staging/`); the shell passes `<app data dir>/vendor`.
-    pub vendor_root: PathBuf,
     pub tools: ToolsConfig,
     /// Base execution settings. The profile carries no tool revisions — the
     /// session worker composes the discovered revisions in before each claim,
@@ -62,12 +62,20 @@ pub struct EngineConfig {
 
 #[derive(Debug, Clone)]
 pub enum ToolsConfig {
-    /// Run vendor discovery (explicit env paths > managed install > PATH)
-    /// against the vendor root at startup.
-    Discover,
-    /// Injected discovery outcome. Tests and the contract fixture pin tools
-    /// and revisions without touching the process environment.
-    Fixed(DiscoveredTools),
+    /// Locate tools from the environment and the persisted Settings paths at
+    /// startup and on every rediscovery; verify them by probing at each
+    /// session start (ADR-023).
+    Discover(DiscoveryEnvironment),
+    /// Injected, already-verified tools. Tests and the contract fixture pin
+    /// binaries and revisions without touching the process environment, and
+    /// no probe runs.
+    Fixed(FixedTools),
+}
+
+#[derive(Debug, Clone)]
+pub struct FixedTools {
+    pub tools: LocatedTools,
+    pub revisions: ToolRevisions,
 }
 
 #[derive(Debug)]
@@ -117,8 +125,8 @@ impl EngineRuntime {
         // the supervisor turns them into commands submitted back into the
         // driver's bounded command channel — so a bound here could deadlock
         // the driver against its own supervisor. Depth is governed by the
-        // reducer, which serializes work through the session and vendor
-        // activity states and dedups effects per batch, never by event rate.
+        // reducer, which serializes work through the session state and
+        // dedups effects per batch, never by event rate.
         let (effect_tx, effect_rx) = mpsc::channel();
         let mut driver =
             DriverHandle::start_with_effects(&config.journal_path, &config.config_path, effect_tx)
@@ -139,13 +147,18 @@ impl EngineRuntime {
                 )));
             }
         };
-        let report = match &config.tools {
-            ToolsConfig::Discover => discovery::discover(&config.vendor_root),
-            ToolsConfig::Fixed(tools) => DiscoveryReport {
-                tools: tools.clone(),
-                update_available: false,
+        let availability = match &config.tools {
+            ToolsConfig::Discover(environment) => {
+                discovery::discover(environment, &initial.settings.tools)
+            }
+            ToolsConfig::Fixed(fixed) => ToolAvailability::Located {
+                tools: fixed.tools.clone(),
+                verification: ToolVerification::Verified {
+                    revisions: fixed.revisions.clone(),
+                },
             },
         };
+        let located = located_tools(&availability);
         // Availability is reported before recovery so the reducer's fail-closed
         // default is replaced by the real discovery result ahead of any
         // recovery events, and the ToolsChanged ephemeral is already queued
@@ -153,8 +166,7 @@ impl EngineRuntime {
         let discovered = driver
             .commands
             .submit(Command::System(SystemCommand::ToolsDiscovered {
-                availability: report.tools.availability(),
-                update_available: report.update_available,
+                availability,
             }))
             .map_err(|error| {
                 EngineStartError::Failed(format!("failed to report tool availability: {error}"))
@@ -164,15 +176,8 @@ impl EngineRuntime {
                 "tool availability report was not accepted: {discovered:?}"
             )));
         }
-        let current_tools = match report.tools {
-            DiscoveredTools::Available(current) => Some(current),
-            DiscoveredTools::Missing { .. } => None,
-        };
-        let recovered = recover_startup(
-            &driver.commands,
-            current_tools.as_ref().map(|current| &current.media),
-            initial.durable,
-        );
+        let media_tools = located.as_ref().map(MediaTools::from);
+        let recovered = recover_startup(&driver.commands, media_tools.as_ref(), initial.durable);
         let next_runtime_id = next_runtime_id(&recovered)?;
         // Bounded: telemetry can outrun a stalled consumer for hours, and an
         // unbounded buffer would turn that stall into unbounded memory. On
@@ -222,11 +227,10 @@ impl EngineRuntime {
             .map_err(|error| {
                 EngineStartError::Failed(format!("failed to start event bridge: {error}"))
             })?;
-        // Written only by the vendor worker on successful activation, which
-        // the reducer permits only while the engine is fully idle; sessions
-        // snapshot it once at start. That serialization is what makes the
-        // shared slot race-free.
-        let tools_slot = Arc::new(Mutex::new(current_tools));
+        // Replaced whole by the supervisor on every rediscovery; a session
+        // snapshots it once at start and a probe result names the tools it
+        // was taken on, so a swap mid-session can never mislabel anything.
+        let tools_slot = Arc::new(Mutex::new(located));
         let internal_commands = driver.commands.clone();
         let supervisor_commands = internal_commands.clone();
         let supervisor_runtime = Arc::clone(&runtime);
@@ -354,11 +358,8 @@ impl UserCommandSender {
         self.inner.submit(Command::Settings(command))
     }
 
-    pub fn submit_vendor(
-        &self,
-        command: VendorCommand,
-    ) -> Result<Reply, crate::driver::SubmitError> {
-        self.inner.submit(Command::Vendor(command))
+    pub fn submit_tools(&self, command: ToolsCommand) -> Result<Reply, crate::driver::SubmitError> {
+        self.inner.submit(Command::Tools(command))
     }
 
     pub fn submit_projection(
@@ -438,6 +439,13 @@ fn next_runtime_id(state: &DurableState) -> Result<u64, EngineStartError> {
     maximum
         .checked_add(1)
         .ok_or_else(|| EngineStartError::Failed("runtime id space is exhausted".to_owned()))
+}
+
+pub(super) fn located_tools(availability: &ToolAvailability) -> Option<LocatedTools> {
+    match availability {
+        ToolAvailability::Located { tools, .. } => Some(tools.clone()),
+        ToolAvailability::Missing { .. } => None,
+    }
 }
 
 fn accepted(reply: Result<Reply, crate::driver::SubmitError>) -> bool {

@@ -11,20 +11,25 @@ use std::{
 
 use crfty_core::{
     ClaimId, ClaimedJob, Command, DurationMs, ItemOutcome, JobAction, JobPhase, JobProgress,
-    PhaseSpan, Reply, RunId, Telemetry, WorkerCommand,
+    LocatedTools, PhaseSpan, Reply, RunId, SystemCommand, Telemetry, ToolVerification,
+    WorkerCommand,
 };
 
 use crate::{
     ab_av1::AbAv1Runtime,
     driver::CommandSender,
     media::{DecodeResolver, MediaInspector},
-    vendor::discovery::{CurrentTools, MediaTools},
+    process_supervisor::ProcessCancellation,
+    tools::{
+        MediaTools,
+        probe::{ProbeOutcome, probe_capabilities},
+    },
 };
 
 use super::job::{run_encode, run_remux, search_with_fallback};
 use super::output_flow::{begin_output, resolve_output_destination};
 use super::supervision::ActiveCancellation;
-use super::{EngineConfig, require_accepted};
+use super::{EngineConfig, ToolsConfig, require_accepted};
 use crate::clock::now_millis;
 
 #[derive(Clone, Copy)]
@@ -96,21 +101,21 @@ pub(super) fn run_session(
     commands: &CommandSender,
     runtime: &AbAv1Runtime,
     config: &EngineConfig,
-    tools_slot: &Mutex<Option<CurrentTools>>,
+    tools_slot: &Mutex<Option<LocatedTools>>,
     cancellation: &ActiveCancellation,
     ids: &AtomicU64,
 ) -> Result<(), String> {
     // Snapshot the slot once: every claim in this session executes with the
-    // same binaries and revisions, and the reducer refuses vendor installs
-    // while a session runs, so the snapshot cannot go stale mid-session.
-    let current = {
+    // same binaries and revisions. A rediscovery mid-session only affects
+    // the next session.
+    let located = {
         let slot = match tools_slot.lock() {
             Ok(slot) => slot,
             Err(poisoned) => poisoned.into_inner(),
         };
         slot.clone()
     };
-    let Some(current) = current else {
+    let Some(located) = located else {
         // Unreachable past the reducer's session-start gate; finish the
         // session gracefully rather than reporting a worker crash.
         return require_accepted(
@@ -118,15 +123,61 @@ pub(super) fn run_session(
             commands.submit(Command::Worker(WorkerCommand::Finished)),
         );
     };
-    let tools = &current.media;
+    let tools = MediaTools::from(&located);
+    let tools = &tools;
+    // The probe is the gate before the first claim (ADR-023): binaries that
+    // cannot encode or score never reserve an item, and the revisions they
+    // report are the provenance every analysis in this session records.
+    let revisions = match &config.tools {
+        ToolsConfig::Fixed(fixed) => fixed.revisions.clone(),
+        ToolsConfig::Discover(_) => {
+            let probe_cancellation = ProcessCancellation::new();
+            let outcome = {
+                let _registration = cancellation.register_probe(&probe_cancellation);
+                probe_capabilities(tools, &probe_cancellation)
+            };
+            let verification = match outcome {
+                ProbeOutcome::Verified(revisions) => ToolVerification::Verified { revisions },
+                ProbeOutcome::Failed(failure) => ToolVerification::Failed(failure),
+                ProbeOutcome::Cancelled => {
+                    return require_accepted(
+                        "finish cancelled worker session",
+                        commands.submit(Command::Worker(WorkerCommand::Finished)),
+                    );
+                }
+            };
+            let revisions = match &verification {
+                ToolVerification::Verified { revisions } => Some(revisions.clone()),
+                ToolVerification::Failed(failure) => {
+                    tracing::warn!("media tools failed verification: {}", failure.summary());
+                    None
+                }
+                ToolVerification::Pending => None,
+            };
+            require_accepted(
+                "report tool verification",
+                commands.submit(Command::System(SystemCommand::ToolsProbed {
+                    tools: located.clone(),
+                    verification,
+                })),
+            )?;
+            let Some(revisions) = revisions else {
+                return require_accepted(
+                    "finish unverified worker session",
+                    commands.submit(Command::Worker(WorkerCommand::Finished)),
+                );
+            };
+            revisions
+        }
+    };
     let inspector = MediaInspector::new(tools.ffprobe.clone());
     let mut decoder_resolver = DecodeResolver::new(tools.ffmpeg.clone());
     // Claim-time revision immutability: the composed revisions freeze into
-    // each JobSpec at PrepareReserved and survive any later tool swap.
+    // each JobSpec at PrepareReserved and survive any later tool change.
     let mut base_execution = config.execution.clone();
-    base_execution.profile.ab_av1_revision = current.revisions.ab_av1.clone();
-    base_execution.profile.ffmpeg_revision = current.revisions.ffmpeg.clone();
-    base_execution.profile.encoder_revision = current.revisions.encoder.clone();
+    base_execution.profile.ab_av1_revision = revisions.ab_av1.clone();
+    base_execution.profile.ffmpeg_revision = revisions.ffmpeg.clone();
+    base_execution.profile.encoder_revision = revisions.encoder.clone();
     loop {
         let claim_id = ClaimId(ids.fetch_add(1, Ordering::Relaxed));
         let run_id = RunId(ids.fetch_add(1, Ordering::Relaxed));

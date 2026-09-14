@@ -1,7 +1,7 @@
 import { page } from "vitest/browser";
 import { describe, expect, it } from "vitest";
 
-import type { Settings, ToolsState } from "@/lib/bindings";
+import type { Settings, ToolAvailability } from "@/lib/bindings";
 import { appStore } from "@/lib/store/app-store";
 import { renderApp } from "@/test/browser/render";
 import { installTauriMock } from "@/test/browser/tauri";
@@ -21,30 +21,31 @@ function settings(overrides: Partial<Settings> = {}): Settings {
     hardware_decode: true,
     privacy: { anonymize_logs: false, anonymize_history: false },
     log_folder: null,
+    tools: { ffmpeg: null, ffprobe: null },
     ...overrides,
   };
 }
 
-function missingTools(): ToolsState {
+function missingTools(): ToolAvailability {
   return {
-    availability: {
-      Missing: { missing: ["Ffmpeg", "Ffprobe"], detail: "managed tools are not installed" },
+    Missing: {
+      failures: [
+        { SettingsPathIsNotAFile: { tool: "Ffmpeg", path: "/opt/ffmpeg/bin/ffmpeg" } },
+        { NotOnSearchPath: { tool: "Ffprobe" } },
+      ],
     },
-    activity: "Idle",
-    update_available: false,
   };
 }
 
-function availableTools(updateAvailable = false): ToolsState {
+function verifiedTools(): ToolAvailability {
   return {
-    availability: {
-      Available: {
-        source: "Managed",
-        revisions: { ab_av1: "0.11.1", ffmpeg: "8.0", encoder: "3.2" },
+    Located: {
+      tools: {
+        ffmpeg: { source: "Settings", path: "/opt/ffmpeg/bin/ffmpeg" },
+        ffprobe: { source: "SearchPath", path: "/usr/bin/ffprobe" },
       },
+      verification: { Verified: { revisions: { ab_av1: "0.11.1", ffmpeg: "8.1.2", encoder: "8.1.2" } } },
     },
-    activity: "Idle",
-    update_available: updateAvailable,
   };
 }
 
@@ -180,84 +181,52 @@ describe("Settings view", () => {
       .toBeVisible();
   });
 
-  it("exposes only valid vendor actions and follows streamed tool activity", async () => {
-    const tauri = installTauriMock({ vendor_install: () => null, vendor_check: () => null });
-    await renderApp(<SettingsView />, {
-      appState: { settings: settings(), tools: missingTools() },
+  it("configures media tool paths, validates them, and submits them with the settings", async () => {
+    const committed = settings();
+    const tauri = installTauriMock({ set_settings: () => null });
+    await renderApp(<SettingsView />, { appState: { settings: committed, tools: verifiedTools() } });
+
+    const ffmpeg = page.getByRole("textbox", { name: "ffmpeg path", exact: true });
+    await ffmpeg.fill("bin/ffmpeg");
+    await expect.element(ffmpeg).toHaveAttribute("aria-invalid", "true");
+    await expect.element(page.getByText("The ffmpeg path must be absolute.")).toBeVisible();
+    await expect.element(page.getByRole("button", { name: "Save changes" })).toBeDisabled();
+
+    await ffmpeg.fill("/opt/ffmpeg/bin/ffmpeg");
+    await page.getByRole("button", { name: "Save changes" }).click();
+    expect(tauri.callsFor("set_settings").at(0)?.payload).toEqual({
+      settings: { ...committed, tools: { ffmpeg: "/opt/ffmpeg/bin/ffmpeg", ffprobe: null } },
     });
-
-    await page.getByRole("button", { name: "Install" }).click();
-    expect(tauri.callsFor("vendor_install")).toHaveLength(1);
-
-    appStore.setState({
-      tools: { ...missingTools(), activity: { Downloading: { received: 512, total: 1024 } } },
-    });
-    await expect.element(page.getByText("Downloading dependencies…")).toBeVisible();
-    await expect.element(page.getByRole("progressbar", { name: "Download" })).toBeVisible();
-    await expect.element(page.getByText("512 B / 1.00 KB")).toBeVisible();
-    await expect.element(page.getByRole("button", { name: "Check", exact: true })).toBeDisabled();
-
-    appStore.setState({ tools: availableTools(true) });
-    await expect.element(page.getByRole("button", { name: "Update", exact: true })).toBeEnabled();
   });
 
-  it("exposes vendor actions only in valid streamed states and session conditions", async () => {
-    installTauriMock({ vendor_install: () => null, vendor_check: () => null });
+  it("reports the streamed tool status with install guidance and rechecks on demand", async () => {
+    const tauri = installTauriMock({ recheck_tools: () => null });
     await renderApp(<SettingsView />, { appState: { settings: settings(), tools: null } });
 
-    await expect.element(page.getByRole("button", { name: "Check", exact: true })).toBeDisabled();
-    await expect.element(page.getByRole("button", { name: "Install" })).not.toBeInTheDocument();
+    await expect.element(page.getByText("Waiting for the media tool report.")).toBeVisible();
+    await expect.element(page.getByRole("button", { name: "Check again" })).toBeDisabled();
 
-    appStore.setState({ tools: { ...missingTools(), activity: "Checking" } });
-    await expect.element(page.getByRole("button", { name: "Checking…" })).toBeDisabled();
-    await expect.element(page.getByRole("button", { name: "Install" })).toBeDisabled();
-
-    appStore.setState({ tools: { ...missingTools(), activity: "Installing" } });
-    await expect.element(page.getByRole("button", { name: "Check", exact: true })).toBeDisabled();
-
-    appStore.setState({ tools: availableTools() });
-    await expect.element(page.getByRole("button", { name: "Check", exact: true })).toBeEnabled();
-    await expect.element(page.getByRole("button", { name: "Install" })).not.toBeInTheDocument();
-
-    appStore.setState({
-      tools: {
-        ...missingTools(),
-        activity: { Failed: { detail: "archive verification failed" } },
-      },
-    });
+    appStore.setState({ tools: missingTools(), platform: "Linux" });
+    await expect.element(page.getByRole("alert")).toHaveTextContent("Media tools are missing.");
     await expect
       .element(
-        page
-          .getByText("Dependency operation failed: archive verification failed", {
-            exact: true,
-          })
-          .last(),
+        page.getByText("The configured ffmpeg path does not name a file: /opt/ffmpeg/bin/ffmpeg"),
       )
       .toBeVisible();
-    await expect.element(page.getByRole("button", { name: "Retry install" })).toBeEnabled();
+    await expect.element(page.getByText("ffprobe was not found on PATH.")).toBeVisible();
+    await expect.element(page.getByText(/apt install ffmpeg/)).toBeVisible();
 
-    appStore.setState({ session: "Running" });
-    await expect.element(page.getByRole("button", { name: "Retry install" })).toBeDisabled();
+    await page.getByRole("button", { name: "Check again" }).click();
+    expect(tauri.callsFor("recheck_tools")).toHaveLength(1);
 
-    appStore.setState((state) => ({
-      ...state,
-      session: "Idle",
-      durable: {
-        ...state.durable,
-        queue: [
-          {
-            id: 1,
-            input: "/videos/active.mkv",
-            operation: "Convert",
-            intent: "ReuseIfFresh",
-            output_target: "Replace",
-            overwrite: "FollowSettings",
-            state: { Reserved: { claim_id: 1, run_id: 1 } },
-          },
-        ],
-      },
-    }));
-    await expect.element(page.getByRole("button", { name: "Retry install" })).toBeDisabled();
+    appStore.setState({ tools: verifiedTools() });
+    await expect
+      .element(page.getByText("Media tools verified: FFmpeg 8.1.2."))
+      .toBeVisible();
+    await expect
+      .element(page.getByText("ffprobe (found on PATH): /usr/bin/ffprobe"))
+      .toBeVisible();
+    await expect.element(page.getByText(/apt install ffmpeg/)).not.toBeInTheDocument();
   });
 
   it("checks application updates and confirms irreversible log scrubbing", async () => {

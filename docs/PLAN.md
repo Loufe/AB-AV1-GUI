@@ -12,7 +12,7 @@ The delivery target is the runnable alpha defined in [the alpha delivery scope](
 
 - Three-crate split (core/engine/shell) with one state owner: ADR-001, ADR-002
 - Append-only journal, snapshot-head compaction, generation-identity corruption handling: ADR-004, ADR-009, ADR-011
-- Pinned ab-av1 adapter; vendored, checksummed FFmpeg: ADR-003, ADR-010
+- Pinned ab-av1 adapter; user-supplied FFmpeg verified by a capability probe: ADR-003, ADR-023
 - IPC bindings generated from Rust via tauri-specta: ADR-006
 - History and Statistics derive as pure projections, with imported history projected separately: ADR-015
 - Analysis identity pins decode mode; queue adds filter at enqueue: ADR-007, ADR-013

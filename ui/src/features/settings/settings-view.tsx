@@ -14,13 +14,11 @@ import {
 import { Switch } from "@/components/ui/switch";
 import type { DefaultOutputMode, Settings, VideoExtension } from "@/lib/bindings";
 import { saveSettings } from "@/lib/ipc/settings";
+import { isAbsolutePath } from "@/lib/tools";
 
 import { HistoryImport } from "./history-import";
-import {
-  ApplicationUpdateAction,
-  DependenciesActions,
-  PrivacyMaintenanceActions,
-} from "./maintenance-actions";
+import { ApplicationUpdateAction, PrivacyMaintenanceActions } from "./maintenance-actions";
+import { MediaToolsGroup, type ToolPathField } from "./media-tools";
 import { FolderInput } from "./path-input";
 import { SettingContainer, SettingsGroup } from "./settings-primitives";
 import { useSettings } from "./use-settings";
@@ -37,7 +35,7 @@ function settingsEqual(left: Settings, right: Settings): boolean {
 }
 
 interface ValidationIssue {
-  field: "output-suffix" | "output-folder";
+  field: "output-suffix" | "output-folder" | ToolPathField;
   message: string;
 }
 
@@ -54,11 +52,22 @@ function validationIssue(settings: Settings): ValidationIssue | null {
       message: "An output folder is required in separate-folder mode.",
     };
   }
+  if (settings.tools.ffmpeg !== null && !isAbsolutePath(settings.tools.ffmpeg)) {
+    return { field: "tool-ffmpeg", message: "The ffmpeg path must be absolute." };
+  }
+  if (settings.tools.ffprobe !== null && !isAbsolutePath(settings.tools.ffprobe)) {
+    return { field: "tool-ffprobe", message: "The ffprobe path must be absolute." };
+  }
   return null;
 }
 
 function optionalPath(value: string): string | null {
   return value.length === 0 ? null : value;
+}
+
+function toolPathField(issue: ValidationIssue | null): ToolPathField | null {
+  if (issue === null) return null;
+  return issue.field === "tool-ffmpeg" || issue.field === "tool-ffprobe" ? issue.field : null;
 }
 
 export function SettingsView() {
@@ -208,6 +217,13 @@ export function SettingsView() {
         </SettingContainer>
       </SettingsGroup>
 
+      <MediaToolsGroup
+        draft={draft.tools}
+        disabled={disabled}
+        invalidField={toolPathField(validation)}
+        onChange={(tools) => setDraft({ ...draft, tools })}
+      />
+
       <SettingsGroup title="Output">
         <SettingContainer
           label="Default output mode"
@@ -342,8 +358,6 @@ export function SettingsView() {
       <PrivacyMaintenanceActions />
 
       <HistoryImport />
-
-      <DependenciesActions />
 
       <ApplicationUpdateAction />
 

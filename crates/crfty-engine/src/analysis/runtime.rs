@@ -11,13 +11,11 @@ use std::{
 };
 
 use crfty_core::{
-    AnalysisActivity, AnalysisCommand, AnalysisGenerationId, AnalysisRowId, Command, Reply,
-    VideoExtension,
+    AnalysisActivity, AnalysisCommand, AnalysisGenerationId, AnalysisRowId, Command, LocatedTools,
+    Reply, VideoExtension,
 };
 
-use crate::{
-    driver::CommandSender, process_supervisor::ProcessCancellation, vendor::discovery::CurrentTools,
-};
+use crate::{driver::CommandSender, process_supervisor::ProcessCancellation};
 
 use super::basic_scan::{BasicScanRequest, run_basic_scan_request};
 use super::discovery::{DiscoveryRequest, deduplicate_roots, display_text, run_discovery_request};
@@ -124,13 +122,13 @@ pub(crate) struct AnalysisRuntime {
     control: Arc<DiscoveryControl>,
     start_gate: Mutex<()>,
     worker: Mutex<Option<thread::JoinHandle<()>>>,
-    tools: Arc<Mutex<Option<CurrentTools>>>,
+    tools: Arc<Mutex<Option<LocatedTools>>>,
 }
 
 impl AnalysisRuntime {
     pub(crate) fn start(
         commands: CommandSender,
-        tools: Arc<Mutex<Option<CurrentTools>>>,
+        tools: Arc<Mutex<Option<LocatedTools>>>,
     ) -> io::Result<Arc<Self>> {
         let control = Arc::new(DiscoveryControl {
             state: Mutex::new(ControlState {
@@ -223,7 +221,7 @@ impl AnalysisRuntime {
         }
         let ffprobe = lock(&self.tools)
             .as_ref()
-            .map(|tools| tools.media.ffprobe.clone())
+            .map(|tools| tools.ffprobe.path.clone())
             .ok_or(AnalysisError::MissingTools)?;
         let registry = {
             let state = lock(&self.control.state);

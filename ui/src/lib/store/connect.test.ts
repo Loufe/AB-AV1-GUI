@@ -35,6 +35,7 @@ function settings(): Settings {
       anonymize_history: false,
     },
     log_folder: null,
+    tools: { ffmpeg: null, ffprobe: null },
   };
 }
 
@@ -324,24 +325,21 @@ describe("applyPayload", () => {
   });
 
   it("records tool state until the next snapshot resets it", () => {
-    const missing = {
-      availability: { Missing: { missing: ["Ffmpeg" as const], detail: "ffmpeg not found" } },
-      activity: "Idle" as const,
-      update_available: false,
-    };
+    const missing = { Missing: { failures: [{ NotOnSearchPath: { tool: "Ffmpeg" as const } }] } };
     applyPayload({ Ephemeral: { ToolsChanged: missing } });
     expect(appStore.getState().tools).toEqual(missing);
     expect(progressStore.getState().telemetry).toEqual({});
 
     const available = {
-      availability: {
-        Available: {
-          source: "System" as const,
-          revisions: { ab_av1: "rev-a", ffmpeg: "rev-f", encoder: "rev-s" },
+      Located: {
+        tools: {
+          ffmpeg: { source: "SearchPath" as const, path: "/usr/bin/ffmpeg" },
+          ffprobe: { source: "SearchPath" as const, path: "/usr/bin/ffprobe" },
+        },
+        verification: {
+          Verified: { revisions: { ab_av1: "rev-a", ffmpeg: "rev-f", encoder: "rev-s" } },
         },
       },
-      activity: "Idle" as const,
-      update_available: true,
     };
     applyPayload({ Ephemeral: { ToolsChanged: available } });
     expect(appStore.getState().tools).toEqual(available);
