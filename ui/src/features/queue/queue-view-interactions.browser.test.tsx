@@ -1,7 +1,12 @@
 import { page, userEvent } from "vitest/browser";
 import { describe, expect, it } from "vitest";
 
-import type { DurableState_Deserialize, QueueItem, Settings, ToolAvailability } from "@/lib/bindings";
+import type {
+  DurableState_Deserialize,
+  QueueItem,
+  Settings,
+  ToolAvailability,
+} from "@/lib/bindings";
 import { appStore } from "@/lib/store/app-store";
 import { emptyDurableState } from "@/lib/store/fold";
 import { renderApp } from "@/test/browser/render";

@@ -288,7 +288,9 @@ describe("QueueView", () => {
     });
 
     await expect
-      .element(page.getByText("ffmpeg was not found on PATH. Configure the media tools in Settings."))
+      .element(
+        page.getByText("ffmpeg was not found on PATH. Configure the media tools in Settings."),
+      )
       .toBeVisible();
     await expect.element(page.getByRole("button", { name: "Start Queue" })).toBeDisabled();
 

@@ -60,9 +60,9 @@ describe("tool availability presentation", () => {
     expect(startBlockReason({ Missing: { failures: [] } })).toBe(
       "Media tool discovery has not reported yet.",
     );
-    expect(startBlockReason({ Missing: { failures: [{ NotOnSearchPath: { tool: "Ffmpeg" } }] } })).toBe(
-      "ffmpeg was not found on PATH. Configure the media tools in Settings.",
-    );
+    expect(
+      startBlockReason({ Missing: { failures: [{ NotOnSearchPath: { tool: "Ffmpeg" } }] } }),
+    ).toBe("ffmpeg was not found on PATH. Configure the media tools in Settings.");
     expect(startBlockReason(located("Pending"))).toBeNull();
     expect(
       startBlockReason(located({ Failed: { TimedOut: { capability: "VmafFilter" } } })),
@@ -103,7 +103,9 @@ describe("tool availability presentation", () => {
       ),
     ).toMatchObject({ tone: "success", headline: "Media tools verified: FFmpeg 8.1.2." });
     expect(
-      toolsStatus(located({ Failed: { Unsupported: { capability: "VmafFilter", diagnostic: "" } } })),
+      toolsStatus(
+        located({ Failed: { Unsupported: { capability: "VmafFilter", diagnostic: "" } } }),
+      ),
     ).toMatchObject({
       tone: "destructive",
       details: [

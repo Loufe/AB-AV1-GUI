@@ -44,7 +44,9 @@ function verifiedTools(): ToolAvailability {
         ffmpeg: { source: "Settings", path: "/opt/ffmpeg/bin/ffmpeg" },
         ffprobe: { source: "SearchPath", path: "/usr/bin/ffprobe" },
       },
-      verification: { Verified: { revisions: { ab_av1: "0.11.1", ffmpeg: "8.1.2", encoder: "8.1.2" } } },
+      verification: {
+        Verified: { revisions: { ab_av1: "0.11.1", ffmpeg: "8.1.2", encoder: "8.1.2" } },
+      },
     },
   };
 }
@@ -184,7 +186,9 @@ describe("Settings view", () => {
   it("configures media tool paths, validates them, and submits them with the settings", async () => {
     const committed = settings();
     const tauri = installTauriMock({ set_settings: () => null });
-    await renderApp(<SettingsView />, { appState: { settings: committed, tools: verifiedTools() } });
+    await renderApp(<SettingsView />, {
+      appState: { settings: committed, tools: verifiedTools() },
+    });
 
     const ffmpeg = page.getByRole("textbox", { name: "ffmpeg path", exact: true });
     await ffmpeg.fill("bin/ffmpeg");
@@ -220,12 +224,8 @@ describe("Settings view", () => {
     expect(tauri.callsFor("recheck_tools")).toHaveLength(1);
 
     appStore.setState({ tools: verifiedTools() });
-    await expect
-      .element(page.getByText("Media tools verified: FFmpeg 8.1.2."))
-      .toBeVisible();
-    await expect
-      .element(page.getByText("ffprobe (found on PATH): /usr/bin/ffprobe"))
-      .toBeVisible();
+    await expect.element(page.getByText("Media tools verified: FFmpeg 8.1.2.")).toBeVisible();
+    await expect.element(page.getByText("ffprobe (found on PATH): /usr/bin/ffprobe")).toBeVisible();
     await expect.element(page.getByText(/apt install ffmpeg/)).not.toBeInTheDocument();
   });
 

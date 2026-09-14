@@ -106,7 +106,10 @@ export function MediaToolsGroup({ draft, disabled, invalidField, onChange }: Med
         </Button>
       </SettingContainer>
       <div className="flex flex-col gap-1 border-t border-border px-4 py-2 text-xs">
-        <p className={TONE_CLASS[status.tone]} role={status.tone === "destructive" ? "alert" : "status"}>
+        <p
+          className={TONE_CLASS[status.tone]}
+          role={status.tone === "destructive" ? "alert" : "status"}
+        >
           {status.headline}
         </p>
         {status.details.map((detail) => (
