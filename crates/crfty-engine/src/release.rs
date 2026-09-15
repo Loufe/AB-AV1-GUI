@@ -16,9 +16,7 @@ const RELEASE_API_URL: &str = "https://api.github.com/repos/Loufe/AB-AV1-GUI/rel
 /// Far above any real release payload; bounds a misbehaving server.
 const RELEASE_BODY_CAP_BYTES: u64 = 1024 * 1024;
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(30);
-/// Stall timeout. The blocking client re-arms this on every body read, so
-/// it bounds silence, not the whole transfer.
-const STALL_TIMEOUT: Duration = Duration::from_secs(30);
+const REQUEST_TIMEOUT: Duration = Duration::from_secs(30);
 
 /// The response body for a URL.
 struct FetchStream {
@@ -47,7 +45,7 @@ impl HttpFetch {
             .user_agent(concat!("crfty/", env!("CARGO_PKG_VERSION")))
             .https_only(true)
             .connect_timeout(CONNECT_TIMEOUT)
-            .timeout(STALL_TIMEOUT)
+            .timeout(REQUEST_TIMEOUT)
             .build()
             .map_err(|error| format!("failed to build the release check client: {error}"))?;
         Ok(Self { client })

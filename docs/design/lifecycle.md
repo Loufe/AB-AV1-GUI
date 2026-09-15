@@ -28,7 +28,9 @@ Closing during active work prompts rather than hiding to a tray; there is no sys
 Two signals sharing one outcome fold:
 
 - **Stop After File** sets a session flag, lets the active file finish its whole fallback/search/encode sequence, and prevents another claim.
-- **Force Stop** cancels the child process immediately, waits for termination and cleanup, and folds `Stopped`.
+- **Force Stop** cancels the child process immediately and waits for termination and cleanup. Safe staging abandonment folds `Stopped`; interrupted verification after promotion preserves files and reports an output conflict under [ADR-020](../adr/020-own-output-promotion-as-a-journaled-transaction.md).
+
+Both stopping states wait for worker completion before returning to idle, including during the capability probe before the first claim. A new session cannot start while that worker is settling.
 
 The active item cannot be removed, reordered, or retyped during a run.
 

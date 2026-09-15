@@ -6621,5 +6621,30 @@ fn force_stop_without_a_reserved_run_still_cancels_session_work() {
         stopped.effects,
         vec![Effect::KillActiveRun { run_id: None }]
     );
+    assert_eq!(state.session, SessionState::ForceStopping);
+    let restart = apply(&mut state, Command::Session(SessionCommand::Start));
+    assert!(matches!(restart.reply, Reply::Rejected { .. }));
+    let finished = apply(&mut state, Command::Worker(WorkerCommand::Finished));
+    assert_eq!(finished.reply, Reply::Accepted);
+    assert_eq!(state.session, SessionState::Idle);
+}
+
+#[test]
+fn graceful_stop_before_a_run_waits_for_worker_completion() {
+    let mut state = AppState {
+        session: SessionState::Running,
+        ..AppState::default()
+    };
+    let stopped = apply(
+        &mut state,
+        Command::Session(SessionCommand::StopAfterCurrent),
+    );
+    assert_eq!(stopped.reply, Reply::Accepted);
+    assert!(stopped.effects.is_empty());
+    assert_eq!(state.session, SessionState::StopAfterCurrent);
+    let restart = apply(&mut state, Command::Session(SessionCommand::Start));
+    assert!(matches!(restart.reply, Reply::Rejected { .. }));
+    let finished = apply(&mut state, Command::Worker(WorkerCommand::Finished));
+    assert_eq!(finished.reply, Reply::Accepted);
     assert_eq!(state.session, SessionState::Idle);
 }

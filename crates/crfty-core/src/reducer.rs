@@ -1164,12 +1164,9 @@ fn apply_session(state: &AppState, command: SessionCommand) -> Applied {
         SessionCommand::Start => Applied::rejected("session is already active"),
         SessionCommand::StopAfterCurrent if state.session == SessionState::Running => {
             let mut applied = Applied::accepted();
-            let next = if active_run(state).is_some() {
-                SessionState::StopAfterCurrent
-            } else {
-                SessionState::Idle
-            };
-            applied.ephemeral.push(EphemeralDelta::SessionChanged(next));
+            applied.ephemeral.push(EphemeralDelta::SessionChanged(
+                SessionState::StopAfterCurrent,
+            ));
             applied
         }
         SessionCommand::StopAfterCurrent => Applied::rejected("session is not running"),
@@ -1180,19 +1177,12 @@ fn apply_session(state: &AppState, command: SessionCommand) -> Applied {
             ) =>
         {
             let mut applied = Applied::accepted();
-            if let Some(run_id) = active_run(state) {
-                applied
-                    .ephemeral
-                    .push(EphemeralDelta::SessionChanged(SessionState::ForceStopping));
-                applied.effects.push(Effect::KillActiveRun {
-                    run_id: Some(run_id),
-                });
-            } else {
-                applied.effects.push(Effect::KillActiveRun { run_id: None });
-                applied
-                    .ephemeral
-                    .push(EphemeralDelta::SessionChanged(SessionState::Idle));
-            }
+            applied
+                .ephemeral
+                .push(EphemeralDelta::SessionChanged(SessionState::ForceStopping));
+            applied.effects.push(Effect::KillActiveRun {
+                run_id: active_run(state),
+            });
             applied
         }
         SessionCommand::ForceStop => Applied::rejected("session is not running"),
