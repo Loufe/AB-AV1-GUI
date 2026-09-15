@@ -50,7 +50,7 @@ Read from source: every V2 Statistics aggregate has a wired V3 home in `Statisti
 | Cumulative output-size reduction by day | joined sizes, terminal timestamp | Terminal | `cumulative_reduction` |
 | History range | terminal timestamps | Terminal | `first_epoch_day`, `last_epoch_day` |
 
-V3 exceeds the floor with aggregates V2 never had: remux size change, grew count, the not-worthwhile count, and terminal run totals including stopped, skipped, and failed (read from source).
+V3 exceeds the floor with aggregates V2 never had: remux size reduction, grew count, the not-worthwhile count, and terminal run totals including stopped, skipped, and failed (read from source).
 
 Two semantics differ deliberately. V2 keyed its date axis on `first_seen`, which its own worker overwrote on every terminal write, so the values coincided with conversion dates by accident (read from source). V3 keys on the terminal timestamp, keeping the intentional semantic. A converted fact missing either size still counts as converted while contributing nothing to output-size reduction, because absence and zero are different claims (`docs/HISTORY.md`).
 

@@ -284,8 +284,10 @@ pub struct StatisticsPayload {
     /// Negative when outputs grew past their inputs overall.
     #[specta(type = crate::JsNumber)]
     pub total_reduction_bytes: i64,
+    /// Source minus produced-file logical sizes for remuxes with both sizes
+    /// known. Positive means smaller outputs; negative means larger outputs.
     #[specta(type = crate::JsNumber)]
-    pub remux_size_change_bytes: i64,
+    pub remux_reduction_bytes: i64,
     /// Analyzing plus encoding time across converted facts.
     #[specta(type = crate::JsNumber)]
     pub total_time_ms: u64,
@@ -363,7 +365,7 @@ struct StatisticsAccumulator {
     not_worthwhile_files: u32,
     total_input: u128,
     total_output: u128,
-    remux_size_change: i128,
+    remux_reduction: i128,
     total_time_ms: u64,
     reductions: Vec<f64>,
     vmaf_values: Vec<f64>,
@@ -396,7 +398,7 @@ impl StatisticsAccumulator {
             not_worthwhile_files: 0,
             total_input: 0,
             total_output: 0,
-            remux_size_change: 0,
+            remux_reduction: 0,
             total_time_ms: 0,
             reductions: Vec::new(),
             vmaf_values: Vec::new(),
@@ -423,8 +425,8 @@ impl StatisticsAccumulator {
             }),
             StatFactKind::Remuxed => {
                 self.remuxed_files = self.remuxed_files.saturating_add(1);
-                if let Some(change) = fact.size_reduction_bytes() {
-                    self.remux_size_change = self.remux_size_change.saturating_add(change);
+                if let Some(reduction) = fact.size_reduction_bytes() {
+                    self.remux_reduction = self.remux_reduction.saturating_add(reduction);
                 }
             }
             StatFactKind::NotWorthwhile { .. } => {
@@ -549,7 +551,7 @@ impl StatisticsAccumulator {
             total_input_bytes: u64::try_from(self.total_input).unwrap_or(u64::MAX),
             total_output_bytes: u64::try_from(self.total_output).unwrap_or(u64::MAX),
             total_reduction_bytes: clamp_to_i64(total_reduction),
-            remux_size_change_bytes: clamp_to_i64(self.remux_size_change),
+            remux_reduction_bytes: clamp_to_i64(self.remux_reduction),
             total_time_ms: self.total_time_ms,
             gigabytes_per_hour,
             reduction_percent: spread(&self.reductions),
@@ -1409,7 +1411,7 @@ mod tests {
         assert_eq!(payload.converted_files, 1);
         assert_eq!(payload.remuxed_files, 1);
         assert_eq!(payload.total_reduction_bytes, 5_000);
-        assert_eq!(payload.remux_size_change_bytes, 100);
+        assert_eq!(payload.remux_reduction_bytes, 100);
         assert_eq!(payload.vmaf.map(|spread| spread.count), Some(1));
         assert_eq!(payload.codecs.len(), 1);
 
