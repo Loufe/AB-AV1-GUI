@@ -52,7 +52,7 @@ The reducer allocates a monotonically increasing `AnalysisGenerationId` with `be
 | Select roots / explicit rescan | Allocate next id; Reset to `Discovering` and no rows | Create native registry and cancel the prior registry | Prior-generation work may finish but mutation is rejected |
 | Discovery batch | Upsert rows for current id | Retain native paths under the same row ids | Unknown/stale generation is rejected |
 | Discovery complete | `Discovering` to `Discovered` | Stop discovery workers | Repeated stale completion is rejected |
-| Start Basic Scan | `Discovered`/`Ready` to `BasicScanning` | Acquire bounded probe permits | Vendor-busy or missing-tool request is rejected before transition |
+| Start Basic Scan | `Discovered`/`Ready` to `BasicScanning` | Acquire bounded probe permits | A missing-tool request is rejected before transition |
 | Scan batch | Upsert facts for current id after any source durable deltas | Retain/cancel supervised processes | Unknown/stale generation is rejected |
 | Scan complete | `BasicScanning` to `Ready` | Release permits and child handles | Prior-generation completion is rejected |
 | Cancel | Current activity to `Cancelled` | Signal generation cancellation and terminate supervised children | A later batch cannot change the cancelled/new generation |
@@ -65,12 +65,11 @@ All Analysis deltas use the driver's post-durable position. Discovery-only updat
 
 Starting a new generation cancels the prior driver-local generation and immediately replaces its public state. Late results remain harmless even if the underlying OS operation cannot be interrupted.
 
-| Requested work | Conversion active | Basic Scan active | Vendor install/check active |
-| --- | --- | --- | --- |
-| Discovery | Allowed | Allowed for the same current generation | Allowed; it needs no media tool |
-| Basic Scan | Allowed under its independent bounded permit pool | Idempotent/rejected if already active | Rejected |
-| Conversion | Existing single conversion worker continues | Allowed; it never borrows Analysis state or permits | Existing vendor/session policy applies |
-| Vendor install/check | Existing conversion policy applies | Rejected until scan stops/cancels | Serialized by existing vendor activity |
+| Requested work | Conversion active | Basic Scan active |
+| --- | --- | --- |
+| Discovery | Allowed | Allowed for the same current generation |
+| Basic Scan | Allowed under its independent bounded permit pool | Idempotent/rejected if already active |
+| Conversion | Existing single conversion worker continues | Allowed; it never borrows Analysis state or permits |
 
 Current Analysis level and historical achievement are separate fields derived by `assess_analysis_levels`; neither is persisted as a mutable flag.
 

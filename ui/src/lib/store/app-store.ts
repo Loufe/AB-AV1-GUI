@@ -8,10 +8,11 @@ import { createStore } from "zustand/vanilla";
 import type {
   CorruptionReport,
   DurableState_Deserialize,
+  HostPlatform,
   SessionState,
   Settings,
   StatisticsPayload,
-  ToolsState,
+  ToolAvailability,
 } from "@/lib/bindings";
 import { emptyDurableState } from "@/lib/store/fold";
 
@@ -38,12 +39,18 @@ export interface AppStoreState {
   session: SessionState;
   health: Health;
   /**
-   * Standing tool state (availability, vendor activity, update flag); null
-   * until the stream delivers it. The shell replays ToolsChanged right after
-   * each snapshot (ADR-006 standing health), so the snapshot handler resets
-   * this to null rather than guessing.
+   * Standing media tool availability; null until the stream delivers it. The
+   * shell replays ToolsChanged right after each snapshot (ADR-006 standing
+   * health), so the snapshot handler resets this to null rather than
+   * guessing.
    */
-  tools: ToolsState | null;
+  tools: ToolAvailability | null;
+  /**
+   * Frontend-only: the shell platform from app info, fetched once at startup
+   * and never part of the stream. Null in plain browser dev. Selects the
+   * media tool install guidance.
+   */
+  platform: HostPlatform | null;
   /**
    * Latest Statistics answer. Fire-and-forget on the stream — never replayed
    * on subscribe — so each snapshot resets it to null and the statistics
@@ -71,6 +78,7 @@ export function initialAppState(): AppStoreState {
     session: "Idle",
     health: { degraded: null, unavailable: null, fatal: null, secondInstance: null },
     tools: null,
+    platform: null,
     statistics: null,
     closeRequested: false,
     quitAfterSession: false,

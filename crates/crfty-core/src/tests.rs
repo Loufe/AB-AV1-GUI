@@ -18,16 +18,17 @@ use crate::{
     Effect, EphemeralDelta, ExecutionSettings, FailureFacts, FailureKind, FileRecord,
     FileSystemFacts, FileSystemId, FileTimeNs, HistoryCommand, ImportPath, ImportedHistoryRecord,
     ImportedProvenance, ItemOutcome, JobAction, JobPhase, JobProgress, JournalEnvelope,
-    JournalSequence, MediaContainer, MediaObservation, Operation, OutputDelta,
-    OutputRecoveryAction, OutputState, OutputTarget, OutputTransaction, OverwriteDecision,
-    ParkedResolution, ParkedStatus, PathBinding, PathHash, PhaseSpan, ProjectionCommand,
-    QueueAddRequest, QueueCommand, QueueItemEdit, QueueItemId, QueueItemState, Replacement, Reply,
-    RunId, SearchMeasurement, SessionAggregates, SessionCommand, SessionState, Settings,
-    SettingsCommand, SkipReason, SystemCommand, Telemetry, ToolAvailability, ToolRevisions,
-    ToolSource, ToolsState, UnixMillis, VendorActivity, VendorCommand, VideoCodec, VideoMeta,
-    VmafScore, VmafTarget, WorkerCommand, apply, compaction_due, compaction_quiescent,
-    corruption_signature, encode_record, encode_snapshot, permitted_profiles, recover_output,
-    replay, resolve_parked, select_analysis, select_job_action,
+    JournalSequence, LocatedTool, LocatedTools, MediaContainer, MediaObservation, MediaTool,
+    Operation, OutputDelta, OutputRecoveryAction, OutputState, OutputTarget, OutputTransaction,
+    OverwriteDecision, ParkedResolution, ParkedStatus, PathBinding, PathHash, PhaseSpan,
+    ProbeFailure, ProjectionCommand, QueueAddRequest, QueueCommand, QueueItemEdit, QueueItemId,
+    QueueItemState, Replacement, Reply, RunId, SearchMeasurement, SessionAggregates,
+    SessionCommand, SessionState, Settings, SettingsCommand, SkipReason, SystemCommand, Telemetry,
+    ToolAvailability, ToolCapability, ToolLocationFailure, ToolPathSettings, ToolRevisions,
+    ToolSource, ToolVerification, ToolsCommand, UnixMillis, VideoCodec, VideoMeta, VmafScore,
+    VmafTarget, WorkerCommand, apply, compaction_due, compaction_quiescent, corruption_signature,
+    encode_record, encode_snapshot, permitted_profiles, recover_output, replay, resolve_parked,
+    select_analysis, select_job_action,
 };
 
 fn revisions() -> ToolRevisions {
@@ -38,10 +39,23 @@ fn revisions() -> ToolRevisions {
     }
 }
 
-fn available() -> ToolAvailability {
-    ToolAvailability::Available {
-        source: ToolSource::System,
-        revisions: revisions(),
+fn located_tools() -> LocatedTools {
+    LocatedTools {
+        ffmpeg: LocatedTool {
+            source: ToolSource::SearchPath,
+            path: PathBuf::from("/usr/bin/ffmpeg"),
+        },
+        ffprobe: LocatedTool {
+            source: ToolSource::SearchPath,
+            path: PathBuf::from("/usr/bin/ffprobe"),
+        },
+    }
+}
+
+fn located() -> ToolAvailability {
+    ToolAvailability::Located {
+        tools: located_tools(),
+        verification: ToolVerification::Pending,
     }
 }
 
@@ -259,7 +273,7 @@ fn settings_control_job_overwrite_and_hardware_decode_policy() {
 }
 
 #[test]
-fn session_start_requires_discovered_tools_and_discovery_is_idempotent() {
+fn session_start_requires_located_tools_and_discovery_is_idempotent() {
     let mut state = AppState::default();
     let _added = apply(&mut state, add_command(QueueItemId(1), "video.mkv"));
     let blocked = apply(&mut state, Command::Session(SessionCommand::Start));
@@ -275,26 +289,20 @@ fn session_start_requires_discovered_tools_and_discovery_is_idempotent() {
     let discovered = apply(
         &mut state,
         Command::System(SystemCommand::ToolsDiscovered {
-            availability: available(),
-            update_available: false,
+            availability: located(),
         }),
     );
     assert_eq!(discovered.reply, Reply::Accepted);
     assert_eq!(
         discovered.ephemeral,
-        vec![EphemeralDelta::ToolsChanged(ToolsState {
-            availability: available(),
-            activity: VendorActivity::Idle,
-            update_available: false,
-        })]
+        vec![EphemeralDelta::ToolsChanged(located())]
     );
-    assert_eq!(state.tools.availability, available());
+    assert_eq!(state.tools, located());
 
     let unchanged = apply(
         &mut state,
         Command::System(SystemCommand::ToolsDiscovered {
-            availability: available(),
-            update_available: false,
+            availability: located(),
         }),
     );
     assert_eq!(unchanged.reply, Reply::Accepted);
@@ -308,27 +316,23 @@ fn session_start_requires_discovered_tools_and_discovery_is_idempotent() {
         &mut state,
         Command::System(SystemCommand::ToolsDiscovered {
             availability: ToolAvailability::Missing {
-                missing: vec![crate::MediaTool::Ffmpeg],
-                detail: "ffmpeg was not found".to_owned(),
+                failures: vec![ToolLocationFailure::NotOnSearchPath {
+                    tool: MediaTool::Ffmpeg,
+                }],
             },
-            update_available: false,
         }),
     );
     assert_eq!(missing.reply, Reply::Accepted);
-    assert!(matches!(
-        state.tools.availability,
-        ToolAvailability::Missing { .. }
-    ));
+    assert!(matches!(state.tools, ToolAvailability::Missing { .. }));
 }
 
-/// Reports available tools, then starts the session. Nearly every session
+/// Reports located tools, then starts the session. Nearly every session
 /// test needs both because `AppState` defaults to tools-missing (fail-closed).
 fn start_session(state: &mut AppState) -> crate::Applied {
     let discovered = apply(
         state,
         Command::System(SystemCommand::ToolsDiscovered {
-            availability: available(),
-            update_available: false,
+            availability: located(),
         }),
     );
     assert_eq!(discovered.reply, Reply::Accepted);
@@ -336,225 +340,224 @@ fn start_session(state: &mut AppState) -> crate::Applied {
 }
 
 #[test]
-fn vendor_install_requires_a_fully_idle_engine() {
-    // Running session refuses an install.
+fn a_tool_probe_result_applies_only_to_the_tools_it_was_taken_on() {
     let mut state = AppState::default();
-    let _added = apply(&mut state, add_command(QueueItemId(1), "video.mkv"));
-    let _started = start_session(&mut state);
-    assert_eq!(state.session, SessionState::Running);
-    let refused = apply(&mut state, Command::Vendor(VendorCommand::Install));
-    assert_eq!(
-        refused.reply,
-        Reply::Rejected {
-            reason: "vendor install requires an idle session".to_owned(),
-        }
-    );
-    assert!(refused.effects.is_empty());
-    assert_eq!(state.tools.activity, VendorActivity::Idle);
-
-    // Idle session but a crash-recovered active item still refuses.
-    let mut state = AppState::default();
-    let _added = apply(&mut state, add_command(QueueItemId(1), "video.mkv"));
-    let _started = start_session(&mut state);
-    let _reserved = apply(
-        &mut state,
-        Command::Worker(WorkerCommand::ReserveNext {
-            claim_id: ClaimId(2),
-            run_id: RunId(3),
-        }),
-    );
-    state.session = SessionState::Idle;
-    let refused = apply(&mut state, Command::Vendor(VendorCommand::Install));
-    assert_eq!(
-        refused.reply,
-        Reply::Rejected {
-            reason: "vendor install cannot start while a queue item is active".to_owned(),
-        }
-    );
-
-    // Fully idle accepts: activity transitions and the effect is emitted.
-    let mut state = AppState::default();
-    let accepted = apply(&mut state, Command::Vendor(VendorCommand::Install));
-    assert_eq!(accepted.reply, Reply::Accepted);
-    assert_eq!(accepted.effects, vec![Effect::VendorInstall]);
-    assert_eq!(
-        state.tools.activity,
-        VendorActivity::Downloading {
-            received: 0,
-            total: None,
-        }
-    );
-
-    // A second install while the first is in flight is refused.
-    let refused = apply(&mut state, Command::Vendor(VendorCommand::Install));
-    assert_eq!(
-        refused.reply,
-        Reply::Rejected {
-            reason: "a vendor operation is already in progress".to_owned(),
-        }
-    );
-    assert!(refused.effects.is_empty());
-}
-
-#[test]
-fn vendor_activity_serializes_workers_and_failed_is_restartable() {
-    let mut state = AppState::default();
-    let checking = apply(&mut state, Command::Vendor(VendorCommand::Check));
-    assert_eq!(checking.reply, Reply::Accepted);
-    assert_eq!(checking.effects, vec![Effect::VendorCheck]);
-    assert_eq!(state.tools.activity, VendorActivity::Checking);
-
-    // Checking blocks both vendor commands: at most one worker exists.
-    for command in [VendorCommand::Install, VendorCommand::Check] {
-        let refused = apply(&mut state, Command::Vendor(command));
-        assert_eq!(
-            refused.reply,
-            Reply::Rejected {
-                reason: "a vendor operation is already in progress".to_owned(),
-            }
-        );
-    }
-
-    // A failed operation is terminal for the worker, so both restart paths
-    // reopen from it.
-    let failed = apply(
-        &mut state,
-        Command::System(SystemCommand::VendorProgress {
-            activity: VendorActivity::Failed {
-                detail: "checksum mismatch".to_owned(),
-            },
-        }),
-    );
-    assert_eq!(failed.reply, Reply::Accepted);
-    assert!(matches!(
-        state.tools.activity,
-        VendorActivity::Failed { .. }
-    ));
-    let retried = apply(&mut state, Command::Vendor(VendorCommand::Install));
-    assert_eq!(retried.reply, Reply::Accepted);
-    assert_eq!(retried.effects, vec![Effect::VendorInstall]);
-}
-
-#[test]
-fn session_start_is_refused_while_the_vendor_swaps_tools() {
-    for activity in [
-        VendorActivity::Downloading {
-            received: 5,
-            total: Some(10),
-        },
-        VendorActivity::Installing,
-    ] {
-        let mut state = AppState::default();
-        let _added = apply(&mut state, add_command(QueueItemId(1), "video.mkv"));
-        let discovered = apply(
-            &mut state,
-            Command::System(SystemCommand::ToolsDiscovered {
-                availability: available(),
-                update_available: false,
-            }),
-        );
-        assert_eq!(discovered.reply, Reply::Accepted);
-        let progressed = apply(
-            &mut state,
-            Command::System(SystemCommand::VendorProgress {
-                activity: activity.clone(),
-            }),
-        );
-        assert_eq!(progressed.reply, Reply::Accepted);
-        let refused = apply(&mut state, Command::Session(SessionCommand::Start));
-        assert_eq!(
-            refused.reply,
-            Reply::Rejected {
-                reason: "a vendor install is in progress".to_owned(),
-            },
-            "start accepted during {activity:?}"
-        );
-        assert_eq!(state.session, SessionState::Idle);
-    }
-
-    // Checking does not block a start: it swaps no binaries.
-    let mut state = AppState::default();
-    let _added = apply(&mut state, add_command(QueueItemId(1), "video.mkv"));
-    let _discovered = apply(
+    let _located = apply(
         &mut state,
         Command::System(SystemCommand::ToolsDiscovered {
-            availability: available(),
-            update_available: false,
+            availability: located(),
         }),
     );
-    let _checking = apply(
+
+    let verified = apply(
         &mut state,
-        Command::System(SystemCommand::VendorProgress {
-            activity: VendorActivity::Checking,
+        Command::System(SystemCommand::ToolsProbed {
+            tools: located_tools(),
+            verification: ToolVerification::Verified {
+                revisions: revisions(),
+            },
+        }),
+    );
+    assert_eq!(verified.reply, Reply::Accepted);
+    assert_eq!(
+        verified.ephemeral,
+        vec![EphemeralDelta::ToolsChanged(ToolAvailability::Located {
+            tools: located_tools(),
+            verification: ToolVerification::Verified {
+                revisions: revisions(),
+            },
+        })]
+    );
+
+    // Discovery replaced the tools; a late probe of the old pair is dropped.
+    let replaced = LocatedTools {
+        ffmpeg: LocatedTool {
+            source: ToolSource::Settings,
+            path: PathBuf::from("/opt/ffmpeg/bin/ffmpeg"),
+        },
+        ..located_tools()
+    };
+    let _rediscovered = apply(
+        &mut state,
+        Command::System(SystemCommand::ToolsDiscovered {
+            availability: ToolAvailability::Located {
+                tools: replaced.clone(),
+                verification: ToolVerification::Pending,
+            },
+        }),
+    );
+    let stale = apply(
+        &mut state,
+        Command::System(SystemCommand::ToolsProbed {
+            tools: located_tools(),
+            verification: ToolVerification::Failed(ProbeFailure::TimedOut {
+                capability: ToolCapability::VmafFilter,
+            }),
+        }),
+    );
+    assert_eq!(stale.reply, Reply::Accepted);
+    assert!(stale.ephemeral.is_empty());
+    assert_eq!(
+        state.tools,
+        ToolAvailability::Located {
+            tools: replaced,
+            verification: ToolVerification::Pending,
+        }
+    );
+
+    // Nothing located: a probe result has no tools to attach to.
+    let _missing = apply(
+        &mut state,
+        Command::System(SystemCommand::ToolsDiscovered {
+            availability: ToolAvailability::Missing {
+                failures: vec![ToolLocationFailure::NotOnSearchPath {
+                    tool: MediaTool::Ffmpeg,
+                }],
+            },
+        }),
+    );
+    let orphaned = apply(
+        &mut state,
+        Command::System(SystemCommand::ToolsProbed {
+            tools: located_tools(),
+            verification: ToolVerification::Pending,
+        }),
+    );
+    assert!(orphaned.ephemeral.is_empty());
+    assert!(matches!(state.tools, ToolAvailability::Missing { .. }));
+}
+
+#[test]
+fn a_failed_verification_still_lets_a_session_start_so_the_worker_re_probes() {
+    let mut state = AppState::default();
+    let _added = apply(&mut state, add_command(QueueItemId(1), "video.mkv"));
+    let _located = apply(
+        &mut state,
+        Command::System(SystemCommand::ToolsDiscovered {
+            availability: ToolAvailability::Located {
+                tools: located_tools(),
+                verification: ToolVerification::Failed(ProbeFailure::Unsupported {
+                    capability: ToolCapability::Svtav1Encoder,
+                    diagnostic: "Unknown encoder 'libsvtav1'".to_owned(),
+                }),
+            },
         }),
     );
     let started = apply(&mut state, Command::Session(SessionCommand::Start));
     assert_eq!(started.reply, Reply::Accepted);
+    assert_eq!(started.effects, vec![Effect::StartWorker]);
 }
 
 #[test]
-fn vendor_progress_and_discovery_compose_without_clobbering_each_other() {
+fn rejection_reasons_for_missing_tools_never_carry_paths() {
     let mut state = AppState::default();
-    let _install = apply(&mut state, Command::Vendor(VendorCommand::Install));
-    let progressed = apply(
-        &mut state,
-        Command::System(SystemCommand::VendorProgress {
-            activity: VendorActivity::Downloading {
-                received: 1_024,
-                total: Some(4_096),
-            },
-        }),
-    );
-    assert_eq!(
-        progressed.ephemeral,
-        vec![EphemeralDelta::ToolsChanged(ToolsState {
-            availability: ToolAvailability::default(),
-            activity: VendorActivity::Downloading {
-                received: 1_024,
-                total: Some(4_096),
-            },
-            update_available: false,
-        })]
-    );
-
-    // Discovery mid-flight (the post-install report) preserves the activity.
-    let discovered = apply(
+    let secret = "/home/someone/private/ffmpeg";
+    let _missing = apply(
         &mut state,
         Command::System(SystemCommand::ToolsDiscovered {
-            availability: ToolAvailability::Available {
-                source: ToolSource::Managed,
-                revisions: revisions(),
+            availability: ToolAvailability::Missing {
+                failures: vec![
+                    ToolLocationFailure::SettingsPathIsNotAFile {
+                        tool: MediaTool::Ffmpeg,
+                        path: PathBuf::from(secret),
+                    },
+                    ToolLocationFailure::EnvironmentPathIsNotAFile {
+                        tool: MediaTool::Ffprobe,
+                        path: PathBuf::from(secret),
+                    },
+                ],
             },
-            update_available: false,
         }),
     );
-    assert_eq!(discovered.reply, Reply::Accepted);
+    let blocked = apply(&mut state, Command::Session(SessionCommand::Start));
+    let Reply::Rejected { reason } = blocked.reply else {
+        panic!("expected a fail-closed session start");
+    };
+    assert!(!reason.contains(secret), "{reason}");
+    assert!(reason.contains("configured ffmpeg path"), "{reason}");
+    assert!(reason.contains("ffprobe environment override"), "{reason}");
+    for failure in [
+        ProbeFailure::CouldNotRun {
+            capability: ToolCapability::FfprobeVersion,
+            detail: "permission denied".to_owned(),
+        },
+        ProbeFailure::TimedOut {
+            capability: ToolCapability::Svtav1Encoder,
+        },
+        ProbeFailure::Unsupported {
+            capability: ToolCapability::VmafFilter,
+            diagnostic: format!("No such filter at {secret}"),
+        },
+        ProbeFailure::InvalidVersionDocument {
+            detail: "missing program_version".to_owned(),
+        },
+    ] {
+        assert!(!failure.summary().contains(secret), "{}", failure.summary());
+    }
+}
+
+#[test]
+fn rediscover_and_changed_tool_paths_ask_the_engine_to_discover() {
+    let mut state = AppState::default();
+    let rediscover = apply(&mut state, Command::Tools(ToolsCommand::Rediscover));
+    assert_eq!(rediscover.reply, Reply::Accepted);
     assert_eq!(
-        state.tools.activity,
-        VendorActivity::Downloading {
-            received: 1_024,
-            total: Some(4_096),
-        }
+        rediscover.effects,
+        vec![Effect::DiscoverTools {
+            configured: ToolPathSettings::default(),
+        }]
     );
+    assert!(rediscover.ephemeral.is_empty());
+
+    let mut settings = Settings::default();
+    settings.tools.ffmpeg = Some(PathBuf::from(if cfg!(windows) {
+        r"C:\tools\ffmpeg.exe"
+    } else {
+        "/opt/ffmpeg/bin/ffmpeg"
+    }));
+    let changed = apply(
+        &mut state,
+        Command::Settings(SettingsCommand::Set {
+            settings: settings.clone(),
+        }),
+    );
+    assert_eq!(changed.reply, Reply::Accepted);
     assert_eq!(
-        state.tools.availability,
-        ToolAvailability::Available {
-            source: ToolSource::Managed,
-            revisions: revisions(),
-        }
+        changed.effects,
+        vec![
+            Effect::DiscoverTools {
+                configured: settings.tools.clone(),
+            },
+            Effect::WriteSettings {
+                settings: settings.clone(),
+            },
+        ]
     );
 
-    // Identical progress re-report emits nothing.
-    let unchanged = apply(
+    // Same tool paths again: settings are rewritten, discovery is not rerun.
+    settings.hardware_decode = false;
+    let unrelated = apply(
         &mut state,
-        Command::System(SystemCommand::VendorProgress {
-            activity: VendorActivity::Downloading {
-                received: 1_024,
-                total: Some(4_096),
-            },
+        Command::Settings(SettingsCommand::Set {
+            settings: settings.clone(),
         }),
     );
-    assert!(unchanged.ephemeral.is_empty());
+    assert_eq!(unrelated.effects, vec![Effect::WriteSettings { settings }]);
+
+    // A configured path that is not absolute is refused before any effect.
+    let mut relative = Settings::default();
+    relative.tools.ffprobe = Some(PathBuf::from("bin/ffprobe"));
+    let refused = apply(
+        &mut state,
+        Command::Settings(SettingsCommand::Set { settings: relative }),
+    );
+    assert_eq!(
+        refused.reply,
+        Reply::Rejected {
+            reason: "configured ffprobe path must be absolute".to_owned(),
+        }
+    );
+    assert!(refused.effects.is_empty());
 }
 
 fn add_command(item_id: QueueItemId, input: impl Into<PathBuf>) -> Command {
@@ -733,8 +736,10 @@ fn media_observation(content: &str) -> MediaObservation {
 }
 
 fn basic_scan_state() -> AppState {
-    let mut state = AppState::default();
-    state.tools.availability = available();
+    let mut state = AppState {
+        tools: located(),
+        ..AppState::default()
+    };
     let display = |text: &str| AnalysisDisplayText {
         text: text.to_owned(),
         lossy: false,
@@ -1676,7 +1681,9 @@ fn stop_after_current_does_not_kill_but_force_stop_does() {
     let forced = apply(&mut state, Command::Session(SessionCommand::ForceStop));
     assert_eq!(
         forced.effects,
-        vec![Effect::KillActiveRun { run_id: RunId(3) }]
+        vec![Effect::KillActiveRun {
+            run_id: Some(RunId(3))
+        }]
     );
 }
 
@@ -6521,4 +6528,123 @@ fn recover_started_abandons_absent_and_intends_or_conflicts_on_present_staging()
             })
         );
     }
+}
+
+#[test]
+#[expect(clippy::expect_used, reason = "test assertion")]
+fn ready_abandonment_checks_identity_at_live_and_replay_boundaries() {
+    let artifact = identity("ready", 20);
+    let mut different_size = artifact.destructive.clone();
+    different_size.size += 1;
+    let mut different_time = artifact.destructive.clone();
+    different_time.modified_ns = Some(FileTimeNs(42));
+    for observed in [
+        artifact.destructive.clone(),
+        different_size,
+        different_time,
+        identity("other", 20).destructive,
+    ] {
+        let expected = observed == artifact.destructive;
+        let mut state = active_state();
+        let mut output = transaction(
+            OutputState::Ready {
+                staging_identity: artifact.clone(),
+            },
+            Replacement::KeepOriginal,
+        );
+        output.run_id = RunId(3);
+        state.durable.outputs.insert(RunId(3), output);
+        let mut bytes = encode_snapshot("test", UnixMillis(0), JournalSequence(0), &state.durable)
+            .expect("snapshot");
+        let delta = OutputDelta::AbandonStagingIntent {
+            run_id: RunId(3),
+            staging_identity: observed,
+        };
+        bytes.extend(
+            encode_record(&JournalEnvelope {
+                sequence: JournalSequence(0),
+                deltas: vec![DurableDelta::Output(delta.clone())],
+            })
+            .expect("record"),
+        );
+        let applied = apply(&mut state, Command::Worker(WorkerCommand::Output(delta)));
+        assert_eq!(applied.reply == Reply::Accepted, expected);
+        let recovered = replay(&bytes);
+        assert_eq!(recovered.corruption.is_none(), expected);
+        if expected {
+            assert_eq!(recovered.state, state.durable);
+        }
+    }
+}
+
+#[test]
+fn abandonment_authority_ends_at_promotion_and_partial_staging_keeps_its_owner() {
+    let artifact = identity("staging", 20);
+    let mut grown = artifact.destructive.clone();
+    grown.size += 10;
+    let partial = transaction(
+        OutputState::StagingCreated {
+            initial: artifact.destructive.clone(),
+        },
+        Replacement::KeepOriginal,
+    );
+    assert!(partial.can_abandon_staging(&grown));
+    assert!(!partial.can_abandon_staging(&identity("replacement", 20).destructive));
+    for state in [
+        OutputState::Committed {
+            final_identity: artifact.clone(),
+        },
+        OutputState::RetireIntent {
+            final_identity: artifact.clone(),
+        },
+        OutputState::Retired {
+            final_identity: artifact.clone(),
+        },
+        OutputState::Abandoned,
+    ] {
+        assert!(
+            !transaction(state, Replacement::KeepOriginal)
+                .can_abandon_staging(&artifact.destructive)
+        );
+    }
+}
+
+#[test]
+fn force_stop_without_a_reserved_run_still_cancels_session_work() {
+    let mut state = AppState {
+        session: SessionState::Running,
+        ..AppState::default()
+    };
+    let stopped = apply(&mut state, Command::Session(SessionCommand::ForceStop));
+    assert_eq!(stopped.reply, Reply::Accepted);
+    assert_eq!(
+        stopped.effects,
+        vec![Effect::KillActiveRun { run_id: None }]
+    );
+    assert_eq!(state.session, SessionState::ForceStopping);
+    let restart = apply(&mut state, Command::Session(SessionCommand::Start));
+    assert!(matches!(restart.reply, Reply::Rejected { .. }));
+    let finished = apply(&mut state, Command::Worker(WorkerCommand::Finished));
+    assert_eq!(finished.reply, Reply::Accepted);
+    assert_eq!(state.session, SessionState::Idle);
+}
+
+#[test]
+fn graceful_stop_before_a_run_waits_for_worker_completion() {
+    let mut state = AppState {
+        session: SessionState::Running,
+        ..AppState::default()
+    };
+    let stopped = apply(
+        &mut state,
+        Command::Session(SessionCommand::StopAfterCurrent),
+    );
+    assert_eq!(stopped.reply, Reply::Accepted);
+    assert!(stopped.effects.is_empty());
+    assert_eq!(state.session, SessionState::StopAfterCurrent);
+    let restart = apply(&mut state, Command::Session(SessionCommand::Start));
+    assert!(matches!(restart.reply, Reply::Rejected { .. }));
+    let finished = apply(&mut state, Command::Worker(WorkerCommand::Finished));
+    assert_eq!(finished.reply, Reply::Accepted);
+    assert_eq!(state.session, SessionState::Idle);
 }

@@ -44,8 +44,11 @@ export const commands = {
 	stopAfterCurrent: () => typedError<null, CommandError>(__TAURI_INVOKE("stop_after_current")),
 	forceStop: () => typedError<null, CommandError>(__TAURI_INVOKE("force_stop")),
 	setSettings: (settings: Settings) => typedError<null, CommandError>(__TAURI_INVOKE("set_settings", { settings })),
-	vendorInstall: () => typedError<null, CommandError>(__TAURI_INVOKE("vendor_install")),
-	vendorCheck: () => typedError<null, CommandError>(__TAURI_INVOKE("vendor_check")),
+	/**
+	 *  Re-run media tool discovery on demand, e.g. after the user installs
+	 *  FFmpeg. The result arrives as a `ToolsChanged` ephemeral on the stream.
+	 */
+	recheckTools: () => typedError<null, CommandError>(__TAURI_INVOKE("recheck_tools")),
 	/**
 	 *  Ask for a fresh Statistics computation. The ack only confirms acceptance;
 	 *  the payload arrives as a sequenced `Statistics` ephemeral on the stream
@@ -315,6 +318,7 @@ export type AnalysisSnapshot_Serialize = {
 
 export type AppInfo = {
 	version: string,
+	platform: HostPlatform,
 };
 
 export type AppSnapshot = AppSnapshot_Serialize | AppSnapshot_Deserialize;
@@ -717,7 +721,7 @@ export type EphemeralDelta_Deserialize =
  */
 ({ SessionAggregates: SessionAggregates }) & { Analysis?: never; CommandRejected?: never; QueueAddSummary?: never; SessionChanged?: never; Statistics?: never; Telemetry?: never; TelemetryCleared?: never; ToolsChanged?: never; WorkerCrashed?: never } | ({ Telemetry: Telemetry }) & { Analysis?: never; CommandRejected?: never; QueueAddSummary?: never; SessionAggregates?: never; SessionChanged?: never; Statistics?: never; TelemetryCleared?: never; ToolsChanged?: never; WorkerCrashed?: never } | ({ TelemetryCleared: {
 	run_id: RunId,
-} }) & { Analysis?: never; CommandRejected?: never; QueueAddSummary?: never; SessionAggregates?: never; SessionChanged?: never; Statistics?: never; Telemetry?: never; ToolsChanged?: never; WorkerCrashed?: never } | ({ ToolsChanged: ToolsState }) & { Analysis?: never; CommandRejected?: never; QueueAddSummary?: never; SessionAggregates?: never; SessionChanged?: never; Statistics?: never; Telemetry?: never; TelemetryCleared?: never; WorkerCrashed?: never } | 
+} }) & { Analysis?: never; CommandRejected?: never; QueueAddSummary?: never; SessionAggregates?: never; SessionChanged?: never; Statistics?: never; Telemetry?: never; ToolsChanged?: never; WorkerCrashed?: never } | ({ ToolsChanged: ToolAvailability }) & { Analysis?: never; CommandRejected?: never; QueueAddSummary?: never; SessionAggregates?: never; SessionChanged?: never; Statistics?: never; Telemetry?: never; TelemetryCleared?: never; WorkerCrashed?: never } | 
 /**
  *  Answer to [`ProjectionCommand::RequestStatistics`]. Fire-and-forget:
  *  not part of the read model and never replayed on subscribe.
@@ -751,7 +755,7 @@ export type EphemeralDelta_Serialize =
  */
 ({ SessionAggregates: SessionAggregates }) & { Analysis?: never; CommandRejected?: never; QueueAddSummary?: never; SessionChanged?: never; Statistics?: never; Telemetry?: never; TelemetryCleared?: never; ToolsChanged?: never; WorkerCrashed?: never } | ({ Telemetry: Telemetry }) & { Analysis?: never; CommandRejected?: never; QueueAddSummary?: never; SessionAggregates?: never; SessionChanged?: never; Statistics?: never; TelemetryCleared?: never; ToolsChanged?: never; WorkerCrashed?: never } | ({ TelemetryCleared: {
 	run_id: RunId,
-} }) & { Analysis?: never; CommandRejected?: never; QueueAddSummary?: never; SessionAggregates?: never; SessionChanged?: never; Statistics?: never; Telemetry?: never; ToolsChanged?: never; WorkerCrashed?: never } | ({ ToolsChanged: ToolsState }) & { Analysis?: never; CommandRejected?: never; QueueAddSummary?: never; SessionAggregates?: never; SessionChanged?: never; Statistics?: never; Telemetry?: never; TelemetryCleared?: never; WorkerCrashed?: never } | 
+} }) & { Analysis?: never; CommandRejected?: never; QueueAddSummary?: never; SessionAggregates?: never; SessionChanged?: never; Statistics?: never; Telemetry?: never; ToolsChanged?: never; WorkerCrashed?: never } | ({ ToolsChanged: ToolAvailability }) & { Analysis?: never; CommandRejected?: never; QueueAddSummary?: never; SessionAggregates?: never; SessionChanged?: never; Statistics?: never; Telemetry?: never; TelemetryCleared?: never; WorkerCrashed?: never } | 
 /**
  *  Answer to [`ProjectionCommand::RequestStatistics`]. Fire-and-forget:
  *  not part of the read model and never replayed on subscribe.
@@ -904,6 +908,13 @@ export type HistoryStatus = "Converted" | "Remuxed" | ({ NotWorthwhile: {
 } }) & { NotWorthwhile?: never } | "Stopped";
 
 /**
+ *  The platform the shell is running on, as far as install guidance for the
+ *  media tools cares: the webview picks the matching instructions from this
+ *  rather than sniffing the user agent (ADR-023).
+ */
+export type HostPlatform = "Windows" | "Linux" | "Other";
+
+/**
  *  The normalized source-path key an imported history record is parked
  *  under. Normalization is v3's own documented rule (verbatim prefixes
  *  stripped, backslashes to slashes, lowercased) applied by the engine at
@@ -995,6 +1006,16 @@ export type JobSpec = {
 	output_target: OutputTarget,
 	execution: ExecutionSettings,
 	action: JobAction,
+};
+
+export type LocatedTool = {
+	source: ToolSource,
+	path: string,
+};
+
+export type LocatedTools = {
+	ffmpeg: LocatedTool,
+	ffprobe: LocatedTool,
 };
 
 export type MediaContainer = "Matroska" | { Other: string };
@@ -1218,6 +1239,18 @@ export type PrivacySettings = {
 	anonymize_history: boolean,
 };
 
+export type ProbeFailure = ({ CouldNotRun: {
+	capability: ToolCapability,
+	detail: string,
+} }) & { InvalidVersionDocument?: never; TimedOut?: never; Unsupported?: never } | ({ TimedOut: {
+	capability: ToolCapability,
+} }) & { CouldNotRun?: never; InvalidVersionDocument?: never; Unsupported?: never } | ({ Unsupported: {
+	capability: ToolCapability,
+	diagnostic: string,
+} }) & { CouldNotRun?: never; InvalidVersionDocument?: never; TimedOut?: never } | ({ InvalidVersionDocument: {
+	detail: string,
+} }) & { CouldNotRun?: never; TimedOut?: never; Unsupported?: never };
+
 export type QueueItem = {
 	id: QueueItemId,
 	input: string,
@@ -1335,6 +1368,7 @@ export type Settings = {
 	hardware_decode: boolean,
 	privacy: PrivacySettings,
 	log_folder: string | null,
+	tools: ToolPathSettings,
 };
 
 export type ShellEvent = ShellEvent_Serialize | ShellEvent_Deserialize;
@@ -1541,17 +1575,47 @@ export type Telemetry = {
 };
 
 /**
- *  Whether external media tools are usable. Ephemeral state: discovery is a
- *  filesystem fact reported to the reducer, never journaled. Fail-closed by
- *  default so media work stays gated until discovery actually reports.
+ *  Whether external media tools are usable. Ephemeral: discovery and the
+ *  probe report filesystem and process facts, never journaled. Defaults to
+ *  nothing located so media work stays gated until discovery reports.
  */
-export type ToolAvailability = ({ Available: {
-	source: ToolSource,
-	revisions: ToolRevisions,
-} }) & { Missing?: never } | ({ Missing: {
-	missing: MediaTool[],
-	detail: string,
-} }) & { Available?: never };
+export type ToolAvailability = ({ Missing: {
+	failures: ToolLocationFailure[],
+} }) & { Located?: never } | ({ Located: {
+	tools: LocatedTools,
+	verification: ToolVerification,
+} }) & { Missing?: never };
+
+/**
+ *  One behaviour the probe exercises on the located tools. Every capability
+ *  is a real invocation judged by exit status; human-oriented output is
+ *  carried only as a diagnostic.
+ */
+export type ToolCapability = "FfprobeVersion" | "Svtav1Encoder" | "VmafFilter";
+
+/**
+ *  Why one tool could not be located. Paths live only in typed fields so a
+ *  consumer can show them deliberately; [`Self::summary`] stays path-free.
+ */
+export type ToolLocationFailure = ({ EnvironmentPathIsNotAFile: {
+	tool: MediaTool,
+	path: string,
+} }) & { NotOnSearchPath?: never; SettingsPathIsNotAFile?: never } | ({ SettingsPathIsNotAFile: {
+	tool: MediaTool,
+	path: string,
+} }) & { EnvironmentPathIsNotAFile?: never; NotOnSearchPath?: never } | ({ NotOnSearchPath: {
+	tool: MediaTool,
+} }) & { EnvironmentPathIsNotAFile?: never; SettingsPathIsNotAFile?: never };
+
+/**
+ *  Operator-configured locations of the external media tools. A configured
+ *  path is an explicit choice: discovery uses it as given and fails closed
+ *  when it does not name a file, never falling through to the search path.
+ */
+export type ToolPathSettings = {
+	ffmpeg: string | null,
+	ffprobe: string | null,
+};
 
 export type ToolRevisions = {
 	ab_av1: string,
@@ -1560,21 +1624,21 @@ export type ToolRevisions = {
 };
 
 /**
- *  Which discovery tier produced the active media tools. Precedence is
- *  explicit environment paths, then the managed vendor install, then PATH.
+ *  Which discovery tier located a tool. Precedence is the environment
+ *  override, then the Settings path, then the search path. An explicit tier
+ *  that names something other than a file fails closed instead of falling
+ *  through, so a deliberate choice is never silently replaced.
  */
-export type ToolSource = "Explicit" | "System" | "Managed";
+export type ToolSource = "Environment" | "Settings" | "SearchPath";
 
 /**
- *  The full ephemeral tool picture: what is usable, what the vendor pipeline
- *  is doing, and whether the compiled-in manifest is newer than the managed
- *  install. Never journaled; replayed after each snapshot on subscribe.
+ *  Outcome of the capability probe on the located tools. `Pending` until a
+ *  session start runs the probe; every session re-probes because the files
+ *  behind a location can change between sessions.
  */
-export type ToolsState = {
-	availability: ToolAvailability,
-	activity: VendorActivity,
-	update_available: boolean,
-};
+export type ToolVerification = "Pending" | ({ Verified: {
+	revisions: ToolRevisions,
+} }) & { Failed?: never } | ({ Failed: ProbeFailure }) & { Verified?: never };
 
 /**
  *  A wall-clock instant in milliseconds since the Unix epoch. Stamped by the
@@ -1589,18 +1653,6 @@ export type ValueSpread = {
 	maximum: number | null,
 	count: number,
 };
-
-/**
- *  What the vendor subsystem is doing right now. `Downloading` progress is
- *  throttled by the engine (core has no clock); a terminal `Failed` stands
- *  until the next vendor command replaces it.
- */
-export type VendorActivity = "Idle" | "Checking" | ({ Downloading: {
-	received: number,
-	total: number | null,
-} }) & { Failed?: never } | "Installing" | ({ Failed: {
-	detail: string,
-} }) & { Downloading?: never };
 
 /**
  *  The record's standing judgment about this content: what the latest

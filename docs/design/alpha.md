@@ -10,7 +10,7 @@ GitHub owns work order, blockers, and acceptance evidence. The [alpha issues](ht
 
 ## User workflow
 
-A clean installation can obtain authenticated media tools, select files or a folder, discover content, run Basic Scan, select rows, and enqueue Analyze or Convert. The first Analysis presentation is a flat table showing relative folders. Stable row identity preserves selection through streamed updates; replacing a generation cannot apply an action to stale selections.
+A clean installation discovers user-supplied FFmpeg and ffprobe and verifies their capabilities before conversion. Users can select files or a folder, discover content, run Basic Scan, select rows, and enqueue Analyze or Convert. The first Analysis presentation is a flat table showing relative folders. Stable row identity preserves selection through streamed updates; replacing a generation cannot apply an action to stale selections.
 
 Basic Scan shows observed metadata and current applicability. Unsupported pre-analysis estimates are absent. A completed quality search exposes ab-av1's predicted output size and duration for the applicable source and execution profile, labelled as predictions. Historical prediction evidence cannot upgrade a file's level or suppress required work. The historical estimator family and its evaluation contract remain as decided in `estimation.md`; alpha does not require that estimator.
 
@@ -28,7 +28,7 @@ Storage selection proves these writes, deterministic pages, restart recovery, st
 
 ## Installation and product truthfulness
 
-CI-built alpha artifacts are exercised from an installed location with an empty managed-tool cache. Tool discovery, download authentication, extraction, execution, restart, and native conversion must pass on both supported platforms. The artifact source and redistribution material are settled before distributing media tools.
+CI-built alpha artifacts are exercised from an installed location, first with no media tools reachable and then with a user-installed FFmpeg configured through Settings. Tool discovery, the session-start capability probe, execution, restart, and native conversion must pass on both supported platforms, and the install guidance shown for each platform is followed on a clean machine.
 
 Filesystem work and History import and queries leave the interface responsive. Command failures remain inspectable in context; the complete notices panel can follow. A privacy control is enabled only when recording and import enforce its promise. Until then it is disabled and explicitly unavailable. Existing anonymized logs and anonymous records retain their protections, and records without readable paths expose no path actions.
 

@@ -7,7 +7,7 @@ import type {
   QueueItem,
   Settings,
   Telemetry,
-  ToolsState,
+  ToolAvailability,
 } from "@/lib/bindings";
 import { appStore } from "@/lib/store/app-store";
 import { emptyDurableState } from "@/lib/store/fold";
@@ -30,19 +30,19 @@ function settings(): Settings {
     hardware_decode: true,
     privacy: { anonymize_logs: false, anonymize_history: false },
     log_folder: null,
+    tools: { ffmpeg: null, ffprobe: null },
   };
 }
 
-function tools(): ToolsState {
+function tools(): ToolAvailability {
   return {
-    availability: {
-      Available: {
-        source: "System",
-        revisions: { ab_av1: "1", ffmpeg: "2", encoder: "3" },
+    Located: {
+      tools: {
+        ffmpeg: { source: "SearchPath", path: "/usr/bin/ffmpeg" },
+        ffprobe: { source: "SearchPath", path: "/usr/bin/ffprobe" },
       },
+      verification: { Verified: { revisions: { ab_av1: "1", ffmpeg: "2", encoder: "3" } } },
     },
-    activity: "Idle",
-    update_available: false,
   };
 }
 
@@ -276,10 +276,8 @@ describe("QueueView", () => {
   });
 
   it("surfaces missing tools and degraded health", async () => {
-    const missing: ToolsState = {
-      availability: { Missing: { missing: ["Ffmpeg"], detail: "FFmpeg was not found" } },
-      activity: "Idle",
-      update_available: false,
+    const missing: ToolAvailability = {
+      Missing: { failures: [{ NotOnSearchPath: { tool: "Ffmpeg" } }] },
     };
     await renderApp(<QueueView />, {
       appState: {
@@ -289,8 +287,32 @@ describe("QueueView", () => {
       },
     });
 
-    await expect.element(page.getByText("FFmpeg was not found")).toBeVisible();
+    await expect
+      .element(
+        page.getByText("ffmpeg was not found on PATH. Configure the media tools in Settings."),
+      )
+      .toBeVisible();
     await expect.element(page.getByRole("button", { name: "Start Queue" })).toBeDisabled();
+
+    // A failed verification only warns: the next start re-probes the tools.
+    const failed: ToolAvailability = {
+      Located: {
+        tools: {
+          ffmpeg: { source: "SearchPath", path: "/usr/bin/ffmpeg" },
+          ffprobe: { source: "SearchPath", path: "/usr/bin/ffprobe" },
+        },
+        verification: { Failed: { TimedOut: { capability: "VmafFilter" } } },
+      },
+    };
+    appStore.setState({ tools: failed });
+    await expect
+      .element(
+        page.getByText(
+          "The ffmpeg libvmaf filter check timed out. Starting the Queue checks the tools again.",
+        ),
+      )
+      .toBeVisible();
+    await expect.element(page.getByRole("button", { name: "Start Queue" })).toBeEnabled();
 
     appStore.setState((state) => ({
       ...state,

@@ -291,76 +291,199 @@ pub struct AppState {
     pub session: SessionState,
     pub aggregates: SessionAggregates,
     pub telemetry: BTreeMap<RunId, Telemetry>,
-    pub tools: ToolsState,
+    pub tools: ToolAvailability,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, specta::Type)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, specta::Type)]
 pub enum MediaTool {
     Ffmpeg,
     Ffprobe,
 }
 
-/// Which discovery tier produced the active media tools. Precedence is
-/// explicit environment paths, then the managed vendor install, then PATH.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, specta::Type)]
-pub enum ToolSource {
-    Explicit,
-    System,
-    Managed,
+impl MediaTool {
+    #[must_use]
+    pub const fn name(self) -> &'static str {
+        match self {
+            Self::Ffmpeg => "ffmpeg",
+            Self::Ffprobe => "ffprobe",
+        }
+    }
 }
 
-/// Whether external media tools are usable. Ephemeral state: discovery is a
-/// filesystem fact reported to the reducer, never journaled. Fail-closed by
-/// default so media work stays gated until discovery actually reports.
+/// Which discovery tier located a tool. Precedence is the environment
+/// override, then the Settings path, then the search path. An explicit tier
+/// that names something other than a file fails closed instead of falling
+/// through, so a deliberate choice is never silently replaced.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, specta::Type)]
+pub enum ToolSource {
+    Environment,
+    Settings,
+    SearchPath,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, specta::Type)]
+pub struct LocatedTool {
+    pub source: ToolSource,
+    pub path: PathBuf,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, specta::Type)]
+pub struct LocatedTools {
+    pub ffmpeg: LocatedTool,
+    pub ffprobe: LocatedTool,
+}
+
+/// Why one tool could not be located. Paths live only in typed fields so a
+/// consumer can show them deliberately; [`Self::summary`] stays path-free.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, specta::Type)]
+pub enum ToolLocationFailure {
+    EnvironmentPathIsNotAFile { tool: MediaTool, path: PathBuf },
+    SettingsPathIsNotAFile { tool: MediaTool, path: PathBuf },
+    NotOnSearchPath { tool: MediaTool },
+}
+
+impl ToolLocationFailure {
+    #[must_use]
+    pub const fn tool(&self) -> MediaTool {
+        match self {
+            Self::EnvironmentPathIsNotAFile { tool, .. }
+            | Self::SettingsPathIsNotAFile { tool, .. }
+            | Self::NotOnSearchPath { tool } => *tool,
+        }
+    }
+
+    /// Path-free description, safe for logs and rejection reasons.
+    #[must_use]
+    pub fn summary(&self) -> String {
+        let tool = self.tool().name();
+        match self {
+            Self::EnvironmentPathIsNotAFile { .. } => {
+                format!("the {tool} environment override does not name a file")
+            }
+            Self::SettingsPathIsNotAFile { .. } => {
+                format!("the configured {tool} path does not name a file")
+            }
+            Self::NotOnSearchPath { .. } => format!("{tool} was not found on the search path"),
+        }
+    }
+}
+
+/// One behaviour the probe exercises on the located tools. Every capability
+/// is a real invocation judged by exit status; human-oriented output is
+/// carried only as a diagnostic.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, specta::Type)]
+pub enum ToolCapability {
+    FfprobeVersion,
+    Svtav1Encoder,
+    VmafFilter,
+}
+
+impl ToolCapability {
+    #[must_use]
+    pub const fn describe(self) -> &'static str {
+        match self {
+            Self::FfprobeVersion => "ffprobe version report",
+            Self::Svtav1Encoder => "ffmpeg libsvtav1 encoder",
+            Self::VmafFilter => "ffmpeg libvmaf filter",
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, specta::Type)]
+pub enum ProbeFailure {
+    CouldNotRun {
+        capability: ToolCapability,
+        detail: String,
+    },
+    TimedOut {
+        capability: ToolCapability,
+    },
+    Unsupported {
+        capability: ToolCapability,
+        diagnostic: String,
+    },
+    InvalidVersionDocument {
+        detail: String,
+    },
+}
+
+impl ProbeFailure {
+    /// Path-free description, safe for logs and rejection reasons.
+    #[must_use]
+    pub fn summary(&self) -> String {
+        match self {
+            Self::CouldNotRun { capability, detail } => {
+                format!(
+                    "the {} probe could not run: {detail}",
+                    capability.describe()
+                )
+            }
+            Self::TimedOut { capability } => {
+                format!("the {} probe timed out", capability.describe())
+            }
+            Self::Unsupported { capability, .. } => {
+                format!(
+                    "the located tools do not support the {}",
+                    capability.describe()
+                )
+            }
+            Self::InvalidVersionDocument { detail } => {
+                format!("ffprobe reported an unreadable version document: {detail}")
+            }
+        }
+    }
+}
+
+/// Outcome of the capability probe on the located tools. `Pending` until a
+/// session start runs the probe; every session re-probes because the files
+/// behind a location can change between sessions.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, specta::Type)]
+pub enum ToolVerification {
+    Pending,
+    Verified { revisions: ToolRevisions },
+    Failed(ProbeFailure),
+}
+
+/// Whether external media tools are usable. Ephemeral: discovery and the
+/// probe report filesystem and process facts, never journaled. Defaults to
+/// nothing located so media work stays gated until discovery reports.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, specta::Type)]
 pub enum ToolAvailability {
-    Available {
-        source: ToolSource,
-        revisions: ToolRevisions,
-    },
     Missing {
-        missing: Vec<MediaTool>,
-        detail: String,
+        failures: Vec<ToolLocationFailure>,
+    },
+    Located {
+        tools: LocatedTools,
+        verification: ToolVerification,
     },
 }
 
 impl Default for ToolAvailability {
     fn default() -> Self {
         Self::Missing {
-            missing: vec![MediaTool::Ffmpeg, MediaTool::Ffprobe],
-            detail: "media tool discovery has not completed".to_owned(),
+            failures: Vec::new(),
         }
     }
 }
 
-/// What the vendor subsystem is doing right now. `Downloading` progress is
-/// throttled by the engine (core has no clock); a terminal `Failed` stands
-/// until the next vendor command replaces it.
-#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, specta::Type)]
-pub enum VendorActivity {
-    #[default]
-    Idle,
-    Checking,
-    Downloading {
-        #[specta(type = crate::JsNumber)]
-        received: u64,
-        #[specta(type = Option<crate::JsNumber>)]
-        total: Option<u64>,
-    },
-    Installing,
-    Failed {
-        detail: String,
-    },
-}
-
-/// The full ephemeral tool picture: what is usable, what the vendor pipeline
-/// is doing, and whether the compiled-in manifest is newer than the managed
-/// install. Never journaled; replayed after each snapshot on subscribe.
-#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, specta::Type)]
-pub struct ToolsState {
-    pub availability: ToolAvailability,
-    pub activity: VendorActivity,
-    pub update_available: bool,
+impl ToolAvailability {
+    /// Path-free reason media work cannot proceed, or `None` when it can.
+    #[must_use]
+    pub fn blocking_summary(&self) -> Option<String> {
+        match self {
+            Self::Missing { failures } if failures.is_empty() => {
+                Some("media tool discovery has not reported".to_owned())
+            }
+            Self::Missing { failures } => Some(
+                failures
+                    .iter()
+                    .map(ToolLocationFailure::summary)
+                    .collect::<Vec<_>>()
+                    .join("; "),
+            ),
+            Self::Located { .. } => None,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, specta::Type)]

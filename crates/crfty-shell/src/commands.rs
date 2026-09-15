@@ -3,7 +3,7 @@ use std::path::PathBuf;
 use crfty_core::{
     AnalysisGenerationId, AnalysisIntent, CorruptionSignature, Operation, OutputTarget,
     ProjectionCommand, QueueCommand, QueueItemEdit, QueueItemId, SessionCommand, Settings,
-    VendorCommand,
+    ToolsCommand,
 };
 use serde::{Deserialize, Serialize};
 use tauri::{State, ipc::Channel};
@@ -16,6 +16,29 @@ use crate::bridge::{
 #[derive(Debug, Clone, Serialize, specta::Type)]
 pub(crate) struct AppInfo {
     pub version: String,
+    pub platform: HostPlatform,
+}
+
+/// The platform the shell is running on, as far as install guidance for the
+/// media tools cares: the webview picks the matching instructions from this
+/// rather than sniffing the user agent (ADR-023).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, specta::Type)]
+pub(crate) enum HostPlatform {
+    Windows,
+    Linux,
+    Other,
+}
+
+impl HostPlatform {
+    const fn current() -> Self {
+        if cfg!(target_os = "windows") {
+            Self::Windows
+        } else if cfg!(target_os = "linux") {
+            Self::Linux
+        } else {
+            Self::Other
+        }
+    }
 }
 
 /// Narrow native-picker intents exposed to the webview. The selected path is
@@ -34,6 +57,7 @@ pub(crate) enum PathPickerKind {
 fn app_info() -> AppInfo {
     AppInfo {
         version: env!("CARGO_PKG_VERSION").to_owned(),
+        platform: HostPlatform::current(),
     }
 }
 
@@ -212,16 +236,12 @@ fn set_settings(bridge: State<'_, Bridge>, settings: Settings) -> Result<(), Com
     bridge.submit_settings(settings)
 }
 
+/// Re-run media tool discovery on demand, e.g. after the user installs
+/// FFmpeg. The result arrives as a `ToolsChanged` ephemeral on the stream.
 #[tauri::command]
 #[specta::specta]
-fn vendor_install(bridge: State<'_, Bridge>) -> Result<(), CommandError> {
-    bridge.submit_vendor(VendorCommand::Install)
-}
-
-#[tauri::command]
-#[specta::specta]
-fn vendor_check(bridge: State<'_, Bridge>) -> Result<(), CommandError> {
-    bridge.submit_vendor(VendorCommand::Check)
+fn recheck_tools(bridge: State<'_, Bridge>) -> Result<(), CommandError> {
+    bridge.submit_tools(ToolsCommand::Rediscover)
 }
 
 /// Ask for a fresh Statistics computation. The ack only confirms acceptance;
@@ -339,8 +359,7 @@ pub fn specta_builder() -> Builder<tauri::Wry> {
             stop_after_current,
             force_stop,
             set_settings,
-            vendor_install,
-            vendor_check,
+            recheck_tools,
             request_statistics,
             import_history,
             scrub_logs,

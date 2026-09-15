@@ -30,8 +30,8 @@ use crfty_engine::ab_av1::{
     AbAv1Runtime, EncodeRequest, FaultInjection, JobHandle, JobTerminal, SearchRequest,
     StartJobError,
 };
-use crfty_engine::coordinator::{EngineConfig, EngineRuntime, ToolsConfig};
-use crfty_engine::vendor::discovery::{CurrentTools, DiscoveredTools, MediaTools};
+use crfty_engine::coordinator::{EngineConfig, EngineRuntime, FixedTools, ToolsConfig};
+use crfty_engine::tools::MediaTools;
 
 /// Distinct bytes for a distinct piece of media. The fake tools key their
 /// behavior off filenames, but content identity hashes real bytes: a
@@ -67,15 +67,23 @@ fn add_one(
 }
 
 fn fixed_tools(tools: MediaTools) -> ToolsConfig {
-    ToolsConfig::Fixed(DiscoveredTools::Available(CurrentTools {
-        media: tools,
-        source: crfty_core::ToolSource::Explicit,
+    ToolsConfig::Fixed(FixedTools {
+        tools: crfty_core::LocatedTools {
+            ffmpeg: crfty_core::LocatedTool {
+                source: crfty_core::ToolSource::Environment,
+                path: tools.ffmpeg,
+            },
+            ffprobe: crfty_core::LocatedTool {
+                source: crfty_core::ToolSource::Environment,
+                path: tools.ffprobe,
+            },
+        },
         revisions: crfty_core::ToolRevisions {
             ab_av1: "contract".to_owned(),
             ffmpeg: "contract".to_owned(),
             encoder: "contract".to_owned(),
         },
-    }))
+    })
 }
 
 fn main() {
@@ -134,6 +142,19 @@ fn fake_ffprobe() -> Result<(), Box<dyn Error>> {
     {
         return Err(format!("fixture rejected {}", input.display()).into());
     }
+    // The marker is created by the selected invocation's descendant, so
+    // tests can cancel at a transaction boundary without racing a timer.
+    if let Some(input) = env::args_os().next_back().map(PathBuf::from)
+        && probe_should_hang(&input)?
+    {
+        let _child = Command::new(env::current_exe()?)
+            .arg("heartbeat")
+            .arg(input.with_extension("heartbeat"))
+            .spawn()?;
+        loop {
+            thread::sleep(Duration::from_secs(1));
+        }
+    }
     let _concurrency = fake_probe_concurrency_guard()?;
     const PROBE: &str = r#"{
         "streams": [{
@@ -183,6 +204,7 @@ fn fake_ffprobe() -> Result<(), Box<dyn Error>> {
     let probes_av1 = env::args_os().any(|argument| {
         let argument = argument.to_string_lossy();
         argument.contains("already-av1.mp4")
+            || argument.contains("already-av1.mkv")
             || argument.contains("incompatible-av1.mp4")
             || argument.contains("input_coordinated.mkv")
             || argument.contains("already-av1_remuxed.mkv")
@@ -268,7 +290,6 @@ fn run_coordinator_contract(
     let engine = EngineRuntime::start(EngineConfig {
         journal_path: output_dir.join("coordinator.jsonl"),
         config_path: output_dir.join("config.json"),
-        vendor_root: output_dir.join("vendor"),
         tools: fixed_tools(tools),
         execution: ExecutionSettings {
             requested_target: DEFAULT_VMAF_TARGET,
@@ -498,7 +519,6 @@ fn run_ladder_contract(
     let engine = EngineRuntime::start(EngineConfig {
         journal_path: output_dir.join("ladder.jsonl"),
         config_path: output_dir.join("ladder-config.json"),
-        vendor_root: output_dir.join("vendor"),
         tools: fixed_tools(tools),
         execution: ExecutionSettings {
             requested_target: DEFAULT_VMAF_TARGET,
@@ -717,6 +737,9 @@ fn accepted_reply(reply: crfty_core::Reply) -> Result<(), Box<dyn Error>> {
 
 fn fake_ffmpeg() -> Result<(), Box<dyn Error>> {
     let arguments: Vec<OsString> = env::args_os().skip(1).collect();
+    if arguments.iter().any(|argument| argument == "lavfi") {
+        return fake_capability_probe(&arguments);
+    }
     // Hardware decoder availability probe (`-h decoder=NAME`): only
     // h264_cuvid is "installed" on this fixture machine.
     if let Some(decoder) = arguments
@@ -794,6 +817,34 @@ fn fake_ffmpeg() -> Result<(), Box<dyn Error>> {
     eprintln!(
         "video:1KiB audio:2KiB subtitle:0KiB other streams:1KiB global headers:0KiB muxing overhead: 0.0%"
     );
+    Ok(())
+}
+
+/// The session-start capability probe (synthetic lavfi inputs, no media).
+/// Passes unless a `crfty-fixture-probe` marker beside the binary says
+/// otherwise: `missing=libsvtav1` or `missing=libvmaf` fails the step that
+/// names that component, and `hang` never exits.
+fn fake_capability_probe(arguments: &[OsString]) -> Result<(), Box<dyn Error>> {
+    let marker = env::current_exe()?.with_file_name("crfty-fixture-probe");
+    let directive = fs::read_to_string(&marker).unwrap_or_default();
+    let directive = directive.trim();
+    if directive == "hang" {
+        let _child = Command::new(env::current_exe()?)
+            .arg("heartbeat")
+            .arg(marker.with_extension("heartbeat"))
+            .spawn()?;
+        loop {
+            thread::sleep(Duration::from_secs(3600));
+        }
+    }
+    if let Some(missing) = directive.strip_prefix("missing=")
+        && arguments
+            .iter()
+            .any(|argument| argument.to_string_lossy().contains(missing))
+    {
+        eprintln!("fixture: {missing} is not available in this build");
+        return Err(format!("fixture capability {missing} missing").into());
+    }
     Ok(())
 }
 
@@ -1104,4 +1155,33 @@ fn wait_for_file(path: &Path) -> Result<(), Box<dyn Error>> {
         thread::sleep(Duration::from_millis(10));
     }
     Err(format!("file was not created: {}", path.display()).into())
+}
+
+fn probe_should_hang(input: &Path) -> Result<bool, Box<dyn Error>> {
+    let name = input
+        .file_name()
+        .and_then(|name| name.to_str())
+        .unwrap_or_default();
+    let staging = name.contains(".part.");
+    let final_output = !staging && input.extension().is_some_and(|ext| ext == "mkv");
+    if name.starts_with("hang-claim")
+        || (name.contains("hang-verify") && staging)
+        || (name.contains("hang-promoted") && final_output)
+    {
+        return Ok(true);
+    }
+    if (name.contains("hang-ready") && staging)
+        || (name.contains("hang-retirement") && final_output)
+    {
+        return match fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(input.with_extension("probe-seen"))
+        {
+            Ok(_) => Ok(false),
+            Err(error) if error.kind() == io::ErrorKind::AlreadyExists => Ok(true),
+            Err(error) => Err(error.into()),
+        };
+    }
+    Ok(false)
 }

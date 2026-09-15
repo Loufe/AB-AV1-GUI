@@ -1,37 +1,30 @@
-//! The supervision loop: draining driver effects, owning the session and
-//! vendor worker threads, and the cancellation registry those threads share.
+//! The supervision loop: draining driver effects, owning the session worker
+//! thread, re-running tool discovery, and the cancellation registry the
+//! worker shares with force-stop and shutdown.
 
 use std::{
-    sync::{
-        Arc, Mutex,
-        atomic::{AtomicBool, AtomicU64, Ordering},
-        mpsc,
-    },
+    sync::{Arc, Mutex, MutexGuard, atomic::AtomicU64, mpsc},
     thread,
-    time::{Duration, Instant},
 };
 
-use crfty_core::{Command, Effect, Reply, RunId, WorkerCommand};
+use crfty_core::{Command, Effect, LocatedTools, Reply, RunId, SystemCommand, WorkerCommand};
 
 use crate::{
     ab_av1::{AbAv1Runtime, CancelMode, CancellationHandle},
     driver::CommandSender,
+    process_supervisor::ProcessCancellation,
     remux::RemuxCancellationHandle,
-    vendor::discovery::CurrentTools,
+    tools::discovery,
 };
 
-use super::EngineConfig;
 use super::session::run_session;
-use super::vendor_task::{VendorTask, spawn_vendor_worker};
+use super::{EngineConfig, ToolsConfig, located_tools};
 
-/// How long shutdown waits for the vendor worker to observe cancellation and
-/// unwind through its own staging cleanup before abandoning the thread to
-/// process exit. Cancellation is observed between download chunks,
-/// so anything slower than this is a wedged network read.
-const VENDOR_SHUTDOWN_WAIT: Duration = Duration::from_secs(5);
-
-const VENDOR_SHUTDOWN_POLL: Duration = Duration::from_millis(25);
-
+/// The cancellation registry Force Stop reaches into. One run is active at a
+/// time; its scope owns the probe cancellation every ffprobe in the run
+/// answers to, and the adapter handle for whichever encode, search, or
+/// remux is in flight. A force flag latched before a scope opens cancels the
+/// scope on entry, so no run can slip in unnoticed.
 #[derive(Clone)]
 pub(super) struct ActiveCancellation {
     state: Arc<Mutex<CancellationState>>,
@@ -39,7 +32,23 @@ pub(super) struct ActiveCancellation {
 
 pub(super) struct CancellationState {
     force_stopping: bool,
-    slot: Option<(RunId, ActiveJobCancellation)>,
+    active: Option<ActiveRun>,
+    probe: Option<ProcessCancellation>,
+}
+
+struct ActiveRun {
+    run_id: RunId,
+    probes: ProcessCancellation,
+    adapter: Option<ActiveJobCancellation>,
+}
+
+impl ActiveRun {
+    fn cancel(&self) {
+        self.probes.cancel();
+        if let Some(adapter) = &self.adapter {
+            adapter.cancel();
+        }
+    }
 }
 
 #[derive(Clone)]
@@ -62,83 +71,159 @@ impl ActiveCancellation {
         Self {
             state: Arc::new(Mutex::new(CancellationState {
                 force_stopping: false,
-                slot: None,
+                active: None,
+                probe: None,
             })),
         }
     }
 
-    pub(super) fn register(
-        &self,
-        run_id: RunId,
-        handle: ActiveJobCancellation,
-    ) -> CancellationRegistration<'_> {
-        let mut state = match self.state.lock() {
-            Ok(state) => state,
-            Err(poisoned) => poisoned.into_inner(),
-        };
-        state.slot = Some((run_id, handle.clone()));
+    /// Opens the cancellation scope for one run, from its reservation through
+    /// its terminal outcome. The returned scope hands out the probe
+    /// cancellation; there is no other way to obtain one inside a session.
+    pub(super) fn begin_run(&self, run_id: RunId) -> RunScope<'_> {
+        let probes = ProcessCancellation::new();
+        let mut state = self.lock();
         if state.force_stopping {
-            handle.cancel();
+            probes.cancel();
         }
-        CancellationRegistration {
+        state.active = Some(ActiveRun {
+            run_id,
+            probes: probes.clone(),
+            adapter: None,
+        });
+        RunScope {
             cancellation: self,
             run_id,
+            probes,
         }
     }
 
-    fn clear(&self, run_id: RunId) {
-        let mut state = match self.state.lock() {
-            Ok(state) => state,
-            Err(poisoned) => poisoned.into_inner(),
-        };
+    fn end_run(&self, run_id: RunId) {
+        let mut state = self.lock();
         if state
-            .slot
+            .active
             .as_ref()
-            .is_some_and(|(active, _)| *active == run_id)
+            .is_some_and(|run| run.run_id == run_id)
         {
-            state.slot = None;
+            state.active = None;
         }
+    }
+
+    fn set_adapter(&self, run_id: RunId, handle: Option<ActiveJobCancellation>) {
+        let mut state = self.lock();
+        let force_stopping = state.force_stopping;
+        if let Some(run) = state.active.as_mut()
+            && run.run_id == run_id
+        {
+            run.adapter = handle;
+            if force_stopping {
+                run.cancel();
+            }
+        }
+    }
+
+    /// Registers the session-start probe so force-stop and shutdown reach
+    /// it; the returned guard unregisters on drop.
+    pub(super) fn register_probe(
+        &self,
+        cancellation: &ProcessCancellation,
+    ) -> ProbeRegistration<'_> {
+        let mut state = self.lock();
+        state.probe = Some(cancellation.clone());
+        if state.force_stopping {
+            cancellation.cancel();
+        }
+        ProbeRegistration { cancellation: self }
+    }
+
+    fn clear_probe(&self) {
+        let mut state = self.lock();
+        state.probe = None;
     }
 
     fn force(&self, run_id: Option<RunId>) {
-        let mut state = match self.state.lock() {
-            Ok(state) => state,
-            Err(poisoned) => poisoned.into_inner(),
-        };
+        let mut state = self.lock();
         state.force_stopping = true;
-        if let Some((active, handle)) = state.slot.as_ref()
-            && run_id.is_none_or(|expected| expected == *active)
+        if let Some(probe) = &state.probe {
+            probe.cancel();
+        }
+        if let Some(run) = state.active.as_ref()
+            && run_id.is_none_or(|expected| expected == run.run_id)
         {
-            handle.cancel();
+            run.cancel();
         }
     }
 
     fn reset(&self) {
-        let mut state = match self.state.lock() {
-            Ok(state) => state,
-            Err(poisoned) => poisoned.into_inner(),
-        };
+        let mut state = self.lock();
         state.force_stopping = false;
-        state.slot = None;
+        state.active = None;
+        state.probe = None;
     }
 
     fn is_force_stopping(&self) -> bool {
-        let state = match self.state.lock() {
+        self.lock().force_stopping
+    }
+
+    fn lock(&self) -> MutexGuard<'_, CancellationState> {
+        match self.state.lock() {
             Ok(state) => state,
             Err(poisoned) => poisoned.into_inner(),
-        };
-        state.force_stopping
+        }
     }
 }
 
-pub(super) struct CancellationRegistration<'a> {
+/// The active run's cancellation scope. Dropping it closes the run.
+pub(super) struct RunScope<'a> {
+    cancellation: &'a ActiveCancellation,
+    run_id: RunId,
+    probes: ProcessCancellation,
+}
+
+impl RunScope<'_> {
+    /// The cancellation every supervised probe in this run must be given.
+    pub(super) fn probes(&self) -> &ProcessCancellation {
+        &self.probes
+    }
+
+    /// Registers the in-flight adapter job; the registration lasts until
+    /// the returned guard drops.
+    pub(super) fn register_adapter(
+        &self,
+        handle: ActiveJobCancellation,
+    ) -> AdapterRegistration<'_> {
+        self.cancellation.set_adapter(self.run_id, Some(handle));
+        AdapterRegistration {
+            cancellation: self.cancellation,
+            run_id: self.run_id,
+        }
+    }
+}
+
+impl Drop for RunScope<'_> {
+    fn drop(&mut self) {
+        self.cancellation.end_run(self.run_id);
+    }
+}
+
+pub(super) struct AdapterRegistration<'a> {
     cancellation: &'a ActiveCancellation,
     run_id: RunId,
 }
 
-impl Drop for CancellationRegistration<'_> {
+impl Drop for AdapterRegistration<'_> {
     fn drop(&mut self) {
-        self.cancellation.clear(self.run_id);
+        self.cancellation.set_adapter(self.run_id, None);
+    }
+}
+
+pub(super) struct ProbeRegistration<'a> {
+    cancellation: &'a ActiveCancellation,
+}
+
+impl Drop for ProbeRegistration<'_> {
+    fn drop(&mut self) {
+        self.cancellation.clear_probe();
     }
 }
 
@@ -147,14 +232,12 @@ pub(super) fn supervise(
     commands: CommandSender,
     runtime: Arc<AbAv1Runtime>,
     config: EngineConfig,
-    tools_slot: Arc<Mutex<Option<CurrentTools>>>,
+    tools_slot: Arc<Mutex<Option<LocatedTools>>>,
     next_runtime_id: u64,
 ) {
     let cancellation = ActiveCancellation::new();
-    let vendor_cancelled = Arc::new(AtomicBool::new(false));
     let next_id = Arc::new(AtomicU64::new(next_runtime_id));
     let mut worker: Option<thread::JoinHandle<()>> = None;
-    let mut vendor: Option<thread::JoinHandle<()>> = None;
     while let Ok(effect) = effects.recv() {
         match effect {
             Effect::StartWorker => {
@@ -217,29 +300,29 @@ pub(super) fn supervise(
                     }
                 }
             }
-            Effect::KillActiveRun { run_id } => cancellation.force(Some(run_id)),
-            // The reducer serializes vendor work through the activity state,
-            // so at most one runs; status flows back as commands, and the
-            // handle is kept so shutdown can join it with a bounded wait.
-            Effect::VendorInstall => {
-                reap_finished_vendor(&mut vendor);
-                vendor = spawn_vendor_worker(
-                    &commands,
-                    &config,
-                    &tools_slot,
-                    &vendor_cancelled,
-                    VendorTask::Install,
-                );
-            }
-            Effect::VendorCheck => {
-                reap_finished_vendor(&mut vendor);
-                vendor = spawn_vendor_worker(
-                    &commands,
-                    &config,
-                    &tools_slot,
-                    &vendor_cancelled,
-                    VendorTask::Check,
-                );
+            Effect::KillActiveRun { run_id } => cancellation.force(run_id),
+            // Discovery is a handful of file-type checks, so it runs inline.
+            // The slot is replaced before the reducer hears of the result, so
+            // a session starting on the new report finds the new tools.
+            Effect::DiscoverTools { configured } => {
+                let ToolsConfig::Discover(environment) = &config.tools else {
+                    continue;
+                };
+                let availability = discovery::discover(environment, &configured);
+                {
+                    let mut slot = match tools_slot.lock() {
+                        Ok(slot) => slot,
+                        Err(poisoned) => poisoned.into_inner(),
+                    };
+                    *slot = located_tools(&availability);
+                }
+                match commands.submit(Command::System(SystemCommand::ToolsDiscovered {
+                    availability,
+                })) {
+                    Ok(Reply::Accepted) => {}
+                    Ok(reply) => tracing::error!("tool rediscovery was not accepted: {reply:?}"),
+                    Err(error) => tracing::error!("failed to report rediscovered tools: {error}"),
+                }
             }
             Effect::WriteSettings { .. } => {
                 report_worker_crash(
@@ -250,61 +333,19 @@ pub(super) fn supervise(
             }
             Effect::StopDriver => {
                 cancellation.force(None);
-                // Flag first so a mid-download vendor worker starts unwinding
-                // through its own cleanup while the session worker is joined;
-                // the bounded join below reclaims it.
-                vendor_cancelled.store(true, Ordering::Relaxed);
                 break;
             }
         }
     }
-    // Reached on StopDriver (both flags already set) or when the driver died
-    // and the effect channel disconnected. Force-flag both workers again so
-    // the joins below are winding-down waits, never an hours-long encode.
+    // Reached on StopDriver (already force-flagged) or when the driver died
+    // and the effect channel disconnected. Force-flag the worker again so
+    // the join below is a winding-down wait, never an hours-long encode.
     cancellation.force(None);
-    vendor_cancelled.store(true, Ordering::Relaxed);
     if let Some(worker) = worker
         && worker.join().is_err()
     {
         report_worker_crash(&commands, "session worker panicked during shutdown");
     }
-    if let Some(vendor) = vendor
-        && !join_within(vendor, VENDOR_SHUTDOWN_WAIT, VENDOR_SHUTDOWN_POLL)
-    {
-        tracing::warn!(
-            "vendor worker still running after {VENDOR_SHUTDOWN_WAIT:?}; abandoning it to \
-             process exit"
-        );
-    }
-}
-
-/// The reducer only schedules new vendor work after the previous worker
-/// reported a terminal activity — its last act before exiting — so this join
-/// reclaims a thread that is already unwinding.
-fn reap_finished_vendor(vendor: &mut Option<thread::JoinHandle<()>>) {
-    if let Some(previous) = vendor.take()
-        && previous.join().is_err()
-    {
-        tracing::error!("previous vendor worker panicked");
-    }
-}
-
-/// Bounded join for shutdown: std has no timed join, so completion is polled.
-/// Returns false when the thread outlived `wait` and was left detached —
-/// blocking shutdown on a wedged network read would be worse than abandoning
-/// the thread to process exit.
-fn join_within(handle: thread::JoinHandle<()>, wait: Duration, poll: Duration) -> bool {
-    let deadline = Instant::now() + wait;
-    while !handle.is_finished() {
-        if Instant::now() >= deadline {
-            return false;
-        }
-        thread::sleep(poll);
-    }
-    if handle.join().is_err() {
-        tracing::error!("thread panicked while being joined during shutdown");
-    }
-    true
 }
 
 fn report_worker_crash(commands: &CommandSender, message: &str) {
@@ -319,37 +360,76 @@ fn report_worker_crash(commands: &CommandSender, message: &str) {
 
 #[cfg(test)]
 mod tests {
-    use std::time::Duration;
-
     use crfty_core::RunId;
 
-    use super::{ActiveCancellation, ActiveJobCancellation, join_within};
-    use crate::ab_av1::{CancelMode, CancellationHandle};
+    use super::{ActiveCancellation, ActiveJobCancellation};
+    use crate::{
+        ab_av1::{CancelMode, CancellationHandle},
+        process_supervisor::ProcessCancellation,
+    };
 
     #[test]
-    fn join_within_reclaims_a_prompt_thread_and_abandons_a_wedged_one() {
-        let prompt = std::thread::spawn(|| {});
-        assert!(join_within(
-            prompt,
-            Duration::from_secs(1),
-            Duration::from_millis(1),
-        ));
-
-        // Stands in for a wedged network read: never observes cancellation.
-        let wedged = std::thread::spawn(|| std::thread::sleep(Duration::from_secs(2)));
-        assert!(!join_within(
-            wedged,
-            Duration::from_millis(20),
-            Duration::from_millis(1),
-        ));
+    fn session_probe_registration_observes_latched_cancellation() {
+        let cancellation = ActiveCancellation::new();
+        let probe = ProcessCancellation::new();
+        let registration = cancellation.register_probe(&probe);
+        cancellation.force(None);
+        assert!(probe.is_cancelled());
+        drop(registration);
+        let late = ProcessCancellation::new();
+        let late_registration = cancellation.register_probe(&late);
+        assert!(late.is_cancelled());
+        drop(late_registration);
+        cancellation.reset();
+        let fresh = ProcessCancellation::new();
+        let _fresh_registration = cancellation.register_probe(&fresh);
+        assert!(!fresh.is_cancelled());
     }
 
     #[test]
     fn force_before_registration_cannot_miss_the_child() {
         let cancellation = ActiveCancellation::new();
         cancellation.force(None);
+        let run = cancellation.begin_run(RunId(7));
+        assert!(run.probes().is_cancelled());
         let (handle, receiver) = CancellationHandle::fixture();
-        let _registration = cancellation.register(RunId(7), ActiveJobCancellation::AbAv1(handle));
+        let _registration = run.register_adapter(ActiveJobCancellation::AbAv1(handle));
         assert_eq!(*receiver.borrow(), Some(CancelMode::Force));
+    }
+
+    #[test]
+    fn force_reaches_the_active_run_probes_and_adapter_and_every_later_scope() {
+        let cancellation = ActiveCancellation::new();
+        let run = cancellation.begin_run(RunId(3));
+        let (handle, receiver) = CancellationHandle::fixture();
+        let registration = run.register_adapter(ActiveJobCancellation::AbAv1(handle));
+        assert!(!run.probes().is_cancelled());
+
+        cancellation.force(Some(RunId(3)));
+        assert!(run.probes().is_cancelled());
+        assert_eq!(*receiver.borrow(), Some(CancelMode::Force));
+
+        // A probe that runs after the adapter registration is released, such
+        // as output verification, still sees the same cancelled signal.
+        drop(registration);
+        assert!(run.probes().is_cancelled());
+        drop(run);
+        assert!(cancellation.begin_run(RunId(4)).probes().is_cancelled());
+    }
+
+    #[test]
+    fn force_for_another_run_leaves_the_active_run_alone() {
+        let cancellation = ActiveCancellation::new();
+        let run = cancellation.begin_run(RunId(3));
+        cancellation.force(Some(RunId(9)));
+        assert!(!run.probes().is_cancelled());
+    }
+
+    #[test]
+    fn reset_clears_the_latch_for_the_next_worker() {
+        let cancellation = ActiveCancellation::new();
+        cancellation.force(None);
+        cancellation.reset();
+        assert!(!cancellation.begin_run(RunId(1)).probes().is_cancelled());
     }
 }

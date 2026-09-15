@@ -102,6 +102,7 @@ function settings(hardwareDecode: boolean): Settings {
       anonymize_history: false,
     },
     log_folder: null,
+    tools: { ffmpeg: null, ffprobe: null },
   };
 }
 

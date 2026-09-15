@@ -16,15 +16,19 @@ const MIN_VERIFIED_OUTPUT_SIZE: u64 = 1024;
 
 use crate::{
     filesystem::sync_parent as sync_parent_directory,
-    media::{MediaInspector, destructive_identity},
+    media::{MediaError, MediaInspector, destructive_identity},
+    process_supervisor::{BoundedOutput, ProcessCancellation},
 };
 
+/// Filesystem and media inspection behind the output transaction.
+/// `inspect_file` is metadata only and must never spawn a process; the two
+/// media methods may run ffprobe and report its typed outcome.
 pub trait ArtifactInspector {
     fn inspect_file(&self, path: &Path) -> io::Result<DestructiveIdentity>;
 
-    fn inspect_media(&self, path: &Path) -> io::Result<ArtifactIdentity>;
+    fn inspect_media(&self, path: &Path) -> Result<ArtifactIdentity, MediaError>;
 
-    fn verify_output(&self, path: &Path) -> io::Result<ArtifactIdentity>;
+    fn verify_output(&self, path: &Path) -> Result<ArtifactIdentity, MediaError>;
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -45,18 +49,34 @@ pub const fn parent_sync_support() -> ParentSyncSupport {
 #[derive(Debug)]
 pub struct OutputError {
     context: &'static str,
-    source: io::Error,
+    source: MediaError,
 }
 
 impl OutputError {
-    fn new(context: &'static str, source: io::Error) -> Self {
-        Self { context, source }
+    fn new(context: &'static str, source: impl Into<MediaError>) -> Self {
+        Self {
+            context,
+            source: source.into(),
+        }
     }
 
     #[must_use]
     pub fn is_destination_exists(&self) -> bool {
         self.context == "output destination already exists"
-            && self.source.kind() == io::ErrorKind::AlreadyExists
+            && matches!(&self.source, MediaError::Io(error) if error.kind() == io::ErrorKind::AlreadyExists)
+    }
+
+    /// The inspection was interrupted by cancellation rather than failing:
+    /// the caller reports a stop, not a failure.
+    #[must_use]
+    pub fn is_cancelled(&self) -> bool {
+        self.source.is_cancelled()
+    }
+
+    /// The failed tool run's bounded stderr tail, unscrubbed.
+    #[must_use]
+    pub fn diagnostic(&self) -> Option<&BoundedOutput> {
+        self.source.diagnostic()
     }
 }
 
@@ -244,16 +264,37 @@ impl<I: ArtifactInspector> OutputManager<I> {
         &self,
         transaction: &OutputTransaction,
     ) -> Result<OutputDelta, OutputError> {
-        if !matches!(transaction.state, OutputState::StagingCreated { .. }) {
+        let staging_identity = match self.inspector.inspect_file(&transaction.staging) {
+            Ok(identity) => identity,
+            // The adapter may have already removed its partial output.
+            // Missing Ready staging can instead mean promotion happened.
+            Err(error)
+                if error.kind() == io::ErrorKind::NotFound
+                    && matches!(
+                        transaction.state,
+                        OutputState::Started | OutputState::StagingCreated { .. }
+                    ) =>
+            {
+                return Ok(OutputDelta::Abandoned {
+                    run_id: transaction.run_id,
+                });
+            }
+            Err(error) => {
+                return Err(OutputError::new(
+                    "failed to inspect abandoned staging",
+                    error,
+                ));
+            }
+        };
+        if !transaction.can_abandon_staging(&staging_identity) {
             return Err(OutputError::new(
-                "output transaction cannot be abandoned from its current state",
-                io::Error::new(io::ErrorKind::InvalidInput, "invalid output state"),
+                "staging ownership does not authorize abandonment",
+                io::Error::new(
+                    io::ErrorKind::InvalidData,
+                    "staging identity or state changed",
+                ),
             ));
         }
-        let staging_identity = self
-            .inspector
-            .inspect_file(&transaction.staging)
-            .map_err(|error| OutputError::new("failed to inspect abandoned staging", error))?;
         Ok(OutputDelta::AbandonStagingIntent {
             run_id: transaction.run_id,
             staging_identity,
@@ -423,7 +464,7 @@ fn inspect_present_media<I: ArtifactInspector>(
     path: &Path,
     observation: &DestructiveObservation,
     required: bool,
-) -> io::Result<Option<ArtifactIdentity>> {
+) -> Result<Option<ArtifactIdentity>, MediaError> {
     if required && matches!(observation, DestructiveObservation::Present(_)) {
         inspector.inspect_media(path).map(Some)
     } else {
@@ -497,17 +538,17 @@ impl ArtifactInspector for FixtureByteInspector {
         destructive_identity(path)
     }
 
-    fn inspect_media(&self, path: &Path) -> io::Result<ArtifactIdentity> {
-        byte_artifact_identity(path)
+    fn inspect_media(&self, path: &Path) -> Result<ArtifactIdentity, MediaError> {
+        Ok(byte_artifact_identity(path)?)
     }
 
-    fn verify_output(&self, path: &Path) -> io::Result<ArtifactIdentity> {
+    fn verify_output(&self, path: &Path) -> Result<ArtifactIdentity, MediaError> {
         let identity = byte_artifact_identity(path)?;
         if identity.destructive.size == 0 {
-            return Err(io::Error::new(
-                io::ErrorKind::InvalidData,
-                "output is empty",
-            ));
+            return Err(MediaError::OutputTooSmall {
+                size_bytes: 0,
+                minimum_bytes: 1,
+            });
         }
         Ok(identity)
     }
@@ -526,15 +567,20 @@ fn byte_artifact_identity(path: &Path) -> io::Result<ArtifactIdentity> {
     })
 }
 
+/// The production inspector. Every ffprobe it runs answers to the
+/// cancellation it was built with, so a force-stopped run reaches its
+/// output-verification probes as well as its encode.
 #[derive(Debug, Clone)]
 pub(crate) struct MediaArtifactInspector {
     media: MediaInspector,
+    cancellation: ProcessCancellation,
 }
 
 impl MediaArtifactInspector {
-    pub(crate) fn new(ffprobe: PathBuf) -> Self {
+    pub(crate) fn new(ffprobe: PathBuf, cancellation: ProcessCancellation) -> Self {
         Self {
             media: MediaInspector::new(ffprobe),
+            cancellation,
         }
     }
 }
@@ -544,11 +590,12 @@ impl ArtifactInspector for MediaArtifactInspector {
         destructive_identity(path)
     }
 
-    fn inspect_media(&self, path: &Path) -> io::Result<ArtifactIdentity> {
-        self.media.inspect_artifact(path)
+    fn inspect_media(&self, path: &Path) -> Result<ArtifactIdentity, MediaError> {
+        self.media.inspect_artifact(path, &self.cancellation)
     }
 
-    fn verify_output(&self, path: &Path) -> io::Result<ArtifactIdentity> {
-        self.media.verify_av1(path, MIN_VERIFIED_OUTPUT_SIZE)
+    fn verify_output(&self, path: &Path) -> Result<ArtifactIdentity, MediaError> {
+        self.media
+            .verify_av1(path, MIN_VERIFIED_OUTPUT_SIZE, &self.cancellation)
     }
 }

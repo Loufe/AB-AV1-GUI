@@ -24,6 +24,14 @@ on:
 permissions:
   contents: read
 
+# FFmpeg is user-supplied in the product (ADR-023); these suites need a real
+# build with libsvtav1 and libvmaf, so the job installs BtbN's rolling n8.1
+# release at run time. The release tag is stable while its bytes advance,
+# which is why no checksum or cache is kept: the suites verify behaviour, not
+# an artifact.
+env:
+  FFMPEG_RELEASE_BASE: https://github.com/BtbN/FFmpeg-Builds/releases/download/latest
+
 jobs:
   media-contract:
     name: Real FFmpeg (${{ matrix.os }})
@@ -39,39 +47,27 @@ jobs:
         run: rustup toolchain install stable --profile minimal
       - name: Select stable Rust
         run: rustup default stable
-      - name: Cache pinned FFmpeg
-        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9
-        with:
-          path: .ci/ffmpeg
-          key: ffmpeg-${{ runner.os }}-autobuild-2026-07-19-13-12
-      - name: Install pinned FFmpeg on Linux
+      - name: Install FFmpeg on Linux
         if: runner.os == 'Linux'
         shell: bash
         run: |
-          if [[ ! -x .ci/ffmpeg/bin/ffmpeg ]]; then
-            archive="$RUNNER_TEMP/ffmpeg.tar.xz"
-            curl --fail --location --retry 3 --output "$archive" "https://github.com/BtbN/FFmpeg-Builds/releases/download/autobuild-2026-07-19-13-12/ffmpeg-n8.1.2-22-g94138f6973-linux64-gpl-8.1.tar.xz"
-            echo "166375e7f8b1f6963949a61a83ffffe858eba742f6326180b8ff3bc58b205c72  $archive" | sha256sum --check
-            mkdir -p .ci/ffmpeg
-            tar --extract --xz --file "$archive" --directory .ci/ffmpeg --strip-components=1
-          fi
-      - name: Install pinned FFmpeg on Windows
+          archive="$RUNNER_TEMP/ffmpeg.tar.xz"
+          curl --fail --location --retry 3 --output "$archive" "$FFMPEG_RELEASE_BASE/ffmpeg-n8.1-latest-linux64-gpl-8.1.tar.xz"
+          mkdir -p .ci/ffmpeg
+          tar --extract --xz --file "$archive" --directory .ci/ffmpeg --strip-components=1
+          .ci/ffmpeg/bin/ffmpeg -hide_banner -version | head -n 1
+      - name: Install FFmpeg on Windows
         if: runner.os == 'Windows'
         shell: pwsh
         run: |
-          if (-not (Test-Path .ci/ffmpeg/bin/ffmpeg.exe)) {
-            $archive = Join-Path $env:RUNNER_TEMP 'ffmpeg.zip'
-            $extract = Join-Path $env:RUNNER_TEMP 'ffmpeg-extract'
-            Invoke-WebRequest -Uri 'https://github.com/BtbN/FFmpeg-Builds/releases/download/autobuild-2026-07-19-13-12/ffmpeg-n8.1.2-22-g94138f6973-win64-gpl-8.1.zip' -OutFile $archive
-            $actual = (Get-FileHash -Algorithm SHA256 $archive).Hash.ToLowerInvariant()
-            if ($actual -ne '9db2860af5d1c536ed7fcb7ed84fa4ef80d188d1396d1cdf8cad180137510f3f') {
-              throw "FFmpeg checksum mismatch: $actual"
-            }
-            Expand-Archive -Path $archive -DestinationPath $extract
-            New-Item -ItemType Directory -Force -Path .ci/ffmpeg | Out-Null
-            $root = Get-ChildItem -Path $extract -Directory | Select-Object -First 1
-            Move-Item -Path (Join-Path $root.FullName '*') -Destination .ci/ffmpeg
-          }
+          $archive = Join-Path $env:RUNNER_TEMP 'ffmpeg.zip'
+          $extract = Join-Path $env:RUNNER_TEMP 'ffmpeg-extract'
+          Invoke-WebRequest -Uri "$env:FFMPEG_RELEASE_BASE/ffmpeg-n8.1-latest-win64-gpl-8.1.zip" -OutFile $archive
+          Expand-Archive -Path $archive -DestinationPath $extract
+          New-Item -ItemType Directory -Force -Path .ci/ffmpeg | Out-Null
+          $root = Get-ChildItem -Path $extract -Directory | Select-Object -First 1
+          Move-Item -Path (Join-Path $root.FullName '*') -Destination .ci/ffmpeg
+          & .ci/ffmpeg/bin/ffmpeg.exe -hide_banner -version | Select-Object -First 1
       - name: Run real-media contract on Linux
         if: runner.os == 'Linux'
         env:
@@ -84,18 +80,19 @@ jobs:
           CRFTY_FFMPEG: ${{ github.workspace }}/.ci/ffmpeg/bin/ffmpeg.exe
           CRFTY_FFPROBE: ${{ github.workspace }}/.ci/ffmpeg/bin/ffprobe.exe
         run: cargo test -p crfty-engine --all-features --locked --test ab_av1_real_media -- --ignored --nocapture
-      # The vendor-native contract copies these binaries into a managed-install
-      # layout under a spaces + Unicode directory and runs discovery + a full
-      # convert from there; the env vars only locate the source binaries.
-      - name: Run vendor-native contract on Linux
+      # The native tool contract copies these binaries into a spaces + Unicode
+      # directory, configures them through Settings paths with no PATH, and
+      # runs the session-start probe plus a full convert from there; the env
+      # vars only locate the source binaries.
+      - name: Run native tool contract on Linux
         if: runner.os == 'Linux'
         env:
           CRFTY_FFMPEG: ${{ github.workspace }}/.ci/ffmpeg/bin/ffmpeg
           CRFTY_FFPROBE: ${{ github.workspace }}/.ci/ffmpeg/bin/ffprobe
-        run: cargo test -p crfty-engine --all-features --locked --test vendor_native -- --ignored --nocapture
-      - name: Run vendor-native contract on Windows
+        run: cargo test -p crfty-engine --all-features --locked --test tools_native -- --ignored --nocapture
+      - name: Run native tool contract on Windows
         if: runner.os == 'Windows'
         env:
           CRFTY_FFMPEG: ${{ github.workspace }}/.ci/ffmpeg/bin/ffmpeg.exe
           CRFTY_FFPROBE: ${{ github.workspace }}/.ci/ffmpeg/bin/ffprobe.exe
-        run: cargo test -p crfty-engine --all-features --locked --test vendor_native -- --ignored --nocapture
+        run: cargo test -p crfty-engine --all-features --locked --test tools_native -- --ignored --nocapture

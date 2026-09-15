@@ -51,7 +51,7 @@ use crfty_engine::ab_av1::{
     AbAv1Runtime, EncodeRequest, FaultInjection, JobTerminal, SearchRequest,
 };
 use crfty_engine::coordinator::{EngineConfig, EngineRuntime};
-use crfty_engine::vendor::discovery::MediaTools;
+use crfty_engine::tools::MediaTools;
 
 #[test]
 #[ignore = "requires CRFTY_FFMPEG and CRFTY_FFPROBE with libsvtav1 and libvmaf"]
@@ -334,19 +334,24 @@ fn real_engine_config(directory: &Path, tools: &MediaTools) -> EngineConfig {
     EngineConfig {
         journal_path: directory.join("state.jsonl"),
         config_path: directory.join("config.json"),
-        vendor_root: directory.join("vendor"),
         tools: crfty_engine::coordinator::ToolsConfig::Fixed(
-            crfty_engine::vendor::discovery::DiscoveredTools::Available(
-                crfty_engine::vendor::discovery::CurrentTools {
-                    media: tools.clone(),
-                    source: crfty_core::ToolSource::Explicit,
-                    revisions: crfty_core::ToolRevisions {
-                        ab_av1: "real-contract".to_owned(),
-                        ffmpeg: "real-contract".to_owned(),
-                        encoder: "real-contract".to_owned(),
+            crfty_engine::coordinator::FixedTools {
+                tools: crfty_core::LocatedTools {
+                    ffmpeg: crfty_core::LocatedTool {
+                        source: crfty_core::ToolSource::Environment,
+                        path: tools.ffmpeg.clone(),
+                    },
+                    ffprobe: crfty_core::LocatedTool {
+                        source: crfty_core::ToolSource::Environment,
+                        path: tools.ffprobe.clone(),
                     },
                 },
-            ),
+                revisions: crfty_core::ToolRevisions {
+                    ab_av1: "real-contract".to_owned(),
+                    ffmpeg: "real-contract".to_owned(),
+                    encoder: "real-contract".to_owned(),
+                },
+            },
         ),
         execution: ExecutionSettings {
             requested_target: REAL_CONTRACT_TARGET,

@@ -22,17 +22,11 @@ export async function importHistory(path: string): Promise<ImportSummary> {
   return result.data;
 }
 
-export async function vendorCheck(): Promise<void> {
-  const result = await commands.vendorCheck();
+/** Re-run media tool discovery; the result arrives as ToolsChanged on the stream. */
+export async function recheckTools(): Promise<void> {
+  const result = await commands.recheckTools();
   if (result.status === "error") {
-    throw new Error(`dependency check failed (${result.error.code}): ${result.error.message}`);
-  }
-}
-
-export async function vendorInstall(): Promise<void> {
-  const result = await commands.vendorInstall();
-  if (result.status === "error") {
-    throw new Error(`dependency install failed (${result.error.code}): ${result.error.message}`);
+    throw new Error(`tool check failed (${result.error.code}): ${result.error.message}`);
   }
 }
 

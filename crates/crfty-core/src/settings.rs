@@ -64,6 +64,36 @@ pub struct PrivacySettings {
     pub anonymize_history: bool,
 }
 
+/// Operator-configured locations of the external media tools. A configured
+/// path is an explicit choice: discovery uses it as given and fails closed
+/// when it does not name a file, never falling through to the search path.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, specta::Type)]
+#[serde(deny_unknown_fields)]
+pub struct ToolPathSettings {
+    pub ffmpeg: Option<PathBuf>,
+    pub ffprobe: Option<PathBuf>,
+}
+
+impl ToolPathSettings {
+    fn validate(&self) -> Result<(), &'static str> {
+        if self
+            .ffmpeg
+            .as_deref()
+            .is_some_and(|path| !path.is_absolute())
+        {
+            return Err("configured ffmpeg path must be absolute");
+        }
+        if self
+            .ffprobe
+            .as_deref()
+            .is_some_and(|path| !path.is_absolute())
+        {
+            return Err("configured ffprobe path must be absolute");
+        }
+        Ok(())
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, specta::Type)]
 #[serde(deny_unknown_fields)]
 pub struct Settings {
@@ -73,6 +103,7 @@ pub struct Settings {
     pub hardware_decode: bool,
     pub privacy: PrivacySettings,
     pub log_folder: Option<PathBuf>,
+    pub tools: ToolPathSettings,
 }
 
 impl Settings {
@@ -91,7 +122,7 @@ impl Settings {
         {
             return Err("default separate output folder is required in separate-folder mode");
         }
-        Ok(())
+        self.tools.validate()
     }
 }
 
@@ -111,6 +142,7 @@ impl Default for Settings {
             hardware_decode: true,
             privacy: PrivacySettings::default(),
             log_folder: None,
+            tools: ToolPathSettings::default(),
         }
     }
 }

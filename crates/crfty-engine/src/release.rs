@@ -6,17 +6,68 @@
 //! when either side does not parse (which is every pre-release, so an alpha
 //! reports any differently-tagged release as an update).
 
-use std::io::Read;
+use std::{io::Read, time::Duration};
 
 use serde::Deserialize;
-
-use crate::vendor::download::{Fetch, HttpFetch};
 
 /// Still the V2 repository name; changes when the repository is renamed for
 /// the CRFty release.
 const RELEASE_API_URL: &str = "https://api.github.com/repos/Loufe/AB-AV1-GUI/releases/latest";
 /// Far above any real release payload; bounds a misbehaving server.
 const RELEASE_BODY_CAP_BYTES: u64 = 1024 * 1024;
+const CONNECT_TIMEOUT: Duration = Duration::from_secs(30);
+const REQUEST_TIMEOUT: Duration = Duration::from_secs(30);
+
+/// The response body for a URL.
+struct FetchStream {
+    reader: Box<dyn Read>,
+}
+
+/// Transport abstraction: production fetches over HTTPS, tests serve
+/// crafted responses from memory without any network. This is the only
+/// network client in the product; media tools are never downloaded
+/// (ADR-023).
+trait Fetch {
+    fn fetch(&self, url: &str) -> Result<FetchStream, String>;
+}
+
+struct HttpFetch {
+    client: reqwest::blocking::Client,
+}
+
+impl HttpFetch {
+    fn new() -> Result<Self, String> {
+        // reqwest is built without a default TLS provider; ring is installed
+        // process-wide here. An Err means a provider is already installed,
+        // which is exactly the state this call wants.
+        let _already_installed = rustls::crypto::ring::default_provider().install_default();
+        let client = reqwest::blocking::Client::builder()
+            .user_agent(concat!("crfty/", env!("CARGO_PKG_VERSION")))
+            .https_only(true)
+            .connect_timeout(CONNECT_TIMEOUT)
+            .timeout(REQUEST_TIMEOUT)
+            .build()
+            .map_err(|error| format!("failed to build the release check client: {error}"))?;
+        Ok(Self { client })
+    }
+}
+
+impl Fetch for HttpFetch {
+    fn fetch(&self, url: &str) -> Result<FetchStream, String> {
+        let response = self
+            .client
+            .get(url)
+            .send()
+            .map_err(|error| format!("the release request failed: {error}"))?;
+        let status = response.status();
+        if !status.is_success() {
+            return Err(format!("the release server answered {status}"));
+        }
+        Ok(FetchStream {
+            reader: Box::new(response),
+        })
+    }
+}
 
 /// Outcome of a successful check. `html_url` is the release page GitHub
 /// reported — the shell keeps it engine-side of the webview and opens it on
@@ -90,16 +141,13 @@ fn parse_dotted(version: &str) -> Option<Vec<u64>> {
 mod tests {
     use std::io::Cursor;
 
-    use crate::vendor::download::{Fetch, FetchStream};
-
-    use super::{check_latest_release_with, is_up_to_date};
+    use super::{Fetch, FetchStream, check_latest_release_with, is_up_to_date};
 
     struct StaticFetch(&'static str);
 
     impl Fetch for StaticFetch {
         fn fetch(&self, _url: &str) -> Result<FetchStream, String> {
             Ok(FetchStream {
-                total: None,
                 reader: Box::new(Cursor::new(self.0.as_bytes())),
             })
         }
@@ -109,7 +157,7 @@ mod tests {
 
     impl Fetch for FailingFetch {
         fn fetch(&self, _url: &str) -> Result<FetchStream, String> {
-            Err("the download server answered 403 Forbidden".to_owned())
+            Err("the release server answered 403 Forbidden".to_owned())
         }
     }
 

@@ -25,7 +25,7 @@ CI installs Chromium and its Linux system dependencies explicitly with the Playw
 
 Pure tests stay beside their source as `*.test.ts`. Tests that require a real DOM, focus, keyboard input, portals, or React lifecycle behaviour use `*.browser.test.tsx`; shared browser helpers live in `src/test/browser/`. Use `renderApp` for the production root providers and isolated Zustand state, and `installTauriMock` to exercise generated commands and stream subscriptions without mocking `src/lib/bindings.ts`.
 
-`pnpm tauri:dev` builds `crates/crfty-shell` and opens the window against the dev server; Linux needs the Tauri webkit2gtk prerequisites installed (see `.github/workflows/rust.yml` for the package list). Without ffmpeg/ffprobe on PATH (or `CRFTY_FFMPEG`/`CRFTY_FFPROBE` set) the app opens degraded: the stream reports why and commands fail with `engine_unavailable`. Under WSLg the webview crashes on the GPU path — launch with `WEBKIT_DISABLE_DMABUF_RENDERER=1 LIBGL_ALWAYS_SOFTWARE=1 pnpm tauri:dev`.
+`pnpm tauri:dev` builds `crates/crfty-shell` and opens the window against the dev server; Linux needs the Tauri webkit2gtk prerequisites installed (see `.github/workflows/rust.yml` for the package list). Without ffmpeg/ffprobe on PATH (or `CRFTY_FFMPEG`/`CRFTY_FFPROBE` set, or paths configured in Settings) the app opens degraded: the stream reports why, Settings shows install guidance, and media commands fail with `engine_unavailable`. Under WSLg the webview crashes on the GPU path — launch with `WEBKIT_DISABLE_DMABUF_RENDERER=1 LIBGL_ALWAYS_SOFTWARE=1 pnpm tauri:dev`.
 
 ## Layout
 

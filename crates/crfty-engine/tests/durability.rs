@@ -15,19 +15,24 @@ use crfty_core::{
     AnalysisIntent, AnalysisProfile, AnalysisResult, AppState, ArtifactIdentity, AudioCodec,
     AudioStreamMeta, ClaimId, Command, ContentKey, Crf, DestructiveIdentity, DurableDelta,
     DurableState, EphemeralDelta, ExecutionSettings, FailureFacts, FailureKind, FileSystemId,
-    FileTimeNs, HistoryCommand, ItemOutcome, JobPhase, JobProgress, MediaContainer,
-    MediaObservation, Operation, OutputDelta, OutputTarget, OverwriteDecision, PathBinding,
-    PathHash, QueueAddRequest, QueueCommand, QueueItemId, Replacement, Reply, RunId,
+    FileTimeNs, HistoryCommand, ItemOutcome, JobPhase, JobProgress, LocatedTool, LocatedTools,
+    MediaContainer, MediaObservation, Operation, OutputDelta, OutputTarget, OverwriteDecision,
+    PathBinding, PathHash, QueueAddRequest, QueueCommand, QueueItemId, Replacement, Reply, RunId,
     SearchMeasurement, SessionCommand, Settings, SettingsCommand, SystemCommand, Telemetry,
-    ToolAvailability, ToolRevisions, ToolSource, UnixMillis, VerdictKind, VideoCodec, VideoMeta,
-    VmafScore, VmafTarget, WorkerCommand, apply, corruption_signature, fold, replay,
+    ToolAvailability, ToolRevisions, ToolSource, ToolVerification, UnixMillis, VerdictKind,
+    VideoCodec, VideoMeta, VmafScore, VmafTarget, WorkerCommand, apply, corruption_signature, fold,
+    replay,
 };
 use crfty_engine::{
-    coordinator::{EngineConfig, EngineRuntime, PUBLIC_EVENT_CHANNEL_CAPACITY, ToolsConfig},
+    coordinator::{
+        EngineConfig, EngineRuntime, FixedTools, PUBLIC_EVENT_CHANNEL_CAPACITY, ToolsConfig,
+    },
     driver::{DriverEvent, DriverHandle, DriverStartError},
     journal::JournalWriter,
+    media::MediaError,
     output::{ArtifactInspector, FixtureByteInspector, OutputManager},
-    vendor::discovery::{CurrentTools, DiscoveredTools, MediaTools},
+    process_supervisor::BoundedOutput,
+    tools::MediaTools,
 };
 
 static TEMP_SEQUENCE: AtomicU64 = AtomicU64::new(0);
@@ -44,25 +49,43 @@ fn execution() -> ExecutionSettings {
     ExecutionSettings::production(profile, false)
 }
 
-fn fixture_tools(media: MediaTools) -> ToolsConfig {
-    ToolsConfig::Fixed(DiscoveredTools::Available(CurrentTools {
-        media,
-        source: ToolSource::System,
-        revisions: ToolRevisions {
-            ab_av1: "fixture".to_owned(),
-            ffmpeg: "fixture".to_owned(),
-            encoder: "fixture".to_owned(),
-        },
-    }))
+fn fixture_revisions() -> ToolRevisions {
+    ToolRevisions {
+        ab_av1: "fixture".to_owned(),
+        ffmpeg: "fixture".to_owned(),
+        encoder: "fixture".to_owned(),
+    }
 }
 
+fn fixture_located(media: MediaTools) -> LocatedTools {
+    LocatedTools {
+        ffmpeg: LocatedTool {
+            source: ToolSource::SearchPath,
+            path: media.ffmpeg,
+        },
+        ffprobe: LocatedTool {
+            source: ToolSource::SearchPath,
+            path: media.ffprobe,
+        },
+    }
+}
+
+fn fixture_tools(media: MediaTools) -> ToolsConfig {
+    ToolsConfig::Fixed(FixedTools {
+        tools: fixture_located(media),
+        revisions: fixture_revisions(),
+    })
+}
+
+/// Located tools for driver-only tests, where no process ever runs.
 fn fixture_available() -> ToolAvailability {
-    ToolAvailability::Available {
-        source: ToolSource::System,
-        revisions: ToolRevisions {
-            ab_av1: "fixture".to_owned(),
-            ffmpeg: "fixture".to_owned(),
-            encoder: "fixture".to_owned(),
+    ToolAvailability::Located {
+        tools: fixture_located(MediaTools {
+            ffmpeg: PathBuf::from("fixture-ffmpeg"),
+            ffprobe: PathBuf::from("fixture-ffprobe"),
+        }),
+        verification: ToolVerification::Verified {
+            revisions: fixture_revisions(),
         },
     }
 }
@@ -889,7 +912,6 @@ fn history_import_parks_compacts_adopts_and_reimports_as_noop() {
     for command in [
         Command::System(SystemCommand::ToolsDiscovered {
             availability: fixture_available(),
-            update_available: false,
         }),
         Command::Session(SessionCommand::Start),
     ] {
@@ -1037,7 +1059,6 @@ fn telemetry_pressure_coalesces_and_terminal_value_wins() {
             .commands
             .submit(Command::System(SystemCommand::ToolsDiscovered {
                 availability: fixture_available(),
-                update_available: false,
             }))
             .expect("discovery reply"),
         Reply::Accepted
@@ -1130,7 +1151,6 @@ fn terminal_publishes_final_telemetry_and_clear_before_item_finished() {
         add(QueueItemId(1)),
         Command::System(SystemCommand::ToolsDiscovered {
             availability: fixture_available(),
-            update_available: false,
         }),
         Command::Session(SessionCommand::Start),
         Command::Worker(WorkerCommand::ReserveNext {
@@ -1219,7 +1239,6 @@ fn restart_after_fsynced_terminal_folds_to_finished_snapshot() {
         add(QueueItemId(1)),
         Command::System(SystemCommand::ToolsDiscovered {
             availability: fixture_available(),
-            update_available: false,
         }),
         Command::Session(SessionCommand::Start),
         Command::Worker(WorkerCommand::ReserveNext {
@@ -1412,7 +1431,6 @@ fn engine_startup_recovers_an_active_partial_staging_transaction() {
     let engine = EngineRuntime::start(EngineConfig {
         journal_path,
         config_path: directory.path().join("config.json"),
-        vendor_root: directory.path().join("vendor"),
         tools: fixture_tools(MediaTools {
             ffmpeg: executable.clone(),
             ffprobe: executable,
@@ -1458,7 +1476,6 @@ fn journal_active_output_run(
         add_input(QueueItemId(1), input.to_path_buf()),
         Command::System(SystemCommand::ToolsDiscovered {
             availability: fixture_available(),
-            update_available: false,
         }),
         Command::Session(SessionCommand::Start),
         Command::Worker(WorkerCommand::ReserveNext {
@@ -1535,7 +1552,6 @@ fn engine_startup_abandons_intent_when_staging_was_never_created() {
     let engine = EngineRuntime::start(EngineConfig {
         journal_path,
         config_path: directory.path().join("config.json"),
-        vendor_root: directory.path().join("vendor"),
         tools: fixture_tools(MediaTools {
             ffmpeg: executable.clone(),
             ffprobe: executable,
@@ -1588,7 +1604,6 @@ fn engine_startup_removes_staging_left_before_staging_created_was_durable() {
     let engine = EngineRuntime::start(EngineConfig {
         journal_path,
         config_path: directory.path().join("config.json"),
-        vendor_root: directory.path().join("vendor"),
         tools: fixture_tools(MediaTools {
             ffmpeg: executable.clone(),
             ffprobe: executable,
@@ -1620,7 +1635,6 @@ fn public_event_overflow_severs_the_stream_without_blocking_the_driver() {
     let config = EngineConfig {
         journal_path: directory.path().join("state.jsonl"),
         config_path: directory.path().join("config.json"),
-        vendor_root: directory.path().join("vendor"),
         tools: fixture_tools(MediaTools {
             ffmpeg: executable.clone(),
             ffprobe: executable,
@@ -1776,7 +1790,6 @@ fn settled_success_journal(
         }),
         Command::System(SystemCommand::ToolsDiscovered {
             availability: fixture_available(),
-            update_available: false,
         }),
         Command::Session(SessionCommand::Start),
         Command::Worker(WorkerCommand::ReserveNext {
@@ -1863,7 +1876,6 @@ fn recover_settled_success(directory: &TestDirectory, fixture: &SettledSuccessFi
     let engine = EngineRuntime::start(EngineConfig {
         journal_path: fixture.journal_path.clone(),
         config_path: directory.path().join("config.json"),
-        vendor_root: directory.path().join("vendor"),
         tools: fixture_tools(MediaTools {
             ffmpeg: executable.clone(),
             ffprobe: executable,
@@ -1954,14 +1966,13 @@ impl ArtifactInspector for RejectingMediaInspector {
         FixtureByteInspector.inspect_file(path)
     }
 
-    fn inspect_media(&self, _path: &Path) -> std::io::Result<ArtifactIdentity> {
-        Err(std::io::Error::new(
-            std::io::ErrorKind::InvalidData,
-            "fixture rejects media",
-        ))
+    fn inspect_media(&self, _path: &Path) -> Result<ArtifactIdentity, MediaError> {
+        Err(MediaError::Rejected {
+            diagnostic: BoundedOutput::default(),
+        })
     }
 
-    fn verify_output(&self, path: &Path) -> std::io::Result<ArtifactIdentity> {
+    fn verify_output(&self, path: &Path) -> Result<ArtifactIdentity, MediaError> {
         self.inspect_media(path)
     }
 }
@@ -2255,4 +2266,185 @@ fn current(state: &DurableState, run_id: RunId) -> crfty_core::OutputTransaction
         .get(&run_id)
         .expect("output transaction")
         .clone()
+}
+
+#[test]
+#[expect(clippy::expect_used, reason = "test assertion")]
+fn ready_abandonment_recovers_both_deletion_crash_windows() {
+    for deleted in [false, true] {
+        let directory = TestDirectory::new("ready-abandon");
+        let input = directory.path().join("input.mkv");
+        let destination = directory.path().join("output.mkv");
+        fs::write(&input, b"original").expect("input");
+        let manager = OutputManager::new(FixtureByteInspector);
+        let mut state = DurableState::default();
+        let transaction = stage_output(
+            &manager,
+            &mut state,
+            RunId(20),
+            &input,
+            &destination,
+            Replacement::KeepOriginal,
+            false,
+        );
+        fs::write(&transaction.staging, b"complete output").expect("staging");
+        let ready = manager
+            .mark_ready(&current(&state, RunId(20)))
+            .expect("ready");
+        fold_output(&mut state, ready);
+        let intent = manager
+            .abandon_intent(&current(&state, RunId(20)))
+            .expect("intent");
+        fold_output(&mut state, intent);
+        if deleted {
+            fs::remove_file(&transaction.staging).expect("crash after deletion");
+        }
+        let bytes = crfty_core::encode_snapshot(
+            "test",
+            UnixMillis(0),
+            crfty_core::JournalSequence(0),
+            &state,
+        )
+        .expect("snapshot");
+        let recovered = replay(&bytes);
+        assert!(recovered.corruption.is_none());
+        let delta = manager
+            .recover_once(&current(&recovered.state, RunId(20)))
+            .expect("recovery")
+            .expect("settlement");
+        assert!(matches!(delta, OutputDelta::Abandoned { .. }));
+        assert!(!transaction.staging.exists());
+        assert!(!destination.exists());
+        assert_eq!(fs::read(&input).expect("input retained"), b"original");
+    }
+}
+
+#[test]
+#[expect(clippy::expect_used, reason = "test assertion")]
+fn ready_abandonment_never_deletes_changed_staging() {
+    for changed_after_intent in [false, true] {
+        let directory = TestDirectory::new("changed-ready-abandon");
+        let input = directory.path().join("input.mkv");
+        let destination = directory.path().join("output.mkv");
+        fs::write(&input, b"original").expect("input");
+        let manager = OutputManager::new(FixtureByteInspector);
+        let mut state = DurableState::default();
+        let transaction = stage_output(
+            &manager,
+            &mut state,
+            RunId(20),
+            &input,
+            &destination,
+            Replacement::KeepOriginal,
+            false,
+        );
+        fs::write(&transaction.staging, b"complete output").expect("staging");
+        let ready = manager
+            .mark_ready(&current(&state, RunId(20)))
+            .expect("ready");
+        fold_output(&mut state, ready);
+        if changed_after_intent {
+            let intent = manager
+                .abandon_intent(&current(&state, RunId(20)))
+                .expect("intent");
+            fold_output(&mut state, intent);
+        }
+        fs::write(&transaction.staging, b"unrelated replacement bytes").expect("changed staging");
+        if changed_after_intent {
+            assert!(matches!(
+                manager
+                    .recover_once(&current(&state, RunId(20)))
+                    .expect("recovery"),
+                Some(OutputDelta::Conflict { .. })
+            ));
+        } else {
+            assert!(manager.abandon_intent(&current(&state, RunId(20))).is_err());
+        }
+        assert_eq!(
+            fs::read(&transaction.staging).expect("staging retained"),
+            b"unrelated replacement bytes"
+        );
+        assert_eq!(fs::read(&input).expect("input retained"), b"original");
+    }
+}
+
+#[test]
+#[expect(clippy::expect_used, reason = "test assertion")]
+fn staging_deletion_failure_remains_an_error() {
+    let directory = TestDirectory::new("failed-staging-removal");
+    let input = directory.path().join("input.mkv");
+    let destination = directory.path().join("output.mkv");
+    fs::write(&input, b"original").expect("input");
+    let inspector = FixtureByteInspector;
+    let manager = OutputManager::new(FixtureByteInspector);
+    let mut transaction = manager
+        .plan(
+            RunId(20),
+            &input,
+            &destination,
+            Replacement::KeepOriginal,
+            false,
+        )
+        .expect("plan");
+    // A directory has a stable identity but remove_file cannot delete it on
+    // either supported platform, independent of test-user permissions.
+    fs::create_dir(&transaction.staging).expect("undeletable staging fixture");
+    transaction.state = crfty_core::OutputState::AbandonIntent {
+        staging_identity: inspector
+            .inspect_file(&transaction.staging)
+            .expect("identity"),
+    };
+    let error = manager
+        .recover_once(&transaction)
+        .expect_err("removal must fail");
+    assert!(
+        error
+            .to_string()
+            .contains("failed to remove abandoned staging file")
+    );
+    assert!(transaction.staging.exists());
+    assert_eq!(fs::read(&input).expect("input retained"), b"original");
+}
+
+#[test]
+#[expect(clippy::expect_used, reason = "test assertion")]
+fn missing_partial_staging_is_abandoned_but_missing_ready_staging_is_preserved() {
+    for ready in [false, true] {
+        let directory = TestDirectory::new("missing-staging");
+        let input = directory.path().join("input.mkv");
+        let destination = directory.path().join("output.mkv");
+        fs::write(&input, b"original").expect("input");
+        let manager = OutputManager::new(FixtureByteInspector);
+        let mut state = DurableState::default();
+        let transaction = stage_output(
+            &manager,
+            &mut state,
+            RunId(20),
+            &input,
+            &destination,
+            Replacement::KeepOriginal,
+            false,
+        );
+        if ready {
+            fs::write(&transaction.staging, b"complete").expect("staging");
+            let delta = manager
+                .mark_ready(&current(&state, RunId(20)))
+                .expect("ready");
+            fold_output(&mut state, delta);
+            fs::rename(&transaction.staging, &destination).expect("promotion");
+        } else {
+            fs::remove_file(&transaction.staging).expect("adapter cleanup");
+        }
+        let result = manager.abandon_intent(&current(&state, RunId(20)));
+        if ready {
+            assert!(result.is_err());
+            assert_eq!(
+                fs::read(&destination).expect("preserved output"),
+                b"complete"
+            );
+        } else {
+            assert!(matches!(result, Ok(OutputDelta::Abandoned { .. })));
+        }
+        assert_eq!(fs::read(&input).expect("original"), b"original");
+    }
 }
