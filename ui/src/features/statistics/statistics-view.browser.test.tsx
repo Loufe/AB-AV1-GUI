@@ -47,7 +47,7 @@ function richPayload(offset = currentUtcOffsetMinutes()): StatisticsPayload {
     total_input_bytes: 3 * GIB,
     total_output_bytes: 4 * GIB,
     total_reduction_bytes: -GIB,
-    remux_size_change_bytes: GIB / 2,
+    remux_reduction_bytes: GIB / 2,
     total_time_ms: 3_600_000,
     gigabytes_per_hour: 3,
     reduction_bins: [1, 0, 0, 0, 0, 0, 0, 0, 0, 0],
@@ -245,7 +245,7 @@ describe("StatisticsView payload presentation", () => {
     const remuxOnly = statisticsPayload({
       utc_offset_minutes: currentUtcOffsetMinutes(),
       remuxed_files: 2,
-      remux_size_change_bytes: GIB,
+      remux_reduction_bytes: GIB,
     });
     const rendered = await renderApp(<StatisticsHarness active />, {
       appState: { statistics: remuxOnly },
@@ -253,7 +253,7 @@ describe("StatisticsView payload presentation", () => {
 
     await expect.element(page.getByText("Outcomes and coverage")).toBeVisible();
     await expect.element(page.getByText("No statistics yet")).not.toBeInTheDocument();
-    await expect.element(page.getByText("Remux size change")).toBeVisible();
+    await expect.element(page.getByText("Remux size reduction")).toBeVisible();
 
     const notWorthwhileOnly = statisticsPayload({
       utc_offset_minutes: currentUtcOffsetMinutes(),

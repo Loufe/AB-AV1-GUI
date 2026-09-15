@@ -50,7 +50,7 @@ export function hasStatisticsData(payload: StatisticsPayload): boolean {
 }
 
 /**
- * Savings are signed in Statistics. The shared file-size formatter rejects
+ * Size reductions are signed in Statistics. The shared file-size formatter rejects
  * negatives by design, so preserve the sign and format only the magnitude.
  */
 export function formatSignedFileSize(bytes: number): string {

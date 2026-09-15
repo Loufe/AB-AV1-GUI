@@ -24,7 +24,7 @@ export function statisticsPayload(overrides: StatisticsOverrides = {}): Statisti
     total_input_bytes: 0,
     total_output_bytes: 0,
     total_reduction_bytes: 0,
-    remux_size_change_bytes: 0,
+    remux_reduction_bytes: 0,
     total_time_ms: 0,
     gigabytes_per_hour: null,
     reduction_percent: null,
