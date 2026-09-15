@@ -500,9 +500,9 @@ function OutcomeDetailsCard({ payload }: { payload: StatisticsPayload }) {
               </dd>
             </div>
             <div className="flex justify-between gap-4">
-              <dt>Remux size change</dt>
+              <dt>Remux size reduction</dt>
               <dd className="text-foreground tabular-nums">
-                {formatSignedFileSize(payload.remux_size_change_bytes)}
+                {formatSignedFileSize(payload.remux_reduction_bytes)}
               </dd>
             </div>
             <div className="flex justify-between gap-4">

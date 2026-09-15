@@ -71,7 +71,7 @@ function statisticsPayload(): StatisticsPayload {
     total_input_bytes: 10_000,
     total_output_bytes: 4_000,
     total_reduction_bytes: 6_000,
-    remux_size_change_bytes: 0,
+    remux_reduction_bytes: 0,
     total_time_ms: 300_000,
     gigabytes_per_hour: 111.76,
     reduction_percent: { average: 60, minimum: 60, maximum: 60, count: 1 },

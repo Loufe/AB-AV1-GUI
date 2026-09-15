@@ -1404,7 +1404,11 @@ export type StatisticsPayload = {
 	total_output_bytes: number,
 	/**  Negative when outputs grew past their inputs overall. */
 	total_reduction_bytes: number,
-	remux_size_change_bytes: number,
+	/**
+	 *  Source minus produced-file logical sizes for remuxes with both sizes
+	 *  known. Positive means smaller outputs; negative means larger outputs.
+	 */
+	remux_reduction_bytes: number,
 	/**  Analyzing plus encoding time across converted facts. */
 	total_time_ms: number,
 	/**  Input gigabytes processed per hour of conversion time. */
