@@ -264,16 +264,37 @@ impl<I: ArtifactInspector> OutputManager<I> {
         &self,
         transaction: &OutputTransaction,
     ) -> Result<OutputDelta, OutputError> {
-        if !matches!(transaction.state, OutputState::StagingCreated { .. }) {
+        let staging_identity = match self.inspector.inspect_file(&transaction.staging) {
+            Ok(identity) => identity,
+            // The adapter may have already removed its partial output.
+            // Missing Ready staging can instead mean promotion happened.
+            Err(error)
+                if error.kind() == io::ErrorKind::NotFound
+                    && matches!(
+                        transaction.state,
+                        OutputState::Started | OutputState::StagingCreated { .. }
+                    ) =>
+            {
+                return Ok(OutputDelta::Abandoned {
+                    run_id: transaction.run_id,
+                });
+            }
+            Err(error) => {
+                return Err(OutputError::new(
+                    "failed to inspect abandoned staging",
+                    error,
+                ));
+            }
+        };
+        if !transaction.can_abandon_staging(&staging_identity) {
             return Err(OutputError::new(
-                "output transaction cannot be abandoned from its current state",
-                io::Error::new(io::ErrorKind::InvalidInput, "invalid output state"),
+                "staging ownership does not authorize abandonment",
+                io::Error::new(
+                    io::ErrorKind::InvalidData,
+                    "staging identity or state changed",
+                ),
             ));
         }
-        let staging_identity = self
-            .inspector
-            .inspect_file(&transaction.staging)
-            .map_err(|error| OutputError::new("failed to inspect abandoned staging", error))?;
         Ok(OutputDelta::AbandonStagingIntent {
             run_id: transaction.run_id,
             staging_identity,

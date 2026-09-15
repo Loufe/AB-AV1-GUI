@@ -416,3 +416,133 @@ fn config(directory: &Path, ffmpeg: PathBuf, ffprobe: PathBuf) -> EngineConfig {
         execution: ExecutionSettings::production(profile, false),
     }
 }
+
+#[test]
+#[expect(clippy::expect_used, reason = "test assertion")]
+fn finalization_cancellation_preserves_the_correct_files_across_restart() {
+    let _gate = ENGINE_TEST_GATE.lock().expect("engine test gate");
+    for (name, replace, should_abandon) in [
+        ("hang-ready-already-av1.mp4", false, true),
+        ("hang-promoted-already-av1.mp4", false, false),
+        ("hang-retirement-already-av1.mp4", true, false),
+    ] {
+        let fixture = tempfile::tempdir().expect("fixture directory");
+        let media = fixture.path().join("media");
+        fs::create_dir(&media).expect("media directory");
+        let input = media.join(name);
+        let original = vec![1_u8; 8192];
+        fs::write(&input, &original).expect("input");
+        let ffprobe = copy_as_tool(fixture.path(), "ffprobe");
+        let ffmpeg = copy_as_tool(fixture.path(), "ffmpeg");
+        let configuration = config(fixture.path(), ffmpeg, ffprobe);
+        let engine = EngineRuntime::start(configuration.clone()).expect("engine");
+        let DriverEvent::Snapshot(mut snapshot) = engine.events.recv().expect("snapshot") else {
+            panic!("snapshot");
+        };
+        let mut request = add_one(QueueItemId(1), &input);
+        if let QueueCommand::AddMany { requests } = &mut request {
+            for request in requests {
+                if replace {
+                    request.output_target = OutputTarget::Replace;
+                }
+            }
+        }
+        assert_eq!(
+            engine.commands.submit_queue(request).expect("add"),
+            Reply::Accepted
+        );
+        assert_eq!(
+            engine
+                .commands
+                .submit_session(SessionCommand::Start)
+                .expect("start"),
+            Reply::Accepted
+        );
+        let heartbeat = wait_for_heartbeat_in(&media);
+        assert_eq!(
+            heartbeat.to_string_lossy().contains(".part."),
+            should_abandon
+        );
+        assert_eq!(
+            engine
+                .commands
+                .submit_session(SessionCommand::ForceStop)
+                .expect("stop"),
+            Reply::Accepted
+        );
+        let mut terminal = None;
+        let deadline = Instant::now() + EVENT_TIMEOUT;
+        loop {
+            let event = engine
+                .events
+                .recv_timeout(deadline.saturating_duration_since(Instant::now()))
+                .expect("settlement event");
+            match event {
+                DriverEvent::Durable(delta) => {
+                    if let DurableDelta::ItemFinished { outcome, .. } = &delta {
+                        terminal = Some(outcome.clone());
+                    }
+                    crfty_core::fold(&mut snapshot.durable, &delta);
+                }
+                DriverEvent::Ephemeral(EphemeralDelta::SessionChanged(SessionState::Idle)) => break,
+                DriverEvent::Fatal { message } => panic!("engine failed: {message}"),
+                _ => {}
+            }
+        }
+        let transaction = snapshot
+            .durable
+            .outputs
+            .values()
+            .next()
+            .expect("output transaction");
+        if should_abandon {
+            assert_eq!(terminal, Some(ItemOutcome::Stopped));
+            assert_eq!(transaction.state, crfty_core::OutputState::Abandoned);
+            assert!(!transaction.final_path.exists());
+        } else {
+            let Some(ItemOutcome::Failed(facts)) = terminal else {
+                panic!("expected visible conflict");
+            };
+            assert_eq!(facts.kind, crfty_core::FailureKind::OutputConflict);
+            assert!(facts.message.contains("cancelled"));
+            assert!(matches!(
+                transaction.state,
+                crfty_core::OutputState::Conflict { .. }
+            ));
+            assert!(transaction.final_path.exists());
+        }
+        assert!(!transaction.staging.exists());
+        assert_eq!(fs::read(&input).expect("preserved input"), original);
+        assert_heartbeat_stopped(&heartbeat);
+        engine.shutdown().expect("shutdown");
+        let restarted = EngineRuntime::start(configuration).expect("restart");
+        let DriverEvent::Snapshot(recovered) = restarted.events.recv().expect("restart snapshot")
+        else {
+            panic!("snapshot");
+        };
+        assert_eq!(recovered.durable.outputs, snapshot.durable.outputs);
+        assert_eq!(recovered.durable.queue, snapshot.durable.queue);
+        assert_eq!(fs::read(&input).expect("input after restart"), original);
+        assert_eq!(transaction.final_path.exists(), !should_abandon);
+        restarted.shutdown().expect("restart shutdown");
+    }
+}
+
+#[test]
+#[expect(clippy::expect_used, reason = "test assertion")]
+fn output_verification_deadline_settles_descendants_and_returns_a_typed_timeout() {
+    let fixture = tempfile::tempdir().expect("fixture directory");
+    let ffprobe = copy_as_tool(fixture.path(), "ffprobe");
+    let staging = fixture.path().join("hang-claim-output.mkv");
+    fs::write(&staging, vec![1_u8; 8192]).expect("staging");
+    let inspector = MediaInspector::new(ffprobe).with_probe_timeout(SHORT_PROBE_TIMEOUT);
+    let started = Instant::now();
+    let error = inspector
+        .verify_av1(&staging, MINIMUM_OUTPUT_BYTES, &ProcessCancellation::new())
+        .expect_err("deadline");
+    assert!(
+        matches!(error, MediaError::TimedOut { timeout, .. } if timeout == SHORT_PROBE_TIMEOUT)
+    );
+    assert!(started.elapsed() < EVENT_TIMEOUT);
+    assert_heartbeat_stopped(&staging.with_extension("heartbeat"));
+}

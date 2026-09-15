@@ -41,7 +41,7 @@ pub(super) fn abandon_output(
     final_telemetry: Option<Telemetry>,
     tracker: &mut PhaseTracker,
 ) -> Result<(), String> {
-    settle_abandoned(manager, commands, transaction)?;
+    let outcome = settle_abandoned(manager, commands, transaction)?.outcome(outcome);
     terminal(commands, job, tracker, outcome, final_telemetry)
 }
 
@@ -206,7 +206,7 @@ pub(super) fn finish_successful_output(
     let ready = match manager.mark_ready(&transaction) {
         Ok(ready) => ready,
         Err(error) => {
-            settle_abandoned(&manager, commands, &transaction)?;
+            let settlement = settle_abandoned(&manager, commands, &transaction)?;
             let final_telemetry = map_progress(
                 job.spec.run_id,
                 tracker,
@@ -224,7 +224,13 @@ pub(super) fn finish_successful_output(
                     &transaction,
                 ))
             };
-            terminal(commands, job, tracker, outcome, final_telemetry)?;
+            terminal(
+                commands,
+                job,
+                tracker,
+                settlement.outcome(outcome),
+                final_telemetry,
+            )?;
             return Ok(());
         }
     };
@@ -238,25 +244,36 @@ pub(super) fn finish_successful_output(
                 return Err("output recovery made no progress before settlement".to_owned());
             }
             Err(error) => {
-                settle_conflict(commands, job.spec.run_id, error.to_string())?;
                 let final_telemetry = map_progress(
                     job.spec.run_id,
                     tracker,
                     JobPhase::Finalizing,
                     final_progress,
                 );
-                terminal(
-                    commands,
-                    job,
-                    tracker,
+                let outcome = if error.is_cancelled()
+                    && matches!(transaction.state, OutputState::Ready { .. })
+                {
+                    // Ready is journaled before rename. Only a still-present,
+                    // identity-matched staging can authorize abandonment.
+                    match settle_abandoned(&manager, commands, &transaction)? {
+                        AbandonSettlement::Abandoned => ItemOutcome::Stopped,
+                        conflict => conflict.outcome(ItemOutcome::Failed(output_failure(
+                            FailureKind::OutputConflict,
+                            &error,
+                            job,
+                            &transaction,
+                        ))),
+                    }
+                } else {
+                    settle_conflict(commands, job.spec.run_id, error.to_string())?;
                     ItemOutcome::Failed(output_failure(
                         FailureKind::OutputConflict,
                         &error,
                         job,
                         &transaction,
-                    )),
-                    final_telemetry,
-                )?;
+                    ))
+                };
+                terminal(commands, job, tracker, outcome, final_telemetry)?;
                 return Ok(());
             }
         };
@@ -340,6 +357,10 @@ pub(super) fn submit_output(commands: &CommandSender, delta: OutputDelta) -> Res
 /// so the conflict kind is baked in; identity mismatches are detected by the
 /// core recovery policy and arrive as deltas, not through this path.
 fn settle_conflict(commands: &CommandSender, run_id: RunId, detail: String) -> Result<(), String> {
+    tracing::warn!(
+        "output transaction {} requires intervention: {detail}",
+        run_id.0
+    );
     submit_output(
         commands,
         OutputDelta::Conflict {
@@ -350,28 +371,74 @@ fn settle_conflict(commands: &CommandSender, run_id: RunId, detail: String) -> R
     )
 }
 
+enum AbandonSettlement {
+    Abandoned,
+    Conflict(String),
+}
+
+impl AbandonSettlement {
+    fn outcome(self, outcome: ItemOutcome) -> ItemOutcome {
+        match self {
+            Self::Abandoned => outcome,
+            Self::Conflict(detail) => {
+                let mut facts = match outcome {
+                    ItemOutcome::Failed(facts) => facts,
+                    _ => FailureFacts::new(FailureKind::OutputConflict, "run stopped"),
+                };
+                facts.kind = FailureKind::OutputConflict;
+                facts.message = format!("{}; output cleanup failed: {detail}", facts.message);
+                ItemOutcome::Failed(facts)
+            }
+        }
+    }
+}
+
+fn abandon_conflict(
+    commands: &CommandSender,
+    run_id: RunId,
+    detail: String,
+) -> Result<AbandonSettlement, String> {
+    settle_conflict(commands, run_id, detail.clone())?;
+    Ok(AbandonSettlement::Conflict(detail))
+}
+
 fn settle_abandoned(
     manager: &OutputManager<MediaArtifactInspector>,
     commands: &CommandSender,
     transaction: &crfty_core::OutputTransaction,
-) -> Result<(), String> {
+) -> Result<AbandonSettlement, String> {
     let intent = match manager.abandon_intent(transaction) {
         Ok(intent) => intent,
         Err(error) => {
-            return settle_conflict(commands, transaction.run_id, error.to_string());
+            return abandon_conflict(commands, transaction.run_id, error.to_string());
         }
     };
     submit_output(commands, intent.clone())?;
+    if matches!(intent, OutputDelta::Abandoned { .. }) {
+        return Ok(AbandonSettlement::Abandoned);
+    }
     let mut abandoning = transaction.clone();
     fold_transaction(&mut abandoning, intent);
     match manager.recover_once(&abandoning) {
-        Ok(Some(abandoned)) => {
-            submit_output(commands, abandoned)?;
+        Ok(Some(delta @ OutputDelta::Abandoned { .. })) => {
+            submit_output(commands, delta)?;
+            Ok(AbandonSettlement::Abandoned)
         }
-        Ok(None) => {}
-        Err(error) => settle_conflict(commands, transaction.run_id, error.to_string())?,
+        Ok(Some(OutputDelta::Conflict { kind, detail, .. })) => {
+            submit_output(
+                commands,
+                OutputDelta::Conflict {
+                    run_id: transaction.run_id,
+                    kind,
+                    detail: detail.clone(),
+                },
+            )?;
+            tracing::warn!("output abandonment failed: {detail}");
+            Ok(AbandonSettlement::Conflict(detail))
+        }
+        Ok(_) => Err("output abandonment made no progress toward settlement".to_owned()),
+        Err(error) => abandon_conflict(commands, transaction.run_id, error.to_string()),
     }
-    Ok(())
 }
 
 pub(super) fn fold_transaction(
@@ -385,5 +452,40 @@ pub(super) fn fold_transaction(
     fold(&mut state, &DurableDelta::Output(delta));
     if let Some(updated) = state.outputs.remove(&transaction.run_id) {
         *transaction = updated;
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::AbandonSettlement;
+    use crfty_core::{FailureFacts, FailureKind, ItemOutcome};
+
+    #[test]
+    fn cleanup_conflict_does_not_report_a_clean_stop_or_discard_the_initial_failure() {
+        assert_eq!(
+            AbandonSettlement::Abandoned.outcome(ItemOutcome::Stopped),
+            ItemOutcome::Stopped
+        );
+        for outcome in [
+            ItemOutcome::Stopped,
+            ItemOutcome::Failed(FailureFacts::new(
+                FailureKind::OutputPromote,
+                "probe rejected",
+            )),
+        ] {
+            let initial_message = match &outcome {
+                ItemOutcome::Failed(facts) => facts.message.as_str(),
+                _ => "run stopped",
+            };
+            let expected = initial_message.to_owned();
+            let ItemOutcome::Failed(facts) =
+                AbandonSettlement::Conflict("staging removal denied".to_owned()).outcome(outcome)
+            else {
+                panic!("cleanup failure must remain visible");
+            };
+            assert_eq!(facts.kind, FailureKind::OutputConflict);
+            assert!(facts.message.contains(&expected));
+            assert!(facts.message.contains("staging removal denied"));
+        }
     }
 }
