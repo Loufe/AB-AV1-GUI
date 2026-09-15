@@ -266,7 +266,7 @@ pub enum EphemeralDelta {
 pub enum Effect {
     StartWorker,
     KillActiveRun {
-        run_id: RunId,
+        run_id: Option<RunId>,
     },
     WriteSettings {
         settings: Settings,
@@ -1184,8 +1184,11 @@ fn apply_session(state: &AppState, command: SessionCommand) -> Applied {
                 applied
                     .ephemeral
                     .push(EphemeralDelta::SessionChanged(SessionState::ForceStopping));
-                applied.effects.push(Effect::KillActiveRun { run_id });
+                applied.effects.push(Effect::KillActiveRun {
+                    run_id: Some(run_id),
+                });
             } else {
+                applied.effects.push(Effect::KillActiveRun { run_id: None });
                 applied
                     .ephemeral
                     .push(EphemeralDelta::SessionChanged(SessionState::Idle));

@@ -7,7 +7,7 @@ date: 2026-09-14
 
 ## Context and problem statement
 
-V3 executes external FFmpeg and ffprobe binaries and stamps every analysis with tool revisions (`AnalysisProfile.{ab_av1,ffmpeg,encoder}_revision`). The earlier design had the application download a pinned, checksummed FFmpeg build and install it atomically. That design rested on an artifact the application could fetch for its whole supported lifetime, and upstream retention broke that premise: BtbN keeps daily builds for fourteen days and monthly builds for two years, so the pinned archives returned HTTP 404 and a clean managed install could not complete. Every durable replacement, project-owned hosting or CI-built artifacts, carries redistribution and GPL source-availability obligations, plus an update-shipping burden, that a two-binary dependency does not justify. The question is how the application obtains trustworthy tools without operating a distribution channel, and how it knows which build it is running.
+V3 executes external FFmpeg and ffprobe binaries and stamps every analysis with tool revisions (`AnalysisProfile.{ab_av1,ffmpeg,encoder}_revision`). The earlier design had the application download a pinned, checksummed FFmpeg build and install it atomically. That design rested on an artifact the application could fetch for its whole supported lifetime, and upstream retention broke that premise. BtbN keeps daily builds for fourteen days and monthly builds for two years. The pinned archives returned HTTP 404 and a clean managed install could not complete. Every durable replacement, project-owned hosting or CI-built artifacts, carries redistribution and GPL source-availability obligations, plus an update-shipping burden, that a two-binary dependency does not justify. The question is how the application obtains trustworthy tools without operating a distribution channel, and how it knows which build it is running.
 
 ## Decision drivers
 
@@ -26,7 +26,7 @@ V3 executes external FFmpeg and ffprobe binaries and stamps every analysis with 
 
 ## Decision outcome
 
-Chosen option: **require a user-installed FFmpeg, discovered and verified by the application**, because it removes the network, archive, and update machinery along with the retention risk, keeps the project out of binary redistribution, and replaces trust in a download with evidence from the tools themselves.
+Chosen option: **require a user-installed FFmpeg, discovered and verified by the application**. This removes the network, archive, and update machinery along with the retention risk. It keeps the project out of binary redistribution, and replaces trust in a download with evidence from the tools themselves.
 
 Mechanics, fixed by this record:
 

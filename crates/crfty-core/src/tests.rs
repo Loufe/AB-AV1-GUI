@@ -510,7 +510,11 @@ fn rediscover_and_changed_tool_paths_ask_the_engine_to_discover() {
     assert!(rediscover.ephemeral.is_empty());
 
     let mut settings = Settings::default();
-    settings.tools.ffmpeg = Some(PathBuf::from("/opt/ffmpeg/bin/ffmpeg"));
+    settings.tools.ffmpeg = Some(PathBuf::from(if cfg!(windows) {
+        r"C:\tools\ffmpeg.exe"
+    } else {
+        "/opt/ffmpeg/bin/ffmpeg"
+    }));
     let changed = apply(
         &mut state,
         Command::Settings(SettingsCommand::Set {
@@ -1677,7 +1681,9 @@ fn stop_after_current_does_not_kill_but_force_stop_does() {
     let forced = apply(&mut state, Command::Session(SessionCommand::ForceStop));
     assert_eq!(
         forced.effects,
-        vec![Effect::KillActiveRun { run_id: RunId(3) }]
+        vec![Effect::KillActiveRun {
+            run_id: Some(RunId(3))
+        }]
     );
 }
 
@@ -6522,4 +6528,98 @@ fn recover_started_abandons_absent_and_intends_or_conflicts_on_present_staging()
             })
         );
     }
+}
+
+#[test]
+#[expect(clippy::expect_used, reason = "test assertion")]
+fn ready_abandonment_checks_identity_at_live_and_replay_boundaries() {
+    let artifact = identity("ready", 20);
+    let mut different_size = artifact.destructive.clone();
+    different_size.size += 1;
+    let mut different_time = artifact.destructive.clone();
+    different_time.modified_ns = Some(FileTimeNs(42));
+    for observed in [
+        artifact.destructive.clone(),
+        different_size,
+        different_time,
+        identity("other", 20).destructive,
+    ] {
+        let expected = observed == artifact.destructive;
+        let mut state = active_state();
+        let mut output = transaction(
+            OutputState::Ready {
+                staging_identity: artifact.clone(),
+            },
+            Replacement::KeepOriginal,
+        );
+        output.run_id = RunId(3);
+        state.durable.outputs.insert(RunId(3), output);
+        let mut bytes = encode_snapshot("test", UnixMillis(0), JournalSequence(0), &state.durable)
+            .expect("snapshot");
+        let delta = OutputDelta::AbandonStagingIntent {
+            run_id: RunId(3),
+            staging_identity: observed,
+        };
+        bytes.extend(
+            encode_record(&JournalEnvelope {
+                sequence: JournalSequence(0),
+                deltas: vec![DurableDelta::Output(delta.clone())],
+            })
+            .expect("record"),
+        );
+        let applied = apply(&mut state, Command::Worker(WorkerCommand::Output(delta)));
+        assert_eq!(applied.reply == Reply::Accepted, expected);
+        let recovered = replay(&bytes);
+        assert_eq!(recovered.corruption.is_none(), expected);
+        if expected {
+            assert_eq!(recovered.state, state.durable);
+        }
+    }
+}
+
+#[test]
+fn abandonment_authority_ends_at_promotion_and_partial_staging_keeps_its_owner() {
+    let artifact = identity("staging", 20);
+    let mut grown = artifact.destructive.clone();
+    grown.size += 10;
+    let partial = transaction(
+        OutputState::StagingCreated {
+            initial: artifact.destructive.clone(),
+        },
+        Replacement::KeepOriginal,
+    );
+    assert!(partial.can_abandon_staging(&grown));
+    assert!(!partial.can_abandon_staging(&identity("replacement", 20).destructive));
+    for state in [
+        OutputState::Committed {
+            final_identity: artifact.clone(),
+        },
+        OutputState::RetireIntent {
+            final_identity: artifact.clone(),
+        },
+        OutputState::Retired {
+            final_identity: artifact.clone(),
+        },
+        OutputState::Abandoned,
+    ] {
+        assert!(
+            !transaction(state, Replacement::KeepOriginal)
+                .can_abandon_staging(&artifact.destructive)
+        );
+    }
+}
+
+#[test]
+fn force_stop_without_a_reserved_run_still_cancels_session_work() {
+    let mut state = AppState {
+        session: SessionState::Running,
+        ..AppState::default()
+    };
+    let stopped = apply(&mut state, Command::Session(SessionCommand::ForceStop));
+    assert_eq!(stopped.reply, Reply::Accepted);
+    assert_eq!(
+        stopped.effects,
+        vec![Effect::KillActiveRun { run_id: None }]
+    );
+    assert_eq!(state.session, SessionState::Idle);
 }

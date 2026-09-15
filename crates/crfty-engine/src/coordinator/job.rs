@@ -26,7 +26,7 @@ use super::output_flow::{
     submit_output,
 };
 use super::session::{JobServices, PhaseTracker, map_progress};
-use super::supervision::{ActiveCancellation, ActiveJobCancellation};
+use super::supervision::{ActiveJobCancellation, RunScope};
 use super::telemetry::{
     NORMALIZED_PROGRESS_MAX, crf_to_f32, measurement, rate_sample, remux_progress,
     telemetry_progress,
@@ -85,7 +85,7 @@ pub(super) fn run_encode(
             services.commands,
             job.spec.run_id,
             handle,
-            services.cancellation,
+            services.run,
             JobPhase::Encoding,
             tracker,
             services.input_duration_ms.map(|duration| duration as f64),
@@ -290,7 +290,7 @@ pub(super) fn run_remux(
         services.commands,
         job.spec.run_id,
         handle,
-        services.cancellation,
+        services.run,
         tracker,
         services.input_duration_ms.map(|duration| duration as f64),
     );
@@ -370,7 +370,7 @@ pub(super) fn search_with_fallback(
     commands: &CommandSender,
     runtime: &AbAv1Runtime,
     tools: &MediaTools,
-    cancellation: &ActiveCancellation,
+    run: &RunScope<'_>,
     job: &ClaimedJob,
     tracker: &mut PhaseTracker,
 ) -> Result<AnalysisResult, ItemOutcome> {
@@ -402,7 +402,7 @@ pub(super) fn search_with_fallback(
             commands,
             job.spec.run_id,
             handle,
-            cancellation,
+            run,
             JobPhase::Analyzing,
             tracker,
             Some(f64::from(NORMALIZED_PROGRESS_MAX)),
@@ -494,16 +494,14 @@ fn wait_for_report<T>(
     commands: &CommandSender,
     run_id: RunId,
     mut handle: JobHandle<T>,
-    cancellation: &ActiveCancellation,
+    run: &RunScope<'_>,
     phase: JobPhase,
     tracker: &mut PhaseTracker,
     total_work: Option<f64>,
 ) -> Result<JobReport<T>, String> {
     tracker.enter(phase);
-    let _registration = cancellation.register(
-        run_id,
-        ActiveJobCancellation::AbAv1(handle.cancellation_handle()),
-    );
+    let _registration =
+        run.register_adapter(ActiveJobCancellation::AbAv1(handle.cancellation_handle()));
     let started = Instant::now();
     let mut rates = RateTracker::new(total_work);
     let mut last_update = None;
@@ -550,15 +548,13 @@ fn wait_for_remux_report(
     commands: &CommandSender,
     run_id: RunId,
     mut handle: RemuxHandle,
-    cancellation: &ActiveCancellation,
+    run: &RunScope<'_>,
     tracker: &mut PhaseTracker,
     total_work: Option<f64>,
 ) -> Result<RemuxReport, String> {
     tracker.enter(JobPhase::Remuxing);
-    let _registration = cancellation.register(
-        run_id,
-        ActiveJobCancellation::Remux(handle.cancellation_handle()),
-    );
+    let _registration =
+        run.register_adapter(ActiveJobCancellation::Remux(handle.cancellation_handle()));
     let started = Instant::now();
     let mut rates = RateTracker::new(total_work);
     let mut last_update = None;

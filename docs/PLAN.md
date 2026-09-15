@@ -4,7 +4,7 @@ Living state of the V3 rewrite. Decisions get an ADR; long-form design goes in `
 
 ## Current phase
 
-The branch has the pinned ab-av1 adapter, job coordinator, journal recovery, queue commands, Tauri shell, and frontend stores with contract coverage. Queue, History, Statistics, and Settings have production views over the current model. Analysis has streaming discovery and bounded Basic Scan in the engine (`docs/ANALYSIS.md`), but its production view remains a disabled empty state. Known probe cancellation, Windows spawn cleanup, and terminal identity defects remain; existing coverage does not establish alpha readiness.
+The branch has the pinned ab-av1 adapter, job coordinator, journal recovery, queue commands, Tauri shell, and frontend stores with contract coverage. Queue, History, Statistics, and Settings have production views over the current model. Analysis has streaming discovery and bounded Basic Scan in the engine (`docs/ANALYSIS.md`), but its production view remains a disabled empty state. Known adapter-internal probe cancellation, Windows spawn cleanup, and terminal identity defects remain; existing coverage does not establish alpha readiness.
 
 The delivery target is the runnable alpha defined in [the alpha delivery scope](design/alpha.md). It combines a usable Analysis-to-Queue workflow with durable terminal observations, History browsing, import v1, and clean Windows and Linux installation. First-class History is still a redesign of the current projections. Historical estimation and richer collectors remain V3 work beyond alpha.
 

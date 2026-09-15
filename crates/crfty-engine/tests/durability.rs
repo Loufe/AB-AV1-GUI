@@ -29,7 +29,9 @@ use crfty_engine::{
     },
     driver::{DriverEvent, DriverHandle, DriverStartError},
     journal::JournalWriter,
+    media::MediaError,
     output::{ArtifactInspector, FixtureByteInspector, OutputManager},
+    process_supervisor::BoundedOutput,
     tools::MediaTools,
 };
 
@@ -1964,14 +1966,13 @@ impl ArtifactInspector for RejectingMediaInspector {
         FixtureByteInspector.inspect_file(path)
     }
 
-    fn inspect_media(&self, _path: &Path) -> std::io::Result<ArtifactIdentity> {
-        Err(std::io::Error::new(
-            std::io::ErrorKind::InvalidData,
-            "fixture rejects media",
-        ))
+    fn inspect_media(&self, _path: &Path) -> Result<ArtifactIdentity, MediaError> {
+        Err(MediaError::Rejected {
+            diagnostic: BoundedOutput::default(),
+        })
     }
 
-    fn verify_output(&self, path: &Path) -> std::io::Result<ArtifactIdentity> {
+    fn verify_output(&self, path: &Path) -> Result<ArtifactIdentity, MediaError> {
         self.inspect_media(path)
     }
 }
@@ -2265,4 +2266,185 @@ fn current(state: &DurableState, run_id: RunId) -> crfty_core::OutputTransaction
         .get(&run_id)
         .expect("output transaction")
         .clone()
+}
+
+#[test]
+#[expect(clippy::expect_used, reason = "test assertion")]
+fn ready_abandonment_recovers_both_deletion_crash_windows() {
+    for deleted in [false, true] {
+        let directory = TestDirectory::new("ready-abandon");
+        let input = directory.path().join("input.mkv");
+        let destination = directory.path().join("output.mkv");
+        fs::write(&input, b"original").expect("input");
+        let manager = OutputManager::new(FixtureByteInspector);
+        let mut state = DurableState::default();
+        let transaction = stage_output(
+            &manager,
+            &mut state,
+            RunId(20),
+            &input,
+            &destination,
+            Replacement::KeepOriginal,
+            false,
+        );
+        fs::write(&transaction.staging, b"complete output").expect("staging");
+        let ready = manager
+            .mark_ready(&current(&state, RunId(20)))
+            .expect("ready");
+        fold_output(&mut state, ready);
+        let intent = manager
+            .abandon_intent(&current(&state, RunId(20)))
+            .expect("intent");
+        fold_output(&mut state, intent);
+        if deleted {
+            fs::remove_file(&transaction.staging).expect("crash after deletion");
+        }
+        let bytes = crfty_core::encode_snapshot(
+            "test",
+            UnixMillis(0),
+            crfty_core::JournalSequence(0),
+            &state,
+        )
+        .expect("snapshot");
+        let recovered = replay(&bytes);
+        assert!(recovered.corruption.is_none());
+        let delta = manager
+            .recover_once(&current(&recovered.state, RunId(20)))
+            .expect("recovery")
+            .expect("settlement");
+        assert!(matches!(delta, OutputDelta::Abandoned { .. }));
+        assert!(!transaction.staging.exists());
+        assert!(!destination.exists());
+        assert_eq!(fs::read(&input).expect("input retained"), b"original");
+    }
+}
+
+#[test]
+#[expect(clippy::expect_used, reason = "test assertion")]
+fn ready_abandonment_never_deletes_changed_staging() {
+    for changed_after_intent in [false, true] {
+        let directory = TestDirectory::new("changed-ready-abandon");
+        let input = directory.path().join("input.mkv");
+        let destination = directory.path().join("output.mkv");
+        fs::write(&input, b"original").expect("input");
+        let manager = OutputManager::new(FixtureByteInspector);
+        let mut state = DurableState::default();
+        let transaction = stage_output(
+            &manager,
+            &mut state,
+            RunId(20),
+            &input,
+            &destination,
+            Replacement::KeepOriginal,
+            false,
+        );
+        fs::write(&transaction.staging, b"complete output").expect("staging");
+        let ready = manager
+            .mark_ready(&current(&state, RunId(20)))
+            .expect("ready");
+        fold_output(&mut state, ready);
+        if changed_after_intent {
+            let intent = manager
+                .abandon_intent(&current(&state, RunId(20)))
+                .expect("intent");
+            fold_output(&mut state, intent);
+        }
+        fs::write(&transaction.staging, b"unrelated replacement bytes").expect("changed staging");
+        if changed_after_intent {
+            assert!(matches!(
+                manager
+                    .recover_once(&current(&state, RunId(20)))
+                    .expect("recovery"),
+                Some(OutputDelta::Conflict { .. })
+            ));
+        } else {
+            assert!(manager.abandon_intent(&current(&state, RunId(20))).is_err());
+        }
+        assert_eq!(
+            fs::read(&transaction.staging).expect("staging retained"),
+            b"unrelated replacement bytes"
+        );
+        assert_eq!(fs::read(&input).expect("input retained"), b"original");
+    }
+}
+
+#[test]
+#[expect(clippy::expect_used, reason = "test assertion")]
+fn staging_deletion_failure_remains_an_error() {
+    let directory = TestDirectory::new("failed-staging-removal");
+    let input = directory.path().join("input.mkv");
+    let destination = directory.path().join("output.mkv");
+    fs::write(&input, b"original").expect("input");
+    let inspector = FixtureByteInspector;
+    let manager = OutputManager::new(FixtureByteInspector);
+    let mut transaction = manager
+        .plan(
+            RunId(20),
+            &input,
+            &destination,
+            Replacement::KeepOriginal,
+            false,
+        )
+        .expect("plan");
+    // A directory has a stable identity but remove_file cannot delete it on
+    // either supported platform, independent of test-user permissions.
+    fs::create_dir(&transaction.staging).expect("undeletable staging fixture");
+    transaction.state = crfty_core::OutputState::AbandonIntent {
+        staging_identity: inspector
+            .inspect_file(&transaction.staging)
+            .expect("identity"),
+    };
+    let error = manager
+        .recover_once(&transaction)
+        .expect_err("removal must fail");
+    assert!(
+        error
+            .to_string()
+            .contains("failed to remove abandoned staging file")
+    );
+    assert!(transaction.staging.exists());
+    assert_eq!(fs::read(&input).expect("input retained"), b"original");
+}
+
+#[test]
+#[expect(clippy::expect_used, reason = "test assertion")]
+fn missing_partial_staging_is_abandoned_but_missing_ready_staging_is_preserved() {
+    for ready in [false, true] {
+        let directory = TestDirectory::new("missing-staging");
+        let input = directory.path().join("input.mkv");
+        let destination = directory.path().join("output.mkv");
+        fs::write(&input, b"original").expect("input");
+        let manager = OutputManager::new(FixtureByteInspector);
+        let mut state = DurableState::default();
+        let transaction = stage_output(
+            &manager,
+            &mut state,
+            RunId(20),
+            &input,
+            &destination,
+            Replacement::KeepOriginal,
+            false,
+        );
+        if ready {
+            fs::write(&transaction.staging, b"complete").expect("staging");
+            let delta = manager
+                .mark_ready(&current(&state, RunId(20)))
+                .expect("ready");
+            fold_output(&mut state, delta);
+            fs::rename(&transaction.staging, &destination).expect("promotion");
+        } else {
+            fs::remove_file(&transaction.staging).expect("adapter cleanup");
+        }
+        let result = manager.abandon_intent(&current(&state, RunId(20)));
+        if ready {
+            assert!(result.is_err());
+            assert_eq!(
+                fs::read(&destination).expect("preserved output"),
+                b"complete"
+            );
+        } else {
+            assert!(matches!(result, Ok(OutputDelta::Abandoned { .. })));
+        }
+        assert_eq!(fs::read(&input).expect("original"), b"original");
+    }
 }

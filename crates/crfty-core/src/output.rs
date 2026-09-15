@@ -124,6 +124,18 @@ pub enum OutputState {
 }
 
 impl OutputTransaction {
+    /// Ready staging is immutable; partial staging may grow, but cannot
+    /// change ownership before abandonment is authorized.
+    #[must_use]
+    pub fn can_abandon_staging(&self, observed: &DestructiveIdentity) -> bool {
+        match &self.state {
+            OutputState::Started => true,
+            OutputState::StagingCreated { initial } => initial.file_id == observed.file_id,
+            OutputState::Ready { staging_identity } => &staging_identity.destructive == observed,
+            _ => false,
+        }
+    }
+
     /// The final artifact identity of a transaction that settled successfully.
     /// Which terminal state means "settled" depends on the replacement mode:
     /// `KeepOriginal` finishes at `Committed`, `RetireOriginal` only once the
@@ -410,14 +422,12 @@ pub(crate) fn validate_output_delta(
         {
             Ok(())
         }
-        (Some(transaction), OutputDelta::AbandonStagingIntent { .. })
-            if matches!(
-                transaction.state,
-                OutputState::Started | OutputState::StagingCreated { .. }
-            ) =>
-        {
-            Ok(())
-        }
+        (
+            Some(transaction),
+            OutputDelta::AbandonStagingIntent {
+                staging_identity, ..
+            },
+        ) if transaction.can_abandon_staging(staging_identity) => Ok(()),
         (Some(transaction), OutputDelta::Abandoned { .. })
             if matches!(
                 transaction.state,

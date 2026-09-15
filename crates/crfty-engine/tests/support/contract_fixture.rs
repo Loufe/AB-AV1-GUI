@@ -142,6 +142,19 @@ fn fake_ffprobe() -> Result<(), Box<dyn Error>> {
     {
         return Err(format!("fixture rejected {}", input.display()).into());
     }
+    // The marker is created by the selected invocation's descendant, so
+    // tests can cancel at a transaction boundary without racing a timer.
+    if let Some(input) = env::args_os().next_back().map(PathBuf::from)
+        && probe_should_hang(&input)?
+    {
+        let _child = Command::new(env::current_exe()?)
+            .arg("heartbeat")
+            .arg(input.with_extension("heartbeat"))
+            .spawn()?;
+        loop {
+            thread::sleep(Duration::from_secs(1));
+        }
+    }
     let _concurrency = fake_probe_concurrency_guard()?;
     const PROBE: &str = r#"{
         "streams": [{
@@ -191,6 +204,7 @@ fn fake_ffprobe() -> Result<(), Box<dyn Error>> {
     let probes_av1 = env::args_os().any(|argument| {
         let argument = argument.to_string_lossy();
         argument.contains("already-av1.mp4")
+            || argument.contains("already-av1.mkv")
             || argument.contains("incompatible-av1.mp4")
             || argument.contains("input_coordinated.mkv")
             || argument.contains("already-av1_remuxed.mkv")
@@ -815,6 +829,10 @@ fn fake_capability_probe(arguments: &[OsString]) -> Result<(), Box<dyn Error>> {
     let directive = fs::read_to_string(&marker).unwrap_or_default();
     let directive = directive.trim();
     if directive == "hang" {
+        let _child = Command::new(env::current_exe()?)
+            .arg("heartbeat")
+            .arg(marker.with_extension("heartbeat"))
+            .spawn()?;
         loop {
             thread::sleep(Duration::from_secs(3600));
         }
@@ -1137,4 +1155,33 @@ fn wait_for_file(path: &Path) -> Result<(), Box<dyn Error>> {
         thread::sleep(Duration::from_millis(10));
     }
     Err(format!("file was not created: {}", path.display()).into())
+}
+
+fn probe_should_hang(input: &Path) -> Result<bool, Box<dyn Error>> {
+    let name = input
+        .file_name()
+        .and_then(|name| name.to_str())
+        .unwrap_or_default();
+    let staging = name.contains(".part.");
+    let final_output = !staging && input.extension().is_some_and(|ext| ext == "mkv");
+    if name.starts_with("hang-claim")
+        || (name.contains("hang-verify") && staging)
+        || (name.contains("hang-promoted") && final_output)
+    {
+        return Ok(true);
+    }
+    if (name.contains("hang-ready") && staging)
+        || (name.contains("hang-retirement") && final_output)
+    {
+        return match fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(input.with_extension("probe-seen"))
+        {
+            Ok(_) => Ok(false),
+            Err(error) if error.kind() == io::ErrorKind::AlreadyExists => Ok(true),
+            Err(error) => Err(error.into()),
+        };
+    }
+    Ok(false)
 }

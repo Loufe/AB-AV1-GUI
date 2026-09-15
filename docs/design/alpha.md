@@ -10,7 +10,7 @@ GitHub owns work order, blockers, and acceptance evidence. The [alpha issues](ht
 
 ## User workflow
 
-A clean installation can obtain authenticated media tools, select files or a folder, discover content, run Basic Scan, select rows, and enqueue Analyze or Convert. The first Analysis presentation is a flat table showing relative folders. Stable row identity preserves selection through streamed updates; replacing a generation cannot apply an action to stale selections.
+A clean installation discovers user-supplied FFmpeg and ffprobe and verifies their capabilities before conversion. Users can select files or a folder, discover content, run Basic Scan, select rows, and enqueue Analyze or Convert. The first Analysis presentation is a flat table showing relative folders. Stable row identity preserves selection through streamed updates; replacing a generation cannot apply an action to stale selections.
 
 Basic Scan shows observed metadata and current applicability. Unsupported pre-analysis estimates are absent. A completed quality search exposes ab-av1's predicted output size and duration for the applicable source and execution profile, labelled as predictions. Historical prediction evidence cannot upgrade a file's level or suppress required work. The historical estimator family and its evaluation contract remain as decided in `estimation.md`; alpha does not require that estimator.
 

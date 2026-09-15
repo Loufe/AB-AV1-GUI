@@ -913,3 +913,73 @@ fn rediscovery_and_changed_tool_paths_replace_the_located_tools() {
     );
     engine.shutdown().expect("engine shutdown");
 }
+
+#[test]
+#[expect(clippy::expect_used, reason = "test assertion")]
+fn force_stop_cancels_the_session_probe_before_a_run_exists_and_allows_restart() {
+    let _serial = ENGINE_GUARD.lock().expect("engine guard");
+    let directory = TestDirectory::new("probe-force-stop");
+    let path_dir = fixture_path_directory(&directory);
+    write_probe_marker(&path_dir, "hang");
+    let engine = EngineRuntime::start(engine_config(
+        &directory,
+        ToolsConfig::Discover(search_path_environment(&path_dir)),
+    ))
+    .expect("engine");
+    let _pending = wait_for_tools(&engine.events, is_pending, "pending tools");
+    assert_eq!(
+        engine
+            .commands
+            .submit_session(SessionCommand::Start)
+            .expect("start"),
+        Reply::Accepted
+    );
+    let heartbeat = path_dir.join("crfty-fixture-probe.heartbeat");
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+    while !heartbeat.exists() {
+        assert!(std::time::Instant::now() < deadline, "probe did not start");
+        std::thread::sleep(std::time::Duration::from_millis(10));
+    }
+    assert_eq!(
+        engine
+            .commands
+            .submit_session(SessionCommand::ForceStop)
+            .expect("stop"),
+        Reply::Accepted
+    );
+    wait_for_session(&engine.events, SessionState::Idle);
+    loop {
+        let before = fs::read(&heartbeat).expect("heartbeat");
+        std::thread::sleep(std::time::Duration::from_millis(200));
+        if !before.is_empty() && before == fs::read(&heartbeat).expect("heartbeat") {
+            break;
+        }
+        assert!(
+            std::time::Instant::now() < deadline,
+            "force stop did not settle probe descendants"
+        );
+    }
+    write_probe_marker(&path_dir, "");
+    assert_eq!(
+        engine
+            .commands
+            .submit_session(SessionCommand::Start)
+            .expect("restart"),
+        Reply::Accepted
+    );
+    let _verified = wait_for_tools(
+        &engine.events,
+        |tools| {
+            matches!(
+                tools,
+                ToolAvailability::Located {
+                    verification: ToolVerification::Verified { .. },
+                    ..
+                }
+            )
+        },
+        "verified tools after restart",
+    );
+    wait_for_session(&engine.events, SessionState::Idle);
+    engine.shutdown().expect("shutdown");
+}

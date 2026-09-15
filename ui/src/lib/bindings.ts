@@ -445,13 +445,13 @@ export type CorruptionSignature = {
 export type Crf = number;
 
 /**
- *  One point of the cumulative savings series: a local calendar day (days
- *  since the Unix epoch in the requester's timezone) and the running total
- *  through that day. The series can dip when an output grew.
+ *  One point of the cumulative output-size reduction series: a local
+ *  calendar day (days since the Unix epoch in the requester's timezone) and
+ *  the running total through that day. The series can dip when an output grew.
  */
-export type CumulativeSavingsPoint = {
+export type CumulativeReductionPoint = {
 	epoch_day: number,
-	cumulative_saved_bytes: number,
+	cumulative_reduction_bytes: number,
 };
 
 export type DecodeMode = "Software" | { Hardware: HardwareDecoder };
@@ -1419,9 +1419,9 @@ export type SkipReason = ({ LowResolution: {
 "AlreadyQueued";
 
 /**
- *  The exhaustive Statistics answer. Conversion savings, VMAF, CRF, and time
- *  aggregates cover converted verdicts only; remux facts are counted and
- *  summed separately and never blend into conversion aggregates.
+ *  The exhaustive Statistics answer. Conversion output-size reduction, VMAF,
+ *  CRF, and time aggregates cover converted verdicts only; remux facts are
+ *  counted and summed separately and never blend into conversion aggregates.
  */
 export type StatisticsPayload = {
 	/**  The requester-supplied offset the calendar bucketing used. */
@@ -1429,7 +1429,7 @@ export type StatisticsPayload = {
 	converted_files: number,
 	/**
 	 *  Converted facts that carried both sizes and therefore contribute to
-	 *  savings totals, bins, and the cumulative series.
+	 *  output-size reduction totals, bins, and the cumulative series.
 	 */
 	sized_converted_files: number,
 	remuxed_files: number,
@@ -1437,8 +1437,8 @@ export type StatisticsPayload = {
 	total_input_bytes: number,
 	total_output_bytes: number,
 	/**  Negative when outputs grew past their inputs overall. */
-	total_saved_bytes: number,
-	remux_saved_bytes: number,
+	total_reduction_bytes: number,
+	remux_size_change_bytes: number,
 	/**  Analyzing plus encoding time across converted facts. */
 	total_time_ms: number,
 	/**  Input gigabytes processed per hour of conversion time. */
@@ -1461,7 +1461,7 @@ export type StatisticsPayload = {
 	 *  codec enum's ascending canonical order.
 	 */
 	codecs: CodecCount[],
-	cumulative_savings: CumulativeSavingsPoint[],
+	cumulative_reduction: CumulativeReductionPoint[],
 	first_epoch_day: number | null,
 	last_epoch_day: number | null,
 	runs: RunTotals,

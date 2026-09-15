@@ -36,7 +36,7 @@ Byte sizes reach History from verified identities only. The fixed join order is 
 
 Human-readable FFmpeg output is not a size source. The stream summaries FFmpeg prints when an encode ends are display text rounded to a unit FFmpeg chose, and the engine does not treat human-oriented process output as an application contract. Such a figure must never be stored as a size, and a value derived from one must never be presented as a measurement.
 
-An unknown size is absent, not zero. Absence and zero are different claims, and a size that was never established must not be allowed to become the second one. Absence is carried through the projections intact: a converted fact whose sizes are not both known still counts as converted, and contributes nothing to savings totals, reduction bins, or the cumulative series.
+An unknown size is absent, not zero. Absence and zero are different claims, and a size that was never established must not be allowed to become the second one. Absence is carried through the projections intact: a converted fact whose sizes are not both known still counts as converted, and contributes nothing to output-size reduction totals, reduction bins, or the cumulative series.
 
 ## Pathless is pseudonymous, not anonymous
 

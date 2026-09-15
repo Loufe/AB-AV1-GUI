@@ -1,6 +1,15 @@
+//! Media identity and metadata: the ffprobe inspection every claim, Basic
+//! Scan row, and output verification runs, plus the sampled content key.
+//!
+//! Every ffprobe invocation here is supervised: bounded by a deadline,
+//! reachable by a [`ProcessCancellation`], and settled (complete process
+//! group, both pipes drained) before the call returns. There is no
+//! unsupervised probe path.
+
 use std::{
     collections::BTreeMap,
     ffi::OsStr,
+    fmt,
     fs::Metadata,
     io::{self, Read, Seek, SeekFrom},
     path::{Path, PathBuf},
@@ -20,9 +29,8 @@ use crfty_core::{
 };
 use serde::Deserialize;
 
-use crate::{
-    process,
-    process_supervisor::{BoundedOutput, ProcessCancellation, ProcessLimits, ProcessTerminal},
+use crate::process_supervisor::{
+    self, BoundedOutput, ProcessCancellation, ProcessLimits, ProcessTerminal,
 };
 
 const CONTENT_KEY_SCHEMA: &[u8] = b"ck1";
@@ -41,14 +49,21 @@ const MILLISECONDS_PER_SECOND: f64 = 1_000.0;
 const FULL_ROTATION_DEGREES: i16 = 360;
 const NANOSECONDS_PER_SECOND: u64 = 1_000_000_000;
 const RECENT_MTIME_WINDOW_NS: u64 = 2 * NANOSECONDS_PER_SECOND;
-const BASIC_SCAN_TIMEOUT: Duration = Duration::from_secs(30);
-const BASIC_SCAN_STDOUT_BYTES: usize = 1024 * 1024;
-const BASIC_SCAN_STDERR_BYTES: usize = 4 * 1024;
+/// Deadline for one ffprobe or ffmpeg capability query. Header inspection
+/// finishes in well under a second on local media; the bound exists so a
+/// wedged tool or an unresponsive network mount cannot hold a job worker.
+const TOOL_QUERY_TIMEOUT: Duration = Duration::from_secs(30);
+const PROBE_STDOUT_BYTES: usize = 1024 * 1024;
+const DIAGNOSTIC_STDERR_BYTES: usize = 4 * 1024;
 
+/// Why a media inspection produced no observation. Process-side failures
+/// carry the bounded stderr tail so the caller can journal a scrubbed
+/// diagnostic; `Io` covers the filesystem reads around the probe.
 #[derive(Debug)]
-pub(crate) enum SupervisedMediaError {
+pub enum MediaError {
     Cancelled,
     TimedOut {
+        timeout: Duration,
         diagnostic: BoundedOutput,
     },
     Rejected {
@@ -65,11 +80,98 @@ pub(crate) enum SupervisedMediaError {
     Io(io::Error),
     ChangedAfterProbe,
     ChangedDuringSampling,
+    /// Output verification verdicts: the probe succeeded and the artifact is
+    /// not an acceptable conversion output.
+    OutputTooSmall {
+        size_bytes: u64,
+        minimum_bytes: u64,
+    },
+    OutputNotAv1 {
+        codec: VideoCodec,
+    },
+}
+
+impl MediaError {
+    #[must_use]
+    pub fn is_cancelled(&self) -> bool {
+        matches!(self, Self::Cancelled)
+    }
+
+    /// The bounded stderr tail of the failed tool run, when there was one.
+    /// Unscrubbed: it may quote the probed path.
+    #[must_use]
+    pub fn diagnostic(&self) -> Option<&BoundedOutput> {
+        match self {
+            Self::TimedOut { diagnostic, .. }
+            | Self::Rejected { diagnostic }
+            | Self::InvalidOutput { diagnostic, .. }
+            | Self::Supervision { diagnostic, .. } => Some(diagnostic),
+            Self::Cancelled
+            | Self::Io(_)
+            | Self::ChangedAfterProbe
+            | Self::ChangedDuringSampling
+            | Self::OutputTooSmall { .. }
+            | Self::OutputNotAv1 { .. } => None,
+        }
+    }
+}
+
+impl fmt::Display for MediaError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Cancelled => formatter.write_str("media inspection was cancelled"),
+            Self::TimedOut { timeout, .. } => write!(
+                formatter,
+                "ffprobe did not finish within {} seconds",
+                timeout.as_secs()
+            ),
+            Self::Rejected { .. } => formatter.write_str("ffprobe rejected the media"),
+            Self::InvalidOutput { detail, .. } => {
+                write!(formatter, "ffprobe output is invalid: {detail}")
+            }
+            Self::Supervision { detail, .. } => {
+                write!(formatter, "ffprobe supervision failed: {detail}")
+            }
+            Self::Io(error) => fmt::Display::fmt(error, formatter),
+            Self::ChangedAfterProbe => formatter.write_str("media changed while it was probed"),
+            Self::ChangedDuringSampling => {
+                formatter.write_str("media changed while its identity was computed")
+            }
+            Self::OutputTooSmall {
+                size_bytes,
+                minimum_bytes,
+            } => write!(
+                formatter,
+                "output is {size_bytes} bytes, below the {minimum_bytes}-byte minimum for a video"
+            ),
+            Self::OutputNotAv1 { codec } => write!(
+                formatter,
+                "output video codec is {}, not AV1",
+                codec_header(codec)
+            ),
+        }
+    }
+}
+
+impl std::error::Error for MediaError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            Self::Io(error) => Some(error),
+            _ => None,
+        }
+    }
+}
+
+impl From<io::Error> for MediaError {
+    fn from(error: io::Error) -> Self {
+        Self::Io(error)
+    }
 }
 
 #[derive(Debug, Clone)]
-pub(crate) struct MediaInspector {
+pub struct MediaInspector {
     ffprobe: PathBuf,
+    probe_timeout: Duration,
 }
 
 pub(crate) struct DecodeResolver {
@@ -85,11 +187,16 @@ impl DecodeResolver {
         }
     }
 
+    /// Resolves the decode mode for `codec`, querying ffmpeg once per
+    /// decoder and caching the verdict. A cancelled query is not a verdict:
+    /// it falls back to software without caching so the next session asks
+    /// again.
     #[must_use]
     pub(crate) fn resolve(
         &mut self,
         preference: DecodePreference,
         codec: &VideoCodec,
+        cancellation: &ProcessCancellation,
     ) -> DecodeMode {
         if preference == DecodePreference::SoftwareOnly {
             return DecodeMode::Software;
@@ -98,7 +205,10 @@ impl DecodeResolver {
             let available = if let Some(available) = self.availability.get(decoder) {
                 *available
             } else {
-                let available = decoder_is_available(&self.ffmpeg, decoder);
+                let Some(available) = decoder_is_available(&self.ffmpeg, *decoder, cancellation)
+                else {
+                    return DecodeMode::Software;
+                };
                 self.availability.insert(*decoder, available);
                 available
             };
@@ -111,14 +221,29 @@ impl DecodeResolver {
 }
 
 impl MediaInspector {
-    pub(crate) fn new(ffprobe: PathBuf) -> Self {
-        Self { ffprobe }
+    #[must_use]
+    pub fn new(ffprobe: PathBuf) -> Self {
+        Self {
+            ffprobe,
+            probe_timeout: TOOL_QUERY_TIMEOUT,
+        }
     }
 
-    pub(crate) fn observe(&self, path: &Path) -> io::Result<MediaObservation> {
-        let (metadata, identity) = self.inspect(path)?;
+    #[must_use]
+    pub fn with_probe_timeout(mut self, timeout: Duration) -> Self {
+        self.probe_timeout = timeout;
+        self
+    }
+
+    pub fn observe(
+        &self,
+        path: &Path,
+        cancellation: &ProcessCancellation,
+    ) -> Result<MediaObservation, MediaError> {
+        let path_hash = path_hash(path)?;
+        let (metadata, identity) = self.inspect(path, cancellation)?;
         Ok(MediaObservation {
-            path_hash: path_hash(path)?,
+            path_hash,
             binding: PathBinding {
                 identity: identity.destructive,
                 content_key: identity.content_key,
@@ -127,105 +252,60 @@ impl MediaInspector {
         })
     }
 
-    pub(crate) fn observe_supervised(
+    pub fn inspect_artifact(
         &self,
         path: &Path,
         cancellation: &ProcessCancellation,
-    ) -> Result<MediaObservation, SupervisedMediaError> {
-        let path_hash = path_hash(path).map_err(SupervisedMediaError::Io)?;
-        let before_probe = destructive_identity(path).map_err(SupervisedMediaError::Io)?;
-        let metadata = self.probe_supervised(path, before_probe.size, cancellation)?;
-        let after_probe = destructive_identity(path).map_err(SupervisedMediaError::Io)?;
-        if before_probe != after_probe {
-            return Err(SupervisedMediaError::ChangedAfterProbe);
-        }
-        let identity = sampled_identity_cancellable(path, &metadata, cancellation)?;
-        match observation_stability(&before_probe, &after_probe, &identity.destructive) {
-            ObservationStability::Stable => Ok(MediaObservation {
-                path_hash,
-                binding: PathBinding {
-                    identity: identity.destructive,
-                    content_key: identity.content_key,
-                },
-                metadata,
-            }),
-            ObservationStability::ChangedAfterProbe => Err(SupervisedMediaError::ChangedAfterProbe),
-            ObservationStability::ChangedDuringSampling => {
-                Err(SupervisedMediaError::ChangedDuringSampling)
-            }
-        }
+    ) -> Result<ArtifactIdentity, MediaError> {
+        self.inspect(path, cancellation)
+            .map(|(_, identity)| identity)
     }
 
-    pub(crate) fn inspect_artifact(&self, path: &Path) -> io::Result<ArtifactIdentity> {
-        self.inspect(path).map(|(_, identity)| identity)
-    }
-
-    pub(crate) fn verify_av1(
+    pub fn verify_av1(
         &self,
         path: &Path,
         minimum_size: u64,
-    ) -> io::Result<ArtifactIdentity> {
-        let metadata = std::fs::metadata(path)?;
-        if metadata.len() < minimum_size {
-            return Err(io::Error::new(
-                io::ErrorKind::InvalidData,
-                "output is too small to be a valid video",
-            ));
+        cancellation: &ProcessCancellation,
+    ) -> Result<ArtifactIdentity, MediaError> {
+        let size_bytes = std::fs::metadata(path)?.len();
+        if size_bytes < minimum_size {
+            return Err(MediaError::OutputTooSmall {
+                size_bytes,
+                minimum_bytes: minimum_size,
+            });
         }
-        let (video, identity) = self.inspect(path)?;
+        let (video, identity) = self.inspect(path, cancellation)?;
         if video.codec != VideoCodec::Av1 {
-            return Err(io::Error::new(
-                io::ErrorKind::InvalidData,
-                "output video codec is not AV1",
-            ));
+            return Err(MediaError::OutputNotAv1 { codec: video.codec });
         }
         Ok(identity)
     }
 
-    fn inspect(&self, path: &Path) -> io::Result<(VideoMeta, ArtifactIdentity)> {
+    fn inspect(
+        &self,
+        path: &Path,
+        cancellation: &ProcessCancellation,
+    ) -> Result<(VideoMeta, ArtifactIdentity), MediaError> {
         let before_probe = destructive_identity(path)?;
-        let metadata = self.probe(path, before_probe.size)?;
+        let metadata = self.probe(path, before_probe.size, cancellation)?;
         let after_probe = destructive_identity(path)?;
-        let identity = sampled_identity(path, &metadata)?;
-        if observation_stability(&before_probe, &after_probe, &identity.destructive)
-            != ObservationStability::Stable
-        {
-            return Err(io::Error::new(
-                io::ErrorKind::Interrupted,
-                "artifact changed while it was probed and identified",
-            ));
+        if before_probe != after_probe {
+            return Err(MediaError::ChangedAfterProbe);
         }
-        Ok((metadata, identity))
+        let identity = sampled_identity(path, &metadata, cancellation)?;
+        match observation_stability(&before_probe, &after_probe, &identity.destructive) {
+            ObservationStability::Stable => Ok((metadata, identity)),
+            ObservationStability::ChangedAfterProbe => Err(MediaError::ChangedAfterProbe),
+            ObservationStability::ChangedDuringSampling => Err(MediaError::ChangedDuringSampling),
+        }
     }
 
-    fn probe(&self, path: &Path, size_bytes: u64) -> io::Result<VideoMeta> {
-        let mut command = Command::new(&self.ffprobe);
-        command
-            .args([
-                "-v",
-                "error",
-                "-show_entries",
-                "stream=codec_type,codec_name,width,height,channels:stream_tags=rotate:stream_side_data=rotation:format=duration,format_name",
-                "-of",
-                "json",
-            ])
-            .arg(path);
-        let output = process::output(&mut command)?;
-        if !output.status.success() {
-            return Err(io::Error::new(
-                io::ErrorKind::InvalidData,
-                "ffprobe rejected media artifact",
-            ));
-        }
-        parse_probe_document(path, size_bytes, &output.stdout)
-    }
-
-    fn probe_supervised(
+    fn probe(
         &self,
         path: &Path,
         size_bytes: u64,
         cancellation: &ProcessCancellation,
-    ) -> Result<VideoMeta, SupervisedMediaError> {
+    ) -> Result<VideoMeta, MediaError> {
         let mut command = Command::new(&self.ffprobe);
         command
             .args([
@@ -237,40 +317,41 @@ impl MediaInspector {
                 "json",
             ])
             .arg(path);
-        let report = crate::process_supervisor::run(
+        let report = process_supervisor::run(
             &mut command,
             cancellation,
             ProcessLimits::new(
-                Some(BASIC_SCAN_TIMEOUT),
-                BASIC_SCAN_STDOUT_BYTES,
-                BASIC_SCAN_STDERR_BYTES,
+                Some(self.probe_timeout),
+                PROBE_STDOUT_BYTES,
+                DIAGNOSTIC_STDERR_BYTES,
             ),
         );
         match report.terminal {
             ProcessTerminal::Success(_) if report.stdout.was_truncated() => {
-                Err(SupervisedMediaError::InvalidOutput {
+                Err(MediaError::InvalidOutput {
                     detail: "ffprobe JSON exceeded the capture limit".to_owned(),
                     diagnostic: report.stderr_tail,
                 })
             }
             ProcessTerminal::Success(_) => {
                 parse_probe_document(path, size_bytes, report.stdout.as_bytes()).map_err(|error| {
-                    SupervisedMediaError::InvalidOutput {
+                    MediaError::InvalidOutput {
                         detail: error.to_string(),
                         diagnostic: report.stderr_tail,
                     }
                 })
             }
-            ProcessTerminal::ToolFailed(_) => Err(SupervisedMediaError::Rejected {
+            ProcessTerminal::ToolFailed(_) => Err(MediaError::Rejected {
                 diagnostic: report.stderr_tail,
             }),
-            ProcessTerminal::Cancelled => Err(SupervisedMediaError::Cancelled),
-            ProcessTerminal::TimedOut => Err(SupervisedMediaError::TimedOut {
+            ProcessTerminal::Cancelled => Err(MediaError::Cancelled),
+            ProcessTerminal::TimedOut => Err(MediaError::TimedOut {
+                timeout: self.probe_timeout,
                 diagnostic: report.stderr_tail,
             }),
             ProcessTerminal::SpawnFailed(failure)
             | ProcessTerminal::SupervisionFailed(failure)
-            | ProcessTerminal::CleanupFailed(failure) => Err(SupervisedMediaError::Supervision {
+            | ProcessTerminal::CleanupFailed(failure) => Err(MediaError::Supervision {
                 detail: failure.message,
                 diagnostic: report.stderr_tail,
             }),
@@ -387,12 +468,45 @@ fn decoder_candidates(codec: &VideoCodec) -> &'static [HardwareDecoder] {
     }
 }
 
-fn decoder_is_available(ffmpeg: &Path, decoder: &HardwareDecoder) -> bool {
+/// `None` means the query was cancelled before ffmpeg answered; every other
+/// failure is logged and treated as "not available".
+fn decoder_is_available(
+    ffmpeg: &Path,
+    decoder: HardwareDecoder,
+    cancellation: &ProcessCancellation,
+) -> Option<bool> {
     let mut command = Command::new(ffmpeg);
     command
         .args(["-v", "error", "-hide_banner", "-h"])
-        .arg(format!("decoder={}", decoder_name(*decoder)));
-    process::status(&mut command).is_ok_and(|status| status.success())
+        .arg(format!("decoder={}", decoder_name(decoder)));
+    let report = process_supervisor::run(
+        &mut command,
+        cancellation,
+        ProcessLimits::new(Some(TOOL_QUERY_TIMEOUT), 0, DIAGNOSTIC_STDERR_BYTES),
+    );
+    match report.terminal {
+        ProcessTerminal::Success(_) => Some(true),
+        ProcessTerminal::ToolFailed(_) => Some(false),
+        ProcessTerminal::Cancelled => None,
+        ProcessTerminal::TimedOut => {
+            tracing::warn!(
+                "ffmpeg decoder query for {} did not finish within {} seconds",
+                decoder_name(decoder),
+                TOOL_QUERY_TIMEOUT.as_secs()
+            );
+            Some(false)
+        }
+        ProcessTerminal::SpawnFailed(failure)
+        | ProcessTerminal::SupervisionFailed(failure)
+        | ProcessTerminal::CleanupFailed(failure) => {
+            tracing::warn!(
+                "ffmpeg decoder query for {} failed: {}",
+                decoder_name(decoder),
+                failure.message
+            );
+            Some(false)
+        }
+    }
 }
 
 pub(crate) fn destructive_identity(path: &Path) -> io::Result<DestructiveIdentity> {
@@ -427,50 +541,13 @@ pub(crate) fn timestamp_reliability(
     }
 }
 
-fn sampled_identity(path: &Path, header: &VideoMeta) -> io::Result<ArtifactIdentity> {
-    sampled_identity_with_cancel(path, header, || false).map_err(|error| match error {
-        SampleIdentityError::Io(error) => error,
-        SampleIdentityError::Cancelled => io::Error::new(io::ErrorKind::Interrupted, "cancelled"),
-        SampleIdentityError::Changed => io::Error::new(
-            io::ErrorKind::Interrupted,
-            "artifact changed while its identity was computed",
-        ),
-    })
-}
-
-fn sampled_identity_cancellable(
+fn sampled_identity(
     path: &Path,
     header: &VideoMeta,
     cancellation: &ProcessCancellation,
-) -> Result<ArtifactIdentity, SupervisedMediaError> {
-    sampled_identity_with_cancel(path, header, || cancellation.is_cancelled()).map_err(|error| {
-        match error {
-            SampleIdentityError::Io(error) => SupervisedMediaError::Io(error),
-            SampleIdentityError::Cancelled => SupervisedMediaError::Cancelled,
-            SampleIdentityError::Changed => SupervisedMediaError::ChangedDuringSampling,
-        }
-    })
-}
-
-enum SampleIdentityError {
-    Io(io::Error),
-    Cancelled,
-    Changed,
-}
-
-impl From<io::Error> for SampleIdentityError {
-    fn from(error: io::Error) -> Self {
-        Self::Io(error)
-    }
-}
-
-fn sampled_identity_with_cancel(
-    path: &Path,
-    header: &VideoMeta,
-    mut cancelled: impl FnMut() -> bool,
-) -> Result<ArtifactIdentity, SampleIdentityError> {
-    if cancelled() {
-        return Err(SampleIdentityError::Cancelled);
+) -> Result<ArtifactIdentity, MediaError> {
+    if cancellation.is_cancelled() {
+        return Err(MediaError::Cancelled);
     }
     let before = std::fs::metadata(path)?;
     let before_identity = identity_from_metadata(path, &before)?;
@@ -489,8 +566,8 @@ fn sampled_identity_with_cancel(
     if before.len() <= WHOLE_FILE_LIMIT {
         let mut bytes = [0_u8; READ_BUFFER_BYTES];
         loop {
-            if cancelled() {
-                return Err(SampleIdentityError::Cancelled);
+            if cancellation.is_cancelled() {
+                return Err(MediaError::Cancelled);
             }
             let count = file.read(&mut bytes)?;
             if count == 0 {
@@ -501,24 +578,18 @@ fn sampled_identity_with_cancel(
             }
         }
     } else {
-        hash_region_cancellable(&mut digest, &mut file, 0, EDGE_SAMPLE, &mut cancelled)?;
+        hash_region(&mut digest, &mut file, 0, EDGE_SAMPLE, cancellation)?;
         for numerator in QUARTER_SAMPLE_NUMERATORS {
             let raw = before.len().saturating_mul(numerator) / SAMPLE_QUARTERS;
             let offset = raw / SAMPLE_ALIGNMENT_BYTES * SAMPLE_ALIGNMENT_BYTES;
-            hash_region_cancellable(
-                &mut digest,
-                &mut file,
-                offset,
-                MIDDLE_SAMPLE,
-                &mut cancelled,
-            )?;
+            hash_region(&mut digest, &mut file, offset, MIDDLE_SAMPLE, cancellation)?;
         }
-        hash_region_cancellable(
+        hash_region(
             &mut digest,
             &mut file,
             before.len().saturating_sub(EDGE_SAMPLE as u64),
             EDGE_SAMPLE,
-            &mut cancelled,
+            cancellation,
         )?;
     }
     let after = std::fs::metadata(path)?;
@@ -526,7 +597,7 @@ fn sampled_identity_with_cancel(
     if observation_stability(&before_identity, &before_identity, &after_identity)
         != ObservationStability::Stable
     {
-        return Err(SampleIdentityError::Changed);
+        return Err(MediaError::ChangedDuringSampling);
     }
     Ok(ArtifactIdentity {
         content_key: ContentKey(finalize_hex(digest, CONTENT_KEY_TEXT_PREFIX)?),
@@ -601,19 +672,19 @@ fn finalize_hex(digest: Blake2bVar, prefix: &str) -> io::Result<String> {
 
 const READ_BUFFER_BYTES: usize = 32 * 1024;
 
-fn hash_region_cancellable(
+fn hash_region(
     digest: &mut Blake2bVar,
     file: &mut std::fs::File,
     offset: u64,
     length: usize,
-    cancelled: &mut impl FnMut() -> bool,
-) -> Result<(), SampleIdentityError> {
+    cancellation: &ProcessCancellation,
+) -> Result<(), MediaError> {
     file.seek(SeekFrom::Start(offset))?;
     let mut remaining = length;
     let mut bytes = [0_u8; READ_BUFFER_BYTES];
     while remaining > 0 {
-        if cancelled() {
-            return Err(SampleIdentityError::Cancelled);
+        if cancellation.is_cancelled() {
+            return Err(MediaError::Cancelled);
         }
         let requested = remaining.min(bytes.len());
         let chunk = bytes
@@ -735,6 +806,7 @@ mod tests {
     #[cfg(unix)]
     use super::path_hash;
     use super::{hash_native_path, sampled_identity, timestamp_reliability};
+    use crate::process_supervisor::ProcessCancellation;
 
     static TEST_SEQUENCE: AtomicU64 = AtomicU64::new(0);
 
@@ -844,6 +916,7 @@ mod tests {
                 audio: Vec::new(),
                 subtitle_count: 0,
             },
+            &ProcessCancellation::new(),
         )
         .expect("small content key");
         assert_eq!(
@@ -869,6 +942,7 @@ mod tests {
                 audio: Vec::new(),
                 subtitle_count: 0,
             },
+            &ProcessCancellation::new(),
         )
         .expect("large content key");
         assert_eq!(

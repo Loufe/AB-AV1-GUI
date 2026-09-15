@@ -30,10 +30,10 @@ export function formatCompactTime(seconds: number, confidence: TimeConfidence = 
   return `${prefix}< 1m`;
 }
 
-/** Savings-per-time as "2.5 GB/h" (one decimal below 10, none at or above). */
-export function formatEfficiency(savingsBytes: number, timeSeconds: number): string {
-  if (savingsBytes <= 0 || timeSeconds <= 0) return EM_DASH;
-  const gbPerHr = savingsBytes / GIB / (timeSeconds / 3600);
+/** Output-size reduction per hour as "2.5 GB/h" (one decimal below 10, none at or above). */
+export function formatEfficiency(reductionBytes: number, timeSeconds: number): string {
+  if (reductionBytes <= 0 || timeSeconds <= 0) return EM_DASH;
+  const gbPerHr = reductionBytes / GIB / (timeSeconds / 3600);
   if (gbPerHr >= EFFICIENCY_DECIMAL_THRESHOLD) return `${gbPerHr.toFixed(0)} GB/h`;
   return `${gbPerHr.toFixed(1)} GB/h`;
 }

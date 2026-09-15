@@ -21,7 +21,7 @@ use crfty_core::{
 use crate::{
     driver::CommandSender,
     history_import,
-    media::{self, MediaInspector, SupervisedMediaError},
+    media::{self, MediaError, MediaInspector},
 };
 
 use super::runtime::{AnalysisGenerationRegistry, Cancellation};
@@ -244,9 +244,9 @@ fn scan_one_file(
         }
         BasicScanDisposition::Observe => {}
     }
-    let observation = match inspector.observe_supervised(&task.path, &cancellation.process) {
+    let observation = match inspector.observe(&task.path, &cancellation.process) {
         Ok(observation) => observation,
-        Err(SupervisedMediaError::Cancelled) => return Ok(()),
+        Err(MediaError::Cancelled) => return Ok(()),
         Err(error) => {
             return submit_scan_failure(
                 commands,
@@ -276,37 +276,40 @@ fn scan_one_file(
     }
 }
 
-fn scan_failure(error: SupervisedMediaError, path: &Path) -> AnalysisScanFailure {
+fn scan_failure(error: MediaError, path: &Path) -> AnalysisScanFailure {
     match error {
-        SupervisedMediaError::Cancelled => AnalysisScanFailure::Unavailable {
+        MediaError::Cancelled => AnalysisScanFailure::Unavailable {
             detail: "scan was cancelled".to_owned(),
         },
-        SupervisedMediaError::TimedOut { diagnostic } => AnalysisScanFailure::TimedOut {
+        MediaError::TimedOut { diagnostic, .. } => AnalysisScanFailure::TimedOut {
             diagnostic: diagnostic_tail(diagnostic, path),
         },
-        SupervisedMediaError::Rejected { diagnostic } => AnalysisScanFailure::Rejected {
+        MediaError::Rejected { diagnostic } => AnalysisScanFailure::Rejected {
             diagnostic: diagnostic_tail(diagnostic, path),
         },
-        SupervisedMediaError::InvalidOutput { detail, diagnostic } => {
-            AnalysisScanFailure::InvalidOutput {
-                detail,
-                diagnostic: diagnostic_tail(diagnostic, path),
-            }
-        }
-        SupervisedMediaError::Supervision { detail, diagnostic } => {
-            AnalysisScanFailure::Supervision {
-                detail,
-                diagnostic: diagnostic_tail(diagnostic, path),
-            }
-        }
-        SupervisedMediaError::Io(error) if error.kind() == io::ErrorKind::NotFound => {
+        MediaError::InvalidOutput { detail, diagnostic } => AnalysisScanFailure::InvalidOutput {
+            detail,
+            diagnostic: diagnostic_tail(diagnostic, path),
+        },
+        MediaError::Supervision { detail, diagnostic } => AnalysisScanFailure::Supervision {
+            detail,
+            diagnostic: diagnostic_tail(diagnostic, path),
+        },
+        MediaError::Io(error) if error.kind() == io::ErrorKind::NotFound => {
             AnalysisScanFailure::Missing
         }
-        SupervisedMediaError::Io(error) => AnalysisScanFailure::Unavailable {
+        MediaError::Io(error) => AnalysisScanFailure::Unavailable {
             detail: format!("media observation failed: {:?}", error.kind()),
         },
-        SupervisedMediaError::ChangedAfterProbe => AnalysisScanFailure::ChangedAfterProbe,
-        SupervisedMediaError::ChangedDuringSampling => AnalysisScanFailure::ChangedDuringSampling,
+        MediaError::ChangedAfterProbe => AnalysisScanFailure::ChangedAfterProbe,
+        MediaError::ChangedDuringSampling => AnalysisScanFailure::ChangedDuringSampling,
+        // Verification verdicts belong to output checks; a scan never asks
+        // for them, so they cannot occur here.
+        verdict @ (MediaError::OutputTooSmall { .. } | MediaError::OutputNotAv1 { .. }) => {
+            AnalysisScanFailure::Unavailable {
+                detail: verdict.to_string(),
+            }
+        }
     }
 }
 
