@@ -663,6 +663,8 @@ export type DurableDelta_Serialize = ({ QueueAdded: {
 export type DurableState = DurableState_Serialize | DurableState_Deserialize;
 
 export type DurableState_Deserialize = {
+	/**  Highest durably reserved claim or run ID, retained after queue removal. */
+	runtime_id_high_water: number,
 	queue: QueueItem[],
 	paths: { [key in PathHash]: PathBinding_Deserialize },
 	records: { [key in ContentKey]: FileRecord_Deserialize },
@@ -683,6 +685,8 @@ export type DurableState_Deserialize = {
 };
 
 export type DurableState_Serialize = {
+	/**  Highest durably reserved claim or run ID, retained after queue removal. */
+	runtime_id_high_water: number,
 	queue: QueueItem[],
 	paths: { [key in PathHash]: PathBinding_Serialize },
 	records: { [key in ContentKey]: FileRecord_Serialize },

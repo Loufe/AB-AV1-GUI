@@ -268,7 +268,7 @@ fn startup_recovery_without_ffprobe_defers_output_settlement() {
     let manager = OutputManager::new(FixtureByteInspector);
     let transaction = manager
         .plan(
-            RunId(3),
+            RunId(2),
             &input,
             &final_path,
             Replacement::RetireOriginal,
@@ -289,28 +289,25 @@ fn startup_recovery_without_ffprobe_defers_output_settlement() {
             availability: fixture_available(),
         }),
         Command::Session(SessionCommand::Start),
-        Command::Worker(WorkerCommand::ReserveNext {
-            claim_id: ClaimId(2),
-            run_id: RunId(3),
-        }),
+        Command::Worker(WorkerCommand::ReserveNext),
         Command::Worker(WorkerCommand::PrepareReserved {
             item_id: QueueItemId(1),
-            claim_id: ClaimId(2),
-            run_id: RunId(3),
+            claim_id: ClaimId(1),
+            run_id: RunId(2),
             observation: None,
             import_paths: Vec::new(),
             execution: settings.clone(),
         }),
         Command::Worker(WorkerCommand::Started {
             item_id: QueueItemId(1),
-            claim_id: ClaimId(2),
-            run_id: RunId(3),
+            claim_id: ClaimId(1),
+            run_id: RunId(2),
             at: UnixMillis(1_000),
         }),
         Command::Worker(WorkerCommand::RecordAnalysis {
             item_id: QueueItemId(1),
-            claim_id: ClaimId(2),
-            run_id: RunId(3),
+            claim_id: ClaimId(1),
+            run_id: RunId(2),
             result: Box::new(AnalysisResult {
                 requested_target: settings.requested_target,
                 successful_target: settings.requested_target,
@@ -332,7 +329,7 @@ fn startup_recovery_without_ffprobe_defers_output_settlement() {
             transaction: Box::new(transaction.clone()),
         })),
         Command::Worker(WorkerCommand::Output(OutputDelta::StagingCreated {
-            run_id: RunId(3),
+            run_id: RunId(2),
             initial,
         })),
     ] {
@@ -359,7 +356,7 @@ fn startup_recovery_without_ffprobe_defers_output_settlement() {
     let deferred_transaction = snapshot
         .durable
         .outputs
-        .get(&RunId(3))
+        .get(&RunId(2))
         .expect("deferred transaction");
     assert!(!deferred_transaction.is_settled());
     assert!(transaction.staging.exists(), "staging must be untouched");

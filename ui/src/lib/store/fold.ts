@@ -43,6 +43,7 @@ export function emptyDurableState(): DurableState_Deserialize {
     paths: {},
     records: {},
     outputs: {},
+    runtime_id_high_water: 0,
     conversion_runs: {},
     parked: {},
     adopted_imports: [],
@@ -90,6 +91,7 @@ export function foldDurable(
     const { job } = delta.ItemReserved;
     return {
       ...state,
+      runtime_id_high_water: job.run_id,
       queue: withItemState(state.queue, job.item_id, {
         Reserved: { claim_id: job.claim_id, run_id: job.run_id },
       }),

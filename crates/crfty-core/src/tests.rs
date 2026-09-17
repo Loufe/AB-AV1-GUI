@@ -260,7 +260,7 @@ fn settings_control_job_overwrite_and_hardware_decode_policy() {
     let _started = start_session(&mut state);
     let mut requested = execution();
     requested.profile.decode_mode = DecodeMode::Hardware(crate::HardwareDecoder::H264Qsv);
-    let prepared = reserve_and_prepare(&mut state, ClaimId(2), RunId(3), requested);
+    let prepared = reserve_and_prepare(&mut state, requested);
     let Reply::Claimed(Some(job)) = prepared.reply else {
         panic!("expected claimed job");
     };
@@ -1186,14 +1186,14 @@ fn reducer_enforces_session_claim_and_terminal_ordering() {
     assert_eq!(add.reply, Reply::Accepted);
     let start = start_session(&mut state);
     assert_eq!(start.effects, vec![Effect::StartWorker]);
-    let claim = reserve_and_prepare(&mut state, ClaimId(2), RunId(3), execution());
+    let claim = reserve_and_prepare(&mut state, execution());
     assert!(matches!(claim.reply, Reply::Claimed(Some(_))));
     let stale = apply(
         &mut state,
         Command::Worker(WorkerCommand::Started {
             item_id: QueueItemId(1),
             claim_id: ClaimId(99),
-            run_id: RunId(3),
+            run_id: RunId(2),
             at: UnixMillis(1_000),
         }),
     );
@@ -1206,13 +1206,13 @@ fn reducer_enforces_session_claim_and_terminal_ordering() {
         &mut state,
         Command::Worker(WorkerCommand::Terminal {
             item_id: QueueItemId(1),
-            claim_id: ClaimId(2),
-            run_id: RunId(3),
+            claim_id: ClaimId(1),
+            run_id: RunId(2),
             outcome: ItemOutcome::Failed(FailureFacts::new(FailureKind::Internal, "fixture")),
             at: UnixMillis(1_000),
             phase_spans: Vec::new(),
             final_telemetry: Some(Telemetry {
-                run_id: RunId(3),
+                run_id: RunId(2),
                 sequence: 20,
                 phase: JobPhase::Encoding,
                 progress: JobProgress::OutputPositionMs(100),
@@ -1226,7 +1226,7 @@ fn reducer_enforces_session_claim_and_terminal_ordering() {
     let finished = apply(&mut state, Command::Worker(WorkerCommand::Finished));
     assert_eq!(finished.reply, Reply::Accepted);
     assert_eq!(state.session, SessionState::Idle);
-    assert!(!state.telemetry.contains_key(&RunId(3)));
+    assert!(!state.telemetry.contains_key(&RunId(2)));
 }
 
 #[test]
@@ -1237,25 +1237,13 @@ fn reservation_is_atomic_and_uses_current_queue_order() {
     let moved = apply(&mut state, reorder_pending_command(&[2, 1]));
     assert_eq!(moved.reply, Reply::Accepted);
     let _started = start_session(&mut state);
-    let reserved = apply(
-        &mut state,
-        Command::Worker(WorkerCommand::ReserveNext {
-            claim_id: ClaimId(10),
-            run_id: RunId(11),
-        }),
-    );
+    let reserved = apply(&mut state, Command::Worker(WorkerCommand::ReserveNext));
     let Reply::Reserved(Some(job)) = reserved.reply else {
         panic!("expected an atomic reservation");
     };
     assert_eq!(job.item_id, QueueItemId(2));
 
-    let competing = apply(
-        &mut state,
-        Command::Worker(WorkerCommand::ReserveNext {
-            claim_id: ClaimId(12),
-            run_id: RunId(13),
-        }),
-    );
+    let competing = apply(&mut state, Command::Worker(WorkerCommand::ReserveNext));
     assert!(matches!(competing.reply, Reply::Rejected { .. }));
 }
 
@@ -1264,13 +1252,7 @@ fn durable_analysis_is_selected_for_the_same_content_and_profile() {
     let mut state = AppState::default();
     let _added = apply(&mut state, add_command(QueueItemId(1), "first.mkv"));
     let _started = start_session(&mut state);
-    let reserved = apply(
-        &mut state,
-        Command::Worker(WorkerCommand::ReserveNext {
-            claim_id: ClaimId(2),
-            run_id: RunId(3),
-        }),
-    );
+    let reserved = apply(&mut state, Command::Worker(WorkerCommand::ReserveNext));
     assert!(matches!(reserved.reply, Reply::Reserved(Some(_))));
     let mut moved_observation = media_observation("same-content");
     moved_observation.path_hash = PathHash("moved-path".to_owned());
@@ -1278,8 +1260,8 @@ fn durable_analysis_is_selected_for_the_same_content_and_profile() {
         &mut state,
         Command::Worker(WorkerCommand::PrepareReserved {
             item_id: QueueItemId(1),
-            claim_id: ClaimId(2),
-            run_id: RunId(3),
+            claim_id: ClaimId(1),
+            run_id: RunId(2),
             observation: Some(Box::new(moved_observation)),
             import_paths: Vec::new(),
             execution: execution(),
@@ -1290,8 +1272,8 @@ fn durable_analysis_is_selected_for_the_same_content_and_profile() {
         &mut state,
         Command::Worker(WorkerCommand::RecordAnalysis {
             item_id: QueueItemId(1),
-            claim_id: ClaimId(2),
-            run_id: RunId(3),
+            claim_id: ClaimId(1),
+            run_id: RunId(2),
             result: Box::new(analysis()),
         }),
     );
@@ -1300,8 +1282,8 @@ fn durable_analysis_is_selected_for_the_same_content_and_profile() {
         &mut state,
         Command::Worker(WorkerCommand::Terminal {
             item_id: QueueItemId(1),
-            claim_id: ClaimId(2),
-            run_id: RunId(3),
+            claim_id: ClaimId(1),
+            run_id: RunId(2),
             outcome: ItemOutcome::Failed(FailureFacts::new(
                 FailureKind::Internal,
                 "fixture boundary",
@@ -1313,20 +1295,14 @@ fn durable_analysis_is_selected_for_the_same_content_and_profile() {
     );
     assert_eq!(failed.reply, Reply::Accepted);
     let _second = apply(&mut state, add_command(QueueItemId(4), "moved.mkv"));
-    let reserved = apply(
-        &mut state,
-        Command::Worker(WorkerCommand::ReserveNext {
-            claim_id: ClaimId(5),
-            run_id: RunId(6),
-        }),
-    );
+    let reserved = apply(&mut state, Command::Worker(WorkerCommand::ReserveNext));
     assert!(matches!(reserved.reply, Reply::Reserved(Some(_))));
     let prepared = apply(
         &mut state,
         Command::Worker(WorkerCommand::PrepareReserved {
             item_id: QueueItemId(4),
-            claim_id: ClaimId(5),
-            run_id: RunId(6),
+            claim_id: ClaimId(3),
+            run_id: RunId(4),
             observation: Some(Box::new(media_observation("same-content"))),
             import_paths: Vec::new(),
             execution: execution(),
@@ -1350,14 +1326,14 @@ fn reorder_fixture() -> AppState {
     }
     let start = start_session(&mut state);
     assert_eq!(start.reply, Reply::Accepted);
-    let first = reserve_and_prepare(&mut state, ClaimId(20), RunId(21), execution());
+    let first = reserve_and_prepare(&mut state, execution());
     assert!(matches!(first.reply, Reply::Claimed(Some(_))));
     let finished = apply(
         &mut state,
         Command::Worker(WorkerCommand::Terminal {
             item_id: QueueItemId(1),
-            claim_id: ClaimId(20),
-            run_id: RunId(21),
+            claim_id: ClaimId(1),
+            run_id: RunId(2),
             outcome: ItemOutcome::Failed(FailureFacts::new(FailureKind::Internal, "fixture")),
             at: UnixMillis(1_000),
             phase_spans: Vec::new(),
@@ -1365,7 +1341,7 @@ fn reorder_fixture() -> AppState {
         }),
     );
     assert_eq!(finished.reply, Reply::Accepted);
-    let second = reserve_and_prepare(&mut state, ClaimId(22), RunId(23), execution());
+    let second = reserve_and_prepare(&mut state, execution());
     assert!(matches!(second.reply, Reply::Claimed(Some(_))));
     assert_queue_shape(&state, &[1, 2, 3, 4, 5]);
     state
@@ -1488,14 +1464,14 @@ fn reorder_of_the_only_pending_item_above_active_is_a_no_op() {
     }
     let start = start_session(&mut state);
     assert_eq!(start.reply, Reply::Accepted);
-    let first = reserve_and_prepare(&mut state, ClaimId(20), RunId(21), execution());
+    let first = reserve_and_prepare(&mut state, execution());
     assert!(matches!(first.reply, Reply::Claimed(Some(_))));
     let finished = apply(
         &mut state,
         Command::Worker(WorkerCommand::Terminal {
             item_id: QueueItemId(1),
-            claim_id: ClaimId(20),
-            run_id: RunId(21),
+            claim_id: ClaimId(1),
+            run_id: RunId(2),
             outcome: ItemOutcome::Failed(FailureFacts::new(FailureKind::Internal, "fixture")),
             at: UnixMillis(1_000),
             phase_spans: Vec::new(),
@@ -1503,7 +1479,7 @@ fn reorder_of_the_only_pending_item_above_active_is_a_no_op() {
         }),
     );
     assert_eq!(finished.reply, Reply::Accepted);
-    let second = reserve_and_prepare(&mut state, ClaimId(22), RunId(23), execution());
+    let second = reserve_and_prepare(&mut state, execution());
     assert!(matches!(second.reply, Reply::Claimed(Some(_))));
 
     let applied = apply(&mut state, reorder_pending_command(&[3]));
@@ -1607,10 +1583,7 @@ fn media_record_and_analysis_checkpoint_replay_as_one_state() {
         &mut state,
         &mut bytes,
         &mut sequence,
-        Command::Worker(WorkerCommand::ReserveNext {
-            claim_id: ClaimId(2),
-            run_id: RunId(3),
-        }),
+        Command::Worker(WorkerCommand::ReserveNext),
     );
     let _prepared = apply_and_journal(
         &mut state,
@@ -1618,8 +1591,8 @@ fn media_record_and_analysis_checkpoint_replay_as_one_state() {
         &mut sequence,
         Command::Worker(WorkerCommand::PrepareReserved {
             item_id: QueueItemId(1),
-            claim_id: ClaimId(2),
-            run_id: RunId(3),
+            claim_id: ClaimId(1),
+            run_id: RunId(2),
             observation: Some(Box::new(media_observation("durable-content"))),
             import_paths: Vec::new(),
             execution: execution(),
@@ -1631,8 +1604,8 @@ fn media_record_and_analysis_checkpoint_replay_as_one_state() {
         &mut sequence,
         Command::Worker(WorkerCommand::RecordAnalysis {
             item_id: QueueItemId(1),
-            claim_id: ClaimId(2),
-            run_id: RunId(3),
+            claim_id: ClaimId(1),
+            run_id: RunId(2),
             result: Box::new(analysis()),
         }),
     );
@@ -1642,8 +1615,8 @@ fn media_record_and_analysis_checkpoint_replay_as_one_state() {
         &mut sequence,
         Command::Worker(WorkerCommand::Terminal {
             item_id: QueueItemId(1),
-            claim_id: ClaimId(2),
-            run_id: RunId(3),
+            claim_id: ClaimId(1),
+            run_id: RunId(2),
             outcome: ItemOutcome::Failed(FailureFacts::new(
                 FailureKind::Internal,
                 "fixture boundary",
@@ -1682,7 +1655,7 @@ fn stop_after_current_does_not_kill_but_force_stop_does() {
     assert_eq!(
         forced.effects,
         vec![Effect::KillActiveRun {
-            run_id: Some(RunId(3))
+            run_id: Some(RunId(2))
         }]
     );
 }
@@ -1691,7 +1664,7 @@ fn stop_after_current_does_not_kill_but_force_stop_does() {
 fn terminal_is_rejected_until_output_ledger_is_settled() {
     let mut state = active_state();
     let mut started = transaction(OutputState::Started, Replacement::KeepOriginal);
-    started.run_id = RunId(3);
+    started.run_id = RunId(2);
     let output = apply(
         &mut state,
         Command::Worker(WorkerCommand::Output(OutputDelta::OutputStarted {
@@ -1703,8 +1676,8 @@ fn terminal_is_rejected_until_output_ledger_is_settled() {
         &mut state,
         Command::Worker(WorkerCommand::Terminal {
             item_id: QueueItemId(1),
-            claim_id: ClaimId(2),
-            run_id: RunId(3),
+            claim_id: ClaimId(1),
+            run_id: RunId(2),
             outcome: ItemOutcome::Stopped,
             at: UnixMillis(1_000),
             phase_spans: Vec::new(),
@@ -1721,8 +1694,8 @@ fn converted_requires_a_successfully_committed_output() {
         &mut state,
         Command::Worker(WorkerCommand::Terminal {
             item_id: QueueItemId(1),
-            claim_id: ClaimId(2),
-            run_id: RunId(3),
+            claim_id: ClaimId(1),
+            run_id: RunId(2),
             outcome: ItemOutcome::Converted(CompletionEvidence::RecoveredAtStartup),
             at: UnixMillis(1_000),
             phase_spans: Vec::new(),
@@ -1732,7 +1705,7 @@ fn converted_requires_a_successfully_committed_output() {
     assert!(matches!(without_output.reply, Reply::Rejected { .. }));
 
     let mut started = transaction(OutputState::Started, Replacement::KeepOriginal);
-    started.run_id = RunId(3);
+    started.run_id = RunId(2);
     assert_eq!(
         apply(
             &mut state,
@@ -1747,7 +1720,7 @@ fn converted_requires_a_successfully_committed_output() {
         apply(
             &mut state,
             Command::Worker(WorkerCommand::Output(OutputDelta::Conflict {
-                run_id: RunId(3),
+                run_id: RunId(2),
                 kind: ConflictKind::InspectionFailed,
                 detail: "fixture conflict".to_owned(),
             })),
@@ -1759,8 +1732,8 @@ fn converted_requires_a_successfully_committed_output() {
         &mut state,
         Command::Worker(WorkerCommand::Terminal {
             item_id: QueueItemId(1),
-            claim_id: ClaimId(2),
-            run_id: RunId(3),
+            claim_id: ClaimId(1),
+            run_id: RunId(2),
             outcome: ItemOutcome::Converted(CompletionEvidence::RecoveredAtStartup),
             at: UnixMillis(1_000),
             phase_spans: Vec::new(),
@@ -1776,13 +1749,7 @@ fn remuxed_requires_a_remux_action_and_committed_output() {
     let mut state = AppState::default();
     let _added = apply(&mut state, add_command(QueueItemId(1), "video.mp4"));
     let _started = start_session(&mut state);
-    let _reserved = apply(
-        &mut state,
-        Command::Worker(WorkerCommand::ReserveNext {
-            claim_id: ClaimId(2),
-            run_id: RunId(3),
-        }),
-    );
+    let _reserved = apply(&mut state, Command::Worker(WorkerCommand::ReserveNext));
     let mut observation = media_observation("remux-content");
     observation.metadata.codec = VideoCodec::Av1;
     observation.metadata.container = MediaContainer::Other("mov,mp4".to_owned());
@@ -1790,8 +1757,8 @@ fn remuxed_requires_a_remux_action_and_committed_output() {
         &mut state,
         Command::Worker(WorkerCommand::PrepareReserved {
             item_id: QueueItemId(1),
-            claim_id: ClaimId(2),
-            run_id: RunId(3),
+            claim_id: ClaimId(1),
+            run_id: RunId(2),
             observation: Some(Box::new(observation)),
             import_paths: Vec::new(),
             execution: execution(),
@@ -1802,8 +1769,8 @@ fn remuxed_requires_a_remux_action_and_committed_output() {
         &mut state,
         Command::Worker(WorkerCommand::Started {
             item_id: QueueItemId(1),
-            claim_id: ClaimId(2),
-            run_id: RunId(3),
+            claim_id: ClaimId(1),
+            run_id: RunId(2),
             at: UnixMillis(1_000),
         }),
     );
@@ -1811,7 +1778,7 @@ fn remuxed_requires_a_remux_action_and_committed_output() {
     let run = state
         .durable
         .conversion_runs
-        .get(&RunId(3))
+        .get(&RunId(2))
         .expect("prepared remux run");
     assert_eq!(run.spec.action, JobAction::Remux);
     assert_eq!(run.started_at, Some(UnixMillis(1_000)));
@@ -1821,7 +1788,7 @@ fn remuxed_requires_a_remux_action_and_committed_output() {
         },
         Replacement::KeepOriginal,
     );
-    output.run_id = RunId(3);
+    output.run_id = RunId(2);
     let live_remux = ItemOutcome::Remuxed(CompletionEvidence::LiveRemux {
         input_size: 10_000,
         output_size: 20,
@@ -1867,20 +1834,20 @@ fn successful_outcomes_require_a_started_run_and_matching_evidence() {
     let mut state = AppState::default();
     let _added = apply(&mut state, add_command(QueueItemId(1), "video.mkv"));
     let _started = start_session(&mut state);
-    let _claimed = reserve_and_prepare(&mut state, ClaimId(2), RunId(3), execution());
+    let _claimed = reserve_and_prepare(&mut state, execution());
     let _analysis = apply(
         &mut state,
         Command::Worker(WorkerCommand::RecordAnalysis {
             item_id: QueueItemId(1),
-            claim_id: ClaimId(2),
-            run_id: RunId(3),
+            claim_id: ClaimId(1),
+            run_id: RunId(2),
             result: Box::new(analysis()),
         }),
     );
     let run = state
         .durable
         .conversion_runs
-        .get(&RunId(3))
+        .get(&RunId(2))
         .expect("claimed run");
     assert_eq!(run.started_at, None);
     let mut output = transaction(
@@ -1889,7 +1856,7 @@ fn successful_outcomes_require_a_started_run_and_matching_evidence() {
         },
         Replacement::KeepOriginal,
     );
-    output.run_id = RunId(3);
+    output.run_id = RunId(2);
     assert!(
         validate_terminal(
             run,
@@ -1904,7 +1871,7 @@ fn successful_outcomes_require_a_started_run_and_matching_evidence() {
     let started_run = started_state
         .durable
         .conversion_runs
-        .get(&RunId(3))
+        .get(&RunId(2))
         .expect("started run");
     assert!(started_run.started_at.is_some());
     assert!(
@@ -1950,8 +1917,8 @@ fn run_facts_fold_start_finish_instants_and_phase_spans() {
         &mut state,
         Command::Worker(WorkerCommand::Terminal {
             item_id: QueueItemId(1),
-            claim_id: ClaimId(2),
-            run_id: RunId(3),
+            claim_id: ClaimId(1),
+            run_id: RunId(2),
             outcome: ItemOutcome::Failed(FailureFacts::new(FailureKind::Internal, "fixture")),
             at: UnixMillis(2_000),
             phase_spans: spans.clone(),
@@ -1962,7 +1929,7 @@ fn run_facts_fold_start_finish_instants_and_phase_spans() {
     let run = state
         .durable
         .conversion_runs
-        .get(&RunId(3))
+        .get(&RunId(2))
         .expect("finished run");
     assert_eq!(run.started_at, Some(UnixMillis(1_000)));
     assert_eq!(run.finished_at, Some(UnixMillis(2_000)));
@@ -2061,8 +2028,8 @@ fn terminal_and_abandonment_emit_the_updated_aggregates() {
         &mut state,
         Command::Worker(WorkerCommand::Terminal {
             item_id: QueueItemId(1),
-            claim_id: ClaimId(2),
-            run_id: RunId(3),
+            claim_id: ClaimId(1),
+            run_id: RunId(2),
             outcome: ItemOutcome::Failed(FailureFacts::new(FailureKind::Internal, "fixture")),
             at: UnixMillis(2_000),
             phase_spans: vec![PhaseSpan {
@@ -2088,19 +2055,13 @@ fn terminal_and_abandonment_emit_the_updated_aggregates() {
     let mut state = AppState::default();
     let _added = apply(&mut state, add_command(QueueItemId(1), "video.mkv"));
     let _started = start_session(&mut state);
-    let _reserved = apply(
-        &mut state,
-        Command::Worker(WorkerCommand::ReserveNext {
-            claim_id: ClaimId(2),
-            run_id: RunId(3),
-        }),
-    );
+    let _reserved = apply(&mut state, Command::Worker(WorkerCommand::ReserveNext));
     let stopped = apply(
         &mut state,
         Command::Worker(WorkerCommand::AbandonReservation {
             item_id: QueueItemId(1),
-            claim_id: ClaimId(2),
-            run_id: RunId(3),
+            claim_id: ClaimId(1),
+            run_id: RunId(2),
             at: UnixMillis(1_000),
         }),
     );
@@ -2122,19 +2083,13 @@ fn failed_terminal_invariants_check_conflict_state_and_diagnostic_bound() {
     let mut state = AppState::default();
     let _added = apply(&mut state, add_command(QueueItemId(1), "video.mkv"));
     let _started = start_session(&mut state);
-    let _reserved = apply(
-        &mut state,
-        Command::Worker(WorkerCommand::ReserveNext {
-            claim_id: ClaimId(2),
-            run_id: RunId(3),
-        }),
-    );
+    let _reserved = apply(&mut state, Command::Worker(WorkerCommand::ReserveNext));
     let prepared = apply(
         &mut state,
         Command::Worker(WorkerCommand::PrepareReserved {
             item_id: QueueItemId(1),
-            claim_id: ClaimId(2),
-            run_id: RunId(3),
+            claim_id: ClaimId(1),
+            run_id: RunId(2),
             observation: Some(Box::new(media_observation("failed-content"))),
             import_paths: Vec::new(),
             execution: execution(),
@@ -2144,7 +2099,7 @@ fn failed_terminal_invariants_check_conflict_state_and_diagnostic_bound() {
     let run = state
         .durable
         .conversion_runs
-        .get(&RunId(3))
+        .get(&RunId(2))
         .expect("prepared run");
 
     let conflict_failure = ItemOutcome::Failed(FailureFacts::new(
@@ -2160,7 +2115,7 @@ fn failed_terminal_invariants_check_conflict_state_and_diagnostic_bound() {
         },
         Replacement::KeepOriginal,
     );
-    conflicted.run_id = RunId(3);
+    conflicted.run_id = RunId(2);
     assert!(validate_terminal(run, Some(&conflicted), &conflict_failure).is_ok());
     // The converse is NOT an invariant: a conflicted settlement followed by a
     // Stopped terminal stays legal (cancellation racing a settlement failure).
@@ -2187,20 +2142,14 @@ fn preparation_rejects_invalid_execution_settings() {
     let _started = start_session(&mut state);
     let mut invalid = execution();
     invalid.fallback_step = 0;
-    let reserved = apply(
-        &mut state,
-        Command::Worker(WorkerCommand::ReserveNext {
-            claim_id: ClaimId(2),
-            run_id: RunId(3),
-        }),
-    );
+    let reserved = apply(&mut state, Command::Worker(WorkerCommand::ReserveNext));
     assert!(matches!(reserved.reply, Reply::Reserved(Some(_))));
     let prepared = apply(
         &mut state,
         Command::Worker(WorkerCommand::PrepareReserved {
             item_id: QueueItemId(1),
-            claim_id: ClaimId(2),
-            run_id: RunId(3),
+            claim_id: ClaimId(1),
+            run_id: RunId(2),
             observation: None,
             import_paths: Vec::new(),
             execution: invalid,
@@ -2216,22 +2165,13 @@ fn reserved_item_can_be_durably_stopped_before_preparation() {
     let mut durable = Vec::new();
     durable.extend(apply(&mut state, add_command(QueueItemId(1), "video.mkv")).durable);
     let _started = start_session(&mut state);
-    durable.extend(
-        apply(
-            &mut state,
-            Command::Worker(WorkerCommand::ReserveNext {
-                claim_id: ClaimId(2),
-                run_id: RunId(3),
-            }),
-        )
-        .durable,
-    );
+    durable.extend(apply(&mut state, Command::Worker(WorkerCommand::ReserveNext)).durable);
     let stopped = apply(
         &mut state,
         Command::Worker(WorkerCommand::AbandonReservation {
             item_id: QueueItemId(1),
-            claim_id: ClaimId(2),
-            run_id: RunId(3),
+            claim_id: ClaimId(1),
+            run_id: RunId(2),
             at: UnixMillis(1_000),
         }),
     );
@@ -2257,14 +2197,14 @@ fn output_ledger_rejects_skipped_and_mismatched_transitions() {
     let skipped = apply(
         &mut state,
         Command::Worker(WorkerCommand::Output(OutputDelta::OutputCommitted {
-            run_id: RunId(3),
+            run_id: RunId(2),
             final_identity: identity("encoded", 8),
         })),
     );
     assert!(matches!(skipped.reply, Reply::Rejected { .. }));
 
     let mut started = transaction(OutputState::Started, Replacement::KeepOriginal);
-    started.run_id = RunId(3);
+    started.run_id = RunId(2);
     let accepted = apply(
         &mut state,
         Command::Worker(WorkerCommand::Output(OutputDelta::OutputStarted {
@@ -2275,7 +2215,7 @@ fn output_ledger_rejects_skipped_and_mismatched_transitions() {
     let ready_without_staging = apply(
         &mut state,
         Command::Worker(WorkerCommand::Output(OutputDelta::OutputReady {
-            run_id: RunId(3),
+            run_id: RunId(2),
             staging_identity: identity("staging", 8),
         })),
     );
@@ -2286,7 +2226,7 @@ fn output_ledger_rejects_skipped_and_mismatched_transitions() {
     let staging_created = apply(
         &mut state,
         Command::Worker(WorkerCommand::Output(OutputDelta::StagingCreated {
-            run_id: RunId(3),
+            run_id: RunId(2),
             initial: destructive("staging", 0),
         })),
     );
@@ -2296,7 +2236,7 @@ fn output_ledger_rejects_skipped_and_mismatched_transitions() {
     let repeated_staging = apply(
         &mut state,
         Command::Worker(WorkerCommand::Output(OutputDelta::StagingCreated {
-            run_id: RunId(3),
+            run_id: RunId(2),
             initial: destructive("staging", 0),
         })),
     );
@@ -2304,7 +2244,7 @@ fn output_ledger_rejects_skipped_and_mismatched_transitions() {
     let empty_ready = apply(
         &mut state,
         Command::Worker(WorkerCommand::Output(OutputDelta::OutputReady {
-            run_id: RunId(3),
+            run_id: RunId(2),
             staging_identity: identity("staging", 0),
         })),
     );
@@ -2312,7 +2252,7 @@ fn output_ledger_rejects_skipped_and_mismatched_transitions() {
     let foreign_ready = apply(
         &mut state,
         Command::Worker(WorkerCommand::Output(OutputDelta::OutputReady {
-            run_id: RunId(3),
+            run_id: RunId(2),
             staging_identity: identity("other", 8),
         })),
     );
@@ -2320,7 +2260,7 @@ fn output_ledger_rejects_skipped_and_mismatched_transitions() {
     let ready = apply(
         &mut state,
         Command::Worker(WorkerCommand::Output(OutputDelta::OutputReady {
-            run_id: RunId(3),
+            run_id: RunId(2),
             staging_identity: identity("staging", 8),
         })),
     );
@@ -2807,8 +2747,8 @@ fn replay_rejects_invalid_queue_output_targets_before_folding() {
             DurableDelta::ItemReserved {
                 job: Box::new(crate::ReservedJob {
                     item_id: QueueItemId(1),
-                    claim_id: ClaimId(2),
-                    run_id: RunId(3),
+                    claim_id: ClaimId(1),
+                    run_id: RunId(2),
                     input: PathBuf::from("one.mkv"),
                     operation: Operation::Convert,
                     intent: AnalysisIntent::ReuseIfFresh,
@@ -2817,8 +2757,8 @@ fn replay_rejects_invalid_queue_output_targets_before_folding() {
             },
             DurableDelta::ItemFinished {
                 item_id: QueueItemId(1),
-                claim_id: ClaimId(2),
-                run_id: RunId(3),
+                claim_id: ClaimId(1),
+                run_id: RunId(2),
                 outcome: ItemOutcome::Stopped,
                 at: UnixMillis(1_000),
                 phase_spans: Vec::new(),
@@ -3030,13 +2970,13 @@ fn active_state() -> AppState {
     let mut state = AppState::default();
     let _added = apply(&mut state, add_command(QueueItemId(1), "video.mkv"));
     let _started = start_session(&mut state);
-    let _claimed = reserve_and_prepare(&mut state, ClaimId(2), RunId(3), execution());
+    let _claimed = reserve_and_prepare(&mut state, execution());
     let _running = apply(
         &mut state,
         Command::Worker(WorkerCommand::Started {
             item_id: QueueItemId(1),
-            claim_id: ClaimId(2),
-            run_id: RunId(3),
+            claim_id: ClaimId(1),
+            run_id: RunId(2),
             at: UnixMillis(1_000),
         }),
     );
@@ -3044,24 +2984,16 @@ fn active_state() -> AppState {
         &mut state,
         Command::Worker(WorkerCommand::RecordAnalysis {
             item_id: QueueItemId(1),
-            claim_id: ClaimId(2),
-            run_id: RunId(3),
+            claim_id: ClaimId(1),
+            run_id: RunId(2),
             result: Box::new(analysis()),
         }),
     );
     state
 }
 
-fn reserve_and_prepare(
-    state: &mut AppState,
-    claim_id: ClaimId,
-    run_id: RunId,
-    execution: ExecutionSettings,
-) -> crate::Applied {
-    let reserved = apply(
-        state,
-        Command::Worker(WorkerCommand::ReserveNext { claim_id, run_id }),
-    );
+fn reserve_and_prepare(state: &mut AppState, execution: ExecutionSettings) -> crate::Applied {
+    let reserved = apply(state, Command::Worker(WorkerCommand::ReserveNext));
     let Reply::Reserved(Some(job)) = reserved.reply else {
         return reserved;
     };
@@ -3069,8 +3001,8 @@ fn reserve_and_prepare(
         state,
         Command::Worker(WorkerCommand::PrepareReserved {
             item_id: job.item_id,
-            claim_id,
-            run_id,
+            claim_id: job.claim_id,
+            run_id: job.run_id,
             observation: None,
             import_paths: Vec::new(),
             execution,
@@ -4062,7 +3994,7 @@ fn prepare_resolves_overwrite_from_the_item_not_the_settings() {
         );
         assert_eq!(added.reply, Reply::Accepted);
         let _started = start_session(&mut state);
-        let claimed = reserve_and_prepare(&mut state, ClaimId(2), RunId(3), execution());
+        let claimed = reserve_and_prepare(&mut state, execution());
         let Reply::Claimed(Some(job)) = claimed.reply else {
             panic!("expected a claim for {decision:?}");
         };
@@ -4457,10 +4389,7 @@ fn retry_flows_through_the_next_reservation_and_replays() {
         &mut state,
         &mut bytes,
         &mut sequence,
-        Command::Worker(WorkerCommand::ReserveNext {
-            claim_id: ClaimId(20),
-            run_id: RunId(21),
-        }),
+        Command::Worker(WorkerCommand::ReserveNext),
     );
     assert!(matches!(reserved.reply, Reply::Reserved(Some(_))));
     let prepared = apply_and_journal(
@@ -4469,8 +4398,8 @@ fn retry_flows_through_the_next_reservation_and_replays() {
         &mut sequence,
         Command::Worker(WorkerCommand::PrepareReserved {
             item_id: QueueItemId(1),
-            claim_id: ClaimId(20),
-            run_id: RunId(21),
+            claim_id: ClaimId(1),
+            run_id: RunId(2),
             observation: None,
             import_paths: Vec::new(),
             execution: execution(),
@@ -4483,8 +4412,8 @@ fn retry_flows_through_the_next_reservation_and_replays() {
         &mut sequence,
         Command::Worker(WorkerCommand::Terminal {
             item_id: QueueItemId(1),
-            claim_id: ClaimId(20),
-            run_id: RunId(21),
+            claim_id: ClaimId(1),
+            run_id: RunId(2),
             outcome: ItemOutcome::Failed(FailureFacts::new(FailureKind::Internal, "fixture")),
             at: UnixMillis(1_000),
             phase_spans: Vec::new(),
@@ -4510,10 +4439,7 @@ fn retry_flows_through_the_next_reservation_and_replays() {
         &mut state,
         &mut bytes,
         &mut sequence,
-        Command::Worker(WorkerCommand::ReserveNext {
-            claim_id: ClaimId(22),
-            run_id: RunId(23),
-        }),
+        Command::Worker(WorkerCommand::ReserveNext),
     );
     let Reply::Reserved(Some(job)) = next.reply else {
         panic!("expected a reservation for item 2");
@@ -4523,7 +4449,7 @@ fn retry_flows_through_the_next_reservation_and_replays() {
         state
             .durable
             .conversion_runs
-            .get(&RunId(21))
+            .get(&RunId(2))
             .is_some_and(|run| run.outcome.is_some())
     );
     let replayed = replay(&bytes);
@@ -4807,8 +4733,8 @@ fn replay_rejects_invalid_atomic_removal_sets() {
             DurableDelta::ItemReserved {
                 job: Box::new(crate::ReservedJob {
                     item_id: QueueItemId(1),
-                    claim_id: ClaimId(2),
-                    run_id: RunId(3),
+                    claim_id: ClaimId(1),
+                    run_id: RunId(2),
                     input: PathBuf::from("one.mkv"),
                     operation: Operation::Convert,
                     intent: AnalysisIntent::ReuseIfFresh,
@@ -4867,8 +4793,8 @@ fn replay_rejects_retries_of_pending_and_edits_of_finished_items() {
             DurableDelta::ItemReserved {
                 job: Box::new(crate::ReservedJob {
                     item_id: QueueItemId(1),
-                    claim_id: ClaimId(2),
-                    run_id: RunId(3),
+                    claim_id: ClaimId(1),
+                    run_id: RunId(2),
                     input: PathBuf::from("one.mkv"),
                     operation: Operation::Convert,
                     intent: AnalysisIntent::ReuseIfFresh,
@@ -4877,8 +4803,8 @@ fn replay_rejects_retries_of_pending_and_edits_of_finished_items() {
             },
             DurableDelta::ItemFinished {
                 item_id: QueueItemId(1),
-                claim_id: ClaimId(2),
-                run_id: RunId(3),
+                claim_id: ClaimId(1),
+                run_id: RunId(2),
                 outcome: ItemOutcome::Stopped,
                 at: UnixMillis(1_000),
                 phase_spans: Vec::new(),
@@ -4949,10 +4875,7 @@ fn refresh_intent_forces_a_new_search_over_a_qualifying_cached_analysis() {
         &mut state,
         &mut bytes,
         &mut sequence,
-        Command::Worker(WorkerCommand::ReserveNext {
-            claim_id: ClaimId(2),
-            run_id: RunId(3),
-        }),
+        Command::Worker(WorkerCommand::ReserveNext),
     );
     let _prepared = apply_and_journal(
         &mut state,
@@ -4960,8 +4883,8 @@ fn refresh_intent_forces_a_new_search_over_a_qualifying_cached_analysis() {
         &mut sequence,
         Command::Worker(WorkerCommand::PrepareReserved {
             item_id: QueueItemId(1),
-            claim_id: ClaimId(2),
-            run_id: RunId(3),
+            claim_id: ClaimId(1),
+            run_id: RunId(2),
             observation: Some(Box::new(media_observation("refresh-content"))),
             import_paths: Vec::new(),
             execution: execution(),
@@ -4973,8 +4896,8 @@ fn refresh_intent_forces_a_new_search_over_a_qualifying_cached_analysis() {
         &mut sequence,
         Command::Worker(WorkerCommand::RecordAnalysis {
             item_id: QueueItemId(1),
-            claim_id: ClaimId(2),
-            run_id: RunId(3),
+            claim_id: ClaimId(1),
+            run_id: RunId(2),
             result: Box::new(analysis()),
         }),
     );
@@ -4984,8 +4907,8 @@ fn refresh_intent_forces_a_new_search_over_a_qualifying_cached_analysis() {
         &mut sequence,
         Command::Worker(WorkerCommand::Terminal {
             item_id: QueueItemId(1),
-            claim_id: ClaimId(2),
-            run_id: RunId(3),
+            claim_id: ClaimId(1),
+            run_id: RunId(2),
             outcome: ItemOutcome::Failed(FailureFacts::new(FailureKind::Internal, "fixture")),
             at: UnixMillis(1_000),
             phase_spans: Vec::new(),
@@ -5007,10 +4930,7 @@ fn refresh_intent_forces_a_new_search_over_a_qualifying_cached_analysis() {
         &mut state,
         &mut bytes,
         &mut sequence,
-        Command::Worker(WorkerCommand::ReserveNext {
-            claim_id: ClaimId(5),
-            run_id: RunId(6),
-        }),
+        Command::Worker(WorkerCommand::ReserveNext),
     );
     let prepared = apply_and_journal(
         &mut state,
@@ -5018,8 +4938,8 @@ fn refresh_intent_forces_a_new_search_over_a_qualifying_cached_analysis() {
         &mut sequence,
         Command::Worker(WorkerCommand::PrepareReserved {
             item_id: QueueItemId(4),
-            claim_id: ClaimId(5),
-            run_id: RunId(6),
+            claim_id: ClaimId(3),
+            run_id: RunId(4),
             observation: Some(Box::new(media_observation("refresh-content"))),
             import_paths: Vec::new(),
             execution: execution(),
@@ -5074,10 +4994,7 @@ fn software_fallback_analysis_is_permitted_under_a_hardware_spec() {
         &mut state,
         &mut bytes,
         &mut sequence,
-        Command::Worker(WorkerCommand::ReserveNext {
-            claim_id: ClaimId(2),
-            run_id: RunId(3),
-        }),
+        Command::Worker(WorkerCommand::ReserveNext),
     );
     let prepared = apply_and_journal(
         &mut state,
@@ -5085,8 +5002,8 @@ fn software_fallback_analysis_is_permitted_under_a_hardware_spec() {
         &mut sequence,
         Command::Worker(WorkerCommand::PrepareReserved {
             item_id: QueueItemId(1),
-            claim_id: ClaimId(2),
-            run_id: RunId(3),
+            claim_id: ClaimId(1),
+            run_id: RunId(2),
             observation: Some(Box::new(media_observation("ladder-content"))),
             import_paths: Vec::new(),
             execution: hardware.clone(),
@@ -5107,8 +5024,8 @@ fn software_fallback_analysis_is_permitted_under_a_hardware_spec() {
         &mut state,
         Command::Worker(WorkerCommand::RecordAnalysis {
             item_id: QueueItemId(1),
-            claim_id: ClaimId(2),
-            run_id: RunId(3),
+            claim_id: ClaimId(1),
+            run_id: RunId(2),
             result: Box::new(wrong),
         }),
     );
@@ -5121,8 +5038,8 @@ fn software_fallback_analysis_is_permitted_under_a_hardware_spec() {
         &mut sequence,
         Command::Worker(WorkerCommand::RecordAnalysis {
             item_id: QueueItemId(1),
-            claim_id: ClaimId(2),
-            run_id: RunId(3),
+            claim_id: ClaimId(1),
+            run_id: RunId(2),
             result: Box::new(fallback),
         }),
     );
@@ -5137,8 +5054,8 @@ fn software_fallback_analysis_is_permitted_under_a_hardware_spec() {
         &mut state,
         Command::Worker(WorkerCommand::Terminal {
             item_id: QueueItemId(1),
-            claim_id: ClaimId(2),
-            run_id: RunId(3),
+            claim_id: ClaimId(1),
+            run_id: RunId(2),
             outcome: ItemOutcome::Failed(FailureFacts::new(FailureKind::Internal, "fixture")),
             at: UnixMillis(1_000),
             phase_spans: Vec::new(),
@@ -5146,15 +5063,15 @@ fn software_fallback_analysis_is_permitted_under_a_hardware_spec() {
         }),
     );
     let _added = apply(&mut state, add_command(QueueItemId(4), "again.mkv"));
-    let _claimed = reserve_and_prepare(&mut state, ClaimId(5), RunId(6), software);
+    let _claimed = reserve_and_prepare(&mut state, software);
     let mut hardware_result = analysis();
     hardware_result.profile.decode_mode = DecodeMode::Hardware(crate::HardwareDecoder::H264Cuvid);
     let rejected = apply(
         &mut state,
         Command::Worker(WorkerCommand::RecordAnalysis {
             item_id: QueueItemId(4),
-            claim_id: ClaimId(5),
-            run_id: RunId(6),
+            claim_id: ClaimId(4),
+            run_id: RunId(5),
             result: Box::new(hardware_result),
         }),
     );
@@ -5173,19 +5090,19 @@ fn worker_rejections_pair_the_reply_with_a_command_rejected_delta() {
     let mut state = AppState::default();
     let _added = apply(&mut state, add_command(QueueItemId(1), "video.mkv"));
     let _started = start_session(&mut state);
-    let _claimed = reserve_and_prepare(&mut state, ClaimId(2), RunId(3), execution());
+    let _claimed = reserve_and_prepare(&mut state, execution());
     let record = |run_id| {
         Command::Worker(WorkerCommand::RecordAnalysis {
             item_id: QueueItemId(1),
-            claim_id: ClaimId(2),
+            claim_id: ClaimId(1),
             run_id,
             result: Box::new(analysis()),
         })
     };
-    let recorded = apply(&mut state, record(RunId(3)));
+    let recorded = apply(&mut state, record(RunId(2)));
     assert_eq!(recorded.reply, Reply::Accepted);
 
-    let duplicate = apply(&mut state, record(RunId(3)));
+    let duplicate = apply(&mut state, record(RunId(2)));
     let reason = "analysis is already recorded".to_owned();
     assert_eq!(
         duplicate.reply,
@@ -5202,8 +5119,8 @@ fn worker_rejections_pair_the_reply_with_a_command_rejected_delta() {
         &mut state,
         Command::Worker(WorkerCommand::Terminal {
             item_id: QueueItemId(1),
-            claim_id: ClaimId(2),
-            run_id: RunId(3),
+            claim_id: ClaimId(1),
+            run_id: RunId(2),
             outcome: ItemOutcome::Analyzed,
             at: UnixMillis(1_000),
             phase_spans: Vec::new(),
@@ -5255,28 +5172,25 @@ fn restage_moves_the_staging_pin_and_is_refused_after_abandonment() {
     );
     let _started = start_session(&mut state);
     for command in [
-        Command::Worker(WorkerCommand::ReserveNext {
-            claim_id: ClaimId(2),
-            run_id: RunId(3),
-        }),
+        Command::Worker(WorkerCommand::ReserveNext),
         Command::Worker(WorkerCommand::PrepareReserved {
             item_id: QueueItemId(1),
-            claim_id: ClaimId(2),
-            run_id: RunId(3),
+            claim_id: ClaimId(1),
+            run_id: RunId(2),
             observation: None,
             import_paths: Vec::new(),
             execution: execution(),
         }),
         Command::Worker(WorkerCommand::Started {
             item_id: QueueItemId(1),
-            claim_id: ClaimId(2),
-            run_id: RunId(3),
+            claim_id: ClaimId(1),
+            run_id: RunId(2),
             at: UnixMillis(1_000),
         }),
         Command::Worker(WorkerCommand::RecordAnalysis {
             item_id: QueueItemId(1),
-            claim_id: ClaimId(2),
-            run_id: RunId(3),
+            claim_id: ClaimId(1),
+            run_id: RunId(2),
             result: Box::new(analysis()),
         }),
     ] {
@@ -5284,7 +5198,7 @@ fn restage_moves_the_staging_pin_and_is_refused_after_abandonment() {
         assert!(!matches!(applied.reply, Reply::Rejected { .. }));
     }
     let mut started = transaction(OutputState::Started, Replacement::KeepOriginal);
-    started.run_id = RunId(3);
+    started.run_id = RunId(2);
     let _output = apply_and_journal(
         &mut state,
         &mut bytes,
@@ -5298,7 +5212,7 @@ fn restage_moves_the_staging_pin_and_is_refused_after_abandonment() {
         &mut bytes,
         &mut sequence,
         Command::Worker(WorkerCommand::Output(OutputDelta::StagingCreated {
-            run_id: RunId(3),
+            run_id: RunId(2),
             initial: destructive("empty", 0),
         })),
     );
@@ -5306,7 +5220,7 @@ fn restage_moves_the_staging_pin_and_is_refused_after_abandonment() {
     let stale = apply(
         &mut state,
         Command::Worker(WorkerCommand::Output(OutputDelta::OutputReady {
-            run_id: RunId(3),
+            run_id: RunId(2),
             staging_identity: identity("wrong", 5),
         })),
     );
@@ -5318,7 +5232,7 @@ fn restage_moves_the_staging_pin_and_is_refused_after_abandonment() {
         &mut bytes,
         &mut sequence,
         Command::Worker(WorkerCommand::Output(OutputDelta::StagingCreated {
-            run_id: RunId(3),
+            run_id: RunId(2),
             initial: destructive("fresh", 0),
         })),
     );
@@ -5327,7 +5241,7 @@ fn restage_moves_the_staging_pin_and_is_refused_after_abandonment() {
         state
             .durable
             .outputs
-            .get(&RunId(3))
+            .get(&RunId(2))
             .expect("restaged transaction")
             .state,
         OutputState::StagingCreated {
@@ -5340,7 +5254,7 @@ fn restage_moves_the_staging_pin_and_is_refused_after_abandonment() {
         &mut bytes,
         &mut sequence,
         Command::Worker(WorkerCommand::Output(OutputDelta::OutputReady {
-            run_id: RunId(3),
+            run_id: RunId(2),
             staging_identity: ArtifactIdentity {
                 content_key: ContentKey("ck-retry".to_owned()),
                 destructive: destructive("fresh", 9),
@@ -5356,20 +5270,20 @@ fn restage_moves_the_staging_pin_and_is_refused_after_abandonment() {
     // refuses to restage.
     let mut abandoned_state = active_state();
     let mut abandoned = transaction(OutputState::Started, Replacement::KeepOriginal);
-    abandoned.run_id = RunId(3);
+    abandoned.run_id = RunId(2);
     for delta in [
         OutputDelta::OutputStarted {
             transaction: Box::new(abandoned),
         },
         OutputDelta::StagingCreated {
-            run_id: RunId(3),
+            run_id: RunId(2),
             initial: destructive("empty", 0),
         },
         OutputDelta::AbandonStagingIntent {
-            run_id: RunId(3),
+            run_id: RunId(2),
             staging_identity: destructive("empty", 0),
         },
-        OutputDelta::Abandoned { run_id: RunId(3) },
+        OutputDelta::Abandoned { run_id: RunId(2) },
     ] {
         let applied = apply(
             &mut abandoned_state,
@@ -5380,7 +5294,7 @@ fn restage_moves_the_staging_pin_and_is_refused_after_abandonment() {
     let refused = apply(
         &mut abandoned_state,
         Command::Worker(WorkerCommand::Output(OutputDelta::StagingCreated {
-            run_id: RunId(3),
+            run_id: RunId(2),
             initial: destructive("fresh", 0),
         })),
     );
@@ -5827,21 +5741,15 @@ fn prepare_resolves_parked_records_after_the_observation() {
 
     apply(&mut state, add_command(QueueItemId(1), "video.mkv"));
     start_session(&mut state);
-    let reserved = apply(
-        &mut state,
-        Command::Worker(WorkerCommand::ReserveNext {
-            claim_id: ClaimId(2),
-            run_id: RunId(3),
-        }),
-    );
+    let reserved = apply(&mut state, Command::Worker(WorkerCommand::ReserveNext));
     assert!(matches!(reserved.reply, Reply::Reserved(Some(_))));
     let observation = media_observation("adopt-content");
     let prepared = apply(
         &mut state,
         Command::Worker(WorkerCommand::PrepareReserved {
             item_id: QueueItemId(1),
-            claim_id: ClaimId(2),
-            run_id: RunId(3),
+            claim_id: ClaimId(1),
+            run_id: RunId(2),
             observation: Some(Box::new(observation.clone())),
             import_paths: vec![weaker_match.clone(), stale.clone(), matching.clone()],
             execution: execution(),
@@ -5917,7 +5825,7 @@ fn adoption_never_overwrites_a_native_verdict() {
             requested: VmafTarget(95),
             floor: VmafTarget(90),
         },
-        source_run: Some(RunId(7)),
+        source_run: Some(RunId(6)),
         decided_at: UnixMillis(9_000),
     };
     state
@@ -5929,19 +5837,13 @@ fn adoption_never_overwrites_a_native_verdict() {
 
     apply(&mut state, add_command(QueueItemId(1), "video.mkv"));
     start_session(&mut state);
-    apply(
-        &mut state,
-        Command::Worker(WorkerCommand::ReserveNext {
-            claim_id: ClaimId(2),
-            run_id: RunId(3),
-        }),
-    );
+    apply(&mut state, Command::Worker(WorkerCommand::ReserveNext));
     let prepared = apply(
         &mut state,
         Command::Worker(WorkerCommand::PrepareReserved {
             item_id: QueueItemId(1),
-            claim_id: ClaimId(2),
-            run_id: RunId(3),
+            claim_id: ClaimId(1),
+            run_id: RunId(2),
             observation: Some(Box::new(observation.clone())),
             import_paths: vec![key.clone()],
             execution: execution(),
@@ -6115,20 +6017,20 @@ fn adopted_verdicts_apply_only_by_content_identity() {
 
 #[test]
 #[expect(clippy::expect_used, reason = "test assertion")]
-fn abandon_reservation_rejected_when_run_id_already_owns_a_run() {
+fn new_reservation_cannot_reuse_a_prepared_run_identity() {
     let mut state = AppState::default();
     let _first = apply(&mut state, add_command(QueueItemId(1), "first.mkv"));
     let _second = apply(&mut state, add_command(QueueItemId(4), "second.mkv"));
     let _started = start_session(&mut state);
-    // Prepare then finish the first item so RunId(3) keeps a conversion run
+    // Prepare then finish the first item so RunId(2) keeps a conversion run
     // that outlives its reservation.
-    let _prepared = reserve_and_prepare(&mut state, ClaimId(2), RunId(3), execution());
+    let _prepared = reserve_and_prepare(&mut state, execution());
     let finished = apply(
         &mut state,
         Command::Worker(WorkerCommand::Terminal {
             item_id: QueueItemId(1),
-            claim_id: ClaimId(2),
-            run_id: RunId(3),
+            claim_id: ClaimId(1),
+            run_id: RunId(2),
             outcome: ItemOutcome::Failed(FailureFacts::new(FailureKind::Internal, "fixture")),
             at: UnixMillis(1_000),
             phase_spans: Vec::new(),
@@ -6136,25 +6038,20 @@ fn abandon_reservation_rejected_when_run_id_already_owns_a_run() {
         }),
     );
     assert_eq!(finished.reply, Reply::Accepted);
-    assert!(state.durable.conversion_runs.contains_key(&RunId(3)));
+    assert!(state.durable.conversion_runs.contains_key(&RunId(2)));
 
-    // Reserve the second item while reusing RunId(3); its run still exists.
-    let reserved = apply(
-        &mut state,
-        Command::Worker(WorkerCommand::ReserveNext {
-            claim_id: ClaimId(5),
-            run_id: RunId(3),
-        }),
-    );
-    assert!(matches!(reserved.reply, Reply::Reserved(Some(_))));
+    let reserved = apply(&mut state, Command::Worker(WorkerCommand::ReserveNext));
+    let Reply::Reserved(Some(job)) = reserved.reply else {
+        panic!("expected second reservation");
+    };
+    assert_eq!((job.claim_id, job.run_id), (ClaimId(3), RunId(4)));
 
-    // The reservation itself is genuine, but the colliding run blocks abandonment.
     let abandoned = apply(
         &mut state,
         Command::Worker(WorkerCommand::AbandonReservation {
             item_id: QueueItemId(4),
-            claim_id: ClaimId(5),
-            run_id: RunId(3),
+            claim_id: ClaimId(4),
+            run_id: RunId(2),
             at: UnixMillis(2_000),
         }),
     );
@@ -6184,11 +6081,11 @@ fn not_worthwhile_terminal_validates_attempt_consistency() {
     let mut state = AppState::default();
     let _added = apply(&mut state, add_command(QueueItemId(1), "video.mkv"));
     let _started = start_session(&mut state);
-    let _prepared = reserve_and_prepare(&mut state, ClaimId(2), RunId(3), execution());
+    let _prepared = reserve_and_prepare(&mut state, execution());
     let run = state
         .durable
         .conversion_runs
-        .get(&RunId(3))
+        .get(&RunId(2))
         .expect("prepared encode run");
     // Not-worthwhile requires an encode run that never produced analysis or output.
     assert!(run.analysis.is_none());
@@ -6231,11 +6128,11 @@ fn output_exists_skip_terminal_requires_producing_run_without_output() {
     let mut state = AppState::default();
     let _added = apply(&mut state, add_command(QueueItemId(1), "video.mkv"));
     let _started = start_session(&mut state);
-    let _prepared = reserve_and_prepare(&mut state, ClaimId(2), RunId(3), execution());
+    let _prepared = reserve_and_prepare(&mut state, execution());
     let run = state
         .durable
         .conversion_runs
-        .get(&RunId(3))
+        .get(&RunId(2))
         .expect("prepared encode run");
     assert!(run.spec.action.produces_output());
 
@@ -6552,12 +6449,12 @@ fn ready_abandonment_checks_identity_at_live_and_replay_boundaries() {
             },
             Replacement::KeepOriginal,
         );
-        output.run_id = RunId(3);
-        state.durable.outputs.insert(RunId(3), output);
+        output.run_id = RunId(2);
+        state.durable.outputs.insert(RunId(2), output);
         let mut bytes = encode_snapshot("test", UnixMillis(0), JournalSequence(0), &state.durable)
             .expect("snapshot");
         let delta = OutputDelta::AbandonStagingIntent {
-            run_id: RunId(3),
+            run_id: RunId(2),
             staging_identity: observed,
         };
         bytes.extend(
@@ -6647,4 +6544,159 @@ fn graceful_stop_before_a_run_waits_for_worker_completion() {
     let finished = apply(&mut state, Command::Worker(WorkerCommand::Finished));
     assert_eq!(finished.reply, Reply::Accepted);
     assert_eq!(state.session, SessionState::Idle);
+}
+#[test]
+#[expect(clippy::expect_used, reason = "fixture serialization")]
+fn reservation_identity_survives_removal_restart_and_compaction() {
+    let mut state = AppState::default();
+    let mut bytes = Vec::new();
+    let mut sequence = 0;
+    apply_and_journal(
+        &mut state,
+        &mut bytes,
+        &mut sequence,
+        add_command(QueueItemId(1), "first.mkv"),
+    );
+    start_session(&mut state);
+    let reserved = apply_and_journal(
+        &mut state,
+        &mut bytes,
+        &mut sequence,
+        Command::Worker(WorkerCommand::ReserveNext),
+    );
+    let Reply::Reserved(Some(job)) = reserved.reply else {
+        panic!("expected reservation");
+    };
+    assert_eq!((job.claim_id, job.run_id), (ClaimId(1), RunId(2)));
+    let stopped = apply_and_journal(
+        &mut state,
+        &mut bytes,
+        &mut sequence,
+        Command::Worker(WorkerCommand::AbandonReservation {
+            item_id: job.item_id,
+            claim_id: job.claim_id,
+            run_id: job.run_id,
+            at: UnixMillis(1),
+        }),
+    );
+    assert_eq!(stopped.reply, Reply::Accepted);
+    let removed = apply_and_journal(
+        &mut state,
+        &mut bytes,
+        &mut sequence,
+        Command::Queue(QueueCommand::RemoveMany {
+            item_ids: vec![job.item_id],
+        }),
+    );
+    assert_eq!(removed.reply, Reply::Accepted);
+    assert!(state.durable.queue.is_empty());
+    assert!(state.durable.conversion_runs.is_empty());
+    let compacted = encode_snapshot(
+        "test",
+        UnixMillis(2),
+        JournalSequence(sequence),
+        &state.durable,
+    )
+    .expect("snapshot");
+    for journal in [&bytes, &compacted] {
+        let replayed = replay(journal);
+        assert!(replayed.corruption.is_none());
+        assert_eq!(replayed.state.runtime_id_high_water, 2);
+        let mut restarted = AppState {
+            durable: replayed.state,
+            ..AppState::default()
+        };
+        apply(&mut restarted, add_command(QueueItemId(2), "second.mkv"));
+        start_session(&mut restarted);
+        let next = apply(&mut restarted, Command::Worker(WorkerCommand::ReserveNext));
+        let Reply::Reserved(Some(job)) = next.reply else {
+            panic!("expected next reservation");
+        };
+        assert_eq!((job.claim_id, job.run_id), (ClaimId(3), RunId(4)));
+    }
+}
+
+#[test]
+fn runtime_identity_exhaustion_is_atomic_and_does_not_consume_empty_reservations() {
+    for mark in [
+        crate::DurableState::MAX_RUNTIME_ID - 1,
+        crate::DurableState::MAX_RUNTIME_ID,
+        u64::MAX,
+    ] {
+        let mut state = AppState::default();
+        state.durable.runtime_id_high_water = mark;
+        start_session(&mut state);
+        let empty = apply(&mut state, Command::Worker(WorkerCommand::ReserveNext));
+        assert_eq!(empty.reply, Reply::Reserved(None));
+        assert!(empty.durable.is_empty());
+        apply(&mut state, add_command(QueueItemId(1), "video.mkv"));
+        let before = state.durable.clone();
+        let exhausted = apply(&mut state, Command::Worker(WorkerCommand::ReserveNext));
+        assert!(matches!(exhausted.reply, Reply::Rejected { .. }));
+        assert!(exhausted.durable.is_empty());
+        assert_eq!(state.durable, before);
+    }
+    let mut state = AppState::default();
+    state.durable.runtime_id_high_water = crate::DurableState::MAX_RUNTIME_ID - 3;
+    apply(&mut state, add_command(QueueItemId(1), "video.mkv"));
+    start_session(&mut state);
+    let last = apply(&mut state, Command::Worker(WorkerCommand::ReserveNext));
+    let Reply::Reserved(Some(job)) = last.reply else {
+        panic!("expected final safe pair");
+    };
+    assert_eq!(job.run_id.0, crate::DurableState::MAX_RUNTIME_ID - 1);
+}
+
+#[test]
+#[expect(clippy::expect_used, reason = "fixture serialization")]
+fn replay_rejects_nonsequential_runtime_pairs_atomically() {
+    let mut state = AppState::default();
+    apply(&mut state, add_command(QueueItemId(1), "video.mkv"));
+    start_session(&mut state);
+    let initial = state.durable.clone();
+    let reserved = apply(&mut state, Command::Worker(WorkerCommand::ReserveNext));
+    let Reply::Reserved(Some(job)) = reserved.reply else {
+        panic!("expected reservation");
+    };
+    for (claim, run) in [(0, 0), (2, 1), (3, 4), (1, 1), (u64::MAX - 1, u64::MAX)] {
+        let mut invalid = job.clone();
+        invalid.claim_id = ClaimId(claim);
+        invalid.run_id = RunId(run);
+        let mut bytes =
+            encode_snapshot("test", UnixMillis(0), JournalSequence(0), &initial).expect("snapshot");
+        bytes.extend(
+            encode_record(&JournalEnvelope {
+                sequence: JournalSequence(0),
+                deltas: vec![DurableDelta::ItemReserved { job: invalid }],
+            })
+            .expect("record"),
+        );
+        let replayed = replay(&bytes);
+        assert!(replayed.corruption.is_some());
+        assert_eq!(replayed.state, initial);
+    }
+}
+
+#[test]
+#[expect(clippy::expect_used, reason = "fixture serialization")]
+fn snapshot_rejects_a_mark_below_retained_ids_or_above_wire_precision() {
+    let state = active_state();
+    for mark in [0, 1, crate::DurableState::MAX_RUNTIME_ID + 1] {
+        let mut invalid = state.durable.clone();
+        invalid.runtime_id_high_water = mark;
+        let bytes =
+            encode_snapshot("test", UnixMillis(0), JournalSequence(0), &invalid).expect("snapshot");
+        let replayed = replay(&bytes);
+        assert!(replayed.corruption.is_some());
+        assert_eq!(replayed.valid_prefix_len, 0);
+    }
+    let exhausted = crate::DurableState {
+        runtime_id_high_water: crate::DurableState::MAX_RUNTIME_ID - 1,
+        ..crate::DurableState::default()
+    };
+    let bytes =
+        encode_snapshot("test", UnixMillis(0), JournalSequence(0), &exhausted).expect("snapshot");
+    let replayed = replay(&bytes);
+    assert!(replayed.corruption.is_none());
+    assert_eq!(replayed.state, exhausted);
 }

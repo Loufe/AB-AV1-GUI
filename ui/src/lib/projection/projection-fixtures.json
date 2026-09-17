@@ -4,6 +4,7 @@
     {
       "name": "empty",
       "state": {
+        "runtime_id_high_water": 0,
         "queue": [],
         "paths": {},
         "records": {},
@@ -17,6 +18,7 @@
     {
       "name": "converted_with_live_evidence",
       "state": {
+        "runtime_id_high_water": 0,
         "queue": [],
         "paths": {},
         "records": {
@@ -182,6 +184,7 @@
     {
       "name": "converted_recovered_at_startup",
       "state": {
+        "runtime_id_high_water": 0,
         "queue": [],
         "paths": {},
         "records": {
@@ -377,6 +380,7 @@
     {
       "name": "converted_verdict_without_run",
       "state": {
+        "runtime_id_high_water": 0,
         "queue": [],
         "paths": {},
         "records": {
@@ -458,6 +462,7 @@
     {
       "name": "parked_imported_history",
       "state": {
+        "runtime_id_high_water": 0,
         "queue": [],
         "paths": {},
         "records": {},
@@ -606,6 +611,7 @@
     {
       "name": "adopted_imported_history",
       "state": {
+        "runtime_id_high_water": 0,
         "queue": [],
         "paths": {},
         "records": {
@@ -705,6 +711,7 @@
     {
       "name": "remuxed",
       "state": {
+        "runtime_id_high_water": 0,
         "queue": [],
         "paths": {},
         "records": {
@@ -840,6 +847,7 @@
     {
       "name": "not_worthwhile",
       "state": {
+        "runtime_id_high_water": 0,
         "queue": [],
         "paths": {},
         "records": {
@@ -1001,6 +1009,7 @@
     {
       "name": "verdict_wins_over_interruptions",
       "state": {
+        "runtime_id_high_water": 0,
         "queue": [],
         "paths": {},
         "records": {
@@ -1437,6 +1446,7 @@
     {
       "name": "analyzed_latest_run_wins",
       "state": {
+        "runtime_id_high_water": 0,
         "queue": [],
         "paths": {},
         "records": {
@@ -1629,6 +1639,7 @@
     {
       "name": "analyzed_record_only",
       "state": {
+        "runtime_id_high_water": 0,
         "queue": [],
         "paths": {},
         "records": {
@@ -1764,6 +1775,7 @@
     {
       "name": "scanned_only_skipped_and_rotation",
       "state": {
+        "runtime_id_high_water": 0,
         "queue": [],
         "paths": {},
         "records": {

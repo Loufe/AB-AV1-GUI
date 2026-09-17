@@ -1,18 +1,11 @@
 //! The session loop and per-job dispatch: claiming work, routing it to the
 //! encode or remux runner, and publishing phase and terminal transitions.
 
-use std::{
-    sync::{
-        Mutex,
-        atomic::{AtomicU64, Ordering},
-    },
-    time::Instant,
-};
+use std::{sync::Mutex, time::Instant};
 
 use crfty_core::{
-    ClaimId, ClaimedJob, Command, DurationMs, ItemOutcome, JobAction, JobPhase, JobProgress,
-    LocatedTools, PhaseSpan, Reply, RunId, SystemCommand, Telemetry, ToolVerification,
-    WorkerCommand,
+    ClaimedJob, Command, DurationMs, ItemOutcome, JobAction, JobPhase, JobProgress, LocatedTools,
+    PhaseSpan, Reply, RunId, SystemCommand, Telemetry, ToolVerification, WorkerCommand,
 };
 
 use crate::{
@@ -105,7 +98,6 @@ pub(super) fn run_session(
     config: &EngineConfig,
     tools_slot: &Mutex<Option<LocatedTools>>,
     cancellation: &ActiveCancellation,
-    ids: &AtomicU64,
 ) -> Result<(), String> {
     // Snapshot the slot once: every claim in this session executes with the
     // same binaries and revisions. A rediscovery mid-session only affects
@@ -181,12 +173,7 @@ pub(super) fn run_session(
     base_execution.profile.ffmpeg_revision = revisions.ffmpeg.clone();
     base_execution.profile.encoder_revision = revisions.encoder.clone();
     loop {
-        let claim_id = ClaimId(ids.fetch_add(1, Ordering::Relaxed));
-        let run_id = RunId(ids.fetch_add(1, Ordering::Relaxed));
-        let reservation = commands.submit(Command::Worker(WorkerCommand::ReserveNext {
-            claim_id,
-            run_id,
-        }));
+        let reservation = commands.submit(Command::Worker(WorkerCommand::ReserveNext));
         let reserved = match reservation {
             Ok(Reply::Reserved(Some(job))) => job,
             Ok(Reply::Reserved(None) | Reply::Rejected { .. }) => break,
@@ -202,6 +189,8 @@ pub(super) fn run_session(
                 return Err("reservation command returned an invalid reply".to_owned());
             }
         };
+        let claim_id = reserved.claim_id;
+        let run_id = reserved.run_id;
         // Opened before the claim-time probe so a Force Stop that lands while
         // ffprobe is reading the input terminates it like any other run work.
         let run = cancellation.begin_run(run_id);

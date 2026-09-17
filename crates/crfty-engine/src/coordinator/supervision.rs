@@ -3,7 +3,7 @@
 //! worker shares with force-stop and shutdown.
 
 use std::{
-    sync::{Arc, Mutex, MutexGuard, atomic::AtomicU64, mpsc},
+    sync::{Arc, Mutex, MutexGuard, mpsc},
     thread,
 };
 
@@ -233,10 +233,8 @@ pub(super) fn supervise(
     runtime: Arc<AbAv1Runtime>,
     config: EngineConfig,
     tools_slot: Arc<Mutex<Option<LocatedTools>>>,
-    next_runtime_id: u64,
 ) {
     let cancellation = ActiveCancellation::new();
-    let next_id = Arc::new(AtomicU64::new(next_runtime_id));
     let mut worker: Option<thread::JoinHandle<()>> = None;
     while let Ok(effect) = effects.recv() {
         match effect {
@@ -260,7 +258,6 @@ pub(super) fn supervise(
                 let worker_config = config.clone();
                 let worker_tools = Arc::clone(&tools_slot);
                 let worker_cancellation = cancellation.clone();
-                let worker_ids = Arc::clone(&next_id);
                 let spawned = thread::Builder::new()
                     .name("crfty-session-worker".to_owned())
                     .spawn(move || {
@@ -275,7 +272,6 @@ pub(super) fn supervise(
                                 &worker_config,
                                 &worker_tools,
                                 &worker_cancellation,
-                                &worker_ids,
                             )
                         }));
                         match result {

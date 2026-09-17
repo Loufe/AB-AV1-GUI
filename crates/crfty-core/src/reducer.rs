@@ -154,10 +154,7 @@ pub enum ProjectionCommand {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum WorkerCommand {
-    ReserveNext {
-        claim_id: ClaimId,
-        run_id: RunId,
-    },
+    ReserveNext,
     PrepareReserved {
         item_id: QueueItemId,
         claim_id: ClaimId,
@@ -1191,7 +1188,7 @@ fn apply_session(state: &AppState, command: SessionCommand) -> Applied {
 
 fn apply_worker(state: &AppState, command: WorkerCommand) -> Applied {
     match command {
-        WorkerCommand::ReserveNext { claim_id, run_id } => {
+        WorkerCommand::ReserveNext => {
             if state.session != SessionState::Running {
                 return Applied::rejected("session is not accepting another claim");
             }
@@ -1207,6 +1204,10 @@ fn apply_worker(state: &AppState, command: WorkerCommand) -> Applied {
                 let mut applied = Applied::accepted();
                 applied.reply = Reply::Reserved(None);
                 return applied;
+            };
+            let (claim_id, run_id) = match state.durable.next_runtime_ids() {
+                Ok(ids) => ids,
+                Err(reason) => return Applied::rejected(reason),
             };
             let job = ReservedJob {
                 item_id: item.id,

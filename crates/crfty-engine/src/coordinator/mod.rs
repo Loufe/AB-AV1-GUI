@@ -21,10 +21,10 @@ use std::{
 };
 
 use crfty_core::{
-    AnalysisGenerationId, AppSnapshot, Command, CorruptionSignature, DurableState,
-    ExecutionSettings, HistoryCommand, LocatedTools, ProjectionCommand, QueueCommand,
-    QueueItemState, Reply, SessionCommand, SettingsCommand, SystemCommand, ToolAvailability,
-    ToolRevisions, ToolVerification, ToolsCommand, VideoExtension,
+    AnalysisGenerationId, AppSnapshot, Command, CorruptionSignature, ExecutionSettings,
+    HistoryCommand, LocatedTools, ProjectionCommand, QueueCommand, Reply, SessionCommand,
+    SettingsCommand, SystemCommand, ToolAvailability, ToolRevisions, ToolVerification,
+    ToolsCommand, VideoExtension,
 };
 
 use crate::{
@@ -39,8 +39,6 @@ use crate::{
 use self::recovery::recover_startup;
 use self::supervision::supervise;
 use crate::clock::now_millis;
-
-const FIRST_RUNTIME_ID: u64 = 1;
 
 /// Depth of the public event channel. A healthy consumer drains continuously,
 /// so occupancy stays near zero; the bound only bites once the consumer has
@@ -178,7 +176,6 @@ impl EngineRuntime {
         }
         let media_tools = located.as_ref().map(MediaTools::from);
         let recovered = recover_startup(&driver.commands, media_tools.as_ref(), initial.durable);
-        let next_runtime_id = next_runtime_id(&recovered)?;
         // Bounded: telemetry can outrun a stalled consumer for hours, and an
         // unbounded buffer would turn that stall into unbounded memory. On
         // overflow the forwarder below severs the stream instead of blocking
@@ -244,7 +241,6 @@ impl EngineRuntime {
                     supervisor_runtime,
                     config,
                     supervisor_tools,
-                    next_runtime_id,
                 );
             })
             .map_err(|error| {
@@ -420,25 +416,6 @@ fn map_driver_start(error: DriverStartError) -> EngineStartError {
             EngineStartError::Failed(format!("driver error: {message}"))
         }
     }
-}
-
-fn next_runtime_id(state: &DurableState) -> Result<u64, EngineStartError> {
-    let maximum = state
-        .queue
-        .iter()
-        .filter_map(|item| match item.state {
-            QueueItemState::Reserved { claim_id, run_id }
-            | QueueItemState::Claimed { claim_id, run_id }
-            | QueueItemState::Running { claim_id, run_id } => Some(claim_id.0.max(run_id.0)),
-            QueueItemState::Queued | QueueItemState::Finished(_) => None,
-        })
-        .chain(state.conversion_runs.keys().map(|run_id| run_id.0))
-        .chain(state.outputs.keys().map(|run_id| run_id.0))
-        .max()
-        .unwrap_or(FIRST_RUNTIME_ID.saturating_sub(1));
-    maximum
-        .checked_add(1)
-        .ok_or_else(|| EngineStartError::Failed("runtime id space is exhausted".to_owned()))
 }
 
 pub(super) fn located_tools(availability: &ToolAvailability) -> Option<LocatedTools> {

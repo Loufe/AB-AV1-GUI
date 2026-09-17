@@ -923,10 +923,7 @@ fn history_import_parks_compacts_adopts_and_reimports_as_noop() {
     assert!(matches!(
         driver
             .commands
-            .submit(Command::Worker(WorkerCommand::ReserveNext {
-                claim_id: ClaimId(2),
-                run_id: RunId(3),
-            }))
+            .submit(Command::Worker(WorkerCommand::ReserveNext))
             .expect("reservation reply"),
         Reply::Reserved(Some(_))
     ));
@@ -936,8 +933,8 @@ fn history_import_parks_compacts_adopts_and_reimports_as_noop() {
             .commands
             .submit(Command::Worker(WorkerCommand::PrepareReserved {
                 item_id: QueueItemId(1),
-                claim_id: ClaimId(2),
-                run_id: RunId(3),
+                claim_id: ClaimId(1),
+                run_id: RunId(2),
                 observation: Some(Box::new(imported_media_observation())),
                 import_paths: vec![movie_key.clone()],
                 execution: execution(),
@@ -1073,10 +1070,7 @@ fn telemetry_pressure_coalesces_and_terminal_value_wins() {
     assert!(matches!(
         driver
             .commands
-            .submit(Command::Worker(WorkerCommand::ReserveNext {
-                claim_id: ClaimId(2),
-                run_id: RunId(3),
-            }))
+            .submit(Command::Worker(WorkerCommand::ReserveNext))
             .expect("reservation reply"),
         Reply::Reserved(Some(_))
     ));
@@ -1085,8 +1079,8 @@ fn telemetry_pressure_coalesces_and_terminal_value_wins() {
             .commands
             .submit(Command::Worker(WorkerCommand::PrepareReserved {
                 item_id: QueueItemId(1),
-                claim_id: ClaimId(2),
-                run_id: RunId(3),
+                claim_id: ClaimId(1),
+                run_id: RunId(2),
                 observation: None,
                 import_paths: Vec::new(),
                 execution: execution(),
@@ -1096,7 +1090,7 @@ fn telemetry_pressure_coalesces_and_terminal_value_wins() {
     ));
     for sequence in 0..100_000 {
         driver.commands.publish_telemetry(Telemetry {
-            run_id: RunId(3),
+            run_id: RunId(2),
             sequence,
             phase: JobPhase::Encoding,
             progress: JobProgress::OutputPositionMs(sequence),
@@ -1111,13 +1105,13 @@ fn telemetry_pressure_coalesces_and_terminal_value_wins() {
             .commands
             .submit(Command::Worker(WorkerCommand::Terminal {
                 item_id: QueueItemId(1),
-                claim_id: ClaimId(2),
-                run_id: RunId(3),
+                claim_id: ClaimId(1),
+                run_id: RunId(2),
                 outcome: ItemOutcome::Failed(FailureFacts::new(FailureKind::Internal, "fixture")),
                 at: UnixMillis(1_000),
                 phase_spans: Vec::new(),
                 final_telemetry: Some(Telemetry {
-                    run_id: RunId(3),
+                    run_id: RunId(2),
                     sequence: terminal_sequence,
                     phase: JobPhase::Finalizing,
                     progress: JobProgress::OutputPositionMs(100),
@@ -1153,14 +1147,11 @@ fn terminal_publishes_final_telemetry_and_clear_before_item_finished() {
             availability: fixture_available(),
         }),
         Command::Session(SessionCommand::Start),
-        Command::Worker(WorkerCommand::ReserveNext {
-            claim_id: ClaimId(2),
-            run_id: RunId(3),
-        }),
+        Command::Worker(WorkerCommand::ReserveNext),
         Command::Worker(WorkerCommand::PrepareReserved {
             item_id: QueueItemId(1),
-            claim_id: ClaimId(2),
-            run_id: RunId(3),
+            claim_id: ClaimId(1),
+            run_id: RunId(2),
             observation: None,
             import_paths: Vec::new(),
             execution: execution(),
@@ -1177,13 +1168,13 @@ fn terminal_publishes_final_telemetry_and_clear_before_item_finished() {
             .commands
             .submit(Command::Worker(WorkerCommand::Terminal {
                 item_id: QueueItemId(1),
-                claim_id: ClaimId(2),
-                run_id: RunId(3),
+                claim_id: ClaimId(1),
+                run_id: RunId(2),
                 outcome: ItemOutcome::Failed(FailureFacts::new(FailureKind::Internal, "fixture")),
                 at: UnixMillis(1_000),
                 phase_spans: Vec::new(),
                 final_telemetry: Some(Telemetry {
-                    run_id: RunId(3),
+                    run_id: RunId(2),
                     sequence: final_sequence,
                     phase: JobPhase::Finalizing,
                     progress: JobProgress::OutputPositionMs(100),
@@ -1209,7 +1200,7 @@ fn terminal_publishes_final_telemetry_and_clear_before_item_finished() {
     let cleared = events.iter().position(|event| {
         matches!(
             event,
-            DriverEvent::Ephemeral(EphemeralDelta::TelemetryCleared { run_id: RunId(3) })
+            DriverEvent::Ephemeral(EphemeralDelta::TelemetryCleared { run_id: RunId(2) })
         )
     });
     let finished = events.iter().position(|event| {
@@ -1241,33 +1232,30 @@ fn restart_after_fsynced_terminal_folds_to_finished_snapshot() {
             availability: fixture_available(),
         }),
         Command::Session(SessionCommand::Start),
-        Command::Worker(WorkerCommand::ReserveNext {
-            claim_id: ClaimId(2),
-            run_id: RunId(3),
-        }),
+        Command::Worker(WorkerCommand::ReserveNext),
         Command::Worker(WorkerCommand::PrepareReserved {
             item_id: QueueItemId(1),
-            claim_id: ClaimId(2),
-            run_id: RunId(3),
+            claim_id: ClaimId(1),
+            run_id: RunId(2),
             observation: None,
             import_paths: Vec::new(),
             execution: execution(),
         }),
         Command::Worker(WorkerCommand::Started {
             item_id: QueueItemId(1),
-            claim_id: ClaimId(2),
-            run_id: RunId(3),
+            claim_id: ClaimId(1),
+            run_id: RunId(2),
             at: UnixMillis(1_000),
         }),
         Command::Worker(WorkerCommand::Terminal {
             item_id: QueueItemId(1),
-            claim_id: ClaimId(2),
-            run_id: RunId(3),
+            claim_id: ClaimId(1),
+            run_id: RunId(2),
             outcome: ItemOutcome::Failed(FailureFacts::new(FailureKind::Internal, "fixture")),
             at: UnixMillis(1_000),
             phase_spans: Vec::new(),
             final_telemetry: Some(Telemetry {
-                run_id: RunId(3),
+                run_id: RunId(2),
                 sequence: 9,
                 phase: JobPhase::Finalizing,
                 progress: JobProgress::OutputPositionMs(100),
@@ -1304,7 +1292,7 @@ fn restart_after_fsynced_terminal_folds_to_finished_snapshot() {
     let run = snapshot
         .durable
         .conversion_runs
-        .get(&RunId(3))
+        .get(&RunId(2))
         .expect("conversion run");
     assert!(run.outcome.is_some());
     for event in driver.events().expect("event receiver").try_iter() {
@@ -1413,7 +1401,7 @@ fn engine_startup_recovers_an_active_partial_staging_transaction() {
     let manager = OutputManager::new(FixtureByteInspector);
     let transaction = manager
         .plan(
-            RunId(3),
+            RunId(2),
             &input,
             &final_path,
             Replacement::RetireOriginal,
@@ -1478,13 +1466,10 @@ fn journal_active_output_run(
             availability: fixture_available(),
         }),
         Command::Session(SessionCommand::Start),
-        Command::Worker(WorkerCommand::ReserveNext {
-            claim_id: ClaimId(2),
-            run_id,
-        }),
+        Command::Worker(WorkerCommand::ReserveNext),
         Command::Worker(WorkerCommand::PrepareReserved {
             item_id: QueueItemId(1),
-            claim_id: ClaimId(2),
+            claim_id: ClaimId(1),
             run_id,
             observation: None,
             import_paths: Vec::new(),
@@ -1492,13 +1477,13 @@ fn journal_active_output_run(
         }),
         Command::Worker(WorkerCommand::Started {
             item_id: QueueItemId(1),
-            claim_id: ClaimId(2),
+            claim_id: ClaimId(1),
             run_id,
             at: UnixMillis(1_000),
         }),
         Command::Worker(WorkerCommand::RecordAnalysis {
             item_id: QueueItemId(1),
-            claim_id: ClaimId(2),
+            claim_id: ClaimId(1),
             run_id,
             result: Box::new(fixture_analysis(&settings)),
         }),
@@ -1537,7 +1522,7 @@ fn engine_startup_abandons_intent_when_staging_was_never_created() {
     let manager = OutputManager::new(FixtureByteInspector);
     let transaction = manager
         .plan(
-            RunId(3),
+            RunId(2),
             &input,
             &final_path,
             Replacement::RetireOriginal,
@@ -1585,7 +1570,7 @@ fn engine_startup_removes_staging_left_before_staging_created_was_durable() {
     let manager = OutputManager::new(FixtureByteInspector);
     let transaction = manager
         .plan(
-            RunId(3),
+            RunId(2),
             &input,
             &final_path,
             Replacement::RetireOriginal,
@@ -1757,7 +1742,7 @@ fn settled_success_journal(
     };
     let manager = OutputManager::new(FixtureByteInspector);
     let transaction = manager
-        .plan(RunId(3), &input, &final_path, replacement, false)
+        .plan(RunId(2), &input, &final_path, replacement, false)
         .expect("plan transaction");
     let initial = manager
         .create_staging(&transaction)
@@ -1792,52 +1777,49 @@ fn settled_success_journal(
             availability: fixture_available(),
         }),
         Command::Session(SessionCommand::Start),
-        Command::Worker(WorkerCommand::ReserveNext {
-            claim_id: ClaimId(2),
-            run_id: RunId(3),
-        }),
+        Command::Worker(WorkerCommand::ReserveNext),
         Command::Worker(WorkerCommand::PrepareReserved {
             item_id: QueueItemId(1),
-            claim_id: ClaimId(2),
-            run_id: RunId(3),
+            claim_id: ClaimId(1),
+            run_id: RunId(2),
             observation: None,
             import_paths: Vec::new(),
             execution: settings.clone(),
         }),
         Command::Worker(WorkerCommand::Started {
             item_id: QueueItemId(1),
-            claim_id: ClaimId(2),
-            run_id: RunId(3),
+            claim_id: ClaimId(1),
+            run_id: RunId(2),
             at: UnixMillis(1_000),
         }),
         Command::Worker(WorkerCommand::RecordAnalysis {
             item_id: QueueItemId(1),
-            claim_id: ClaimId(2),
-            run_id: RunId(3),
+            claim_id: ClaimId(1),
+            run_id: RunId(2),
             result: Box::new(fixture_analysis(&settings)),
         }),
         Command::Worker(WorkerCommand::Output(OutputDelta::OutputStarted {
             transaction: Box::new(transaction.clone()),
         })),
         Command::Worker(WorkerCommand::Output(OutputDelta::StagingCreated {
-            run_id: RunId(3),
+            run_id: RunId(2),
             initial,
         })),
         Command::Worker(WorkerCommand::Output(OutputDelta::OutputReady {
-            run_id: RunId(3),
+            run_id: RunId(2),
             staging_identity: staging_identity.clone(),
         })),
         Command::Worker(WorkerCommand::Output(OutputDelta::OutputCommitted {
-            run_id: RunId(3),
+            run_id: RunId(2),
             final_identity: staging_identity,
         })),
     ];
     if replacement == Replacement::RetireOriginal {
         commands.push(Command::Worker(WorkerCommand::Output(
-            OutputDelta::RetireOriginalIntent { run_id: RunId(3) },
+            OutputDelta::RetireOriginalIntent { run_id: RunId(2) },
         )));
         commands.push(Command::Worker(WorkerCommand::Output(
-            OutputDelta::OriginalRetired { run_id: RunId(3) },
+            OutputDelta::OriginalRetired { run_id: RunId(2) },
         )));
     }
     for command in commands {
@@ -1853,7 +1835,7 @@ fn settled_success_journal(
         state
             .durable
             .outputs
-            .get(&RunId(3))
+            .get(&RunId(2))
             .expect("settled transaction")
             .is_settled()
     );
@@ -1898,7 +1880,7 @@ fn recover_settled_success(directory: &TestDirectory, fixture: &SettledSuccessFi
     let run = snapshot
         .durable
         .conversion_runs
-        .get(&RunId(3))
+        .get(&RunId(2))
         .expect("conversion run");
     assert!(matches!(
         run.outcome,
@@ -2277,7 +2259,10 @@ fn ready_abandonment_recovers_both_deletion_crash_windows() {
         let destination = directory.path().join("output.mkv");
         fs::write(&input, b"original").expect("input");
         let manager = OutputManager::new(FixtureByteInspector);
-        let mut state = DurableState::default();
+        let mut state = DurableState {
+            runtime_id_high_water: 20,
+            ..DurableState::default()
+        };
         let transaction = stage_output(
             &manager,
             &mut state,
@@ -2447,4 +2432,53 @@ fn missing_partial_staging_is_abandoned_but_missing_ready_staging_is_preserved()
         }
         assert_eq!(fs::read(&input).expect("original"), b"original");
     }
+}
+
+#[test]
+#[expect(clippy::expect_used, reason = "fixture setup and assertions")]
+fn exhausted_runtime_ids_do_not_prevent_engine_startup_or_queue_edits() {
+    let _serial = ENGINE_GUARD.lock().expect("engine guard");
+    let directory = TestDirectory::new("exhausted-runtime-ids");
+    let journal_path = directory.path().join("state.jsonl");
+    let durable = DurableState {
+        runtime_id_high_water: (1_u64 << 53) - 2,
+        ..DurableState::default()
+    };
+    fs::write(
+        &journal_path,
+        crfty_core::encode_snapshot(
+            "test",
+            UnixMillis(0),
+            crfty_core::JournalSequence(0),
+            &durable,
+        )
+        .expect("snapshot"),
+    )
+    .expect("journal fixture");
+    let executable = std::env::current_exe().expect("test executable");
+    let engine = EngineRuntime::start(EngineConfig {
+        journal_path,
+        config_path: directory.path().join("config.json"),
+        tools: fixture_tools(MediaTools {
+            ffmpeg: executable.clone(),
+            ffprobe: executable,
+        }),
+        execution: execution(),
+    })
+    .expect("startup remains available after identity exhaustion");
+    let DriverEvent::Snapshot(snapshot) = engine.events.recv().expect("startup snapshot") else {
+        panic!("expected snapshot");
+    };
+    assert_eq!(
+        snapshot.durable.runtime_id_high_water,
+        durable.runtime_id_high_water
+    );
+    let added = engine
+        .commands
+        .submit_queue(QueueCommand::AddMany {
+            requests: vec![overflow_request(1)],
+        })
+        .expect("queue edit");
+    assert_eq!(added, Reply::Accepted);
+    engine.shutdown().expect("engine shutdown");
 }

@@ -6,7 +6,7 @@ use crate::{
     UnixMillis, fold, output::validate_output_delta, reducer::validate_terminal,
 };
 
-pub(crate) const JOURNAL_SCHEMA_VERSION: u32 = 17;
+pub(crate) const JOURNAL_SCHEMA_VERSION: u32 = 18;
 
 /// Compaction fires at an idle writer barrier when the journal is both large
 /// in absolute terms and dominated by dead upserts. The floor keeps
@@ -55,8 +55,7 @@ pub(crate) struct JournalSnapshot {
     pub app_version: String,
     pub compacted_at: UnixMillis,
     /// The sequence the first delta record after this snapshot must carry;
-    /// numbering continues across compactions so recovery identity and
-    /// runtime-id derivation never reset.
+    /// numbering continues across compactions so recovery identity never resets.
     pub base_sequence: JournalSequence,
     pub state: DurableState,
 }
@@ -246,6 +245,10 @@ pub fn replay(bytes: &[u8]) -> JournalReplay {
                     corruption = Some("snapshot record after journal head".to_owned());
                     break;
                 }
+                if let Err(reason) = snapshot.state.validate_runtime_ids() {
+                    corruption = Some(reason.to_owned());
+                    break;
+                }
                 state = snapshot.state;
                 expected = snapshot.base_sequence.0;
             }
@@ -370,6 +373,9 @@ fn validate_replayed_delta(state: &DurableState, delta: &DurableDelta) -> Result
             output_target.validate()?;
         }
         DurableDelta::ItemReserved { job } => {
+            if (job.claim_id, job.run_id) != state.next_runtime_ids()? {
+                return Err("reservation does not use the next runtime identity pair");
+            }
             let matches_item = state.queue.iter().any(|item| {
                 item.id == job.item_id
                     && item.input == job.input

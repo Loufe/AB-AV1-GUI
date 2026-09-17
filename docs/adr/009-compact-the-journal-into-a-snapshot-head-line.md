@@ -7,12 +7,12 @@ date: 2026-07-20
 
 ## Context and problem statement
 
-The append-only journal (ADR-004) grows without bound: long-lived installs accumulate dead upserts and startup replay cost. Compaction must rewrite live state through a crash-safe writer barrier without breaking replay identity, recovery semantics, or the runtime-id derivation that depends on sequence numbering. The journal format also had no room to evolve: the version rode inside each delta envelope, so a record of any future shape failed as a parse error (indistinguishable from corruption) instead of "unsupported schema".
+The append-only journal (ADR-004) grows without bound: long-lived installs accumulate dead upserts and startup replay cost. Compaction must rewrite live state through a crash-safe writer barrier without breaking replay identity, recovery semantics, or the durable runtime ID high-water mark. The journal format also had no room to evolve: the version rode inside each delta envelope, so a record of any future shape failed as a parse error (indistinguishable from corruption) instead of "unsupported schema".
 
 ## Decision drivers
 
 * A compacted journal must replay to exactly the state the old one folded to
-* Sequence numbering must continue across compactions (recovery identity, runtime-id derivation)
+* Sequence numbering and the runtime ID high-water mark must survive compaction
 * Torn-tail and semantic-corruption detection must survive the format change
 * A future schema version must fail distinctly, not as corruption
 * A failed compaction must never lose data or take the driver down

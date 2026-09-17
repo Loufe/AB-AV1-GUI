@@ -973,14 +973,11 @@ mod tests {
                 },
             }),
             Command::Session(SessionCommand::Start),
-            Command::Worker(WorkerCommand::ReserveNext {
-                claim_id: ClaimId(2),
-                run_id: RunId(3),
-            }),
+            Command::Worker(WorkerCommand::ReserveNext),
             Command::Worker(WorkerCommand::PrepareReserved {
                 item_id: QueueItemId(1),
-                claim_id: ClaimId(2),
-                run_id: RunId(3),
+                claim_id: ClaimId(1),
+                run_id: RunId(2),
                 observation: None,
                 import_paths: Vec::new(),
                 execution,
@@ -994,8 +991,8 @@ mod tests {
         let envelope = Envelope {
             command: Command::Worker(WorkerCommand::Terminal {
                 item_id: QueueItemId(1),
-                claim_id: ClaimId(2),
-                run_id: RunId(3),
+                claim_id: ClaimId(1),
+                run_id: RunId(2),
                 outcome: ItemOutcome::Failed(crfty_core::FailureFacts::new(
                     crfty_core::FailureKind::Internal,
                     "fixture",
@@ -1003,7 +1000,7 @@ mod tests {
                 at: UnixMillis(1_000),
                 phase_spans: Vec::new(),
                 final_telemetry: Some(Telemetry {
-                    run_id: RunId(3),
+                    run_id: RunId(2),
                     sequence: 7,
                     phase: JobPhase::Finalizing,
                     progress: JobProgress::OutputPositionMs(100),
