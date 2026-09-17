@@ -38,6 +38,12 @@ Mechanics, fixed by this record:
 * Content equality may reuse an analysis and may skip queued work with a visible typed reason (`SkipReason::ProbableDuplicate`). It authorizes nothing destructive: promotion, overwrite, and original retirement each revalidate exact filesystem identity (file id, size, modification time) immediately before acting, and any mismatch aborts the step.
 * The digest carries no per-install or per-machine salt, so the same bytes yield the same key on every machine and after any reinstall.
 
+### Observation limits
+
+Exact filesystem identity means equality of the observed file ID, size, and modification time. It is not proof of unchanged bytes throughout a run. Matching observations can miss same-size writes with restored timestamps or a path replaced and restored between checks. A check followed by a path operation also leaves an interval for external mutation.
+
+The sampled key names observed content; it does not qualify every later result recorded under that key. Reusable results require the phase assessment defined in the [source-continuity contract](../design/source-continuity.md). That assessment is an alpha requirement not yet enforced by search publication or output planning.
+
 ### Consequences
 
 * Good: A moved, renamed, or copied file keeps its analyses and its verdict, and a duplicate costs a skip rather than a search
@@ -54,3 +60,7 @@ Implementation: the digest and its stability guards are in `crates/crfty-engine/
 The construction is pinned by golden fixtures (`ck1_matches_independent_golden_fixtures`), so changing the digest is a deliberate act with a visible diff rather than an accident.
 
 Related: ADR-004 (the journal these records persist to), ADR-007 (what a reusable analysis must match beyond content), ADR-015 (the projections that read these records), and ADR-017 (row identity in Analysis, which restates the probabilistic limit for large files).
+
+[Borg's change detection](https://borgbackup.readthedocs.io/en/1.4.5/usage/create.html) and [restic's metadata checks](https://restic.readthedocs.io/en/stable/040_backup.html#file-change-detection) explain why change time can detect writes that preserve modification time, and why metadata-only changes also trigger it. These precedents inform source observation; they do not change the sampled digest.
+
+[Microsoft's file-time contract](https://learn.microsoft.com/en-us/windows/win32/sysinfo/file-times) documents delayed last-write updates while write handles remain open. Missing or matching timestamps therefore cannot establish an immutable input.

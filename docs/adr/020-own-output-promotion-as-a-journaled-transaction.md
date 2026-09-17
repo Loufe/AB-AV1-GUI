@@ -26,7 +26,7 @@ An encode produces a new file while the input still exists, and in replace mode 
 
 ## Decision outcome
 
-Chosen option: **an application-owned journaled transaction**. It is the only option where an interruption always leaves either the old file or the new one, never neither or a blend, and where recovery can prove which paths it is authorized to touch.
+Chosen option: **an application-owned journaled transaction**. Staging preserves the input while encoding, and the journal records the intent and artifact facts used for recovery. This protects the application's commit sequence; it does not prevent external writers from changing or deleting files.
 
 Mechanics, fixed by this record:
 
@@ -35,18 +35,26 @@ Mechanics, fixed by this record:
 * The encoder receives the staging path as its output and never the input or the final path, and ab-av1's overwrite-input argument is fixed to false, so no commit semantics are delegated to it.
 * `OutputReady` records a verified staging artifact, where verification means an AV1 check with a minimum size rather than a size test alone, and the ready record is accepted only if it pins the same file id the staging record pinned.
 * Promotion renames staging over the final path, syncs the parent directory where the platform supports it, and journals `OutputCommitted` only after the promoted file re-verifies to the staging content key and size. Because a rename replaces a single directory entry, hardlinked siblings of a replaced input keep the original bytes.
-* Retiring the original is a separate two-step transition, `RetireOriginalIntent` then `OriginalRetired`, taken only in the retire-original replacement mode. A replacement whose destination is the input file itself is rejected at planning, so a same-path replacement can never schedule the deletion of its own output.
+* Retiring the original is a separate two-step transition, `RetireOriginalIntent` then `OriginalRetired`, taken only in the retire-original replacement mode. Planning rejects that mode when the observed destination identity equals the input identity. Same-path Matroska replacement uses `KeepOriginal`, meaning no separate retirement step; it does not preserve the original pathname's contents.
 * Every rename and every removal is preceded by an exact `DestructiveIdentity` comparison (filesystem file id, size, modification time) on each path it touches: promotion revalidates staging and the destination preimage, retirement revalidates the committed output and the original, and staging removal revalidates the staging file. A mismatch aborts the step and settles the transaction as a conflict instead of acting.
 * Staging cleanup uses one abandonment path: `AbandonStagingIntent` records the observed identity, removal rechecks that identity, and `Abandoned` is journaled. Partial staging must retain its recorded file id. Cancellation can also abandon ready staging, but only under an exact match with its verified identity. `Ready` alone does not prove staging remains: promotion may have renamed it before the commit record.
 * Cancellation reports `Stopped` only after successful abandonment. If verification is interrupted after promotion, or staging ownership or cleanup cannot be established, files are preserved and the existing output-conflict failure remains visible. No fresh probe bypasses cancellation, and no later retirement or automatic recovery is scheduled for a settled conflict.
 * The recovery decision is pure. `recover_output` maps a transaction plus filesystem facts to one action, and the engine only executes what it returns; startup repeats this per unsettled transaction until it settles. A promotion that already happened is recognized rather than repeated, because a ready transaction whose staging is gone and whose destination carries the expected content key folds straight to committed. Without ffprobe an unsettled transaction is left untouched rather than settled blind.
 
+### Source assessment and retained artifacts
+
+Artifact verification, source continuity, and destructive authorization are separate judgments. The [source-continuity contract](../design/source-continuity.md) defines their required integration across search, encode or remux, retries, and settlement. These source gates and the typed retained-artifact representation are alpha requirements, not shipped guarantees of the transaction above.
+
+The prepared source baseline remains authoritative. Detected changes or unavailable required evidence prevent ordinary success and reusable result publication. A verified artifact is retained with a typed reason when source assessment blocks settlement. Its identity and ownership must survive recovery and compaction without automatic promotion or abandonment.
+
+Source facts needed to qualify completion become durable before promotion can replace the input path. A recovered absence after authorized retirement satisfies a filesystem disposition; it does not establish who deleted the source or prove source continuity during encoding. Fresh path checks still authorize each destructive step, subject to ADR-019's observation limits.
+
 ### Consequences
 
-* Good: An interruption at any byte leaves either the previous file or a complete new one, and a restart can tell which
-* Good: Recovery removes only a staging path the journal named and retires only an original whose identity still matches, so unknown or changed files are never cleaned up
+* Good: Staging avoids truncating the source during encoding, and the ledger distinguishes interrupted publication from unfinished output
+* Good: Recovery targets journaled paths and refuses detected identity mismatches before destructive actions
 * Good: Replace mode preserves hardlinked siblings, verified against a real filesystem rather than argued from rename semantics
-* Good: Encoder bugs cannot lose user data, because the encoder never holds the commit
+* Good: The encoder does not own promotion or original retirement
 * Bad: Every transition costs a journal append and a sync, and promotion costs a re-verification of the promoted file
 * Bad: Parent-directory syncing is a no-op on Windows, so the durability of the rename itself rests on the platform there
 * Bad: A conflict deliberately leaves both files in place and needs a human decision, so the safe outcome is not a self-healing one
@@ -58,3 +66,5 @@ Implementation: the transaction type, its state machine, delta validation, and t
 Crash behaviour has end-to-end coverage in `crates/crfty-engine/tests/durability.rs`. Cases include promotion with retirement, partial-staging recovery, staging left before its record became durable, identity-authorized abandonment, changed-destination conflict without deletion, pre-staging overwrite policy, restaging after failure, and hardlink-preserving same-path replacement.
 
 Related records are ADR-004 for the journal these transitions append to, ADR-002 for the reducer that validates them, and ADR-019 for the promoted output's content identity. ADR-018 is adjacent but decides job cancellation and completion rather than this record's output commit.
+
+[rsync's source-removal policy](https://download.samba.org/pub/rsync/rsync.1#--remove-source-files) separates transfer completion from deletion and refuses removal after observed source changes. [Syncthing's synchronization design](https://docs.syncthing.net/users/syncing) separates staged files from published files and preserves conflict copies. These precedents support separate disposition and evidence judgments; neither substitutes for CRFty's journal recovery contract.
