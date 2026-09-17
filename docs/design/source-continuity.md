@@ -14,6 +14,8 @@ The alpha policy rejects ordinary success when required source evidence changes 
 
 The prepared `JobSpec` retains a content key but no immutable source filesystem observation. The coordinator records a search result before output planning, which inspects the source again without comparing it with the evidence that justified the search. A later source can therefore become the transaction baseline while the run still names the earlier content.
 
+`identity_from_metadata` joins size and modification time from one metadata lookup with a file ID from a second path lookup through the [file-id crate][file-id]. Every destructive identity comparison therefore compares fields that may describe different objects, so the coherence requirement below applies to the existing ADR-020 guards, not only to the new source gates. Stable Rust exposes no Windows file index or change time from an open handle: [`MetadataExt::file_index`][rust-by-handle] and [`MetadataExt::change_time`][rust-change-time] are nightly-only, so a coherent Windows observation needs a reviewed dependency.
+
 `recover_ready` checks staging and the destination preimage but not the original source. Distinct-path output can promote after source replacement, disappearance, or metadata change. Retirement rejects a changed present original, but accepts an absent original without distinguishing external disappearance from deletion after a durable retirement intent.
 
 `Replacement::KeepOriginal` also represents same-path replacement of a Matroska input. It means that no separate retirement step is required. Source-preserving output, same-path promotion, and separate retirement need distinct policy treatment.
@@ -46,9 +48,7 @@ Observation classes describe available evidence, not an inferred sequence of fil
 
 Identity fields must describe one coherent object observation. Combining size and timestamps from one path lookup with a file ID from another permits an identity assembled from different objects. Opening and inspecting one handle improves coherence, but a CRFty-owned handle does not prove that an external process opened that same object.
 
-Change-time evidence merits evaluation alongside modification time. Unix `ctime` can detect writes followed by restoring `mtime`, but permissions and ownership changes also affect it. Windows `ChangeTime` and `LastWriteTime` are distinct fields. Neither platform supplies an assumed, universal continuity guarantee across all filesystems. [Borg's observation choices][borg-doc], [restic's change detection][restic], and [Microsoft's field definitions][windows-basic] establish these distinctions.
-
-Change-time evidence belongs to source assessment, not the sampled content digest. Adding it to every destructive identity comparison without considering application-owned renames could invalidate legitimate output transitions.
+Change-time evidence belongs to source assessment only. It never enters the sampled content digest, and it never enters destructive identity comparisons, because application-owned renames legitimately update it. Alpha reads Unix `ctime` alongside `mtime` during assessment: it detects a write followed by a restored `mtime`, and permission or ownership changes also trigger it. Windows `ChangeTime` and `LastWriteTime` are distinct fields; `ChangeTime` enters assessment only when the selected handle query exposes it without first-party unsafe code, and otherwise its absence is a documented limit. Neither platform supplies a universal continuity guarantee across all filesystems. [Borg's observation choices][borg-doc], [restic's change detection][restic], and [Microsoft's field definitions][windows-basic] establish these distinctions.
 
 ## Phase boundaries and reuse
 
@@ -108,7 +108,7 @@ Filesystem cases include same-size writes, restored modification times, metadata
 
 ## Unresolved observation details
 
-- Which coherent metadata acquisition API and change-time fields satisfy the contract on each supported platform without first-party unsafe code?
+- Which handle-based metadata acquisition API yields file ID, size, and timestamps from one object on each supported platform without first-party unsafe code?
 - Which missing or coarse fields prevent qualification, and which weaker observations remain acceptable under an explicitly stated policy?
 - Which phase observations need their own durable representation, and which can be carried atomically with result publication or output readiness?
 - What typed retained-artifact state preserves ownership after conflict without allowing later automatic promotion or cleanup?
@@ -120,6 +120,9 @@ An immutable-input guarantee requires a distinct decision about snapshots or oth
 [borg-source]: https://github.com/borgbackup/borg/blob/1.4.5/src/borg/archive.py
 [restic]: https://restic.readthedocs.io/en/stable/040_backup.html#file-change-detection
 [windows-basic]: https://learn.microsoft.com/en-us/windows/win32/api/winbase/ns-winbase-file_basic_info
+[file-id]: https://docs.rs/file-id/0.2.3/file_id/
+[rust-by-handle]: https://github.com/rust-lang/rust/issues/63010
+[rust-change-time]: https://github.com/rust-lang/rust/issues/121478
 [syncthing]: https://docs.syncthing.net/users/syncing
 [unmanic]: https://github.com/Unmanic/unmanic/blob/1c324b8fc3974ffce3d7cc945adb938fe7182910/unmanic/libs/postprocessor.py
 [tdarr]: https://github.com/HaveAGitGat/Tdarr_Plugins/blob/26c97a52f9dcf5fc6faeb751071cb82cdf97ca4e/FlowPluginsTs/CommunityFlowPlugins/file/replaceOriginalFile/1.0.0/index.ts
