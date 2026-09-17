@@ -34,6 +34,16 @@ Both stopping states wait for worker completion before returning to idle, includ
 
 The active item cannot be removed, reordered, or retyped during a run.
 
+## Interrupted work
+
+A durable reservation without a prepared run returns to its original queue position at startup. Its assigned IDs remain consumed. Recovery does not start a new session or count the release as an outcome.
+
+A prepared run with no recorded terminal becomes Incomplete after output recovery, unless a settled output proves success or a conflict requires failure. Recovery waits when unsettled output needs unavailable tools. Incomplete means completion was not recorded; it does not assert a crash or user cancellation. Existing analysis facts survive, but cached analysis alone cannot prove this run completed.
+
+Only a user Force Stop can record Stopped. Both stopped and incomplete outcomes require absent or safely abandoned output. Clear completed retains incomplete and failed items for inspection; explicit retry creates a fresh run.
+
+A definitive preparation rejection records its reason as an internal failure before the worker reports the fatal protocol error. Unknown durability, disconnection, or an unexpected reply does not authorize another terminal write.
+
 ## Containment and guards
 
 - The ab-av1 adapter runs inside `catch_unwind` because upstream contains production unwrap sites; panic recovery cancels children, reconciles staging, and reports worker failure. A driver panic stays fatal and relies on write-ahead recovery.

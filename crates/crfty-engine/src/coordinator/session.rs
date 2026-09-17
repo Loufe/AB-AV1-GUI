@@ -1,18 +1,11 @@
 //! The session loop and per-job dispatch: claiming work, routing it to the
 //! encode or remux runner, and publishing phase and terminal transitions.
 
-use std::{
-    sync::{
-        Mutex,
-        atomic::{AtomicU64, Ordering},
-    },
-    time::Instant,
-};
+use std::{sync::Mutex, time::Instant};
 
 use crfty_core::{
-    ClaimId, ClaimedJob, Command, DurationMs, ItemOutcome, JobAction, JobPhase, JobProgress,
-    LocatedTools, PhaseSpan, Reply, RunId, SystemCommand, Telemetry, ToolVerification,
-    WorkerCommand,
+    ClaimedJob, Command, DurationMs, ItemOutcome, JobAction, JobPhase, JobProgress, LocatedTools,
+    PhaseSpan, Reply, RunId, SystemCommand, Telemetry, ToolVerification, WorkerCommand,
 };
 
 use crate::{
@@ -105,7 +98,6 @@ pub(super) fn run_session(
     config: &EngineConfig,
     tools_slot: &Mutex<Option<LocatedTools>>,
     cancellation: &ActiveCancellation,
-    ids: &AtomicU64,
 ) -> Result<(), String> {
     // Snapshot the slot once: every claim in this session executes with the
     // same binaries and revisions. A rediscovery mid-session only affects
@@ -181,12 +173,7 @@ pub(super) fn run_session(
     base_execution.profile.ffmpeg_revision = revisions.ffmpeg.clone();
     base_execution.profile.encoder_revision = revisions.encoder.clone();
     loop {
-        let claim_id = ClaimId(ids.fetch_add(1, Ordering::Relaxed));
-        let run_id = RunId(ids.fetch_add(1, Ordering::Relaxed));
-        let reservation = commands.submit(Command::Worker(WorkerCommand::ReserveNext {
-            claim_id,
-            run_id,
-        }));
+        let reservation = commands.submit(Command::Worker(WorkerCommand::ReserveNext));
         let reserved = match reservation {
             Ok(Reply::Reserved(Some(job))) => job,
             Ok(Reply::Reserved(None) | Reply::Rejected { .. }) => break,
@@ -202,6 +189,8 @@ pub(super) fn run_session(
                 return Err("reservation command returned an invalid reply".to_owned());
             }
         };
+        let claim_id = reserved.claim_id;
+        let run_id = reserved.run_id;
         // Opened before the claim-time probe so a Force Stop that lands while
         // ffprobe is reading the input terminates it like any other run work.
         let run = cancellation.begin_run(run_id);
@@ -238,6 +227,7 @@ pub(super) fn run_session(
                     claim_id,
                     run_id,
                     at: now_millis(),
+                    disposition: crfty_core::ReservationDisposition::Stopped,
                 })),
             )?;
             continue;
@@ -253,37 +243,20 @@ pub(super) fn run_session(
             import_paths,
             execution,
         }));
-        let job = match prepared {
-            Ok(Reply::Claimed(Some(job))) => job,
-            Ok(Reply::Rejected { reason } | Reply::DurabilityUnknown { reason }) => {
-                let _reply = commands.submit(Command::Worker(WorkerCommand::AbandonReservation {
+        let job = prepared_job(prepared, |reason| {
+            require_accepted(
+                "record rejected preparation",
+                commands.submit(Command::Worker(WorkerCommand::AbandonReservation {
                     item_id: reserved.item_id,
                     claim_id,
                     run_id,
                     at: now_millis(),
-                }));
-                return Err(reason);
-            }
-            Err(error) => {
-                let _reply = commands.submit(Command::Worker(WorkerCommand::AbandonReservation {
-                    item_id: reserved.item_id,
-                    claim_id,
-                    run_id,
-                    at: now_millis(),
-                }));
-                return Err(format!("worker preparation failed: {error}"));
-            }
-            Ok(
-                Reply::Accepted
-                | Reply::AnalysisStarted { .. }
-                | Reply::BasicScan(_)
-                | Reply::Claimed(None)
-                | Reply::Reserved(_)
-                | Reply::Imported { .. },
-            ) => {
-                return Err("preparation command returned an invalid reply".to_owned());
-            }
-        };
+                    disposition: crfty_core::ReservationDisposition::Failed(
+                        crfty_core::FailureFacts::new(crfty_core::FailureKind::Internal, reason),
+                    ),
+                })),
+            )
+        })?;
         require_accepted(
             "mark worker item started",
             commands.submit(Command::Worker(WorkerCommand::Started {
@@ -448,4 +421,72 @@ pub(super) fn publish_phase(
         fps_centi: None,
         eta_ms: None,
     });
+}
+
+fn prepared_job(
+    reply: Result<Reply, crate::driver::SubmitError>,
+    record_rejection: impl FnOnce(&str) -> Result<(), String>,
+) -> Result<Box<ClaimedJob>, String> {
+    match reply {
+        Ok(Reply::Claimed(Some(job))) => Ok(job),
+        Ok(Reply::Rejected { reason }) => {
+            record_rejection(&reason)
+                .map_err(|error| format!("preparation rejected: {reason}; {error}"))?;
+            Err(reason)
+        }
+        Ok(Reply::DurabilityUnknown { reason }) => Err(reason),
+        Err(error) => Err(format!("worker preparation failed: {error}")),
+        Ok(_) => Err("preparation command returned an invalid reply".to_owned()),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::prepared_job;
+    use crate::driver::SubmitError;
+    use crfty_core::Reply;
+
+    #[test]
+    fn only_a_definitive_preparation_rejection_authorizes_a_failure_record() {
+        for reply in [
+            Ok(Reply::DurabilityUnknown {
+                reason: "uncertain write".to_owned(),
+            }),
+            Err(SubmitError::Disconnected),
+            Err(SubmitError::ReplyDisconnected),
+            Ok(Reply::Claimed(None)),
+            Ok(Reply::Accepted),
+        ] {
+            let mut recorded = false;
+            let result = prepared_job(reply, |_| {
+                recorded = true;
+                Ok(())
+            });
+            assert!(result.is_err());
+            assert!(!recorded);
+        }
+        let mut recorded = None;
+        let result = prepared_job(
+            Ok(Reply::Rejected {
+                reason: "invalid preparation".to_owned(),
+            }),
+            |reason| {
+                recorded = Some(reason.to_owned());
+                Ok(())
+            },
+        );
+        assert_eq!(recorded.as_deref(), Some("invalid preparation"));
+        assert_eq!(result, Err("invalid preparation".to_owned()));
+    }
+
+    #[test]
+    fn failed_rejection_record_keeps_both_failure_contexts() {
+        let result = prepared_job(
+            Ok(Reply::Rejected {
+                reason: "stale reservation".to_owned(),
+            }),
+            |_| Err("record rejected preparation: driver disconnected".to_owned()),
+        );
+        assert_eq!(result, Err("preparation rejected: stale reservation; record rejected preparation: driver disconnected".to_owned()));
+    }
 }

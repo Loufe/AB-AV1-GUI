@@ -29,6 +29,7 @@ export type RowStatus =
     }
   | { kind: "skipped"; reason: string; detail: string | null }
   | { kind: "stopped" }
+  | { kind: "incomplete" }
   | { kind: "failed"; message: string; diagnostic: string | null };
 
 /**
@@ -95,6 +96,7 @@ function outcomeStatus(outcome: ItemOutcome, sizeDeltaBytes: number | null): Row
     return { kind: "done", outcome, sizeDeltaBytes: null, recovered: false };
   }
   if (outcome === "Stopped") return { kind: "stopped" };
+  if (outcome === "Incomplete") return { kind: "incomplete" };
   if ("Converted" in outcome && outcome.Converted !== undefined) {
     return {
       kind: "done",

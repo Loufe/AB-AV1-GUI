@@ -120,6 +120,9 @@ describe("deriveRowStatus", () => {
       sizeDeltaBytes: null,
       recovered: false,
     });
+    expect(deriveRowStatus({ Finished: "Incomplete" }, null, null, null)).toEqual({
+      kind: "incomplete",
+    });
     expect(deriveRowStatus({ Finished: "Stopped" }, null, null, null)).toEqual({
       kind: "stopped",
     });

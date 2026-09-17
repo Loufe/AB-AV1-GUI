@@ -109,6 +109,7 @@ describe("History standing vocabulary", () => {
       "Analyzed",
       { Failed: { kind: "SearchRun", message: "anonymized failure" } },
       "Stopped",
+      "Incomplete",
     ];
     expect(statuses.map((status) => statusPresentation(status).label)).toEqual([
       "Converted",
@@ -117,6 +118,7 @@ describe("History standing vocabulary", () => {
       "Analyzed",
       "Failed",
       "Stopped",
+      "Incomplete",
     ]);
   });
 
@@ -125,6 +127,13 @@ describe("History standing vocabulary", () => {
     expect(presentation.detail).toContain("Historical analysis result");
     expect(presentation.detail).not.toContain("skip");
     expect(presentation.detail).not.toContain("cached");
+  });
+
+  it("describes incomplete work without attributing user intent or a crash", () => {
+    expect(statusPresentation("Incomplete")).toEqual({
+      label: "Incomplete",
+      detail: "Interrupted before completion was recorded",
+    });
   });
 
   it("preserves failure and not-worthwhile facts", () => {

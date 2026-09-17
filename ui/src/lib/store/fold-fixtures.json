@@ -4,6 +4,7 @@
     {
       "name": "queue_added",
       "initial": {
+        "runtime_id_high_water": 0,
         "queue": [],
         "paths": {},
         "records": {},
@@ -41,6 +42,7 @@
         }
       ],
       "expected": {
+        "runtime_id_high_water": 0,
         "queue": [
           {
             "id": 1,
@@ -70,8 +72,256 @@
       }
     },
     {
+      "name": "reservation_released_preserves_position_and_settings",
+      "initial": {
+        "runtime_id_high_water": 100,
+        "queue": [
+          {
+            "id": 1,
+            "input": "videos/input-1.mp4",
+            "operation": "Convert",
+            "intent": "ReuseIfFresh",
+            "output_target": "Replace",
+            "overwrite": "FollowSettings",
+            "state": "Queued"
+          },
+          {
+            "id": 2,
+            "input": "videos/input-2.mp4",
+            "operation": "Analyze",
+            "intent": "Refresh",
+            "output_target": {
+              "Suffix": {
+                "suffix": "_edited"
+              }
+            },
+            "overwrite": "Allow",
+            "state": {
+              "Reserved": {
+                "claim_id": 10,
+                "run_id": 100
+              }
+            }
+          },
+          {
+            "id": 3,
+            "input": "videos/input-3.mp4",
+            "operation": "Convert",
+            "intent": "ReuseIfFresh",
+            "output_target": "Replace",
+            "overwrite": "FollowSettings",
+            "state": "Queued"
+          }
+        ],
+        "paths": {},
+        "records": {},
+        "outputs": {},
+        "conversion_runs": {},
+        "parked": {},
+        "adopted_imports": []
+      },
+      "deltas": [
+        {
+          "ReservationReleased": {
+            "item_id": 2,
+            "claim_id": 10,
+            "run_id": 100
+          }
+        }
+      ],
+      "expected": {
+        "runtime_id_high_water": 100,
+        "queue": [
+          {
+            "id": 1,
+            "input": "videos/input-1.mp4",
+            "operation": "Convert",
+            "intent": "ReuseIfFresh",
+            "output_target": "Replace",
+            "overwrite": "FollowSettings",
+            "state": "Queued"
+          },
+          {
+            "id": 2,
+            "input": "videos/input-2.mp4",
+            "operation": "Analyze",
+            "intent": "Refresh",
+            "output_target": {
+              "Suffix": {
+                "suffix": "_edited"
+              }
+            },
+            "overwrite": "Allow",
+            "state": "Queued"
+          },
+          {
+            "id": 3,
+            "input": "videos/input-3.mp4",
+            "operation": "Convert",
+            "intent": "ReuseIfFresh",
+            "output_target": "Replace",
+            "overwrite": "FollowSettings",
+            "state": "Queued"
+          }
+        ],
+        "paths": {},
+        "records": {},
+        "outputs": {},
+        "conversion_runs": {},
+        "parked": {},
+        "adopted_imports": []
+      }
+    },
+    {
+      "name": "prepared_run_incomplete",
+      "initial": {
+        "runtime_id_high_water": 100,
+        "queue": [
+          {
+            "id": 1,
+            "input": "videos/input-1.mp4",
+            "operation": "Convert",
+            "intent": "ReuseIfFresh",
+            "output_target": "Replace",
+            "overwrite": "FollowSettings",
+            "state": {
+              "Claimed": {
+                "claim_id": 10,
+                "run_id": 100
+              }
+            }
+          }
+        ],
+        "paths": {},
+        "records": {},
+        "outputs": {},
+        "conversion_runs": {
+          "100": {
+            "spec": {
+              "item_id": 1,
+              "claim_id": 10,
+              "run_id": 100,
+              "input": "videos/input-1.mp4",
+              "content_key": null,
+              "operation": "Convert",
+              "intent": "ReuseIfFresh",
+              "output_target": "Replace",
+              "execution": {
+                "requested_target": 95,
+                "fallback_floor": 90,
+                "fallback_step": 1,
+                "overwrite_existing": false,
+                "decode_preference": "HardwarePreferred",
+                "profile": {
+                  "preset": 6,
+                  "max_encoded_percent_basis_points": 8000,
+                  "samples": null,
+                  "sample_duration_ms": 20000,
+                  "thorough": false,
+                  "decode_mode": "Software",
+                  "ab_av1_revision": "ab-av1-test",
+                  "ffmpeg_revision": "ffmpeg-test",
+                  "encoder_revision": "svt-av1-test"
+                }
+              },
+              "action": {
+                "Analyze": {
+                  "selected_analysis": null
+                }
+              }
+            },
+            "analysis": null,
+            "output_content_key": null,
+            "outcome": null,
+            "started_at": null,
+            "finished_at": null,
+            "phase_spans": []
+          }
+        },
+        "parked": {},
+        "adopted_imports": []
+      },
+      "deltas": [
+        {
+          "ItemFinished": {
+            "item_id": 1,
+            "claim_id": 10,
+            "run_id": 100,
+            "outcome": "Incomplete",
+            "at": 1752000090000,
+            "phase_spans": []
+          }
+        }
+      ],
+      "expected": {
+        "runtime_id_high_water": 100,
+        "queue": [
+          {
+            "id": 1,
+            "input": "videos/input-1.mp4",
+            "operation": "Convert",
+            "intent": "ReuseIfFresh",
+            "output_target": "Replace",
+            "overwrite": "FollowSettings",
+            "state": {
+              "Finished": "Incomplete"
+            }
+          }
+        ],
+        "paths": {},
+        "records": {},
+        "outputs": {},
+        "conversion_runs": {
+          "100": {
+            "spec": {
+              "item_id": 1,
+              "claim_id": 10,
+              "run_id": 100,
+              "input": "videos/input-1.mp4",
+              "content_key": null,
+              "operation": "Convert",
+              "intent": "ReuseIfFresh",
+              "output_target": "Replace",
+              "execution": {
+                "requested_target": 95,
+                "fallback_floor": 90,
+                "fallback_step": 1,
+                "overwrite_existing": false,
+                "decode_preference": "HardwarePreferred",
+                "profile": {
+                  "preset": 6,
+                  "max_encoded_percent_basis_points": 8000,
+                  "samples": null,
+                  "sample_duration_ms": 20000,
+                  "thorough": false,
+                  "decode_mode": "Software",
+                  "ab_av1_revision": "ab-av1-test",
+                  "ffmpeg_revision": "ffmpeg-test",
+                  "encoder_revision": "svt-av1-test"
+                }
+              },
+              "action": {
+                "Analyze": {
+                  "selected_analysis": null
+                }
+              }
+            },
+            "analysis": null,
+            "output_content_key": null,
+            "outcome": "Incomplete",
+            "started_at": null,
+            "finished_at": 1752000090000,
+            "phase_spans": []
+          }
+        },
+        "parked": {},
+        "adopted_imports": []
+      }
+    },
+    {
       "name": "queue_added_overwrite_decisions",
       "initial": {
+        "runtime_id_high_water": 0,
         "queue": [],
         "paths": {},
         "records": {},
@@ -109,6 +359,7 @@
         }
       ],
       "expected": {
+        "runtime_id_high_water": 0,
         "queue": [
           {
             "id": 1,
@@ -140,6 +391,7 @@
     {
       "name": "queue_items_removed",
       "initial": {
+        "runtime_id_high_water": 0,
         "queue": [
           {
             "id": 1,
@@ -187,6 +439,7 @@
         }
       ],
       "expected": {
+        "runtime_id_high_water": 0,
         "queue": [
           {
             "id": 2,
@@ -209,6 +462,7 @@
     {
       "name": "queue_items_removed_missing",
       "initial": {
+        "runtime_id_high_water": 0,
         "queue": [
           {
             "id": 1,
@@ -237,6 +491,7 @@
         }
       ],
       "expected": {
+        "runtime_id_high_water": 0,
         "queue": [
           {
             "id": 1,
@@ -259,6 +514,7 @@
     {
       "name": "queue_reordered_pending",
       "initial": {
+        "runtime_id_high_water": 0,
         "queue": [
           {
             "id": 1,
@@ -307,6 +563,7 @@
         }
       ],
       "expected": {
+        "runtime_id_high_water": 0,
         "queue": [
           {
             "id": 3,
@@ -347,6 +604,7 @@
     {
       "name": "queue_retried_resolves_and_moves_to_end",
       "initial": {
+        "runtime_id_high_water": 0,
         "queue": [
           {
             "id": 1,
@@ -401,6 +659,7 @@
         }
       ],
       "expected": {
+        "runtime_id_high_water": 0,
         "queue": [
           {
             "id": 2,
@@ -445,6 +704,7 @@
     {
       "name": "queue_retried_missing_item",
       "initial": {
+        "runtime_id_high_water": 0,
         "queue": [
           {
             "id": 1,
@@ -479,6 +739,7 @@
         }
       ],
       "expected": {
+        "runtime_id_high_water": 0,
         "queue": [
           {
             "id": 1,
@@ -501,6 +762,7 @@
     {
       "name": "queue_edited_rewrites_the_job_tuple",
       "initial": {
+        "runtime_id_high_water": 0,
         "queue": [
           {
             "id": 1,
@@ -544,6 +806,7 @@
         }
       ],
       "expected": {
+        "runtime_id_high_water": 0,
         "queue": [
           {
             "id": 1,
@@ -579,6 +842,7 @@
     {
       "name": "queue_edited_missing_item",
       "initial": {
+        "runtime_id_high_water": 0,
         "queue": [
           {
             "id": 1,
@@ -613,6 +877,7 @@
         }
       ],
       "expected": {
+        "runtime_id_high_water": 0,
         "queue": [
           {
             "id": 1,
@@ -635,6 +900,7 @@
     {
       "name": "media_observed_new",
       "initial": {
+        "runtime_id_high_water": 0,
         "queue": [],
         "paths": {},
         "records": {},
@@ -690,6 +956,7 @@
         }
       ],
       "expected": {
+        "runtime_id_high_water": 0,
         "queue": [],
         "paths": {
           "path-1": {
@@ -746,6 +1013,7 @@
     {
       "name": "media_observed_update_and_alias",
       "initial": {
+        "runtime_id_high_water": 0,
         "queue": [],
         "paths": {
           "path-1": {
@@ -845,6 +1113,7 @@
         }
       ],
       "expected": {
+        "runtime_id_high_water": 0,
         "queue": [],
         "paths": {
           "path-1": {
@@ -914,6 +1183,7 @@
     {
       "name": "item_reserved_then_running",
       "initial": {
+        "runtime_id_high_water": 0,
         "queue": [
           {
             "id": 1,
@@ -956,6 +1226,7 @@
         }
       ],
       "expected": {
+        "runtime_id_high_water": 100,
         "queue": [
           {
             "id": 1,
@@ -983,6 +1254,7 @@
     {
       "name": "item_prepared_inserts_run",
       "initial": {
+        "runtime_id_high_water": 0,
         "queue": [
           {
             "id": 1,
@@ -1041,6 +1313,7 @@
         }
       ],
       "expected": {
+        "runtime_id_high_water": 0,
         "queue": [
           {
             "id": 1,
@@ -1110,6 +1383,7 @@
     {
       "name": "item_prepared_with_selected_analysis",
       "initial": {
+        "runtime_id_high_water": 0,
         "queue": [
           {
             "id": 1,
@@ -1193,6 +1467,7 @@
         }
       ],
       "expected": {
+        "runtime_id_high_water": 0,
         "queue": [
           {
             "id": 1,
@@ -1312,6 +1587,7 @@
     {
       "name": "analysis_recorded_updates_run_and_record",
       "initial": {
+        "runtime_id_high_water": 0,
         "queue": [
           {
             "id": 1,
@@ -1455,6 +1731,7 @@
         }
       ],
       "expected": {
+        "runtime_id_high_water": 0,
         "queue": [
           {
             "id": 1,
@@ -1635,6 +1912,7 @@
     {
       "name": "analysis_recorded_unknown_run",
       "initial": {
+        "runtime_id_high_water": 0,
         "queue": [],
         "paths": {},
         "records": {},
@@ -1677,6 +1955,7 @@
         }
       ],
       "expected": {
+        "runtime_id_high_water": 0,
         "queue": [],
         "paths": {},
         "records": {},
@@ -1689,6 +1968,7 @@
     {
       "name": "analysis_recorded_second_profile_and_target",
       "initial": {
+        "runtime_id_high_water": 0,
         "queue": [
           {
             "id": 1,
@@ -1985,6 +2265,7 @@
         }
       ],
       "expected": {
+        "runtime_id_high_water": 0,
         "queue": [
           {
             "id": 1,
@@ -2312,6 +2593,7 @@
     {
       "name": "item_finished_analyzed",
       "initial": {
+        "runtime_id_high_water": 100,
         "queue": [
           {
             "id": 1,
@@ -2399,6 +2681,7 @@
         }
       ],
       "expected": {
+        "runtime_id_high_water": 100,
         "queue": [
           {
             "id": 1,
@@ -2474,6 +2757,7 @@
     {
       "name": "item_finished_converted_committed",
       "initial": {
+        "runtime_id_high_water": 100,
         "queue": [
           {
             "id": 1,
@@ -2649,6 +2933,7 @@
         }
       ],
       "expected": {
+        "runtime_id_high_water": 100,
         "queue": [
           {
             "id": 1,
@@ -2834,6 +3119,7 @@
     {
       "name": "item_finished_remuxed_retired",
       "initial": {
+        "runtime_id_high_water": 100,
         "queue": [
           {
             "id": 1,
@@ -3008,6 +3294,7 @@
         }
       ],
       "expected": {
+        "runtime_id_high_water": 100,
         "queue": [
           {
             "id": 1,
@@ -3187,6 +3474,7 @@
     {
       "name": "item_finished_converted_without_commit",
       "initial": {
+        "runtime_id_high_water": 100,
         "queue": [
           {
             "id": 1,
@@ -3362,6 +3650,7 @@
         }
       ],
       "expected": {
+        "runtime_id_high_water": 100,
         "queue": [
           {
             "id": 1,
@@ -3533,6 +3822,7 @@
     {
       "name": "item_finished_converted_recovered_at_startup",
       "initial": {
+        "runtime_id_high_water": 100,
         "queue": [
           {
             "id": 1,
@@ -3702,6 +3992,7 @@
         }
       ],
       "expected": {
+        "runtime_id_high_water": 100,
         "queue": [
           {
             "id": 1,
@@ -3875,6 +4166,7 @@
     {
       "name": "item_finished_failed",
       "initial": {
+        "runtime_id_high_water": 100,
         "queue": [
           {
             "id": 1,
@@ -4012,6 +4304,7 @@
         }
       ],
       "expected": {
+        "runtime_id_high_water": 100,
         "queue": [
           {
             "id": 1,
@@ -4143,6 +4436,7 @@
     {
       "name": "item_finished_not_worthwhile",
       "initial": {
+        "runtime_id_high_water": 100,
         "queue": [
           {
             "id": 1,
@@ -4294,6 +4588,7 @@
         }
       ],
       "expected": {
+        "runtime_id_high_water": 100,
         "queue": [
           {
             "id": 1,
@@ -4462,6 +4757,7 @@
     {
       "name": "item_finished_skipped_low_resolution",
       "initial": {
+        "runtime_id_high_water": 100,
         "queue": [
           {
             "id": 1,
@@ -4602,6 +4898,7 @@
         }
       ],
       "expected": {
+        "runtime_id_high_water": 100,
         "queue": [
           {
             "id": 1,
@@ -4739,6 +5036,7 @@
     {
       "name": "item_finished_stopped",
       "initial": {
+        "runtime_id_high_water": 100,
         "queue": [
           {
             "id": 1,
@@ -4870,6 +5168,7 @@
         }
       ],
       "expected": {
+        "runtime_id_high_water": 100,
         "queue": [
           {
             "id": 1,
@@ -4989,6 +5288,7 @@
     {
       "name": "output_retire_intent_requires_commit",
       "initial": {
+        "runtime_id_high_water": 100,
         "queue": [
           {
             "id": 1,
@@ -5128,6 +5428,7 @@
         }
       ],
       "expected": {
+        "runtime_id_high_water": 100,
         "queue": [
           {
             "id": 1,
@@ -5261,6 +5562,7 @@
     {
       "name": "output_retired_requires_intent",
       "initial": {
+        "runtime_id_high_water": 100,
         "queue": [
           {
             "id": 1,
@@ -5416,6 +5718,7 @@
         }
       ],
       "expected": {
+        "runtime_id_high_water": 100,
         "queue": [
           {
             "id": 1,
@@ -5565,6 +5868,7 @@
     {
       "name": "output_staging_created",
       "initial": {
+        "runtime_id_high_water": 100,
         "queue": [
           {
             "id": 1,
@@ -5714,6 +6018,7 @@
         }
       ],
       "expected": {
+        "runtime_id_high_water": 100,
         "queue": [
           {
             "id": 1,
@@ -5860,6 +6165,7 @@
     {
       "name": "output_restaged",
       "initial": {
+        "runtime_id_high_water": 100,
         "queue": [
           {
             "id": 1,
@@ -6022,6 +6328,7 @@
         }
       ],
       "expected": {
+        "runtime_id_high_water": 100,
         "queue": [
           {
             "id": 1,
@@ -6168,6 +6475,7 @@
     {
       "name": "output_abandoned",
       "initial": {
+        "runtime_id_high_water": 100,
         "queue": [
           {
             "id": 1,
@@ -6324,6 +6632,7 @@
         }
       ],
       "expected": {
+        "runtime_id_high_water": 100,
         "queue": [
           {
             "id": 1,
@@ -6457,6 +6766,7 @@
     {
       "name": "output_conflict",
       "initial": {
+        "runtime_id_high_water": 100,
         "queue": [
           {
             "id": 1,
@@ -6598,6 +6908,7 @@
         }
       ],
       "expected": {
+        "runtime_id_high_water": 100,
         "queue": [
           {
             "id": 1,
@@ -6736,6 +7047,7 @@
     {
       "name": "output_ready_unknown_run",
       "initial": {
+        "runtime_id_high_water": 0,
         "queue": [],
         "paths": {},
         "records": {},
@@ -6767,6 +7079,7 @@
         }
       ],
       "expected": {
+        "runtime_id_high_water": 0,
         "queue": [],
         "paths": {},
         "records": {},
@@ -6779,6 +7092,7 @@
     {
       "name": "history_imported",
       "initial": {
+        "runtime_id_high_water": 0,
         "queue": [],
         "paths": {},
         "records": {},
@@ -6836,6 +7150,7 @@
         }
       ],
       "expected": {
+        "runtime_id_high_water": 0,
         "queue": [],
         "paths": {},
         "records": {},
@@ -6883,6 +7198,7 @@
     {
       "name": "parked_adopted_with_verdict",
       "initial": {
+        "runtime_id_high_water": 0,
         "queue": [],
         "paths": {
           "path-1": {
@@ -7011,6 +7327,7 @@
         }
       ],
       "expected": {
+        "runtime_id_high_water": 0,
         "queue": [],
         "paths": {
           "path-1": {
@@ -7120,6 +7437,7 @@
     {
       "name": "parked_adopted_provenance_only",
       "initial": {
+        "runtime_id_high_water": 0,
         "queue": [],
         "paths": {
           "path-1": {
@@ -7234,6 +7552,7 @@
         }
       ],
       "expected": {
+        "runtime_id_high_water": 0,
         "queue": [],
         "paths": {
           "path-1": {
@@ -7329,6 +7648,7 @@
     {
       "name": "multiple_paths_adopt_one_content",
       "initial": {
+        "runtime_id_high_water": 0,
         "queue": [],
         "paths": {
           "path-1": {
@@ -7481,6 +7801,7 @@
         }
       ],
       "expected": {
+        "runtime_id_high_water": 0,
         "queue": [],
         "paths": {
           "path-1": {
@@ -7573,6 +7894,7 @@
     {
       "name": "parked_adopted_missing_record",
       "initial": {
+        "runtime_id_high_water": 0,
         "queue": [],
         "paths": {},
         "records": {},
@@ -7657,6 +7979,7 @@
         }
       ],
       "expected": {
+        "runtime_id_high_water": 0,
         "queue": [],
         "paths": {},
         "records": {},
@@ -7689,6 +8012,7 @@
     {
       "name": "parked_retired",
       "initial": {
+        "runtime_id_high_water": 0,
         "queue": [],
         "paths": {},
         "records": {},
@@ -7740,6 +8064,7 @@
         }
       ],
       "expected": {
+        "runtime_id_high_water": 0,
         "queue": [],
         "paths": {},
         "records": {},
@@ -7770,6 +8095,7 @@
     {
       "name": "item_finished_converted_with_analysis_summary",
       "initial": {
+        "runtime_id_high_water": 100,
         "queue": [
           {
             "id": 1,
@@ -8012,6 +8338,7 @@
         }
       ],
       "expected": {
+        "runtime_id_high_water": 100,
         "queue": [
           {
             "id": 1,

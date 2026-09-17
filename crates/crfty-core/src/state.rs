@@ -64,6 +64,7 @@ pub enum ItemOutcome {
     Remuxed(CompletionEvidence),
     NotWorthwhile { attempts: Vec<AnalysisAttempt> },
     Stopped,
+    Incomplete,
     Skipped { reason: SkipReason },
     Failed(FailureFacts),
 }
@@ -111,6 +112,7 @@ pub struct SessionAggregates {
     pub failed: u32,
     pub skipped: u32,
     pub stopped: u32,
+    pub incomplete: u32,
     pub not_worthwhile: u32,
     pub analyzed: u32,
     pub remuxed: u32,
@@ -133,6 +135,7 @@ impl SessionAggregates {
             ItemOutcome::Remuxed(_) => &mut self.remuxed,
             ItemOutcome::NotWorthwhile { .. } => &mut self.not_worthwhile,
             ItemOutcome::Stopped => &mut self.stopped,
+            ItemOutcome::Incomplete => &mut self.incomplete,
             ItemOutcome::Skipped { .. } => &mut self.skipped,
             ItemOutcome::Failed(_) => &mut self.failed,
         };
@@ -216,6 +219,11 @@ pub enum DurableDelta {
     ItemReserved {
         job: Box<ReservedJob>,
     },
+    ReservationReleased {
+        item_id: QueueItemId,
+        claim_id: ClaimId,
+        run_id: RunId,
+    },
     MediaObserved {
         observation: Box<MediaObservation>,
     },
@@ -266,6 +274,9 @@ pub enum DurableDelta {
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, specta::Type)]
 pub struct DurableState {
+    /// Highest durably reserved claim or run ID, retained after queue removal.
+    #[specta(type = crate::JsNumber)]
+    pub runtime_id_high_water: u64,
     pub queue: Vec<QueueItem>,
     pub paths: BTreeMap<PathHash, PathBinding>,
     pub records: BTreeMap<ContentKey, FileRecord>,
@@ -279,6 +290,55 @@ pub struct DurableState {
     /// re-import guard; collision losers remain here even though a content
     /// record retains only one imported summary.
     pub adopted_imports: BTreeSet<ImportPath>,
+}
+
+impl DurableState {
+    // Runtime IDs cross the frontend boundary as JavaScript numbers.
+    pub(crate) const MAX_RUNTIME_ID: u64 = (1_u64 << 53) - 1;
+
+    pub(crate) fn next_runtime_ids(&self) -> Result<(ClaimId, RunId), &'static str> {
+        let run = self
+            .runtime_id_high_water
+            .checked_add(2)
+            .filter(|id| *id <= Self::MAX_RUNTIME_ID)
+            .ok_or("runtime id space is exhausted")?;
+        Ok((ClaimId(run - 1), RunId(run)))
+    }
+
+    pub(crate) fn validate_runtime_ids(&self) -> Result<(), &'static str> {
+        let mark = self.runtime_id_high_water;
+        let queued = self.queue.iter().filter_map(|item| match item.state {
+            QueueItemState::Reserved { claim_id, run_id }
+            | QueueItemState::Claimed { claim_id, run_id }
+            | QueueItemState::Running { claim_id, run_id } => Some(claim_id.0.max(run_id.0)),
+            QueueItemState::Queued | QueueItemState::Finished(_) => None,
+        });
+        let runs = self
+            .conversion_runs
+            .iter()
+            .map(|(id, run)| id.0.max(run.spec.claim_id.0).max(run.spec.run_id.0));
+        let outputs = self
+            .outputs
+            .iter()
+            .map(|(id, output)| id.0.max(output.run_id.0));
+        let verdicts = self.records.values().filter_map(|record| {
+            record
+                .verdict
+                .as_ref()
+                .and_then(|verdict| verdict.source_run)
+                .map(|id| id.0)
+        });
+        if mark > Self::MAX_RUNTIME_ID
+            || queued
+                .chain(runs)
+                .chain(outputs)
+                .chain(verdicts)
+                .any(|id| id > mark)
+        {
+            return Err("runtime id high-water mark is inconsistent with durable identities");
+        }
+        Ok(())
+    }
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -579,6 +639,7 @@ pub fn fold(state: &mut DurableState, delta: &DurableDelta) {
             }
         }
         DurableDelta::ItemReserved { job } => {
+            state.runtime_id_high_water = job.run_id.0;
             set_item_state(
                 &mut state.queue,
                 job.item_id,
@@ -587,6 +648,9 @@ pub fn fold(state: &mut DurableState, delta: &DurableDelta) {
                     run_id: job.run_id,
                 },
             );
+        }
+        DurableDelta::ReservationReleased { item_id, .. } => {
+            set_item_state(&mut state.queue, *item_id, QueueItemState::Queued);
         }
         DurableDelta::MediaObserved { observation } => {
             state
@@ -709,6 +773,7 @@ pub fn fold(state: &mut DurableState, delta: &DurableDelta) {
                     }),
                     ItemOutcome::Analyzed
                     | ItemOutcome::Stopped
+                    | ItemOutcome::Incomplete
                     | ItemOutcome::Skipped { .. }
                     | ItemOutcome::Failed(_) => None,
                 };

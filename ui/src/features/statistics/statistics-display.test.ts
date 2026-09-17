@@ -21,6 +21,7 @@ describe("Statistics display model", () => {
     expect(hasStatisticsData(statisticsPayload({ remuxed_files: 1 }))).toBe(true);
     expect(hasStatisticsData(statisticsPayload({ not_worthwhile_files: 1 }))).toBe(true);
     expect(hasStatisticsData(statisticsPayload({ runs: { failed: 1 } }))).toBe(true);
+    expect(hasStatisticsData(statisticsPayload({ runs: { incomplete: 1 } }))).toBe(true);
   });
 
   it("communicates partial conversion-size coverage without altering totals", () => {
@@ -97,6 +98,7 @@ describe("Statistics display model", () => {
         remuxed: 3,
         not_worthwhile: 4,
         stopped: 5,
+        incomplete: 8,
         skipped: 6,
         failed: 7,
       }),
@@ -106,6 +108,7 @@ describe("Statistics display model", () => {
       { label: "Remuxed", count: 3 },
       { label: "Not worthwhile", count: 4 },
       { label: "Stopped", count: 5 },
+      { label: "Incomplete", count: 8 },
       { label: "Skipped", count: 6 },
       { label: "Failed", count: 7 },
     ]);

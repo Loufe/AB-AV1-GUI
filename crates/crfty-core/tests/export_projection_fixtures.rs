@@ -417,6 +417,31 @@ fn scenarios() -> Vec<Scenario> {
     interrupted.conversion_runs.insert(RunId(4), stopped_fresh);
     list.push(scenario("verdict_wins_over_interruptions", interrupted));
 
+    let mut incomplete = converted_state(10_000_000, 4_000_000);
+    incomplete.conversion_runs.insert(
+        RunId(2),
+        finished_run(2, &key("content-0001"), ItemOutcome::Incomplete),
+    );
+    let interrupted_key = key("incomplete-with-analysis");
+    incomplete.records.insert(
+        interrupted_key.clone(),
+        record(VideoCodec::H264, 6_000_000, None),
+    );
+    let mut interrupted_analysis = finished_run(3, &interrupted_key, ItemOutcome::Incomplete);
+    interrupted_analysis.spec.operation = Operation::Analyze;
+    interrupted_analysis.spec.action = JobAction::Analyze {
+        selected_analysis: interrupted_analysis.analysis.clone().map(Box::new),
+    };
+    interrupted_analysis.started_at = None;
+    interrupted_analysis.phase_spans.clear();
+    incomplete
+        .conversion_runs
+        .insert(RunId(3), interrupted_analysis);
+    list.push(scenario(
+        "incomplete_cached_analysis_and_verdict_precedence",
+        incomplete,
+    ));
+
     // Two analysis runs against one content: the row reports the latest
     // run's measurement (higher run id wins), not the first.
     let mut studied = DurableState::default();

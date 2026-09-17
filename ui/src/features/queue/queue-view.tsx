@@ -100,7 +100,7 @@ function isRemovable(item: QueueItem): boolean {
 function isClearableCompleted(item: QueueItem): boolean {
   if (item.state === "Queued" || !("Finished" in item.state)) return false;
   const outcome = item.state.Finished;
-  return typeof outcome === "string" || outcome?.Failed === undefined;
+  return outcome !== "Incomplete" && (typeof outcome === "string" || outcome?.Failed === undefined);
 }
 function sameIds(left: readonly QueueItemId[], right: readonly QueueItemId[]): boolean {
   return left.length === right.length && left.every((id, index) => id === right[index]);

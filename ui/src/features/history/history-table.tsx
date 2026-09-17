@@ -161,6 +161,7 @@ const STATUS_ICONS = {
   Analyzed: FileSearch,
   Failed: CircleAlert,
   Stopped: SquareStop,
+  Incomplete: CircleAlert,
 } satisfies Record<HistoryStatusLabel, React.ComponentType<{ className?: string }>>;
 
 function StatusText({ displayRow }: { displayRow: HistoryDisplayRow }) {
@@ -170,7 +171,7 @@ function StatusText({ displayRow }: { displayRow: HistoryDisplayRow }) {
       ? "text-success"
       : displayRow.status === "Failed"
         ? "text-destructive"
-        : displayRow.status === "Not Worthwhile"
+        : displayRow.status === "Not Worthwhile" || displayRow.status === "Incomplete"
           ? "text-warning"
           : "text-muted-foreground";
   const body = (

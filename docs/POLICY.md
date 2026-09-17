@@ -36,7 +36,7 @@ A remux settles through the same output transaction as an encode and produces a 
 
 ## Verdicts and freshness
 
-A content record carries at most one standing verdict, the judgment of the latest decisive run: `Converted`, `Remuxed`, or `NotWorthwhile`. Analysis results are facts rather than verdicts, and Stopped, Skipped, and Failed decide nothing.
+A content record carries at most one standing verdict, the judgment of the latest decisive run: `Converted`, `Remuxed`, or `NotWorthwhile`. Analysis results are facts rather than verdicts, and Stopped, Incomplete, Skipped, and Failed decide nothing.
 
 `verdict_applies` answers whether a decided verdict still describes the file at a candidate path, without a probe.
 

@@ -35,6 +35,7 @@ const RUN_LABELS: ReadonlyArray<[keyof RunTotals, string]> = [
   ["remuxed", "Remuxed"],
   ["not_worthwhile", "Not worthwhile"],
   ["stopped", "Stopped"],
+  ["incomplete", "Incomplete"],
   ["skipped", "Skipped"],
   ["failed", "Failed"],
 ];

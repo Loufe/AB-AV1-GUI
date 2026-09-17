@@ -3,7 +3,7 @@
 //! worker shares with force-stop and shutdown.
 
 use std::{
-    sync::{Arc, Mutex, MutexGuard, atomic::AtomicU64, mpsc},
+    sync::{Arc, Mutex, MutexGuard, mpsc},
     thread,
 };
 
@@ -161,10 +161,6 @@ impl ActiveCancellation {
         state.probe = None;
     }
 
-    fn is_force_stopping(&self) -> bool {
-        self.lock().force_stopping
-    }
-
     fn lock(&self) -> MutexGuard<'_, CancellationState> {
         match self.state.lock() {
             Ok(state) => state,
@@ -233,10 +229,8 @@ pub(super) fn supervise(
     runtime: Arc<AbAv1Runtime>,
     config: EngineConfig,
     tools_slot: Arc<Mutex<Option<LocatedTools>>>,
-    next_runtime_id: u64,
 ) {
     let cancellation = ActiveCancellation::new();
-    let next_id = Arc::new(AtomicU64::new(next_runtime_id));
     let mut worker: Option<thread::JoinHandle<()>> = None;
     while let Ok(effect) = effects.recv() {
         match effect {
@@ -260,7 +254,6 @@ pub(super) fn supervise(
                 let worker_config = config.clone();
                 let worker_tools = Arc::clone(&tools_slot);
                 let worker_cancellation = cancellation.clone();
-                let worker_ids = Arc::clone(&next_id);
                 let spawned = thread::Builder::new()
                     .name("crfty-session-worker".to_owned())
                     .spawn(move || {
@@ -275,15 +268,13 @@ pub(super) fn supervise(
                                 &worker_config,
                                 &worker_tools,
                                 &worker_cancellation,
-                                &worker_ids,
                             )
                         }));
                         match result {
                             Ok(Ok(())) => {}
-                            Ok(Err(message)) if !worker_cancellation.is_force_stopping() => {
+                            Ok(Err(message)) => {
                                 report_worker_crash(&worker_commands, &message);
                             }
-                            Ok(Err(_)) => {}
                             Err(_) => {
                                 report_worker_crash(&worker_commands, "session worker panicked");
                             }
@@ -349,6 +340,7 @@ pub(super) fn supervise(
 }
 
 fn report_worker_crash(commands: &CommandSender, message: &str) {
+    tracing::error!("session worker failed: {message}");
     match commands.submit(Command::Worker(WorkerCommand::Crashed {
         message: message.to_owned(),
     })) {

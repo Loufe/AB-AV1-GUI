@@ -99,16 +99,18 @@ function selectionMode(
 }
 
 function totalsSummary(rows: readonly QueueRowData[]): string {
-  const counts = { done: 0, skipped: 0, failed: 0 };
+  const counts = { done: 0, skipped: 0, failed: 0, incomplete: 0 };
   for (const row of rows) {
     if (row.status.kind === "done") counts.done += 1;
     else if (row.status.kind === "skipped") counts.skipped += 1;
     else if (row.status.kind === "failed") counts.failed += 1;
+    else if (row.status.kind === "incomplete") counts.incomplete += 1;
   }
   return [
     counts.done && `${counts.done} done`,
     counts.skipped && `${counts.skipped} skipped`,
     counts.failed && `${counts.failed} failed`,
+    counts.incomplete && `${counts.incomplete} incomplete`,
   ]
     .filter(Boolean)
     .join(" · ");

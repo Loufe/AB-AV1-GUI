@@ -6,7 +6,7 @@ This document states only the rules that are settled and verified against the sh
 
 ## History reports outcomes; it does not decide them
 
-A History entry describes work that reached a terminal outcome: a conversion, a remux, a not-worthwhile judgment, a completed analysis, or a failed or stopped run. Content that was only scanned has nothing to report and gets no entry. A skipped run decided nothing and gets no entry either; its reason belongs to the queue item that was skipped.
+A History entry describes work that reached a terminal outcome: a conversion, a remux, a not-worthwhile judgment, a completed analysis, or a failed, stopped, or incomplete run. Content that was only scanned has nothing to report and gets no entry. A skipped run decided nothing and gets no entry either; its reason belongs to the queue item that was skipped.
 
 Nothing is stored under the name History. History rows and Statistics are context-free projections of durable state, recomputed on request with no clock, no filesystem, and no cache, per ADR-015, project imported history separately.
 
@@ -19,6 +19,14 @@ Facts flow one way. The analysis level a file stands at, the analysis it may reu
 Estimation is the one sanctioned consumer in the other direction: completed phase spans and settled sizes feed the cohorts behind size and time predictions. It reads History and never writes to it; its model, evidence seam, and open questions are in `docs/design/estimation.md`.
 
 One seam does run from historical records into current state, and it is deliberately narrow. An imported record adopts onto a content record only when a fresh observation confirms the file at its recorded path. Confirmation requires either matching size and modification time or the replace-mode case where the file at that path is already the AV1 output. Adoption is the one-time route for V2 history and is governed by ADR-015; a record that no longer describes the file retires and decides nothing.
+
+## Interrupted runs and preparation failures
+
+Stopped means a user requested Force Stop and cleanup allowed that outcome to be recorded. Incomplete means a prepared run had no recorded terminal when startup recovery examined it. This can follow a crash, a persistence failure, or ordinary shutdown during active work. The recovery timestamp records when the outcome was decided, not when processing ended; recovery adds no measured phase durations.
+
+Output evidence takes precedence: a successfully settled output reports recovered conversion or remux, and a conflict reports failure. Other prepared work reports Incomplete only once output is absent or safely abandoned. Missing tools leave unsettled output deferred. Saved analysis survives an incomplete run, but an analysis attached from an earlier run cannot prove that this run completed. An existing standing verdict still takes precedence in the content History row.
+
+A reservation has no prepared run. Startup returns it to its original queue position without creating an outcome. A known preparation rejection instead records a failed queue item with its reason. That failure remains visible until explicit queue removal or retry, but it has no independent History observation or run-based Statistics entry. A durable identity high-water mark prevents ID reuse; it does not retain the failure as a separate observation.
 
 ## Predictions and measurements are separate observations
 

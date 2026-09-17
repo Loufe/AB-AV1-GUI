@@ -135,6 +135,16 @@ export function StatusCell({ status }: { status: RowStatus }) {
       );
     case "stopped":
       return <StatusText tone="muted">Stopped</StatusText>;
+    case "incomplete":
+      return (
+        <StatusText
+          tone="warning"
+          icon={CircleAlert}
+          tooltip="Interrupted before completion was recorded"
+        >
+          Incomplete
+        </StatusText>
+      );
     case "failed":
       return (
         <StatusText

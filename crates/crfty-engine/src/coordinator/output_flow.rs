@@ -283,7 +283,7 @@ pub(super) fn finish_successful_output(
     // The outcome is built only now, after settlement: remux evidence needs
     // the settled final identity, and a delta-borne conflict settlement must
     // surface as the structured failure it is rather than a claimed success.
-    let outcome = settled_outcome(success, &transaction);
+    let outcome = settled_outcome(success, &transaction)?;
     let final_telemetry = map_progress(
         job.spec.run_id,
         tracker,
@@ -319,9 +319,12 @@ fn output_failure(
 /// Maps a settled transaction plus the adapter's success facts to the
 /// terminal outcome. Success requires the replacement-consistent settled
 /// state; a Conflict settlement becomes a structured output-conflict failure.
-fn settled_outcome(success: SuccessfulJob, transaction: &OutputTransaction) -> ItemOutcome {
+fn settled_outcome(
+    success: SuccessfulJob,
+    transaction: &OutputTransaction,
+) -> Result<ItemOutcome, String> {
     if let Some(final_identity) = transaction.settled_identity() {
-        return match success {
+        return Ok(match success {
             SuccessfulJob::Encode { decode_mode } => {
                 ItemOutcome::Converted(CompletionEvidence::LiveEncode {
                     input_size: transaction.input_identity.size,
@@ -335,14 +338,14 @@ fn settled_outcome(success: SuccessfulJob, transaction: &OutputTransaction) -> I
                 input_size: transaction.input_identity.size,
                 output_size: final_identity.destructive.size,
             }),
-        };
+        });
     }
     match transaction.state {
-        OutputState::Conflict { .. } => ItemOutcome::Failed(FailureFacts::new(
+        OutputState::Conflict { .. } => Ok(ItemOutcome::Failed(FailureFacts::new(
             FailureKind::OutputConflict,
             "output transaction settled as a conflict",
-        )),
-        _ => ItemOutcome::Stopped,
+        ))),
+        _ => Err("successful adapter has no reportable output settlement".to_owned()),
     }
 }
 

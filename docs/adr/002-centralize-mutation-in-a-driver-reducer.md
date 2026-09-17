@@ -30,6 +30,8 @@ Chosen option: **One synchronous driver plus a pure reducer**, because it elimin
 
 Commands enter through a bounded lossless channel. High-rate telemetry uses a separate coalescing path. The reducer performs no I/O or clock access and returns deltas, effects, and replies for the driver to interpret.
 
+Claim and run IDs are allocated together by the reducer when it reserves a queue item. The reservation advances a durable high-water mark; finishing, retrying, removing, or compacting work never lowers it. IDs stay within the JavaScript safe integer range because the frontend receives them as numbers. Exhaustion rejects another reservation without preventing startup or inspection. Replay requires the next pair, and snapshot loading checks the mark against retained identities. This guarantee covers the continuing store; restoring an older backup also restores its allocation history.
+
 ### Consequences
 
 * Good: No shared mutable application state or deadlock analysis

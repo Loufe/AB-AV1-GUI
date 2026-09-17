@@ -3,10 +3,10 @@ use serde::{Deserialize, Serialize};
 
 use crate::{
     AppState, DurableDelta, DurableState, JournalSequence, QueueItemState, SessionState,
-    UnixMillis, fold, output::validate_output_delta, reducer::validate_terminal,
+    UnixMillis, fold, output::validate_output_delta,
 };
 
-pub(crate) const JOURNAL_SCHEMA_VERSION: u32 = 17;
+pub(crate) const JOURNAL_SCHEMA_VERSION: u32 = 19;
 
 /// Compaction fires at an idle writer barrier when the journal is both large
 /// in absolute terms and dominated by dead upserts. The floor keeps
@@ -55,8 +55,7 @@ pub(crate) struct JournalSnapshot {
     pub app_version: String,
     pub compacted_at: UnixMillis,
     /// The sequence the first delta record after this snapshot must carry;
-    /// numbering continues across compactions so recovery identity and
-    /// runtime-id derivation never reset.
+    /// numbering continues across compactions so recovery identity never resets.
     pub base_sequence: JournalSequence,
     pub state: DurableState,
 }
@@ -246,6 +245,10 @@ pub fn replay(bytes: &[u8]) -> JournalReplay {
                     corruption = Some("snapshot record after journal head".to_owned());
                     break;
                 }
+                if let Err(reason) = snapshot.state.validate_runtime_ids() {
+                    corruption = Some(reason.to_owned());
+                    break;
+                }
                 state = snapshot.state;
                 expected = snapshot.base_sequence.0;
             }
@@ -370,6 +373,9 @@ fn validate_replayed_delta(state: &DurableState, delta: &DurableDelta) -> Result
             output_target.validate()?;
         }
         DurableDelta::ItemReserved { job } => {
+            if (job.claim_id, job.run_id) != state.next_runtime_ids()? {
+                return Err("reservation does not use the next runtime identity pair");
+            }
             let matches_item = state.queue.iter().any(|item| {
                 item.id == job.item_id
                     && item.input == job.input
@@ -474,6 +480,13 @@ fn validate_replayed_delta(state: &DurableState, delta: &DurableDelta) -> Result
             }
             result.validate_for(&run.spec.execution)?;
         }
+        DurableDelta::ReservationReleased {
+            item_id,
+            claim_id,
+            run_id,
+        } => {
+            crate::reducer::validate_reservation(state, *item_id, *claim_id, *run_id)?;
+        }
         DurableDelta::ItemFinished {
             item_id,
             claim_id,
@@ -492,33 +505,13 @@ fn validate_replayed_delta(state: &DurableState, delta: &DurableDelta) -> Result
                     )
             });
             if reserved {
-                if !matches!(outcome, crate::ItemOutcome::Stopped)
-                    || state.conversion_runs.contains_key(run_id)
-                {
-                    return Err("reservation terminal is not a clean stop");
-                }
+                crate::reducer::validate_reservation(state, *item_id, *claim_id, *run_id)?;
+                crate::reducer::validate_reservation_outcome(outcome)?;
                 return Ok(());
             }
-            let Some(run) = state.conversion_runs.get(run_id) else {
-                return Err("terminal transition references a missing run");
-            };
-            let active = state.queue.iter().any(|item| {
-                item.id == *item_id
-                    && matches!(
-                        item.state,
-                        QueueItemState::Claimed {
-                            claim_id: current_claim,
-                            run_id: current_run,
-                        } | QueueItemState::Running {
-                            claim_id: current_claim,
-                            run_id: current_run,
-                        } if current_claim == *claim_id && current_run == *run_id
-                    )
-            });
-            if !active || run.outcome.is_some() {
-                return Err("terminal transition has a stale claim");
-            }
-            validate_terminal(run, state.outputs.get(run_id), outcome)?;
+            crate::reducer::validate_prepared_terminal(
+                state, *item_id, *claim_id, *run_id, outcome,
+            )?;
         }
         DurableDelta::Output(output) => {
             validate_output_delta(state, output)?;
