@@ -4,6 +4,8 @@ History is the durable record of what conversion work actually happened, and the
 
 This document states only the rules that are settled and verified against the shipped core today. It is not yet the full logical contract, and the storage model behind it is not decided here.
 
+The [source-continuity contract](design/source-continuity.md) defines required alpha changes to evidence eligibility and retained artifacts. The shipped model does not yet classify source mutation across search and conversion. Its completion sizes and fallback projections must not be read as proof that the source stayed unchanged during processing.
+
 ## History reports outcomes; it does not decide them
 
 A History entry describes work that reached a terminal outcome: a conversion, a remux, a not-worthwhile judgment, a completed analysis, or a failed, stopped, or incomplete run. Content that was only scanned has nothing to report and gets no entry. A skipped run decided nothing and gets no entry either; its reason belongs to the queue item that was skipped.
