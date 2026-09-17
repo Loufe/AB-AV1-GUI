@@ -449,19 +449,7 @@ fn validate_replayed_delta(state: &DurableState, delta: &DurableDelta) -> Result
             run_id,
             ..
         } => {
-            let matches_claim = state.queue.iter().any(|item| {
-                item.id == *item_id
-                    && matches!(
-                        item.state,
-                        QueueItemState::Claimed {
-                            claim_id: current_claim,
-                            run_id: current_run,
-                        } if current_claim == *claim_id && current_run == *run_id
-                    )
-            });
-            if !matches_claim {
-                return Err("running transition has a stale claim");
-            }
+            crate::reducer::validate_started(state, *item_id, *claim_id, *run_id)?;
         }
         DurableDelta::AnalysisRecorded { run_id, result } => {
             let Some(run) = state.conversion_runs.get(run_id) else {

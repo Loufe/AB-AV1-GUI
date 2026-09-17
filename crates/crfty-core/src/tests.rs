@@ -2196,6 +2196,111 @@ fn reserved_item_can_be_durably_stopped_before_preparation() {
     assert_eq!(replayed.state, state.durable);
 }
 
+fn assert_started_at_live_and_replay_boundaries(
+    state: &mut AppState,
+    item_id: QueueItemId,
+    claim_id: ClaimId,
+    run_id: RunId,
+    accepted: bool,
+) -> Result<(), serde_json::Error> {
+    let before = state.clone();
+    let at = UnixMillis(1_000);
+    let applied = apply(
+        state,
+        Command::Worker(WorkerCommand::Started {
+            item_id,
+            claim_id,
+            run_id,
+            at,
+        }),
+    );
+    let mut bytes = encode_snapshot("test", UnixMillis(0), JournalSequence(0), &before.durable)?;
+    bytes.extend(encode_record(&JournalEnvelope {
+        sequence: JournalSequence(0),
+        deltas: vec![DurableDelta::ItemRunning {
+            item_id,
+            claim_id,
+            run_id,
+            at,
+        }],
+    })?);
+    let restored = replay(&bytes);
+    assert_eq!(restored.corruption.is_none(), accepted);
+    if accepted {
+        assert_eq!(applied.reply, Reply::Accepted);
+        assert_eq!(applied.durable.len(), 1);
+        assert_eq!(restored.state, state.durable);
+    } else {
+        assert!(matches!(applied.reply, Reply::Rejected { .. }));
+        assert!(applied.durable.is_empty());
+        assert!(applied.config.is_empty());
+        assert!(applied.effects.is_empty());
+        assert_eq!(*state, before);
+        assert_eq!(restored.state, before.durable);
+    }
+    Ok(())
+}
+
+#[test]
+fn started_requires_the_same_prepared_claim_in_live_state_and_replay()
+-> Result<(), serde_json::Error> {
+    let mut state = AppState::default();
+    apply(&mut state, add_command(QueueItemId(1), "video.mkv"));
+    start_session(&mut state);
+    assert_started_at_live_and_replay_boundaries(
+        &mut state,
+        QueueItemId(1),
+        ClaimId(1),
+        RunId(2),
+        false,
+    )?;
+    let reserved = apply(&mut state, Command::Worker(WorkerCommand::ReserveNext));
+    assert!(matches!(reserved.reply, Reply::Reserved(Some(_))));
+    assert_started_at_live_and_replay_boundaries(
+        &mut state,
+        QueueItemId(1),
+        ClaimId(1),
+        RunId(2),
+        false,
+    )?;
+    let prepared = apply(
+        &mut state,
+        Command::Worker(WorkerCommand::PrepareReserved {
+            item_id: QueueItemId(1),
+            claim_id: ClaimId(1),
+            run_id: RunId(2),
+            observation: None,
+            import_paths: Vec::new(),
+            execution: execution(),
+        }),
+    );
+    assert!(matches!(prepared.reply, Reply::Claimed(Some(_))));
+    for (item, claim, run) in [(99, 1, 2), (1, 99, 2), (1, 1, 99)] {
+        assert_started_at_live_and_replay_boundaries(
+            &mut state,
+            QueueItemId(item),
+            ClaimId(claim),
+            RunId(run),
+            false,
+        )?;
+    }
+    assert_started_at_live_and_replay_boundaries(
+        &mut state,
+        QueueItemId(1),
+        ClaimId(1),
+        RunId(2),
+        true,
+    )?;
+    assert_started_at_live_and_replay_boundaries(
+        &mut state,
+        QueueItemId(1),
+        ClaimId(1),
+        RunId(2),
+        false,
+    )?;
+    Ok(())
+}
+
 #[test]
 fn output_ledger_rejects_skipped_and_mismatched_transitions() {
     let mut state = active_state();
@@ -5364,7 +5469,7 @@ fn statistics_request_answers_on_the_stream_without_touching_state() {
 #[test]
 fn statistics_request_rejects_an_implausible_offset() {
     let mut state = AppState::default();
-    for offset in [1_441, -1_441] {
+    for offset in [i32::MIN, -1_441, 1_441, i32::MAX] {
         let applied = apply(
             &mut state,
             Command::Projection(ProjectionCommand::RequestStatistics {
@@ -5376,6 +5481,29 @@ fn statistics_request_rejects_an_implausible_offset() {
             applied.ephemeral.as_slice(),
             [EphemeralDelta::CommandRejected { .. }]
         ));
+        assert!(applied.durable.is_empty());
+        assert!(applied.config.is_empty());
+        assert!(applied.effects.is_empty());
+        assert_eq!(state, AppState::default());
+    }
+}
+
+#[test]
+fn statistics_request_accepts_offsets_at_the_validation_boundaries() {
+    let mut state = AppState::default();
+    for offset in [-1_440, 0, 1_440] {
+        let applied = apply(
+            &mut state,
+            Command::Projection(ProjectionCommand::RequestStatistics {
+                utc_offset_minutes: offset,
+            }),
+        );
+        assert_eq!(applied.reply, Reply::Accepted);
+        let [EphemeralDelta::Statistics(payload)] = applied.ephemeral.as_slice() else {
+            panic!("expected exactly one statistics delta");
+        };
+        assert_eq!(payload.utc_offset_minutes, offset);
+        assert_eq!(state, AppState::default());
     }
 }
 /// A parked record whose stamp matches `media_observation` (size 10_000,

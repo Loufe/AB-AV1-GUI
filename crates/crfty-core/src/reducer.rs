@@ -371,7 +371,7 @@ pub fn apply(state: &mut AppState, command: Command) -> Applied {
             applied
         }
         Command::Projection(ProjectionCommand::RequestStatistics { utc_offset_minutes }) => {
-            if utc_offset_minutes.abs() > MAX_UTC_OFFSET_MINUTES {
+            if !(-MAX_UTC_OFFSET_MINUTES..=MAX_UTC_OFFSET_MINUTES).contains(&utc_offset_minutes) {
                 return Applied::rejected("UTC offset is outside a plausible range");
             }
             let mut applied = Applied::accepted();
@@ -1411,14 +1411,19 @@ fn apply_worker(state: &AppState, command: WorkerCommand) -> Applied {
             claim_id,
             run_id,
             at,
-        } => transition_active(state, item_id, claim_id, run_id, |applied| {
+        } => {
+            if let Err(reason) = validate_started(&state.durable, item_id, claim_id, run_id) {
+                return Applied::rejected(reason);
+            }
+            let mut applied = Applied::accepted();
             applied.durable.push(DurableDelta::ItemRunning {
                 item_id,
                 claim_id,
                 run_id,
                 at,
             });
-        }),
+            applied
+        }
         WorkerCommand::Output(output_delta) => {
             let run_id = output_delta.run_id();
             if active_run(state) != Some(run_id) {
@@ -1677,6 +1682,28 @@ fn active_run(state: &AppState) -> Option<RunId> {
             QueueItemState::Reserved { run_id, .. } => Some(run_id),
             QueueItemState::Queued | QueueItemState::Finished(_) => None,
         })
+}
+
+pub(crate) fn validate_started(
+    state: &crate::DurableState,
+    item_id: QueueItemId,
+    claim_id: ClaimId,
+    run_id: RunId,
+) -> Result<(), &'static str> {
+    let matches_claim = state.queue.iter().any(|item| {
+        item.id == item_id
+            && matches!(
+                item.state,
+                QueueItemState::Claimed {
+                    claim_id: current_claim,
+                    run_id: current_run,
+                } if current_claim == claim_id && current_run == run_id
+            )
+    });
+    if !matches_claim {
+        return Err("running transition has a stale claim");
+    }
+    Ok(())
 }
 
 pub(crate) fn validate_reservation(
