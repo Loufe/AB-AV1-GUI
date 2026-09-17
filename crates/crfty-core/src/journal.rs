@@ -455,18 +455,13 @@ fn validate_replayed_delta(state: &DurableState, delta: &DurableDelta) -> Result
             let Some(run) = state.conversion_runs.get(run_id) else {
                 return Err("analysis references a missing run");
             };
-            if run.analysis.is_some() {
-                return Err("analysis is already recorded");
-            }
-            if run
-                .spec
-                .content_key
-                .as_ref()
-                .is_some_and(|key| !state.records.contains_key(key))
-            {
-                return Err("analysis content record is missing");
-            }
-            result.validate_for(&run.spec.execution)?;
+            crate::reducer::validate_analysis_recorded(
+                state,
+                run.spec.item_id,
+                run.spec.claim_id,
+                *run_id,
+                result,
+            )?;
         }
         DurableDelta::ReservationReleased {
             item_id,

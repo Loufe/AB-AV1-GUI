@@ -1425,10 +1425,6 @@ fn apply_worker(state: &AppState, command: WorkerCommand) -> Applied {
             applied
         }
         WorkerCommand::Output(output_delta) => {
-            let run_id = output_delta.run_id();
-            if active_run(state) != Some(run_id) {
-                return Applied::rejected("output event does not belong to the active run");
-            }
             if let Err(reason) = crate::output::validate_output_delta(&state.durable, &output_delta)
             {
                 return Applied::rejected(reason);
@@ -1442,23 +1438,18 @@ fn apply_worker(state: &AppState, command: WorkerCommand) -> Applied {
             claim_id,
             run_id,
             result,
-        } => transition_active(state, item_id, claim_id, run_id, |applied| {
-            let Some(run) = state.durable.conversion_runs.get(&run_id) else {
-                applied.reject("conversion run does not exist");
-                return;
-            };
-            if run.analysis.is_some() {
-                applied.reject("analysis is already recorded");
-                return;
+        } => {
+            if let Err(reason) =
+                validate_analysis_recorded(&state.durable, item_id, claim_id, run_id, &result)
+            {
+                return Applied::rejected(reason);
             }
-            if let Err(reason) = result.validate_for(&run.spec.execution) {
-                applied.reject(reason);
-                return;
-            }
+            let mut applied = Applied::accepted();
             applied
                 .durable
                 .push(DurableDelta::AnalysisRecorded { run_id, result });
-        }),
+            applied
+        }
         WorkerCommand::Terminal {
             item_id,
             claim_id,
@@ -1467,19 +1458,18 @@ fn apply_worker(state: &AppState, command: WorkerCommand) -> Applied {
             at,
             phase_spans,
             final_telemetry,
-        } => transition_active(state, item_id, claim_id, run_id, |applied| {
+        } => {
             if matches!(outcome, ItemOutcome::Stopped)
                 && state.session != SessionState::ForceStopping
             {
-                applied.reject("stopped outcome requires a user force stop");
-                return;
+                return Applied::rejected("stopped outcome requires a user force stop");
             }
             if let Err(reason) =
                 validate_prepared_terminal(&state.durable, item_id, claim_id, run_id, &outcome)
             {
-                applied.reject(reason);
-                return;
+                return Applied::rejected(reason);
             }
+            let mut applied = Applied::accepted();
             if let Some(telemetry) = final_telemetry {
                 applied.ephemeral.push(EphemeralDelta::Telemetry(telemetry));
             }
@@ -1499,7 +1489,8 @@ fn apply_worker(state: &AppState, command: WorkerCommand) -> Applied {
                 at,
                 phase_spans,
             });
-        }),
+            applied
+        }
         WorkerCommand::Finished => {
             if active_run(state).is_some() {
                 return Applied::rejected("worker cannot finish while an item is active");
@@ -1635,37 +1626,6 @@ fn has_successful_output(output: Option<&crate::OutputTransaction>) -> bool {
     output.is_some_and(|transaction| transaction.settled_identity().is_some())
 }
 
-fn transition_active(
-    state: &AppState,
-    item_id: QueueItemId,
-    claim_id: ClaimId,
-    run_id: RunId,
-    update: impl FnOnce(&mut Applied),
-) -> Applied {
-    let Some(item) = find_item(state, item_id) else {
-        return Applied::rejected("queue item does not exist");
-    };
-    let matching = matches!(
-        item.state,
-        QueueItemState::Reserved {
-            claim_id: current_claim,
-            run_id: current_run,
-        } | QueueItemState::Claimed {
-            claim_id: current_claim,
-            run_id: current_run,
-        } | QueueItemState::Running {
-            claim_id: current_claim,
-            run_id: current_run,
-        } if current_claim == claim_id && current_run == run_id
-    );
-    if !matching {
-        return Applied::rejected("worker event has a stale claim or run id");
-    }
-    let mut applied = Applied::accepted();
-    update(&mut applied);
-    applied
-}
-
 fn find_item(state: &AppState, item_id: QueueItemId) -> Option<&QueueItem> {
     state.durable.queue.iter().find(|item| item.id == item_id)
 }
@@ -1704,6 +1664,54 @@ pub(crate) fn validate_started(
         return Err("running transition has a stale claim");
     }
     Ok(())
+}
+
+pub(crate) fn validate_analysis_recorded(
+    state: &crate::DurableState,
+    item_id: QueueItemId,
+    claim_id: ClaimId,
+    run_id: RunId,
+    result: &AnalysisResult,
+) -> Result<(), &'static str> {
+    let Some(run) = state.conversion_runs.get(&run_id) else {
+        return Err("analysis references a missing run");
+    };
+    if !prepared_claim_is_active(state, item_id, claim_id, run_id)
+        || run.spec.item_id != item_id
+        || run.spec.claim_id != claim_id
+    {
+        return Err("analysis transition has a stale claim");
+    }
+    if run.analysis.is_some() {
+        return Err("analysis is already recorded");
+    }
+    if run
+        .spec
+        .content_key
+        .as_ref()
+        .is_some_and(|key| !state.records.contains_key(key))
+    {
+        return Err("analysis content record is missing");
+    }
+    result.validate_for(&run.spec.execution)
+}
+
+/// A prepared claim stays active from `ItemPrepared` through `ItemFinished`;
+/// worker events for a run outside that window are stale at both the live
+/// and replay boundaries.
+fn prepared_claim_is_active(
+    state: &crate::DurableState,
+    item_id: QueueItemId,
+    claim_id: ClaimId,
+    run_id: RunId,
+) -> bool {
+    state.queue.iter().any(|item| {
+        item.id == item_id
+            && matches!(item.state,
+        QueueItemState::Claimed { claim_id: current_claim, run_id: current_run }
+        | QueueItemState::Running { claim_id: current_claim, run_id: current_run }
+        if current_claim == claim_id && current_run == run_id)
+    })
 }
 
 pub(crate) fn validate_reservation(
@@ -1748,14 +1756,7 @@ pub(crate) fn validate_prepared_terminal(
     let Some(run) = state.conversion_runs.get(&run_id) else {
         return Err("terminal transition references a missing run");
     };
-    let active = state.queue.iter().any(|item| {
-        item.id == item_id
-            && matches!(item.state,
-        QueueItemState::Claimed { claim_id: current_claim, run_id: current_run }
-        | QueueItemState::Running { claim_id: current_claim, run_id: current_run }
-        if current_claim == claim_id && current_run == run_id)
-    });
-    if !active
+    if !prepared_claim_is_active(state, item_id, claim_id, run_id)
         || run.spec.item_id != item_id
         || run.spec.claim_id != claim_id
         || run.spec.run_id != run_id

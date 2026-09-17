@@ -2,7 +2,7 @@ use std::{collections::BTreeMap, path::PathBuf};
 
 use serde::{Deserialize, Serialize};
 
-use crate::{DurableState, FileTimeNs, JobAction, RunId};
+use crate::{DurableState, FileTimeNs, JobAction, QueueItemState, RunId};
 
 #[derive(
     Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize, specta::Type,
@@ -347,6 +347,17 @@ pub(crate) fn validate_output_delta(
     delta: &OutputDelta,
 ) -> Result<(), &'static str> {
     let run_id = delta.run_id();
+    let active = state.queue.iter().any(|item| {
+        matches!(
+            item.state,
+            QueueItemState::Claimed { run_id: current, .. }
+                | QueueItemState::Running { run_id: current, .. }
+            if current == run_id
+        )
+    });
+    if !active {
+        return Err("output event does not belong to the active run");
+    }
     let current = state.outputs.get(&run_id);
     match (current, delta) {
         (None, OutputDelta::OutputStarted { transaction })
