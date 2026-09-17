@@ -64,6 +64,7 @@ pub enum ItemOutcome {
     Remuxed(CompletionEvidence),
     NotWorthwhile { attempts: Vec<AnalysisAttempt> },
     Stopped,
+    Incomplete,
     Skipped { reason: SkipReason },
     Failed(FailureFacts),
 }
@@ -111,6 +112,7 @@ pub struct SessionAggregates {
     pub failed: u32,
     pub skipped: u32,
     pub stopped: u32,
+    pub incomplete: u32,
     pub not_worthwhile: u32,
     pub analyzed: u32,
     pub remuxed: u32,
@@ -133,6 +135,7 @@ impl SessionAggregates {
             ItemOutcome::Remuxed(_) => &mut self.remuxed,
             ItemOutcome::NotWorthwhile { .. } => &mut self.not_worthwhile,
             ItemOutcome::Stopped => &mut self.stopped,
+            ItemOutcome::Incomplete => &mut self.incomplete,
             ItemOutcome::Skipped { .. } => &mut self.skipped,
             ItemOutcome::Failed(_) => &mut self.failed,
         };
@@ -215,6 +218,11 @@ pub enum DurableDelta {
     },
     ItemReserved {
         job: Box<ReservedJob>,
+    },
+    ReservationReleased {
+        item_id: QueueItemId,
+        claim_id: ClaimId,
+        run_id: RunId,
     },
     MediaObserved {
         observation: Box<MediaObservation>,
@@ -641,6 +649,9 @@ pub fn fold(state: &mut DurableState, delta: &DurableDelta) {
                 },
             );
         }
+        DurableDelta::ReservationReleased { item_id, .. } => {
+            set_item_state(&mut state.queue, *item_id, QueueItemState::Queued);
+        }
         DurableDelta::MediaObserved { observation } => {
             state
                 .paths
@@ -762,6 +773,7 @@ pub fn fold(state: &mut DurableState, delta: &DurableDelta) {
                     }),
                     ItemOutcome::Analyzed
                     | ItemOutcome::Stopped
+                    | ItemOutcome::Incomplete
                     | ItemOutcome::Skipped { .. }
                     | ItemOutcome::Failed(_) => None,
                 };

@@ -100,7 +100,7 @@ function carriedSizes(verdict: Verdict): { input: number | null; output: number 
  * Project native/adopted content rows in content-key order, followed by
  * unresolved imported rows in normalized import-path order.
  * Filtering and sorting are frontend concerns. Mirrors `history_rows`: a
- * standing verdict wins; without one, the latest failed or stopped run
+ * standing verdict wins; without one, the latest failed, stopped, or incomplete run
  * reports with its reason; without that, completed analyses report as
  * Analyzed; scanned-only content gets no row.
  */
@@ -124,6 +124,7 @@ export function historyRows(state: DurableState_Deserialize): HistoryRow[] {
     const outcome = run.outcome;
     if (
       outcome === "Stopped" ||
+      outcome === "Incomplete" ||
       (outcome !== null &&
         typeof outcome === "object" &&
         "Failed" in outcome &&
@@ -269,7 +270,9 @@ function interruptionRow(
     "Failed" in outcome &&
     outcome.Failed !== undefined
       ? { Failed: { kind: outcome.Failed.kind, message: outcome.Failed.message } }
-      : "Stopped";
+      : outcome === "Incomplete"
+        ? "Incomplete"
+        : "Stopped";
   const row = baseRow(contentKey, record, status);
   row.source_run = runId;
   row.happened_at = run.finished_at;

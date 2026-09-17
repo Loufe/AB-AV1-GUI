@@ -90,6 +90,7 @@ function statisticsPayload(): StatisticsPayload {
       remuxed: 0,
       not_worthwhile: 0,
       stopped: 0,
+      incomplete: 0,
       skipped: 0,
       failed: 0,
     },

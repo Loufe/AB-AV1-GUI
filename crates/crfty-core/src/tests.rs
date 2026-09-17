@@ -1976,6 +1976,7 @@ fn session_aggregates_absorb_counts_every_outcome_and_live_evidence() {
         &[],
     );
     aggregates.absorb(&ItemOutcome::Stopped, &[]);
+    aggregates.absorb(&ItemOutcome::Incomplete, &[]);
     aggregates.absorb(
         &ItemOutcome::Skipped {
             reason: SkipReason::OutputExists,
@@ -1993,6 +1994,7 @@ fn session_aggregates_absorb_counts_every_outcome_and_live_evidence() {
             failed: 1,
             skipped: 1,
             stopped: 1,
+            incomplete: 1,
             not_worthwhile: 1,
             analyzed: 1,
             remuxed: 1,
@@ -2056,9 +2058,11 @@ fn terminal_and_abandonment_emit_the_updated_aggregates() {
     let _added = apply(&mut state, add_command(QueueItemId(1), "video.mkv"));
     let _started = start_session(&mut state);
     let _reserved = apply(&mut state, Command::Worker(WorkerCommand::ReserveNext));
+    let _stopping = apply(&mut state, Command::Session(SessionCommand::ForceStop));
     let stopped = apply(
         &mut state,
         Command::Worker(WorkerCommand::AbandonReservation {
+            disposition: crate::ReservationDisposition::Stopped,
             item_id: QueueItemId(1),
             claim_id: ClaimId(1),
             run_id: RunId(2),
@@ -2117,9 +2121,8 @@ fn failed_terminal_invariants_check_conflict_state_and_diagnostic_bound() {
     );
     conflicted.run_id = RunId(2);
     assert!(validate_terminal(run, Some(&conflicted), &conflict_failure).is_ok());
-    // The converse is NOT an invariant: a conflicted settlement followed by a
-    // Stopped terminal stays legal (cancellation racing a settlement failure).
-    assert!(validate_terminal(run, Some(&conflicted), &ItemOutcome::Stopped).is_ok());
+    assert!(validate_terminal(run, Some(&conflicted), &ItemOutcome::Stopped).is_err());
+    assert!(validate_terminal(run, Some(&conflicted), &ItemOutcome::Incomplete).is_err());
     // Other failure kinds carry no output requirement.
     let plain_failure = ItemOutcome::Failed(FailureFacts::new(FailureKind::Internal, "fixture"));
     assert!(validate_terminal(run, None, &plain_failure).is_ok());
@@ -2166,9 +2169,11 @@ fn reserved_item_can_be_durably_stopped_before_preparation() {
     durable.extend(apply(&mut state, add_command(QueueItemId(1), "video.mkv")).durable);
     let _started = start_session(&mut state);
     durable.extend(apply(&mut state, Command::Worker(WorkerCommand::ReserveNext)).durable);
+    let _stopping = apply(&mut state, Command::Session(SessionCommand::ForceStop));
     let stopped = apply(
         &mut state,
         Command::Worker(WorkerCommand::AbandonReservation {
+            disposition: crate::ReservationDisposition::Stopped,
             item_id: QueueItemId(1),
             claim_id: ClaimId(1),
             run_id: RunId(2),
@@ -6049,6 +6054,7 @@ fn new_reservation_cannot_reuse_a_prepared_run_identity() {
     let abandoned = apply(
         &mut state,
         Command::Worker(WorkerCommand::AbandonReservation {
+            disposition: crate::ReservationDisposition::Stopped,
             item_id: QueueItemId(4),
             claim_id: ClaimId(4),
             run_id: RunId(2),
@@ -6568,11 +6574,13 @@ fn reservation_identity_survives_removal_restart_and_compaction() {
         panic!("expected reservation");
     };
     assert_eq!((job.claim_id, job.run_id), (ClaimId(1), RunId(2)));
+    let _stopping = apply(&mut state, Command::Session(SessionCommand::ForceStop));
     let stopped = apply_and_journal(
         &mut state,
         &mut bytes,
         &mut sequence,
         Command::Worker(WorkerCommand::AbandonReservation {
+            disposition: crate::ReservationDisposition::Stopped,
             item_id: job.item_id,
             claim_id: job.claim_id,
             run_id: job.run_id,
@@ -6699,4 +6707,304 @@ fn snapshot_rejects_a_mark_below_retained_ids_or_above_wire_precision() {
     let replayed = replay(&bytes);
     assert!(replayed.corruption.is_none());
     assert_eq!(replayed.state, exhausted);
+}
+
+#[test]
+#[expect(clippy::expect_used, reason = "fixture setup and journal assertions")]
+fn reservation_release_preserves_order_and_replays_without_an_outcome() {
+    let mut state = AppState::default();
+    let mut bytes = Vec::new();
+    let mut sequence = 0;
+    let _first = apply_and_journal(
+        &mut state,
+        &mut bytes,
+        &mut sequence,
+        add_command(QueueItemId(1), "first.mkv"),
+    );
+    let _second = apply_and_journal(
+        &mut state,
+        &mut bytes,
+        &mut sequence,
+        add_command(QueueItemId(2), "second.mkv"),
+    );
+    let _started = start_session(&mut state);
+    let reserved = apply_and_journal(
+        &mut state,
+        &mut bytes,
+        &mut sequence,
+        Command::Worker(WorkerCommand::ReserveNext),
+    );
+    let Reply::Reserved(Some(job)) = reserved.reply else {
+        panic!("expected reservation")
+    };
+    let before = state.durable.queue.clone();
+    state.session = SessionState::Idle;
+    let release = Command::Worker(WorkerCommand::ReleaseReservation {
+        item_id: job.item_id,
+        claim_id: job.claim_id,
+        run_id: job.run_id,
+    });
+    let released = apply_and_journal(&mut state, &mut bytes, &mut sequence, release.clone());
+    assert_eq!(released.reply, Reply::Accepted);
+    assert!(released.ephemeral.is_empty());
+    assert_eq!(state.aggregates, SessionAggregates::default());
+    assert_eq!(
+        state
+            .durable
+            .queue
+            .iter()
+            .map(|item| item.id)
+            .collect::<Vec<_>>(),
+        before.iter().map(|item| item.id).collect::<Vec<_>>()
+    );
+    assert_eq!(
+        state.durable.queue.first().expect("first item").state,
+        QueueItemState::Queued
+    );
+    assert!(state.durable.conversion_runs.is_empty());
+    let restored = replay(&bytes);
+    assert!(restored.corruption.is_none());
+    assert_eq!(restored.state, state.durable);
+    assert!(matches!(
+        apply(&mut state, release.clone()).reply,
+        Reply::Rejected { .. }
+    ));
+    assert_eq!(state.durable.runtime_id_high_water, 2);
+    let compacted = encode_snapshot(
+        "test",
+        UnixMillis(0),
+        JournalSequence(sequence),
+        &state.durable,
+    )
+    .expect("snapshot");
+    let mut restarted = AppState {
+        durable: replay(&compacted).state,
+        ..AppState::default()
+    };
+    let _started = start_session(&mut restarted);
+    let next = apply(&mut restarted, Command::Worker(WorkerCommand::ReserveNext));
+    let Reply::Reserved(Some(next)) = next.reply else {
+        panic!("fresh reservation expected")
+    };
+    assert_eq!((next.claim_id, next.run_id), (ClaimId(3), RunId(4)));
+    restarted.session = SessionState::Idle;
+    assert!(matches!(
+        apply(&mut restarted, release).reply,
+        Reply::Rejected { .. }
+    ));
+}
+
+#[test]
+#[expect(clippy::expect_used, reason = "fixture setup and journal assertions")]
+fn reservation_failure_records_reason_and_replays_without_a_prepared_run() {
+    let mut state = AppState::default();
+    let mut bytes = Vec::new();
+    let mut sequence = 0;
+    let _added = apply_and_journal(
+        &mut state,
+        &mut bytes,
+        &mut sequence,
+        add_command(QueueItemId(1), "input.mkv"),
+    );
+    let _started = start_session(&mut state);
+    let reserved = apply_and_journal(
+        &mut state,
+        &mut bytes,
+        &mut sequence,
+        Command::Worker(WorkerCommand::ReserveNext),
+    );
+    let Reply::Reserved(Some(job)) = reserved.reply else {
+        panic!("expected reservation")
+    };
+    let stop = apply(
+        &mut state,
+        Command::Worker(WorkerCommand::AbandonReservation {
+            item_id: job.item_id,
+            claim_id: job.claim_id,
+            run_id: job.run_id,
+            at: UnixMillis(10),
+            disposition: crate::ReservationDisposition::Stopped,
+        }),
+    );
+    assert!(matches!(stop.reply, Reply::Rejected { .. }));
+    let facts = FailureFacts::new(
+        FailureKind::Internal,
+        "preparation rejected invalid execution settings",
+    );
+    let failed = apply_and_journal(
+        &mut state,
+        &mut bytes,
+        &mut sequence,
+        Command::Worker(WorkerCommand::AbandonReservation {
+            item_id: job.item_id,
+            claim_id: job.claim_id,
+            run_id: job.run_id,
+            at: UnixMillis(10),
+            disposition: crate::ReservationDisposition::Failed(facts.clone()),
+        }),
+    );
+    assert_eq!(failed.reply, Reply::Accepted);
+    assert_eq!(
+        state.durable.queue.first().expect("item").state,
+        QueueItemState::Finished(ItemOutcome::Failed(facts))
+    );
+    assert_eq!(state.aggregates.failed, 1);
+    assert_eq!(state.aggregates.stopped, 0);
+    assert!(state.durable.conversion_runs.is_empty());
+    let restored = replay(&bytes);
+    assert!(restored.corruption.is_none());
+    assert_eq!(restored.state, state.durable);
+}
+
+#[test]
+#[expect(clippy::expect_used, reason = "fixture setup and terminal assertions")]
+fn incomplete_is_retained_and_retry_preserves_its_previous_run() {
+    let mut state = active_state();
+    let run = state
+        .durable
+        .conversion_runs
+        .values()
+        .next()
+        .expect("run")
+        .clone();
+    let stopped = apply(
+        &mut state,
+        Command::Worker(WorkerCommand::Terminal {
+            item_id: run.spec.item_id,
+            claim_id: run.spec.claim_id,
+            run_id: run.spec.run_id,
+            outcome: ItemOutcome::Stopped,
+            at: UnixMillis(2000),
+            phase_spans: Vec::new(),
+            final_telemetry: None,
+        }),
+    );
+    assert!(matches!(stopped.reply, Reply::Rejected { .. }));
+    let incomplete = apply(
+        &mut state,
+        Command::Worker(WorkerCommand::Terminal {
+            item_id: run.spec.item_id,
+            claim_id: run.spec.claim_id,
+            run_id: run.spec.run_id,
+            outcome: ItemOutcome::Incomplete,
+            at: UnixMillis(2000),
+            phase_spans: Vec::new(),
+            final_telemetry: None,
+        }),
+    );
+    assert_eq!(incomplete.reply, Reply::Accepted);
+    assert_eq!(state.aggregates.incomplete, 1);
+    let _finished = apply(&mut state, Command::Worker(WorkerCommand::Finished));
+    let clear = apply(&mut state, Command::Queue(QueueCommand::ClearCompleted));
+    assert!(clear.durable.is_empty());
+    let retry = apply(
+        &mut state,
+        Command::Queue(QueueCommand::Retry {
+            item_id: run.spec.item_id,
+            patch: None,
+        }),
+    );
+    assert_eq!(retry.reply, Reply::Accepted);
+    assert_eq!(
+        state.durable.queue.first().expect("item").state,
+        QueueItemState::Queued
+    );
+    assert_eq!(
+        state
+            .durable
+            .conversion_runs
+            .get(&run.spec.run_id)
+            .expect("previous run")
+            .outcome,
+        Some(ItemOutcome::Incomplete)
+    );
+    assert_eq!(
+        state
+            .durable
+            .conversion_runs
+            .get(&run.spec.run_id)
+            .expect("previous run")
+            .analysis,
+        run.analysis
+    );
+}
+
+#[test]
+#[expect(clippy::expect_used, reason = "fixture setup and replay assertions")]
+fn interrupted_terminals_reject_output_evidence_and_replay_rejects_unsettled_failure() {
+    let state = active_state();
+    let run = state.durable.conversion_runs.values().next().expect("run");
+    for outcome in [ItemOutcome::Incomplete, ItemOutcome::Stopped] {
+        assert!(validate_terminal(run, None, &outcome).is_ok());
+        let abandoned = transaction(OutputState::Abandoned, Replacement::KeepOriginal);
+        assert!(validate_terminal(run, Some(&abandoned), &outcome).is_ok());
+        for output_state in [
+            OutputState::Started,
+            OutputState::Committed {
+                final_identity: identity("output", 4),
+            },
+            OutputState::Conflict {
+                kind: ConflictKind::InspectionFailed,
+                detail: "fixture conflict".to_owned(),
+            },
+        ] {
+            let output = transaction(output_state, Replacement::KeepOriginal);
+            assert!(validate_terminal(run, Some(&output), &outcome).is_err());
+        }
+    }
+    let mut unfinished = state.durable.clone();
+    let mut output = transaction(OutputState::Started, Replacement::KeepOriginal);
+    output.run_id = run.spec.run_id;
+    unfinished.outputs.insert(output.run_id, output);
+    let snapshot =
+        encode_snapshot("test", UnixMillis(0), JournalSequence(1), &unfinished).expect("snapshot");
+    let terminal = DurableDelta::ItemFinished {
+        item_id: run.spec.item_id,
+        claim_id: run.spec.claim_id,
+        run_id: run.spec.run_id,
+        outcome: ItemOutcome::Failed(FailureFacts::new(FailureKind::Internal, "fixture failure")),
+        at: UnixMillis(2000),
+        phase_spans: Vec::new(),
+    };
+    let record = encode_record(&JournalEnvelope {
+        sequence: JournalSequence(1),
+        deltas: vec![terminal],
+    })
+    .expect("record");
+    let restored = replay(&[snapshot, record].concat());
+    assert!(restored.corruption.is_some());
+    assert_eq!(restored.state, unfinished);
+}
+
+#[test]
+fn release_rejects_prepared_or_output_bearing_reservations() {
+    let mut state = active_state();
+    let release = Command::Worker(WorkerCommand::ReleaseReservation {
+        item_id: QueueItemId(1),
+        claim_id: ClaimId(1),
+        run_id: RunId(2),
+    });
+    state.session = SessionState::Idle;
+    assert!(matches!(
+        apply(&mut state, release.clone()).reply,
+        Reply::Rejected { .. }
+    ));
+    if let Some(item) = state.durable.queue.first_mut() {
+        item.state = QueueItemState::Reserved {
+            claim_id: ClaimId(1),
+            run_id: RunId(2),
+        };
+    }
+    assert!(matches!(
+        apply(&mut state, release.clone()).reply,
+        Reply::Rejected { .. }
+    ));
+    state.durable.conversion_runs.clear();
+    let mut output = transaction(OutputState::Started, Replacement::KeepOriginal);
+    output.run_id = RunId(2);
+    state.durable.outputs.insert(RunId(2), output);
+    assert!(matches!(
+        apply(&mut state, release).reply,
+        Reply::Rejected { .. }
+    ));
 }

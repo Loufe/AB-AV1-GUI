@@ -14,6 +14,7 @@ export const HISTORY_STATUSES = [
   "Analyzed",
   "Failed",
   "Stopped",
+  "Incomplete",
 ] as const;
 
 export type HistoryStatusLabel = (typeof HISTORY_STATUSES)[number];
@@ -60,6 +61,9 @@ export function statusPresentation(status: HistoryStatus): {
 } {
   if (status === "Converted" || status === "Remuxed" || status === "Stopped") {
     return { label: status, detail: null };
+  }
+  if (status === "Incomplete") {
+    return { label: "Incomplete", detail: "Interrupted before completion was recorded" };
   }
   if (status === "Analyzed") {
     return {

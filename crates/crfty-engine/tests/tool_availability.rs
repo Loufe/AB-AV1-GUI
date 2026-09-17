@@ -384,7 +384,7 @@ fn startup_recovery_without_ffprobe_defers_output_settlement() {
     assert!(
         matches!(
             snapshot.durable.queue.first().expect("queued item").state,
-            QueueItemState::Finished(ItemOutcome::Stopped)
+            QueueItemState::Finished(ItemOutcome::Incomplete)
         ),
         "deferred recovery must complete once tools exist: {snapshot:?}"
     );

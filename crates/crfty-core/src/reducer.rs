@@ -153,6 +153,21 @@ pub enum ProjectionCommand {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ReservationDisposition {
+    Stopped,
+    Failed(crate::FailureFacts),
+}
+
+impl ReservationDisposition {
+    fn into_outcome(self) -> ItemOutcome {
+        match self {
+            Self::Stopped => ItemOutcome::Stopped,
+            Self::Failed(facts) => ItemOutcome::Failed(facts),
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum WorkerCommand {
     ReserveNext,
     PrepareReserved {
@@ -167,7 +182,13 @@ pub enum WorkerCommand {
         import_paths: Vec<ImportPath>,
         execution: ExecutionSettings,
     },
+    ReleaseReservation {
+        item_id: QueueItemId,
+        claim_id: ClaimId,
+        run_id: RunId,
+    },
     AbandonReservation {
+        disposition: ReservationDisposition,
         item_id: QueueItemId,
         claim_id: ClaimId,
         run_id: RunId,
@@ -1010,7 +1031,7 @@ fn apply_queue(state: &AppState, command: QueueCommand) -> Applied {
                 .iter()
                 .filter(|item| {
                     matches!(&item.state, QueueItemState::Finished(outcome)
-                        if !matches!(outcome, ItemOutcome::Failed(_)))
+                        if !matches!(outcome, ItemOutcome::Failed(_) | ItemOutcome::Incomplete))
                 })
                 .map(|item| item.id)
                 .collect::<Vec<_>>();
@@ -1331,28 +1352,47 @@ fn apply_worker(state: &AppState, command: WorkerCommand) -> Applied {
             applied.reply = Reply::Claimed(Some(Box::new(ClaimedJob { spec })));
             applied
         }
+        WorkerCommand::ReleaseReservation {
+            item_id,
+            claim_id,
+            run_id,
+        } => {
+            if state.session != SessionState::Idle {
+                return Applied::rejected("reservation release requires idle recovery");
+            }
+            if let Err(reason) = validate_reservation(&state.durable, item_id, claim_id, run_id) {
+                return Applied::rejected(reason);
+            }
+            let mut applied = Applied::accepted();
+            applied.durable.push(DurableDelta::ReservationReleased {
+                item_id,
+                claim_id,
+                run_id,
+            });
+            applied
+        }
         WorkerCommand::AbandonReservation {
             item_id,
             claim_id,
             run_id,
             at,
+            disposition,
         } => {
-            let Some(item) = find_item(state, item_id) else {
-                return Applied::rejected("queue item does not exist");
-            };
-            if !matches!(
-                item.state,
-                QueueItemState::Reserved {
-                    claim_id: current_claim,
-                    run_id: current_run,
-                } if current_claim == claim_id && current_run == run_id
-            ) || state.durable.conversion_runs.contains_key(&run_id)
+            if let Err(reason) = validate_reservation(&state.durable, item_id, claim_id, run_id) {
+                return Applied::rejected(reason);
+            }
+            let outcome = disposition.into_outcome();
+            if matches!(outcome, ItemOutcome::Stopped)
+                && state.session != SessionState::ForceStopping
             {
-                return Applied::rejected("reservation cannot be abandoned from its current state");
+                return Applied::rejected("stopped outcome requires a user force stop");
+            }
+            if let Err(reason) = validate_reservation_outcome(&outcome) {
+                return Applied::rejected(reason);
             }
             let mut applied = Applied::accepted();
             let mut aggregates = state.aggregates;
-            aggregates.absorb(&ItemOutcome::Stopped, &[]);
+            aggregates.absorb(&outcome, &[]);
             applied
                 .ephemeral
                 .push(EphemeralDelta::SessionAggregates(aggregates));
@@ -1360,7 +1400,7 @@ fn apply_worker(state: &AppState, command: WorkerCommand) -> Applied {
                 item_id,
                 claim_id,
                 run_id,
-                outcome: ItemOutcome::Stopped,
+                outcome,
                 at,
                 phase_spans: Vec::new(),
             });
@@ -1423,21 +1463,14 @@ fn apply_worker(state: &AppState, command: WorkerCommand) -> Applied {
             phase_spans,
             final_telemetry,
         } => transition_active(state, item_id, claim_id, run_id, |applied| {
-            let unsettled = state
-                .durable
-                .outputs
-                .get(&run_id)
-                .is_some_and(|transaction| !transaction.is_settled());
-            if unsettled {
-                applied.reject("output transaction is not settled");
+            if matches!(outcome, ItemOutcome::Stopped)
+                && state.session != SessionState::ForceStopping
+            {
+                applied.reject("stopped outcome requires a user force stop");
                 return;
             }
-            let Some(run) = state.durable.conversion_runs.get(&run_id) else {
-                applied.reject("conversion run does not exist");
-                return;
-            };
             if let Err(reason) =
-                validate_terminal(run, state.durable.outputs.get(&run_id), &outcome)
+                validate_prepared_terminal(&state.durable, item_id, claim_id, run_id, &outcome)
             {
                 applied.reject(reason);
                 return;
@@ -1491,6 +1524,12 @@ pub(crate) fn validate_terminal(
     output: Option<&crate::OutputTransaction>,
     outcome: &ItemOutcome,
 ) -> Result<(), &'static str> {
+    if run.outcome.is_some() {
+        return Err("run already has a terminal outcome");
+    }
+    if output.is_some_and(|transaction| !transaction.is_settled()) {
+        return Err("output transaction is not settled");
+    }
     match outcome {
         ItemOutcome::Analyzed => {
             if !matches!(run.spec.action, JobAction::Analyze { .. })
@@ -1568,10 +1607,6 @@ pub(crate) fn validate_terminal(
         },
         ItemOutcome::Failed(facts) => {
             facts.diagnostic.validate()?;
-            // An output-conflict failure asserts the transaction really did
-            // settle as a conflict. The converse is deliberately NOT an
-            // invariant: a conflicted settlement followed by a Stopped
-            // terminal is legal (cancellation racing a settlement failure).
             if matches!(facts.kind, crate::FailureKind::OutputConflict)
                 && !output.is_some_and(|transaction| {
                     matches!(transaction.state, crate::OutputState::Conflict { .. })
@@ -1580,7 +1615,13 @@ pub(crate) fn validate_terminal(
                 return Err("output-conflict failure requires a conflicted output transaction");
             }
         }
-        ItemOutcome::Stopped => {}
+        ItemOutcome::Stopped | ItemOutcome::Incomplete => {
+            if output.is_some_and(|transaction| {
+                !matches!(transaction.state, crate::OutputState::Abandoned)
+            }) {
+                return Err("interrupted outcome requires absent or abandoned output");
+            }
+        }
     }
     Ok(())
 }
@@ -1636,4 +1677,63 @@ fn active_run(state: &AppState) -> Option<RunId> {
             QueueItemState::Reserved { run_id, .. } => Some(run_id),
             QueueItemState::Queued | QueueItemState::Finished(_) => None,
         })
+}
+
+pub(crate) fn validate_reservation(
+    state: &crate::DurableState,
+    item_id: QueueItemId,
+    claim_id: ClaimId,
+    run_id: RunId,
+) -> Result<(), &'static str> {
+    if !state.queue.iter().any(|item| {
+        item.id == item_id
+            && matches!(item.state,
+        QueueItemState::Reserved { claim_id: current_claim, run_id: current_run }
+        if current_claim == claim_id && current_run == run_id)
+    }) || state.conversion_runs.contains_key(&run_id)
+        || state.outputs.contains_key(&run_id)
+    {
+        return Err("reservation transition has a stale or prepared claim");
+    }
+    Ok(())
+}
+
+pub(crate) fn validate_reservation_outcome(outcome: &ItemOutcome) -> Result<(), &'static str> {
+    match outcome {
+        ItemOutcome::Stopped => Ok(()),
+        ItemOutcome::Failed(facts) => {
+            if !matches!(facts.kind, crate::FailureKind::Internal) {
+                return Err("reservation failure requires internal failure facts");
+            }
+            facts.diagnostic.validate()
+        }
+        _ => Err("reservation terminal requires stop or preparation failure"),
+    }
+}
+
+pub(crate) fn validate_prepared_terminal(
+    state: &crate::DurableState,
+    item_id: QueueItemId,
+    claim_id: ClaimId,
+    run_id: RunId,
+    outcome: &ItemOutcome,
+) -> Result<(), &'static str> {
+    let Some(run) = state.conversion_runs.get(&run_id) else {
+        return Err("terminal transition references a missing run");
+    };
+    let active = state.queue.iter().any(|item| {
+        item.id == item_id
+            && matches!(item.state,
+        QueueItemState::Claimed { claim_id: current_claim, run_id: current_run }
+        | QueueItemState::Running { claim_id: current_claim, run_id: current_run }
+        if current_claim == claim_id && current_run == run_id)
+    });
+    if !active
+        || run.spec.item_id != item_id
+        || run.spec.claim_id != claim_id
+        || run.spec.run_id != run_id
+    {
+        return Err("terminal transition has a stale claim");
+    }
+    validate_terminal(run, state.outputs.get(&run_id), outcome)
 }

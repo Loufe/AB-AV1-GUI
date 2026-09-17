@@ -425,10 +425,6 @@ pub(super) fn located_tools(availability: &ToolAvailability) -> Option<LocatedTo
     }
 }
 
-fn accepted(reply: Result<Reply, crate::driver::SubmitError>) -> bool {
-    matches!(reply, Ok(Reply::Accepted))
-}
-
 fn require_accepted(
     context: &str,
     reply: Result<Reply, crate::driver::SubmitError>,

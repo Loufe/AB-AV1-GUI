@@ -161,10 +161,6 @@ impl ActiveCancellation {
         state.probe = None;
     }
 
-    fn is_force_stopping(&self) -> bool {
-        self.lock().force_stopping
-    }
-
     fn lock(&self) -> MutexGuard<'_, CancellationState> {
         match self.state.lock() {
             Ok(state) => state,
@@ -276,10 +272,9 @@ pub(super) fn supervise(
                         }));
                         match result {
                             Ok(Ok(())) => {}
-                            Ok(Err(message)) if !worker_cancellation.is_force_stopping() => {
+                            Ok(Err(message)) => {
                                 report_worker_crash(&worker_commands, &message);
                             }
-                            Ok(Err(_)) => {}
                             Err(_) => {
                                 report_worker_crash(&worker_commands, "session worker panicked");
                             }
@@ -345,6 +340,7 @@ pub(super) fn supervise(
 }
 
 fn report_worker_crash(commands: &CommandSender, message: &str) {
+    tracing::error!("session worker failed: {message}");
     match commands.submit(Command::Worker(WorkerCommand::Crashed {
         message: message.to_owned(),
     })) {

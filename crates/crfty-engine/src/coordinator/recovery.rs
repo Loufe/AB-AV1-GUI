@@ -14,7 +14,7 @@ use crate::{
     tools::MediaTools,
 };
 
-use super::accepted;
+use super::require_accepted;
 use crate::clock::now_millis;
 
 pub(super) fn recover_startup(
@@ -36,31 +36,30 @@ pub(super) fn recover_startup(
         .filter_map(|item| match item.state {
             QueueItemState::Reserved { claim_id, run_id }
             | QueueItemState::Claimed { claim_id, run_id }
-            | QueueItemState::Running { claim_id, run_id } => Some((item.id, claim_id, run_id)),
+            | QueueItemState::Running { claim_id, run_id } => Some((
+                item.id,
+                claim_id,
+                run_id,
+                matches!(item.state, QueueItemState::Reserved { .. }),
+            )),
             QueueItemState::Queued | QueueItemState::Finished(_) => None,
         })
         .collect();
-    for (item_id, claim_id, run_id) in active {
-        let reservation_only = !state.conversion_runs.contains_key(&run_id);
+    for (item_id, claim_id, run_id, reservation_only) in active {
         if reservation_only {
-            let at = now_millis();
             if accepted(
-                commands.submit(Command::Worker(WorkerCommand::AbandonReservation {
+                commands.submit(Command::Worker(WorkerCommand::ReleaseReservation {
                     item_id,
                     claim_id,
                     run_id,
-                    at,
                 })),
             ) {
                 fold(
                     &mut state,
-                    &DurableDelta::ItemFinished {
+                    &DurableDelta::ReservationReleased {
                         item_id,
                         claim_id,
                         run_id,
-                        outcome: ItemOutcome::Stopped,
-                        at,
-                        phase_spans: Vec::new(),
                     },
                 );
             }
@@ -97,7 +96,16 @@ pub(super) fn recover_startup(
             .get(&run_id)
             .is_none_or(crfty_core::OutputTransaction::is_settled);
         if output_settled {
-            let outcome = recovered_outcome(&state, run_id);
+            let outcome = match recovered_outcome(&state, run_id) {
+                Ok(outcome) => outcome,
+                Err(reason) => {
+                    tracing::error!(
+                        run_id = run_id.0,
+                        "startup terminal recovery failed: {reason}"
+                    );
+                    continue;
+                }
+            };
             // Honest timestamp: this is when the outcome was decided, which
             // for a crash-recovered run is recovery time, not encode time.
             let at = now_millis();
@@ -131,31 +139,39 @@ pub(super) fn recover_startup(
 /// transaction: a promoted-and-settled output is a success even though the
 /// process died before acknowledging it, distinguished as Converted or
 /// Remuxed by the prepared action; a conflicted settlement is a structured
-/// failure; everything else (abandoned staging, no output) stopped cleanly.
-fn recovered_outcome(state: &DurableState, run_id: RunId) -> ItemOutcome {
+/// failure; everything else (abandoned staging, no output) lacks a recorded completion.
+fn recovered_outcome(state: &DurableState, run_id: RunId) -> Result<ItemOutcome, &'static str> {
+    let Some(run) = state.conversion_runs.get(&run_id) else {
+        return Err("active prepared item has no conversion run");
+    };
     let Some(transaction) = state.outputs.get(&run_id) else {
-        return ItemOutcome::Stopped;
+        return Ok(ItemOutcome::Incomplete);
     };
     if transaction.settled_identity().is_some() {
-        return match state
-            .conversion_runs
-            .get(&run_id)
-            .map(|run| &run.spec.action)
-        {
-            Some(JobAction::Remux) => ItemOutcome::Remuxed(CompletionEvidence::RecoveredAtStartup),
-            Some(JobAction::Encode { .. }) => {
-                ItemOutcome::Converted(CompletionEvidence::RecoveredAtStartup)
-            }
-            // Unreachable: the ledger only accepts output transactions
-            // for encode and remux runs.
-            _ => ItemOutcome::Stopped,
+        return match &run.spec.action {
+            JobAction::Remux => Ok(ItemOutcome::Remuxed(CompletionEvidence::RecoveredAtStartup)),
+            JobAction::Encode { .. } => Ok(ItemOutcome::Converted(
+                CompletionEvidence::RecoveredAtStartup,
+            )),
+            _ => Err("successfully settled output belongs to a non-output action"),
         };
     }
     match transaction.state {
-        OutputState::Conflict { .. } => ItemOutcome::Failed(FailureFacts::new(
+        OutputState::Conflict { .. } => Ok(ItemOutcome::Failed(FailureFacts::new(
             FailureKind::OutputConflict,
             "output transaction settled as a conflict",
-        )),
-        _ => ItemOutcome::Stopped,
+        ))),
+        OutputState::Abandoned => Ok(ItemOutcome::Incomplete),
+        _ => Err("terminal recovery requires settled output"),
+    }
+}
+
+fn accepted(reply: Result<crfty_core::Reply, crate::driver::SubmitError>) -> bool {
+    match require_accepted("record startup recovery", reply) {
+        Ok(()) => true,
+        Err(error) => {
+            tracing::error!("{error}");
+            false
+        }
     }
 }

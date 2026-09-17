@@ -260,6 +260,7 @@ pub struct RunTotals {
     pub remuxed: u32,
     pub not_worthwhile: u32,
     pub stopped: u32,
+    pub incomplete: u32,
     pub skipped: u32,
     pub failed: u32,
 }
@@ -348,6 +349,7 @@ pub(crate) fn statistics(state: &DurableState, utc_offset_minutes: i32) -> Stati
                 runs.not_worthwhile = runs.not_worthwhile.saturating_add(1);
             }
             Some(ItemOutcome::Stopped) => runs.stopped = runs.stopped.saturating_add(1),
+            Some(ItemOutcome::Incomplete) => runs.incomplete = runs.incomplete.saturating_add(1),
             Some(ItemOutcome::Skipped { .. }) => runs.skipped = runs.skipped.saturating_add(1),
             Some(ItemOutcome::Failed(_)) => runs.failed = runs.failed.saturating_add(1),
             None => {}
@@ -618,6 +620,7 @@ pub enum HistoryStatus {
         message: String,
     },
     Stopped,
+    Incomplete,
 }
 
 /// Stable identity for either an observed content row or an unresolved
@@ -663,7 +666,7 @@ pub struct HistoryRow {
 ///
 /// Status derivation: a standing verdict wins — it is the record's judgment
 /// about the content (see [`crate::Verdict`]). Without one, the latest
-/// failed or stopped run for the content reports with its reason; without
+/// failed, stopped, or incomplete run reports its outcome; without
 /// that, completed analyses report as `Analyzed`. Content that was only
 /// scanned has nothing to report and gets no row. Skipped runs decide
 /// nothing and never surface here — their reasons live on queue items.
@@ -680,7 +683,7 @@ pub fn history_rows(state: &DurableState) -> Vec<HistoryRow> {
         }
         if matches!(
             run.outcome,
-            Some(ItemOutcome::Failed(_) | ItemOutcome::Stopped)
+            Some(ItemOutcome::Failed(_) | ItemOutcome::Stopped | ItemOutcome::Incomplete)
         ) {
             latest_interruption.insert(content_key, (*run_id, run));
         }
@@ -824,6 +827,7 @@ fn interruption_row(
             kind: facts.kind,
             message: facts.message.clone(),
         },
+        Some(ItemOutcome::Incomplete) => HistoryStatus::Incomplete,
         _ => HistoryStatus::Stopped,
     };
     let mut row = base_row(content_key, record, status);

@@ -1432,7 +1432,7 @@ fn engine_startup_recovers_an_active_partial_staging_transaction() {
     assert!(
         matches!(
             snapshot.durable.queue.first().expect("queue item").state,
-            crfty_core::QueueItemState::Finished(ItemOutcome::Stopped)
+            crfty_core::QueueItemState::Finished(ItemOutcome::Incomplete)
         ),
         "unexpected recovered snapshot: {snapshot:?}"
     );
@@ -1550,7 +1550,7 @@ fn engine_startup_abandons_intent_when_staging_was_never_created() {
     assert!(
         matches!(
             snapshot.durable.queue.first().expect("queue item").state,
-            crfty_core::QueueItemState::Finished(ItemOutcome::Stopped)
+            crfty_core::QueueItemState::Finished(ItemOutcome::Incomplete)
         ),
         "unexpected recovered snapshot: {snapshot:?}"
     );
@@ -1602,7 +1602,7 @@ fn engine_startup_removes_staging_left_before_staging_created_was_durable() {
     assert!(
         matches!(
             snapshot.durable.queue.first().expect("queue item").state,
-            crfty_core::QueueItemState::Finished(ItemOutcome::Stopped)
+            crfty_core::QueueItemState::Finished(ItemOutcome::Incomplete)
         ),
         "unexpected recovered snapshot: {snapshot:?}"
     );

@@ -72,6 +72,253 @@
       }
     },
     {
+      "name": "reservation_released_preserves_position_and_settings",
+      "initial": {
+        "runtime_id_high_water": 100,
+        "queue": [
+          {
+            "id": 1,
+            "input": "videos/input-1.mp4",
+            "operation": "Convert",
+            "intent": "ReuseIfFresh",
+            "output_target": "Replace",
+            "overwrite": "FollowSettings",
+            "state": "Queued"
+          },
+          {
+            "id": 2,
+            "input": "videos/input-2.mp4",
+            "operation": "Analyze",
+            "intent": "Refresh",
+            "output_target": {
+              "Suffix": {
+                "suffix": "_edited"
+              }
+            },
+            "overwrite": "Allow",
+            "state": {
+              "Reserved": {
+                "claim_id": 10,
+                "run_id": 100
+              }
+            }
+          },
+          {
+            "id": 3,
+            "input": "videos/input-3.mp4",
+            "operation": "Convert",
+            "intent": "ReuseIfFresh",
+            "output_target": "Replace",
+            "overwrite": "FollowSettings",
+            "state": "Queued"
+          }
+        ],
+        "paths": {},
+        "records": {},
+        "outputs": {},
+        "conversion_runs": {},
+        "parked": {},
+        "adopted_imports": []
+      },
+      "deltas": [
+        {
+          "ReservationReleased": {
+            "item_id": 2,
+            "claim_id": 10,
+            "run_id": 100
+          }
+        }
+      ],
+      "expected": {
+        "runtime_id_high_water": 100,
+        "queue": [
+          {
+            "id": 1,
+            "input": "videos/input-1.mp4",
+            "operation": "Convert",
+            "intent": "ReuseIfFresh",
+            "output_target": "Replace",
+            "overwrite": "FollowSettings",
+            "state": "Queued"
+          },
+          {
+            "id": 2,
+            "input": "videos/input-2.mp4",
+            "operation": "Analyze",
+            "intent": "Refresh",
+            "output_target": {
+              "Suffix": {
+                "suffix": "_edited"
+              }
+            },
+            "overwrite": "Allow",
+            "state": "Queued"
+          },
+          {
+            "id": 3,
+            "input": "videos/input-3.mp4",
+            "operation": "Convert",
+            "intent": "ReuseIfFresh",
+            "output_target": "Replace",
+            "overwrite": "FollowSettings",
+            "state": "Queued"
+          }
+        ],
+        "paths": {},
+        "records": {},
+        "outputs": {},
+        "conversion_runs": {},
+        "parked": {},
+        "adopted_imports": []
+      }
+    },
+    {
+      "name": "prepared_run_incomplete",
+      "initial": {
+        "runtime_id_high_water": 100,
+        "queue": [
+          {
+            "id": 1,
+            "input": "videos/input-1.mp4",
+            "operation": "Convert",
+            "intent": "ReuseIfFresh",
+            "output_target": "Replace",
+            "overwrite": "FollowSettings",
+            "state": {
+              "Claimed": {
+                "claim_id": 10,
+                "run_id": 100
+              }
+            }
+          }
+        ],
+        "paths": {},
+        "records": {},
+        "outputs": {},
+        "conversion_runs": {
+          "100": {
+            "spec": {
+              "item_id": 1,
+              "claim_id": 10,
+              "run_id": 100,
+              "input": "videos/input-1.mp4",
+              "content_key": null,
+              "operation": "Convert",
+              "intent": "ReuseIfFresh",
+              "output_target": "Replace",
+              "execution": {
+                "requested_target": 95,
+                "fallback_floor": 90,
+                "fallback_step": 1,
+                "overwrite_existing": false,
+                "decode_preference": "HardwarePreferred",
+                "profile": {
+                  "preset": 6,
+                  "max_encoded_percent_basis_points": 8000,
+                  "samples": null,
+                  "sample_duration_ms": 20000,
+                  "thorough": false,
+                  "decode_mode": "Software",
+                  "ab_av1_revision": "ab-av1-test",
+                  "ffmpeg_revision": "ffmpeg-test",
+                  "encoder_revision": "svt-av1-test"
+                }
+              },
+              "action": {
+                "Analyze": {
+                  "selected_analysis": null
+                }
+              }
+            },
+            "analysis": null,
+            "output_content_key": null,
+            "outcome": null,
+            "started_at": null,
+            "finished_at": null,
+            "phase_spans": []
+          }
+        },
+        "parked": {},
+        "adopted_imports": []
+      },
+      "deltas": [
+        {
+          "ItemFinished": {
+            "item_id": 1,
+            "claim_id": 10,
+            "run_id": 100,
+            "outcome": "Incomplete",
+            "at": 1752000090000,
+            "phase_spans": []
+          }
+        }
+      ],
+      "expected": {
+        "runtime_id_high_water": 100,
+        "queue": [
+          {
+            "id": 1,
+            "input": "videos/input-1.mp4",
+            "operation": "Convert",
+            "intent": "ReuseIfFresh",
+            "output_target": "Replace",
+            "overwrite": "FollowSettings",
+            "state": {
+              "Finished": "Incomplete"
+            }
+          }
+        ],
+        "paths": {},
+        "records": {},
+        "outputs": {},
+        "conversion_runs": {
+          "100": {
+            "spec": {
+              "item_id": 1,
+              "claim_id": 10,
+              "run_id": 100,
+              "input": "videos/input-1.mp4",
+              "content_key": null,
+              "operation": "Convert",
+              "intent": "ReuseIfFresh",
+              "output_target": "Replace",
+              "execution": {
+                "requested_target": 95,
+                "fallback_floor": 90,
+                "fallback_step": 1,
+                "overwrite_existing": false,
+                "decode_preference": "HardwarePreferred",
+                "profile": {
+                  "preset": 6,
+                  "max_encoded_percent_basis_points": 8000,
+                  "samples": null,
+                  "sample_duration_ms": 20000,
+                  "thorough": false,
+                  "decode_mode": "Software",
+                  "ab_av1_revision": "ab-av1-test",
+                  "ffmpeg_revision": "ffmpeg-test",
+                  "encoder_revision": "svt-av1-test"
+                }
+              },
+              "action": {
+                "Analyze": {
+                  "selected_analysis": null
+                }
+              }
+            },
+            "analysis": null,
+            "output_content_key": null,
+            "outcome": "Incomplete",
+            "started_at": null,
+            "finished_at": 1752000090000,
+            "phase_spans": []
+          }
+        },
+        "parked": {},
+        "adopted_imports": []
+      }
+    },
+    {
       "name": "queue_added_overwrite_decisions",
       "initial": {
         "runtime_id_high_water": 0,

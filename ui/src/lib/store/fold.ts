@@ -97,6 +97,12 @@ export function foldDurable(
       }),
     };
   }
+  if ("ReservationReleased" in delta && delta.ReservationReleased !== undefined) {
+    return {
+      ...state,
+      queue: withItemState(state.queue, delta.ReservationReleased.item_id, "Queued"),
+    };
+  }
   if ("MediaObserved" in delta && delta.MediaObserved !== undefined) {
     return foldMediaObserved(state, delta.MediaObserved.observation);
   }

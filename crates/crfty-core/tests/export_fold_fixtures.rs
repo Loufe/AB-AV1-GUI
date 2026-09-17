@@ -429,6 +429,45 @@ fn scenarios() -> Vec<Scenario> {
     vec![
         scenario("queue_added", vec![], vec![added(1), added(2)]),
         scenario(
+            "reservation_released_preserves_position_and_settings",
+            vec![
+                added(1),
+                added(2),
+                added(3),
+                edited(2),
+                reserved(2, 10, 100),
+            ],
+            vec![DurableDelta::ReservationReleased {
+                item_id: QueueItemId(2),
+                claim_id: ClaimId(10),
+                run_id: RunId(100),
+            }],
+        ),
+        scenario(
+            "prepared_run_incomplete",
+            vec![
+                added(1),
+                reserved(1, 10, 100),
+                prepared(
+                    1,
+                    10,
+                    100,
+                    None,
+                    JobAction::Analyze {
+                        selected_analysis: None,
+                    },
+                ),
+            ],
+            vec![DurableDelta::ItemFinished {
+                item_id: QueueItemId(1),
+                claim_id: ClaimId(10),
+                run_id: RunId(100),
+                outcome: ItemOutcome::Incomplete,
+                at: UnixMillis(FINISHED_AT_MS),
+                phase_spans: Vec::new(),
+            }],
+        ),
+        scenario(
             "queue_added_overwrite_decisions",
             vec![],
             vec![

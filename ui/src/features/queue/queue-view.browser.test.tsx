@@ -558,6 +558,24 @@ describe("QueueView", () => {
     await expect.element(page.getByRole("button", { name: "Group by folder" })).toBeEnabled();
   });
 
+  it("shows incomplete work and allows an explicit retry without changing the row optimistically", async () => {
+    const tauri = installTauriMock({ queue_retry: () => null });
+    await renderApp(<QueueView />, {
+      appState: {
+        durable: durable([item(7, "interrupted.mkv", { Finished: "Incomplete" })]),
+        settings: settings(),
+        tools: tools(),
+      },
+    });
+    await expect.element(page.getByText("Incomplete", { exact: true })).toBeVisible();
+    await expect.element(page.getByRole("button", { name: "Clear Completed" })).toBeDisabled();
+    await page.getByRole("row", { name: /interrupted\.mkv/ }).click();
+    await page.getByRole("button", { name: "Retry", exact: true }).click();
+    await expect.poll(() => tauri.callsFor("queue_retry").length).toBe(1);
+    expect(tauri.callsFor("queue_retry")[0]?.payload).toMatchObject({ itemId: 7 });
+    expect(appStore.getState().durable.queue[0]?.state).toEqual({ Finished: "Incomplete" });
+  });
+
   it("uses atomic recovery and keeps Open failures local and operator-visible", async () => {
     const tauri = installTauriMock({ queue_retry: () => null });
     tauri.rejectCommand("open_path", { code: "io", message: "file is unavailable" });

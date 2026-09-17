@@ -21,6 +21,7 @@ export function emptySessionAggregates(): SessionAggregates {
     failed: 0,
     skipped: 0,
     stopped: 0,
+    incomplete: 0,
     not_worthwhile: 0,
     analyzed: 0,
     remuxed: 0,

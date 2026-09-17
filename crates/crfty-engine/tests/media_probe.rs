@@ -552,3 +552,111 @@ fn output_verification_deadline_settles_descendants_and_returns_a_typed_timeout(
     assert!(started.elapsed() < EVENT_TIMEOUT);
     assert_heartbeat_stopped(&staging.with_extension("heartbeat"));
 }
+
+#[test]
+#[expect(
+    clippy::expect_used,
+    reason = "real-process fixture setup and assertions"
+)]
+fn shutdown_recovery_releases_reservations_and_marks_prepared_work_incomplete() {
+    let _gate = ENGINE_TEST_GATE.lock().expect("engine test gate");
+    for (name, prepared) in [
+        ("hang-claim.mkv", false),
+        ("hang-verify-already-av1.mp4", true),
+    ] {
+        let fixture = tempfile::tempdir().expect("fixture directory");
+        let media_root = fixture.path().join("media");
+        fs::create_dir(&media_root).expect("media directory");
+        let input = media_root.join(name);
+        fs::write(&input, vec![1_u8; 8192]).expect("input fixture");
+        let ffprobe = copy_as_tool(fixture.path(), "ffprobe");
+        let ffmpeg = copy_as_tool(fixture.path(), "ffmpeg");
+        let configuration = config(fixture.path(), ffmpeg, ffprobe);
+        let engine = EngineRuntime::start(configuration.clone()).expect("engine");
+        let _snapshot = engine.events.recv().expect("snapshot");
+        assert_eq!(
+            engine
+                .commands
+                .submit_queue(add_one(QueueItemId(1), &input))
+                .expect("add"),
+            Reply::Accepted
+        );
+        assert_eq!(
+            engine
+                .commands
+                .submit_session(SessionCommand::Start)
+                .expect("start"),
+            Reply::Accepted
+        );
+        let heartbeat = if prepared {
+            wait_for_heartbeat_in(&media_root)
+        } else {
+            let heartbeat = input.with_extension("heartbeat");
+            wait_for_file(&heartbeat);
+            heartbeat
+        };
+        let mut previous_run = None;
+        wait_for_event(&engine, "reservation", |event| {
+            if let DriverEvent::Durable(DurableDelta::ItemReserved { job }) = event {
+                previous_run = Some(job.run_id);
+                true
+            } else {
+                false
+            }
+        });
+        engine.shutdown().expect("shutdown");
+        assert_heartbeat_stopped(&heartbeat);
+        let recovered = EngineRuntime::start(configuration).expect("recovered engine");
+        let DriverEvent::Snapshot(snapshot) = recovered.events.recv().expect("recovered snapshot")
+        else {
+            panic!("snapshot expected")
+        };
+        let item = snapshot.durable.queue.first().expect("queue item");
+        if prepared {
+            assert_eq!(
+                item.state,
+                crfty_core::QueueItemState::Finished(ItemOutcome::Incomplete)
+            );
+            let run = snapshot
+                .durable
+                .conversion_runs
+                .values()
+                .next()
+                .expect("prepared run");
+            assert_eq!(run.outcome, Some(ItemOutcome::Incomplete));
+            assert!(run.phase_spans.is_empty());
+        } else {
+            assert_eq!(item.state, crfty_core::QueueItemState::Queued);
+            assert!(snapshot.durable.conversion_runs.is_empty());
+            assert_eq!(
+                recovered
+                    .commands
+                    .submit_session(SessionCommand::Start)
+                    .expect("restart session"),
+                Reply::Accepted
+            );
+            wait_for_event(&recovered, "fresh reservation", |event| {
+                if let DriverEvent::Durable(DurableDelta::ItemReserved { job }) = event {
+                    assert!(Some(job.run_id) > previous_run);
+                    true
+                } else {
+                    false
+                }
+            });
+            assert_eq!(
+                recovered
+                    .commands
+                    .submit_session(SessionCommand::ForceStop)
+                    .expect("stop"),
+                Reply::Accepted
+            );
+            wait_for_event(&recovered, "idle", |event| {
+                matches!(
+                    event,
+                    DriverEvent::Ephemeral(EphemeralDelta::SessionChanged(SessionState::Idle))
+                )
+            });
+        }
+        recovered.shutdown().expect("recovered shutdown");
+    }
+}

@@ -207,7 +207,7 @@ export function QueueToolbar({
         <ConfirmAction
           label="Clear Completed"
           title="Clear completed entries?"
-          description="Successful, skipped, stopped, and not-worthwhile entries will be removed. Failed entries remain for inspection."
+          description="Successful, skipped, stopped, and not-worthwhile entries will be removed. Failed and incomplete entries remain for inspection."
           disabled={blocked || !canClearCompleted}
           onConfirm={onClearCompleted}
         />
