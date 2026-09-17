@@ -170,6 +170,8 @@ The common job-contract tests must cover pre-cancel, cloned and idempotent cance
 
 Implementation validation must cover remux cancellation followed by parser and reader cleanup, a child that spawns a grandchild, a Unix descendant that calls `setsid()`, and Windows Job Object settlement. It must also cover concurrent stdout and stderr pressure and driver shutdown proving every registered worker is joined or explicitly classified under the chosen timeout policy. ab-av1-specific real-process lifecycle tests are tracked separately and are not completion criteria for this record.
 
+Fault injection at engine startup and shutdown must prove that a failed spawn or join does not skip settlement of the remaining owned workers. Explicit shutdown and Drop paths retain cleanup errors with context. Fixture execution has a bounded outer wait so a deadlock produces a test failure rather than hanging the suite.
+
 Use ordinary barriers and controllable fake workers for protocol races. Loom is appropriate only if CRFty adds a custom atomic state machine; it cannot directly model real network calls or operating-system processes.
 
 ## More information
