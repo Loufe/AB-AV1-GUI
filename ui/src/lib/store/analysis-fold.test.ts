@@ -1,8 +1,25 @@
 import { describe, expect, it } from "vitest";
 
-import type { AnalysisActivity, AnalysisGeneration_Deserialize, AnalysisRow } from "@/lib/bindings";
+import type {
+  AnalysisActivity,
+  AnalysisDelta_Deserialize,
+  AnalysisGeneration_Deserialize,
+  AnalysisRow,
+  AnalysisSnapshot_Deserialize,
+} from "@/lib/bindings";
 import { foldAnalysis, normalizeAnalysisSnapshot } from "@/lib/store/analysis-fold";
+import fixturesJson from "@/lib/store/analysis-fixtures.json";
 import { emptyAnalysisState } from "@/lib/store/analysis-store";
+
+interface Scenario {
+  name: string;
+  deltas: AnalysisDelta_Deserialize[];
+  expected: AnalysisSnapshot_Deserialize;
+}
+
+// resolveJsonModule infers wide literal types, so the generated file is cast
+// to the binding types it was serialized from.
+const fixtures = fixturesJson as unknown as { scenarios: Scenario[] };
 
 function row(id: number, name: string): AnalysisRow {
   return {
@@ -90,5 +107,36 @@ describe("foldAnalysis", () => {
     expect(foldAnalysis(state, { Reset: { snapshot: { current: null } } })).toEqual(
       emptyAnalysisState(),
     );
+  });
+});
+
+describe("analysis fixtures", () => {
+  it("replays every reducer-published scenario to the reducer's own snapshot", () => {
+    expect(fixtures.scenarios.length).toBeGreaterThan(0);
+    for (const scenario of fixtures.scenarios) {
+      let state = emptyAnalysisState();
+      for (const delta of scenario.deltas) {
+        state = foldAnalysis(state, delta);
+      }
+      expect(state, scenario.name).toEqual(normalizeAnalysisSnapshot(scenario.expected));
+    }
+  });
+
+  it("carries a status on every scanned row and none on discovered or failed rows", () => {
+    for (const scenario of fixtures.scenarios) {
+      const rows = scenario.expected.current?.rows ?? [];
+      for (const row of rows) {
+        if (!("File" in row.entry) || row.entry.File === undefined) continue;
+        const scan = row.entry.File.scan;
+        if (scan === "Discovered" || "Failed" in scan) continue;
+        const status =
+          "Scanned" in scan && scan.Scanned !== undefined
+            ? scan.Scanned.status
+            : "SettledOutput" in scan && scan.SettledOutput !== undefined
+              ? scan.SettledOutput.status
+              : undefined;
+        expect(status?.historical, `${scenario.name}/${row.display_name.text}`).toBeDefined();
+      }
+    }
   });
 });

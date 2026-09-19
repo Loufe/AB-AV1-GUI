@@ -12,10 +12,11 @@ use crate::{
     CorruptionSignature, CurrentFileIdentity, DurableDelta, ExecutionSettings, FreshnessDecision,
     ImportPath, ImportedHistoryRecord, ItemOutcome, JobAction, JobSpec, LocatedTools,
     MediaObservation, Operation, OutputDelta, OutputTarget, OverwriteDecision, PathHash, PhaseSpan,
-    QueueItem, QueueItemId, QueueItemState, ReservedJob, RunId, SessionAggregates, SessionState,
-    Settings, SkipReason, StatisticsPayload, Telemetry, ToolAvailability, ToolPathSettings,
-    ToolVerification, UnixMillis, apply_analysis_mutation, begin_analysis_generation,
-    compose_execution, decide_freshness, evaluate_enqueue, fold, fold_config, select_job_action,
+    QueueItem, QueueItemId, QueueItemState, ReservedJob, RunId, ScanFacts, SessionAggregates,
+    SessionState, Settings, SkipReason, StatisticsPayload, Telemetry, ToolAvailability,
+    ToolPathSettings, ToolVerification, UnixMillis, VideoMeta, apply_analysis_mutation,
+    begin_analysis_generation, compose_execution, decide_freshness, evaluate_enqueue, fold,
+    fold_config, project_row_status, refresh_analysis_rows, refresh_scope, select_job_action,
     statistics, validate_analysis_mutation,
 };
 
@@ -362,7 +363,14 @@ impl Applied {
 }
 
 pub fn apply(state: &mut AppState, command: Command) -> Applied {
-    let applied = match command {
+    // Row statuses derive from the base execution and hardware decode
+    // setting; both change outside the delta folds, so note them here.
+    let refresh_everything = matches!(
+        command,
+        Command::System(SystemCommand::ConfigureExecution { .. })
+    );
+    let hardware_decode_before = state.settings.hardware_decode;
+    let mut applied = match command {
         Command::Analysis(command) => apply_analysis_command(state, command),
         Command::Queue(command) => apply_queue(state, command),
         Command::Session(command) => apply_session(state, command),
@@ -454,6 +462,12 @@ pub fn apply(state: &mut AppState, command: Command) -> Applied {
             | EphemeralDelta::QueueAddSummary { .. } => {}
         }
     }
+    let scope = refresh_scope(
+        state,
+        &applied,
+        refresh_everything || state.settings.hardware_decode != hardware_decode_before,
+    );
+    refresh_analysis_rows(state, &mut applied, &scope);
     applied
 }
 
@@ -610,12 +624,7 @@ fn inspect_analysis_file(
                 state,
                 generation,
                 row_id,
-                AnalysisFileScan::SettledOutput {
-                    source_content_key,
-                    output_content_key,
-                    metadata,
-                    refresh_failure: None,
-                },
+                settled_output_scan(state, source_content_key, output_content_key, metadata),
                 Vec::new(),
             )
         }
@@ -642,11 +651,7 @@ fn inspect_analysis_file(
                 state,
                 generation,
                 row_id,
-                AnalysisFileScan::Scanned {
-                    content_key: binding.content_key.clone(),
-                    metadata: record.metadata.clone(),
-                    refresh_failure: None,
-                },
+                scanned_scan(state, binding.content_key.clone(), record.metadata.clone()),
                 prepared.deltas,
             )
         }
@@ -696,19 +701,69 @@ fn observe_analysis_file(
     }
     durable.extend(prepared.deltas);
     let scan = settled.map_or_else(
-        || AnalysisFileScan::Scanned {
-            content_key: observation.binding.content_key.clone(),
-            metadata: observation.metadata.clone(),
-            refresh_failure: None,
+        || {
+            scanned_scan(
+                state,
+                observation.binding.content_key.clone(),
+                observation.metadata.clone(),
+            )
         },
-        |(source_content_key, output_content_key, _)| AnalysisFileScan::SettledOutput {
-            source_content_key,
-            output_content_key,
-            metadata: Some(observation.metadata.clone()),
-            refresh_failure: None,
+        |(source_content_key, output_content_key, _)| {
+            settled_output_scan(
+                state,
+                source_content_key,
+                output_content_key,
+                Some(observation.metadata.clone()),
+            )
         },
     );
     upsert_scanned_row(state, generation, row_id, scan, durable)
+}
+
+/// The status projected here reads the state before this command's durable
+/// deltas fold; `apply` re-projects the row once they have, so the published
+/// row always reflects the facts it was published after.
+fn scanned_scan(
+    state: &AppState,
+    content_key: ContentKey,
+    metadata: VideoMeta,
+) -> AnalysisFileScan {
+    let status = project_row_status(
+        state,
+        ScanFacts::Scanned {
+            content_key: &content_key,
+            metadata: &metadata,
+        },
+    );
+    AnalysisFileScan::Scanned {
+        content_key,
+        metadata,
+        refresh_failure: None,
+        status: Box::new(status),
+    }
+}
+
+fn settled_output_scan(
+    state: &AppState,
+    source_content_key: ContentKey,
+    output_content_key: ContentKey,
+    metadata: Option<VideoMeta>,
+) -> AnalysisFileScan {
+    let status = project_row_status(
+        state,
+        ScanFacts::SettledOutput {
+            source_content_key: &source_content_key,
+            output_content_key: &output_content_key,
+            metadata: metadata.as_ref(),
+        },
+    );
+    AnalysisFileScan::SettledOutput {
+        source_content_key,
+        output_content_key,
+        metadata,
+        refresh_failure: None,
+        status: Box::new(status),
+    }
 }
 
 fn basic_scan_reply(disposition: BasicScanDisposition) -> Applied {
@@ -811,12 +866,14 @@ fn analysis_file_with_failure(
                 AnalysisFileScan::Scanned {
                     content_key,
                     metadata,
+                    status,
                     ..
                 },
         } => AnalysisFileScan::Scanned {
             content_key,
             metadata,
             refresh_failure: Some(Box::new(failure)),
+            status,
         },
         AnalysisRowEntry::File {
             scan:
@@ -824,6 +881,7 @@ fn analysis_file_with_failure(
                     source_content_key,
                     output_content_key,
                     metadata,
+                    status,
                     ..
                 },
         } => AnalysisFileScan::SettledOutput {
@@ -831,6 +889,7 @@ fn analysis_file_with_failure(
             output_content_key,
             metadata,
             refresh_failure: Some(Box::new(failure)),
+            status,
         },
         AnalysisRowEntry::File {
             scan: AnalysisFileScan::Discovered | AnalysisFileScan::Failed { .. },

@@ -3,8 +3,8 @@ use std::collections::BTreeMap;
 use serde::{Deserialize, Serialize, Serializer};
 
 use crate::{
-    ContentKey, DestructiveIdentity, ExecutionSettings, FileRecord, ImportPath, MediaObservation,
-    ParkedStatus, PathHash, VerdictKind, VideoMeta,
+    AnalysisRowStatus, ContentKey, DestructiveIdentity, ImportPath, MediaObservation, PathHash,
+    VideoMeta,
 };
 
 #[derive(
@@ -91,12 +91,14 @@ pub enum AnalysisFileScan {
         content_key: ContentKey,
         metadata: VideoMeta,
         refresh_failure: Option<Box<AnalysisScanFailure>>,
+        status: Box<AnalysisRowStatus>,
     },
     SettledOutput {
         source_content_key: ContentKey,
         output_content_key: ContentKey,
         metadata: Option<VideoMeta>,
         refresh_failure: Option<Box<AnalysisScanFailure>>,
+        status: Box<AnalysisRowStatus>,
     },
     Failed {
         failure: AnalysisScanFailure,
@@ -134,88 +136,15 @@ pub enum AnalysisActivity {
     Failed { detail: String },
 }
 
-/// Highest useful Analysis tier. This value is always derived from current
-/// facts and execution settings; it is never persisted as a second source of
-/// truth.
-#[derive(
-    Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize, specta::Type,
-)]
-pub enum AnalysisLevel {
-    Discovered,
-    Scanned,
-    Analyzed,
-    Converted,
-}
-
-/// Separates what can be reused for the current file/settings from the best
-/// thing known to have happened historically. An imported Analyzed summary,
-/// for example, raises `historical` but cannot raise `applicable`.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, specta::Type)]
-pub struct AnalysisLevelAssessment {
-    pub applicable: AnalysisLevel,
-    pub historical: Option<AnalysisLevel>,
-}
-
-/// Derive current applicability and historical achievement for one row.
-/// `record` must be the record selected by the row's freshly observed
-/// `ContentKey`; passing it is the content-identity gate. `parked_status`
-/// supplies display-only history before that path has been adopted.
-#[must_use]
-pub fn assess_analysis_levels(
-    record: Option<&FileRecord>,
-    parked_status: Option<ParkedStatus>,
-    execution: &ExecutionSettings,
-) -> AnalysisLevelAssessment {
-    let applicable = record.map_or(AnalysisLevel::Discovered, |record| {
-        match record.verdict.as_ref().map(|verdict| &verdict.kind) {
-            Some(VerdictKind::Converted { .. } | VerdictKind::Remuxed { .. }) => {
-                AnalysisLevel::Converted
-            }
-            _ if crate::select_analysis(record, execution).is_some() => AnalysisLevel::Analyzed,
-            _ => AnalysisLevel::Scanned,
-        }
-    });
-
-    let mut historical = parked_status.map(level_for_imported_status);
-    if let Some(record) = record {
-        promote_level(&mut historical, AnalysisLevel::Scanned);
-        if !record.analyses.is_empty() {
-            promote_level(&mut historical, AnalysisLevel::Analyzed);
-        }
-        if let Some(imported) = &record.imported {
-            promote_level(
-                &mut historical,
-                level_for_imported_status(imported.record.status),
-            );
-        }
-        if let Some(verdict) = &record.verdict {
-            let level = match &verdict.kind {
-                VerdictKind::Converted { .. } | VerdictKind::Remuxed { .. } => {
-                    AnalysisLevel::Converted
-                }
-                VerdictKind::NotWorthwhile { .. } => AnalysisLevel::Analyzed,
-            };
-            promote_level(&mut historical, level);
-        }
-    }
-
-    AnalysisLevelAssessment {
-        applicable,
-        historical,
-    }
-}
-
-fn level_for_imported_status(status: ParkedStatus) -> AnalysisLevel {
-    match status {
-        ParkedStatus::Scanned => AnalysisLevel::Scanned,
-        ParkedStatus::Analyzed | ParkedStatus::NotWorthwhile => AnalysisLevel::Analyzed,
-        ParkedStatus::Converted => AnalysisLevel::Converted,
-    }
-}
-
-fn promote_level(current: &mut Option<AnalysisLevel>, candidate: AnalysisLevel) {
-    if current.is_none_or(|level| candidate > level) {
-        *current = Some(candidate);
+impl AnalysisActivity {
+    /// Whether the generation still accepts row updates. A cancelled or
+    /// failed generation is left exactly as it ended.
+    #[must_use]
+    pub const fn is_live(&self) -> bool {
+        matches!(
+            self,
+            Self::Discovering | Self::Discovered | Self::BasicScanning | Self::Ready
+        )
     }
 }
 
@@ -317,6 +246,7 @@ pub(crate) enum AnalysisMutationError {
     InvalidActivityTransition,
     ResetIsNotNext,
     StaleGeneration,
+    UnknownRow,
 }
 
 /// Allocate and install the next process-local generation. The discovery
@@ -386,15 +316,27 @@ pub(crate) fn validate_analysis_mutation(
                 return Err(AnalysisMutationError::ResetIsNotNext);
             }
         }
-        AnalysisDelta::RowsUpserted { generation, .. } => {
-            if state.current.as_ref().map(|current| current.id) != Some(*generation) {
+        AnalysisDelta::RowsUpserted { generation, rows } => {
+            let Some(current) = state
+                .current
+                .as_ref()
+                .filter(|current| current.id == *generation)
+            else {
                 return Err(AnalysisMutationError::StaleGeneration);
-            }
-            if !matches!(
-                state.current.as_ref().map(|current| &current.activity),
-                Some(AnalysisActivity::Discovering | AnalysisActivity::BasicScanning)
-            ) {
-                return Err(AnalysisMutationError::InvalidActivityTransition);
+            };
+            // New row ids are allocated only while discovery or a scan is
+            // producing them; afterwards a live generation still refreshes
+            // the rows it has.
+            match current.activity {
+                AnalysisActivity::Discovering | AnalysisActivity::BasicScanning => {}
+                AnalysisActivity::Discovered | AnalysisActivity::Ready => {
+                    if rows.iter().any(|row| !current.rows.contains_key(&row.id)) {
+                        return Err(AnalysisMutationError::UnknownRow);
+                    }
+                }
+                AnalysisActivity::Cancelled | AnalysisActivity::Failed { .. } => {
+                    return Err(AnalysisMutationError::InvalidActivityTransition);
+                }
             }
         }
         AnalysisDelta::ActivityChanged {
@@ -588,13 +530,7 @@ pub(crate) fn decide_freshness(
 mod tests {
     use std::collections::BTreeMap;
 
-    use crate::{
-        AnalysisProfile, AnalysisResult, ContentKey, Crf, DecodeMode, DurationMs,
-        ExecutionSettings, FileSystemId, FileTimeNs, HardwareDecoder, ImportPath,
-        ImportedHistoryRecord, ImportedProvenance, MediaContainer, ParkedStatus, RunId,
-        SearchMeasurement, UnixMillis, Verdict, VerdictKind, VideoCodec, VideoMeta, VmafScore,
-        VmafTarget,
-    };
+    use crate::{FileSystemId, FileTimeNs};
 
     use super::*;
 
@@ -636,86 +572,6 @@ mod tests {
                 activity: AnalysisActivity::Discovering,
                 rows: BTreeMap::new(),
             }),
-        }
-    }
-
-    fn execution() -> ExecutionSettings {
-        let mut profile = AnalysisProfile::production();
-        profile.ab_av1_revision = "ab-fixture".to_owned();
-        profile.ffmpeg_revision = "ffmpeg-fixture".to_owned();
-        profile.encoder_revision = "encoder-fixture".to_owned();
-        ExecutionSettings::production(profile, false)
-    }
-
-    fn record() -> FileRecord {
-        FileRecord::new(VideoMeta {
-            codec: VideoCodec::H264,
-            container: MediaContainer::Matroska,
-            width: 1_920,
-            height: 1_080,
-            rotation_degrees: 0,
-            duration_ms: 60_000,
-            size_bytes: 1_000,
-            audio: Vec::new(),
-            subtitle_count: 0,
-        })
-    }
-
-    fn reusable_result(execution: &ExecutionSettings) -> AnalysisResult {
-        AnalysisResult {
-            requested_target: execution.requested_target,
-            successful_target: execution.requested_target,
-            fallback_floor: execution.fallback_floor,
-            fallback_step: execution.fallback_step,
-            failed_attempts: Vec::new(),
-            measurement: SearchMeasurement {
-                crf: Crf(30),
-                score: VmafScore(9_500),
-                predicted_size: 500,
-                predicted_percent_basis_points: 5_000,
-                predicted_duration_ms: 30_000,
-                from_cache: false,
-            },
-            profile: execution.profile.clone(),
-        }
-    }
-
-    fn imported(status: ParkedStatus) -> ImportedProvenance {
-        ImportedProvenance {
-            import_path: ImportPath("/videos/movie.mkv".to_owned()),
-            record: ImportedHistoryRecord {
-                status,
-                size: None,
-                modified_ns: None,
-                video_codec: None,
-                width: None,
-                height: None,
-                duration_ms: None,
-                output_size: None,
-                encoding_time: None,
-                crf: None,
-                vmaf: None,
-                target: None,
-                requested_target: None,
-                floor_target: None,
-                decided_at: UnixMillis(1),
-            },
-        }
-    }
-
-    fn converted_verdict() -> Verdict {
-        Verdict {
-            kind: VerdictKind::Converted {
-                output_content_key: None,
-                input_size: None,
-                output_size: None,
-                encoding_time: Some(DurationMs(1)),
-                crf: None,
-                vmaf: None,
-                target: None,
-            },
-            source_run: Some(RunId(1)),
-            decided_at: UnixMillis(2),
         }
     }
 
@@ -930,222 +786,47 @@ mod tests {
                 Err(AnalysisMutationError::InvalidActivityTransition)
             );
         }
-
-        let mut discovered = snapshot(1);
-        discovered.current.as_mut().expect("generation").activity = AnalysisActivity::Discovered;
-        assert_eq!(
-            apply_analysis_mutation(
-                &mut discovered,
-                &AnalysisDelta::RowsUpserted {
-                    generation: AnalysisGenerationId(1),
-                    rows: vec![row(1, "too-late.mkv")],
-                },
-            ),
-            Err(AnalysisMutationError::InvalidActivityTransition)
-        );
     }
 
     #[test]
-    fn current_level_and_historical_achievement_are_independent() {
-        let execution = execution();
-        assert_eq!(
-            assess_analysis_levels(None, None, &execution),
-            AnalysisLevelAssessment {
-                applicable: AnalysisLevel::Discovered,
-                historical: None,
-            }
-        );
-        assert_eq!(
-            assess_analysis_levels(None, Some(ParkedStatus::Analyzed), &execution),
-            AnalysisLevelAssessment {
-                applicable: AnalysisLevel::Discovered,
-                historical: Some(AnalysisLevel::Analyzed),
-            }
-        );
-
-        let mut adopted = record();
-        adopted.imported = Some(imported(ParkedStatus::Analyzed));
-        assert_eq!(
-            assess_analysis_levels(Some(&adopted), None, &execution),
-            AnalysisLevelAssessment {
-                applicable: AnalysisLevel::Scanned,
-                historical: Some(AnalysisLevel::Analyzed),
-            }
-        );
-    }
-
-    #[test]
-    fn exact_native_analysis_is_currently_applicable() {
-        let execution = execution();
-        let mut record = record();
-        record.record_analysis(reusable_result(&execution));
-        assert_eq!(
-            assess_analysis_levels(Some(&record), None, &execution),
-            AnalysisLevelAssessment {
-                applicable: AnalysisLevel::Analyzed,
-                historical: Some(AnalysisLevel::Analyzed),
-            }
-        );
-    }
-
-    #[test]
-    fn every_measurement_profile_field_participates_in_current_reuse() {
-        let execution = execution();
-        let mut record = record();
-        record.record_analysis(reusable_result(&execution));
-
-        let mut incompatible = Vec::new();
-        let mut changed = execution.clone();
-        changed.profile.preset = changed.profile.preset.saturating_sub(1);
-        incompatible.push(changed);
-        let mut changed = execution.clone();
-        changed.profile.max_encoded_percent_basis_points += 1;
-        incompatible.push(changed);
-        let mut changed = execution.clone();
-        changed.profile.samples = Some(4);
-        incompatible.push(changed);
-        let mut changed = execution.clone();
-        changed.profile.sample_duration_ms += 1;
-        incompatible.push(changed);
-        let mut changed = execution.clone();
-        changed.profile.thorough = !changed.profile.thorough;
-        incompatible.push(changed);
-        let mut changed = execution.clone();
-        changed.profile.decode_mode = DecodeMode::Hardware(HardwareDecoder::H264Cuvid);
-        incompatible.push(changed);
-        let mut changed = execution.clone();
-        changed.profile.ab_av1_revision.push_str("-new");
-        incompatible.push(changed);
-        let mut changed = execution.clone();
-        changed.profile.ffmpeg_revision.push_str("-new");
-        incompatible.push(changed);
-        let mut changed = execution.clone();
-        changed.profile.encoder_revision.push_str("-new");
-        incompatible.push(changed);
-
-        for changed in incompatible {
-            let assessment = assess_analysis_levels(Some(&record), None, &changed);
-            assert_eq!(assessment.applicable, AnalysisLevel::Scanned);
-            assert_eq!(assessment.historical, Some(AnalysisLevel::Analyzed));
-        }
-        assert_eq!(
-            assess_analysis_levels(Some(&record), None, &execution).applicable,
-            AnalysisLevel::Analyzed
-        );
-    }
-
-    #[test]
-    fn target_and_fallback_provenance_control_current_reuse() {
-        let execution = execution();
-        let mut record = record();
-        record.record_analysis(reusable_result(&execution));
-
-        let mut lower_target = execution.clone();
-        lower_target.requested_target = VmafTarget(execution.requested_target.0 - 1);
-        assert_eq!(
-            assess_analysis_levels(Some(&record), None, &lower_target).applicable,
-            AnalysisLevel::Analyzed
-        );
-
-        let mut higher_target = execution.clone();
-        higher_target.requested_target = VmafTarget(execution.requested_target.0 + 1);
-        assert_eq!(
-            assess_analysis_levels(Some(&record), None, &higher_target).applicable,
-            AnalysisLevel::Scanned
-        );
-
-        let mut changed_ladder = execution.clone();
-        changed_ladder.fallback_step += 1;
-        let mut fallback_result = reusable_result(&execution);
-        fallback_result.successful_target = VmafTarget(execution.requested_target.0 - 1);
-        let mut fallback_record = self::record();
-        fallback_record.record_analysis(fallback_result);
-        assert_eq!(
-            assess_analysis_levels(Some(&fallback_record), None, &changed_ladder).applicable,
-            AnalysisLevel::Scanned
-        );
-    }
-
-    #[test]
-    fn decisive_conversion_is_current_but_not_worthwhile_is_history_only() {
-        let execution = execution();
-        let mut converted = record();
-        converted.verdict = Some(converted_verdict());
-        assert_eq!(
-            assess_analysis_levels(Some(&converted), None, &execution),
-            AnalysisLevelAssessment {
-                applicable: AnalysisLevel::Converted,
-                historical: Some(AnalysisLevel::Converted),
-            }
-        );
-
-        let mut not_worthwhile = record();
-        not_worthwhile.verdict = Some(Verdict {
-            kind: VerdictKind::NotWorthwhile {
-                requested: VmafTarget(95),
-                floor: VmafTarget(90),
+    #[expect(clippy::expect_used, reason = "test assertion")]
+    fn rows_are_allocated_while_producing_and_refreshed_while_live() {
+        let mut state = snapshot(1);
+        fold_analysis(
+            &mut state,
+            &AnalysisDelta::RowsUpserted {
+                generation: AnalysisGenerationId(1),
+                rows: vec![row(1, "known.mkv")],
             },
-            source_run: None,
-            decided_at: UnixMillis(2),
-        });
-        assert_eq!(
-            assess_analysis_levels(Some(&not_worthwhile), None, &execution),
-            AnalysisLevelAssessment {
-                applicable: AnalysisLevel::Scanned,
-                historical: Some(AnalysisLevel::Analyzed),
-            }
         );
-    }
-
-    #[test]
-    fn every_imported_status_maps_only_to_historical_achievement() {
-        let execution = execution();
-        let cases = [
-            (ParkedStatus::Scanned, AnalysisLevel::Scanned),
-            (ParkedStatus::Analyzed, AnalysisLevel::Analyzed),
-            (ParkedStatus::NotWorthwhile, AnalysisLevel::Analyzed),
-            (ParkedStatus::Converted, AnalysisLevel::Converted),
-        ];
-        for (status, historical) in cases {
-            let mut adopted = record();
-            adopted.imported = Some(imported(status));
+        let known = AnalysisDelta::RowsUpserted {
+            generation: AnalysisGenerationId(1),
+            rows: vec![row(1, "known-refreshed.mkv")],
+        };
+        let unknown = AnalysisDelta::RowsUpserted {
+            generation: AnalysisGenerationId(1),
+            rows: vec![row(2, "too-late.mkv")],
+        };
+        for activity in [AnalysisActivity::Discovered, AnalysisActivity::Ready] {
+            state.current.as_mut().expect("generation").activity = activity;
+            assert_eq!(apply_analysis_mutation(&mut state, &known), Ok(()));
             assert_eq!(
-                assess_analysis_levels(Some(&adopted), None, &execution),
-                AnalysisLevelAssessment {
-                    applicable: AnalysisLevel::Scanned,
-                    historical: Some(historical),
-                }
-            );
-            assert_eq!(
-                assess_analysis_levels(None, Some(status), &execution),
-                AnalysisLevelAssessment {
-                    applicable: AnalysisLevel::Discovered,
-                    historical: Some(historical),
-                }
+                apply_analysis_mutation(&mut state, &unknown),
+                Err(AnalysisMutationError::UnknownRow)
             );
         }
-    }
-
-    #[test]
-    fn native_remux_is_a_converted_achievement() {
-        let execution = execution();
-        let mut remuxed = record();
-        remuxed.verdict = Some(Verdict {
-            kind: VerdictKind::Remuxed {
-                output_content_key: ContentKey("remux-output".to_owned()),
-                input_size: Some(1_000),
-                output_size: Some(900),
+        for activity in [
+            AnalysisActivity::Cancelled,
+            AnalysisActivity::Failed {
+                detail: "terminal".to_owned(),
             },
-            source_run: Some(RunId(2)),
-            decided_at: UnixMillis(2),
-        });
-        assert_eq!(
-            assess_analysis_levels(Some(&remuxed), None, &execution),
-            AnalysisLevelAssessment {
-                applicable: AnalysisLevel::Converted,
-                historical: Some(AnalysisLevel::Converted),
-            }
-        );
+        ] {
+            state.current.as_mut().expect("generation").activity = activity;
+            assert_eq!(
+                apply_analysis_mutation(&mut state, &known),
+                Err(AnalysisMutationError::InvalidActivityTransition)
+            );
+        }
     }
 
     #[test]

@@ -177,11 +177,13 @@ export type AnalysisFileScan = "Discovered" | ({ Scanned: {
 	content_key: ContentKey,
 	metadata: VideoMeta,
 	refresh_failure: AnalysisScanFailure | null,
+	status: AnalysisRowStatus,
 } }) & { Failed?: never; SettledOutput?: never } | ({ SettledOutput: {
 	source_content_key: ContentKey,
 	output_content_key: ContentKey,
 	metadata: VideoMeta | null,
 	refresh_failure: AnalysisScanFailure | null,
+	status: AnalysisRowStatus,
 } }) & { Failed?: never; Scanned?: never } | ({ Failed: {
 	failure: AnalysisScanFailure,
 } }) & { Scanned?: never; SettledOutput?: never };
@@ -275,6 +277,14 @@ export type AnalysisRowEntry = ({ Folder: {
 
 export type AnalysisRowId = number;
 
+/**  What the current facts, tools, and settings let a claim do with the file. */
+export type AnalysisRowStatus = {
+	applicable: ApplicableLevel,
+	historical: HistoricalLevel,
+	analyze: RowEligibility,
+	convert: RowEligibility,
+};
+
 /**
  *  A file-local Basic Scan failure. One row failing never aborts its
  *  generation; infrastructure failures that prevent the pool from making
@@ -332,6 +342,19 @@ export type AppSnapshot_Serialize = {
 	durable: DurableState_Serialize,
 	settings: Settings,
 };
+
+/**
+ *  The highest tier a claim would reuse right now. A row that carries no
+ *  status is merely discovered; every observed row stands at least at
+ *  `Scanned`.
+ */
+export type ApplicableLevel = ({ Scanned: {
+	reuse: ReuseStanding,
+} }) & { Analyzed?: never; Converted?: never } | ({ Analyzed: {
+	prediction: SearchPrediction,
+} }) & { Converted?: never; Scanned?: never } | ({ Converted: {
+	summary: ConversionSummary,
+} }) & { Analyzed?: never; Scanned?: never };
 
 export type ArtifactIdentity = ArtifactIdentity_Serialize | ArtifactIdentity_Deserialize;
 
@@ -418,6 +441,27 @@ export type ConversionRun = {
 	finished_at: UnixMillis | null,
 	phase_spans: PhaseSpan[],
 };
+
+/**
+ *  The measured summary of the conversion that decided the content. Every
+ *  measurement is nullable because an imported or crash-recovered verdict
+ *  cannot honestly supply it.
+ */
+export type ConversionSummary = ({ Encoded: {
+	input_size: number | null,
+	output_size: number | null,
+	encoding_time: DurationMs | null,
+	crf: Crf | null,
+	vmaf: VmafScore | null,
+	target: VmafTarget | null,
+	decided_at: UnixMillis,
+	source_run: RunId | null,
+} }) & { Remuxed?: never } | ({ Remuxed: {
+	input_size: number | null,
+	output_size: number | null,
+	decided_at: UnixMillis,
+	source_run: RunId | null,
+} }) & { Encoded?: never };
 
 /**
  *  The degraded surface shown to the operator: why replay stopped, and the
@@ -797,6 +841,12 @@ export type ExecutionSettings = {
 };
 
 /**
+ *  Why no claim can be composed from the current tool picture. Path-free by
+ *  construction so it can travel in rejection reasons and row statuses.
+ */
+export type ExecutionUnavailable = "ToolsMissing" | "ToolsPending" | "ToolsFailed";
+
+/**
  *  The durable description of a failed run: a stable kind for policy and
  *  display grouping, a user-facing message, and a bounded diagnostic tail.
  */
@@ -875,6 +925,13 @@ export type FileSystemId_Serialize = ({ Unix: {
 export type FileTimeNs = string;
 
 export type HardwareDecoder = "H264Cuvid" | "H264Qsv" | "HevcCuvid" | "HevcQsv" | "Vp9Cuvid" | "Vp9Qsv" | "Av1Cuvid" | "Av1Qsv";
+
+/**
+ *  The highest tier the content is known to have reached, from native
+ *  searches, verdicts, and imported provenance alike. Never below
+ *  `applicable`.
+ */
+export type HistoricalLevel = "Scanned" | "Analyzed" | "Converted";
 
 /**
  *  One History row per native/adopted content or reportable parked import.
@@ -1317,6 +1374,31 @@ export type ReservedJob = {
 	output_target: OutputTarget,
 };
 
+/**  Why a scanned row has no reusable analysis. */
+export type ReuseStanding = 
+/**  No native search has ever been recorded for this content. */
+"Unanalyzed" | 
+/**
+ *  Searches exist, but none was recorded under the profile and targets a
+ *  claim would use now.
+ */
+"Inapplicable" | 
+/**
+ *  The claim profile cannot be composed until the located tools are
+ *  verified, so no stored search can be matched against it.
+ */
+{ ToolchainUnverified: {
+	reason: ExecutionUnavailable,
+} };
+
+/**
+ *  What a claim for one operation would do with the file, before any
+ *  filesystem check the engine performs at claim time.
+ */
+export type RowEligibility = "Eligible" | "Remux" | { Skip: {
+	reason: SkipReason,
+} };
+
 export type RunId = number;
 
 /**
@@ -1351,6 +1433,20 @@ export type SearchMeasurement = {
 	predicted_percent_basis_points: number,
 	predicted_duration_ms: number,
 	from_cache: boolean,
+};
+
+/**
+ *  ab-av1's prediction from the search a claim would reuse. Distinct from a
+ *  measured conversion summary: nothing here has happened yet.
+ */
+export type SearchPrediction = {
+	crf: Crf,
+	score: VmafScore,
+	predicted_size: number,
+	predicted_percent_basis_points: number,
+	predicted_duration_ms: number,
+	requested_target: VmafTarget,
+	successful_target: VmafTarget,
 };
 
 /**

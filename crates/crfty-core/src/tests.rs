@@ -28,7 +28,7 @@ use crate::{
     ToolSource, ToolVerification, ToolsCommand, UnixMillis, VideoCodec, VideoMeta, VmafScore,
     VmafTarget, WorkerCommand, apply, compaction_due, compaction_quiescent, corruption_signature,
     encode_record, encode_snapshot, observations, permitted_profiles, recover_output, replay,
-    resolve_parked, select_analysis, select_job_action,
+    resolve_parked, select_job_action,
 };
 
 fn revisions() -> ToolRevisions {
@@ -110,7 +110,7 @@ fn analysis_commands_allocate_generations_and_reject_late_same_generation_work()
         &mut state,
         Command::Analysis(AnalysisCommand::UpsertRows {
             generation: AnalysisGenerationId(1),
-            rows: vec![row],
+            rows: vec![row.clone()],
         }),
     );
     assert_eq!(inserted.reply, Reply::Accepted);
@@ -140,7 +140,10 @@ fn analysis_commands_allocate_generations_and_reject_late_same_generation_work()
         &mut state,
         Command::Analysis(AnalysisCommand::UpsertRows {
             generation: AnalysisGenerationId(1),
-            rows: Vec::new(),
+            rows: vec![AnalysisRow {
+                id: AnalysisRowId(2),
+                ..row.clone()
+            }],
         }),
     );
     assert!(matches!(late.reply, Reply::Rejected { .. }));
@@ -1248,6 +1251,410 @@ fn basic_scan_refresh_failure_keeps_the_previous_success() {
     ));
 }
 
+fn analysis_rows_in(applied: &crate::Applied) -> Vec<&Vec<AnalysisRow>> {
+    applied
+        .ephemeral
+        .iter()
+        .filter_map(|delta| match delta {
+            EphemeralDelta::Analysis(crate::AnalysisDelta::RowsUpserted { rows, .. }) => Some(rows),
+            _ => None,
+        })
+        .collect()
+}
+
+fn row_status(state: &AppState, row_id: u64) -> Option<crate::AnalysisRowStatus> {
+    let row = state
+        .analysis
+        .current
+        .as_ref()
+        .and_then(|current| current.rows.get(&AnalysisRowId(row_id)))?;
+    match &row.entry {
+        AnalysisRowEntry::File {
+            scan:
+                AnalysisFileScan::Scanned { status, .. }
+                | AnalysisFileScan::SettledOutput { status, .. },
+        } => Some(status.as_ref().clone()),
+        AnalysisRowEntry::File { .. } | AnalysisRowEntry::Folder { .. } => None,
+    }
+}
+
+fn observe_row(
+    state: &mut AppState,
+    row_id: u64,
+    observation: &MediaObservation,
+) -> crate::Applied {
+    let applied = apply(
+        state,
+        Command::Analysis(AnalysisCommand::ObserveFile {
+            generation: AnalysisGenerationId(1),
+            row_id: AnalysisRowId(row_id),
+            observation: Box::new(observation.clone()),
+            import_paths: Vec::new(),
+        }),
+    );
+    assert_eq!(
+        applied.reply,
+        Reply::BasicScan(BasicScanDisposition::Complete)
+    );
+    applied
+}
+
+#[test]
+fn scanned_rows_refresh_when_the_toolchain_is_verified() {
+    let mut state = basic_scan_state();
+    state.tools = ToolAvailability::Located {
+        tools: located_tools(),
+        verification: ToolVerification::Pending,
+    };
+    let observation = media_observation("content");
+    let scanned = observe_row(&mut state, 1, &observation);
+    assert_eq!(analysis_rows_in(&scanned).len(), 1);
+    assert_eq!(
+        row_status(&state, 1).map(|status| status.applicable),
+        Some(crate::ApplicableLevel::Scanned {
+            reuse: crate::ReuseStanding::ToolchainUnverified {
+                reason: crate::ExecutionUnavailable::ToolsPending,
+            },
+        })
+    );
+    assert_eq!(
+        row_status(&state, 1).map(|status| status.convert),
+        Some(crate::RowEligibility::Eligible)
+    );
+
+    let probed = apply(
+        &mut state,
+        Command::System(SystemCommand::ToolsProbed {
+            tools: located_tools(),
+            verification: ToolVerification::Verified {
+                revisions: revisions(),
+                hardware_decoders: std::collections::BTreeSet::new(),
+            },
+        }),
+    );
+    assert!(matches!(
+        probed.ephemeral.as_slice(),
+        [
+            EphemeralDelta::ToolsChanged(_),
+            EphemeralDelta::Analysis(crate::AnalysisDelta::RowsUpserted { rows, .. })
+        ] if rows.len() == 1
+    ));
+    assert_eq!(
+        row_status(&state, 1).map(|status| status.applicable),
+        Some(crate::ApplicableLevel::Scanned {
+            reuse: crate::ReuseStanding::Unanalyzed,
+        })
+    );
+
+    // Verification that changes nothing about the rows publishes no rows.
+    let unchanged = state.tools.clone();
+    let repeated = apply(
+        &mut state,
+        Command::System(SystemCommand::ToolsDiscovered {
+            availability: unchanged,
+        }),
+    );
+    assert!(repeated.ephemeral.is_empty());
+}
+
+#[test]
+#[expect(clippy::expect_used, reason = "test assertion")]
+fn a_recorded_analysis_refreshes_its_row_after_the_scan_is_ready() {
+    let mut state = basic_scan_state();
+    let observation = media_observation("content");
+    observe_row(&mut state, 1, &observation);
+    assert_eq!(
+        apply(
+            &mut state,
+            Command::Analysis(AnalysisCommand::FinishBasicScan {
+                generation: AnalysisGenerationId(1),
+            }),
+        )
+        .reply,
+        Reply::Accepted
+    );
+
+    let _added = apply(
+        &mut state,
+        Command::Queue(QueueCommand::AddMany {
+            requests: vec![QueueAddRequest {
+                operation: Operation::Analyze,
+                ..add_request(QueueItemId(1), "movie.mkv")
+            }],
+        }),
+    );
+    let _started = start_session(&mut state);
+    let prepared = reserve_and_prepare_observed(&mut state, Some(observation));
+    assert!(matches!(prepared.reply, Reply::Claimed(Some(_))));
+    assert!(analysis_rows_in(&prepared).is_empty());
+    assert_eq!(
+        apply(
+            &mut state,
+            Command::Worker(WorkerCommand::Started {
+                item_id: QueueItemId(1),
+                claim_id: ClaimId(1),
+                run_id: RunId(2),
+                at: UnixMillis(500),
+            }),
+        )
+        .reply,
+        Reply::Accepted
+    );
+
+    let recorded = apply(
+        &mut state,
+        Command::Worker(WorkerCommand::RecordAnalysis {
+            item_id: QueueItemId(1),
+            claim_id: ClaimId(1),
+            run_id: RunId(2),
+            result: Box::new(analysis()),
+        }),
+    );
+    assert_eq!(recorded.reply, Reply::Accepted);
+    assert!(matches!(
+        recorded.ephemeral.as_slice(),
+        [EphemeralDelta::Analysis(crate::AnalysisDelta::RowsUpserted { rows, .. })] if rows.len() == 1
+    ));
+    let status = row_status(&state, 1).expect("scanned row");
+    assert_eq!(
+        status.applicable,
+        crate::ApplicableLevel::Analyzed {
+            prediction: crate::SearchPrediction {
+                crf: Crf(30_000),
+                score: VmafScore(9_500),
+                predicted_size: 1_000,
+                predicted_percent_basis_points: 5_000,
+                predicted_duration_ms: 60_000,
+                requested_target: execution().requested_target,
+                successful_target: execution().requested_target,
+            },
+        }
+    );
+    assert_eq!(status.historical, crate::HistoricalLevel::Analyzed);
+
+    // The terminal outcome touches the same content but changes no status.
+    let finished = apply(
+        &mut state,
+        Command::Worker(WorkerCommand::Terminal {
+            item_id: QueueItemId(1),
+            claim_id: ClaimId(1),
+            run_id: RunId(2),
+            outcome: ItemOutcome::Analyzed,
+            at: UnixMillis(1_000),
+            phase_spans: Vec::new(),
+            final_telemetry: None,
+        }),
+    );
+    assert_eq!(finished.reply, Reply::Accepted);
+    assert!(analysis_rows_in(&finished).is_empty());
+}
+
+#[test]
+#[expect(clippy::expect_used, reason = "test assertion")]
+fn an_adopted_verdict_is_published_in_the_row_it_arrives_with() {
+    let mut state = basic_scan_state();
+    let observation = media_observation("imported");
+    let import_path = ImportPath("root/movie.mkv".to_owned());
+    let mut parked = parked_record(ParkedStatus::NotWorthwhile);
+    parked.size = Some(observation.metadata.size_bytes);
+    parked.modified_ns = observation.binding.identity.modified_ns;
+    parked.requested_target = Some(state.execution.requested_target);
+    parked.floor_target = Some(state.execution.fallback_floor);
+    state.durable.parked.insert(import_path.clone(), parked);
+
+    let applied = apply(
+        &mut state,
+        Command::Analysis(AnalysisCommand::ObserveFile {
+            generation: AnalysisGenerationId(1),
+            row_id: AnalysisRowId(1),
+            observation: Box::new(observation),
+            import_paths: vec![import_path],
+        }),
+    );
+    assert!(matches!(
+        applied.durable.as_slice(),
+        [
+            DurableDelta::MediaObserved { .. },
+            DurableDelta::ParkedAdopted { .. }
+        ]
+    ));
+    let rows = analysis_rows_in(&applied);
+    assert_eq!(rows.len(), 1);
+    let published = rows
+        .first()
+        .and_then(|rows| rows.first())
+        .and_then(|row| match &row.entry {
+            AnalysisRowEntry::File {
+                scan: AnalysisFileScan::Scanned { status, .. },
+            } => Some(status.as_ref().clone()),
+            _ => None,
+        })
+        .expect("published scanned row");
+    assert_eq!(
+        published.convert,
+        crate::RowEligibility::Skip {
+            reason: SkipReason::NotWorthwhile { source_run: None },
+        }
+    );
+    assert_eq!(published.historical, crate::HistoricalLevel::Analyzed);
+    assert_eq!(row_status(&state, 1), Some(published));
+}
+
+#[test]
+#[expect(clippy::expect_used, reason = "test assertion")]
+fn base_execution_and_hardware_decode_changes_refresh_every_row() {
+    let mut state = basic_scan_state();
+    state.tools = located_with_decoders(&[crate::HardwareDecoder::H264Cuvid]);
+    let observation = media_observation("content");
+    observe_row(&mut state, 1, &observation);
+    let software = execution();
+    let mut preset = software.clone();
+    preset.profile.preset = 4;
+    state
+        .durable
+        .records
+        .get_mut(&observation.binding.content_key)
+        .expect("record")
+        .record_analysis(AnalysisResult {
+            profile: preset.profile.clone(),
+            ..analysis()
+        });
+    // The record changed behind the row; only a command refreshes it.
+    assert_eq!(
+        row_status(&state, 1).map(|status| status.applicable),
+        Some(crate::ApplicableLevel::Scanned {
+            reuse: crate::ReuseStanding::Unanalyzed,
+        })
+    );
+
+    // Hardware decode is on and probed, so the composed profile decodes in
+    // hardware: preset alone does not make the software result reusable.
+    let configured = apply(
+        &mut state,
+        Command::System(SystemCommand::ConfigureExecution {
+            base: ExecutionSettings {
+                profile: AnalysisProfile {
+                    preset: 4,
+                    ..AnalysisProfile::production()
+                },
+                ..ExecutionSettings::default()
+            },
+        }),
+    );
+    assert_eq!(configured.reply, Reply::Accepted);
+    assert!(matches!(
+        analysis_rows_in(&configured).as_slice(),
+        [rows] if rows.len() == 1
+    ));
+    assert_eq!(
+        row_status(&state, 1).map(|status| status.applicable),
+        Some(crate::ApplicableLevel::Scanned {
+            reuse: crate::ReuseStanding::Inapplicable,
+        })
+    );
+
+    let mut settings = state.settings.clone();
+    settings.hardware_decode = false;
+    let changed = apply(
+        &mut state,
+        Command::Settings(SettingsCommand::Set { settings }),
+    );
+    assert_eq!(changed.reply, Reply::Accepted);
+    assert!(matches!(
+        analysis_rows_in(&changed).as_slice(),
+        [rows] if rows.len() == 1
+    ));
+    assert!(matches!(
+        row_status(&state, 1).map(|status| status.applicable),
+        Some(crate::ApplicableLevel::Analyzed { .. })
+    ));
+}
+
+#[test]
+fn whole_generation_refreshes_are_batched_and_skip_ended_generations() {
+    let mut state = basic_scan_state();
+    let display = |text: &str| AnalysisDisplayText {
+        text: text.to_owned(),
+        lossy: false,
+    };
+    let stale = crate::AnalysisRowStatus {
+        applicable: crate::ApplicableLevel::Scanned {
+            reuse: crate::ReuseStanding::Unanalyzed,
+        },
+        historical: crate::HistoricalLevel::Converted,
+        analyze: crate::RowEligibility::Eligible,
+        convert: crate::RowEligibility::Eligible,
+    };
+    let rows: Vec<AnalysisRow> = (1..=130)
+        .map(|id| AnalysisRow {
+            id: AnalysisRowId(id),
+            parent: None,
+            entry: AnalysisRowEntry::File {
+                scan: AnalysisFileScan::Scanned {
+                    content_key: ContentKey(format!("content-{id}")),
+                    metadata: media_observation("content").metadata,
+                    refresh_failure: None,
+                    status: Box::new(stale.clone()),
+                },
+            },
+            display_name: display("movie.mkv"),
+            display_path: display("root/movie.mkv"),
+        })
+        .collect();
+    assert_eq!(
+        apply(
+            &mut state,
+            Command::Analysis(AnalysisCommand::UpsertRows {
+                generation: AnalysisGenerationId(1),
+                rows,
+            }),
+        )
+        .reply,
+        Reply::Accepted
+    );
+
+    let missing = apply(
+        &mut state,
+        Command::System(SystemCommand::ToolsDiscovered {
+            availability: ToolAvailability::Missing {
+                failures: Vec::new(),
+            },
+        }),
+    );
+    let batches = analysis_rows_in(&missing);
+    assert_eq!(
+        batches.iter().map(|rows| rows.len()).collect::<Vec<_>>(),
+        vec![crate::ANALYSIS_REFRESH_BATCH_ROWS, 2]
+    );
+    assert_eq!(
+        row_status(&state, 130).map(|status| status.applicable),
+        Some(crate::ApplicableLevel::Scanned {
+            reuse: crate::ReuseStanding::ToolchainUnverified {
+                reason: crate::ExecutionUnavailable::ToolsMissing,
+            },
+        })
+    );
+
+    assert_eq!(
+        apply(
+            &mut state,
+            Command::Analysis(AnalysisCommand::SetActivity {
+                generation: AnalysisGenerationId(1),
+                activity: AnalysisActivity::Cancelled,
+            }),
+        )
+        .reply,
+        Reply::Accepted
+    );
+    let relocated = apply(
+        &mut state,
+        Command::System(SystemCommand::ToolsDiscovered {
+            availability: located(),
+        }),
+    );
+    assert!(analysis_rows_in(&relocated).is_empty());
+}
+
 #[test]
 fn moved_or_duplicated_paths_join_the_probable_content_record_after_observation() {
     let first = media_observation("shared-content");
@@ -1658,11 +2065,15 @@ fn analysis_selection_prefers_exact_then_lowest_qualifying_target() {
     record.record_analysis(fallback);
     record.record_analysis(higher);
     record.record_analysis(exact.clone());
-    assert_eq!(select_analysis(&record, &settings), Some(exact));
+    assert_eq!(
+        crate::policy::select_analysis(&record, &settings),
+        Some(exact)
+    );
 
     let mut lower_request = settings;
     lower_request.requested_target = VmafTarget(94);
-    let selected = select_analysis(&record, &lower_request).expect("qualifying analysis");
+    let selected =
+        crate::policy::select_analysis(&record, &lower_request).expect("qualifying analysis");
     assert_eq!(selected.successful_target, VmafTarget(95));
 }
 
@@ -5516,11 +5927,14 @@ fn analyses_recorded_under_hardware_decode_are_not_reused_elsewhere() {
     result.profile = hardware.profile.clone();
     let mut record = FileRecord::new(media_observation("pin-content").metadata);
     record.record_analysis(result.clone());
-    assert_eq!(select_analysis(&record, &execution()), None);
+    assert_eq!(crate::policy::select_analysis(&record, &execution()), None);
     let mut qsv = hardware.clone();
     qsv.profile.decode_mode = DecodeMode::Hardware(crate::HardwareDecoder::H264Qsv);
-    assert_eq!(select_analysis(&record, &qsv), None);
-    assert_eq!(select_analysis(&record, &hardware), Some(result));
+    assert_eq!(crate::policy::select_analysis(&record, &qsv), None);
+    assert_eq!(
+        crate::policy::select_analysis(&record, &hardware),
+        Some(result)
+    );
 }
 
 #[test]

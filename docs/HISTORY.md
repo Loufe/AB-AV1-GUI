@@ -14,7 +14,7 @@ Nothing is stored under the name History. History rows and Statistics are contex
 
 Facts flow one way. The analysis level a file stands at, the analysis it may reuse, and its eligibility for the queue are all decided from current freshness-checked evidence about the file on disk, never from History:
 
-- Analysis level is split at the type level. `assess_analysis_levels` returns `applicable`, meaning what the current file and execution settings can actually reuse, alongside `historical`, meaning the highest tier known to have been reached. Historical achievement, including an imported Converted or Analyzed summary, raises only `historical`.
+- Analysis level is split at the type level. An Analysis row's `AnalysisRowStatus` reports `applicable`, meaning what a claim would actually reuse under the current tools and execution settings, alongside `historical`, meaning the highest tier known to have been reached. Historical achievement, including an imported Converted or Analyzed summary, raises only `historical` (`docs/ANALYSIS.md`, Row contract).
 - A historical analysis is not a reusable analysis. Analysis identity is profile-exact per ADR-007, pin decode mode in analysis identity, so only a native search recorded under a permitted profile can be selected for reuse. An imported Analyzed fact is display-only and never enters `FileRecord.analyses`.
 - Queue eligibility reads the path binding, the live destructive identity, timestamp reliability, and the standing verdict, per ADR-013, filter queue adds at enqueue. It consults neither History rows, nor Statistics, nor the parked import inbox.
 

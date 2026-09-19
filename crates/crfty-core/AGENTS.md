@@ -6,4 +6,5 @@ Pure domain crate: state, reducer, fold, policy, journal types.
 - All state mutation flows through the reducer (ADR-002). State persists via the append-only journal (ADR-004).
 - `cargo test -p crfty-core --test export_fold_fixtures` regenerates `ui/src/lib/store/fold-fixtures.json` — committed, freshness-gated in CI, and consumed by the ui fold mirror. Regenerate whenever fold semantics change.
 - `cargo test -p crfty-core --test export_projection_fixtures` does the same for `ui/src/lib/projection/projection-fixtures.json`, consumed by the ui history-row mirror. Regenerate whenever `history_rows` semantics change.
+- `cargo test -p crfty-core --test export_analysis_fixtures` does the same for `ui/src/lib/store/analysis-fixtures.json`, consumed by the ui Analysis fold mirror. Regenerate whenever Analysis row shapes, statuses, or refresh semantics change.
 - Pure-logic changes require focused unit tests.

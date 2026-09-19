@@ -25,8 +25,8 @@ pub fn decoder_candidates(codec: &VideoCodec) -> &'static [HardwareDecoder] {
 }
 
 /// Why no claim can be composed from the current tool picture. Path-free by
-/// construction so it can travel in rejection reasons.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+/// construction so it can travel in rejection reasons and row statuses.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, specta::Type)]
 pub enum ExecutionUnavailable {
     ToolsMissing,
     ToolsPending,
