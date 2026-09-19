@@ -6,6 +6,7 @@
 //! or user-interface frameworks.
 
 mod analysis;
+mod analysis_status;
 mod constants;
 mod estimation;
 mod execution;
@@ -34,14 +35,21 @@ pub(crate) type JsNumber = u32;
 pub use analysis::{
     AnalysisActivity, AnalysisCommand, AnalysisDelta, AnalysisDiagnosticTail,
     AnalysisDirectoryFailure, AnalysisDisplayText, AnalysisFileScan, AnalysisGeneration,
-    AnalysisGenerationId, AnalysisLevel, AnalysisLevelAssessment, AnalysisRow, AnalysisRowEntry,
-    AnalysisRowId, AnalysisRowRef, AnalysisScanFailure, AnalysisSnapshot, BasicScanDisposition,
-    CurrentFileIdentity, FreshnessReason, ObservationStability, TimestampReliability,
-    assess_analysis_levels, fold_analysis, observation_stability,
+    AnalysisGenerationId, AnalysisRow, AnalysisRowEntry, AnalysisRowId, AnalysisRowRef,
+    AnalysisScanFailure, AnalysisSnapshot, BasicScanDisposition, CurrentFileIdentity,
+    FreshnessReason, ObservationStability, TimestampReliability, fold_analysis,
+    observation_stability,
 };
 pub(crate) use analysis::{
     AnalysisMutationError, FreshnessDecision, apply_analysis_mutation, begin_analysis_generation,
     decide_freshness, validate_analysis_mutation,
+};
+pub use analysis_status::{
+    ANALYSIS_REFRESH_BATCH_ROWS, AnalysisRowStatus, ApplicableLevel, ConversionSummary,
+    HistoricalLevel, ReuseStanding, RowEligibility, SearchPrediction,
+};
+pub(crate) use analysis_status::{
+    ScanFacts, project_row_status, refresh_analysis_rows, refresh_scope,
 };
 pub use estimation::{
     EstimateBasis, EstimateConfidence, EstimationModel, HistoricalTier, ResolutionBucket,
@@ -77,9 +85,7 @@ pub use output::{
     FileSystemFacts, FileSystemId, OutputDelta, OutputRecoveryAction, OutputState,
     OutputTransaction, Replacement, recover_output,
 };
-pub(crate) use policy::{
-    ParkedResolution, evaluate_enqueue, resolve_parked, select_analysis, select_job_action,
-};
+pub(crate) use policy::{ParkedResolution, evaluate_enqueue, resolve_parked, select_job_action};
 pub use policy::{SkipReason, permitted_profiles, verdict_applies};
 pub use projection::{HistoryRow, history_rows};
 pub(crate) use projection::{StatisticsPayload, collect_stat_facts, statistics};

@@ -37,7 +37,7 @@ The complete ownership split is:
 | State | Authority | Lifetime | Contents | Reconnect behaviour |
 | --- | --- | --- | --- | --- |
 | Durable facts | Core `DurableState` | Journaled across restarts | Stable media observations, full path bindings, content records, native analyses, verdicts, runs, outputs, imported provenance | Included in `AppSnapshot` |
-| Analysis standing model | Core `AppState.analysis` | Process-local, not journaled | Current generation id, activity, public row facts, future scan/applicability facts | Shell sends one complete `AnalysisDelta::Reset` immediately after `AppSnapshot` |
+| Analysis standing model | Core `AppState.analysis` | Process-local, not journaled | Current generation id, activity, public row facts, projected row statuses | Shell sends one complete `AnalysisDelta::Reset` immediately after `AppSnapshot` |
 | Analysis execution | Engine generation registry | Current generation only | Untouched native `PathBuf`s, row allocation, cancellation source, pending work, permits, child processes | Not replayed; a process restart has no generation |
 | Analysis reconnect mirror | Shell `StreamState.analysis` | Shell process | Exact fold of core Analysis deltas | Source of the complete Reset; never independently mutated |
 | Analysis presentation | UI Analysis store | Webview lifetime | Normalized generated rows plus current activity | Snapshot clears it; the following Reset replaces it |
@@ -55,6 +55,7 @@ The reducer allocates a monotonically increasing `AnalysisGenerationId` with `be
 | Start Basic Scan | `Discovered`/`Ready` to `BasicScanning` | Acquire bounded probe permits | A missing-tool request is rejected before transition |
 | Scan batch | Upsert facts for current id after any source durable deltas | Retain/cancel supervised processes | Unknown/stale generation is rejected |
 | Scan complete | `BasicScanning` to `Ready` | Release permits and child handles | Prior-generation completion is rejected |
+| Tool, execution, or content fact | Re-project affected row statuses after the fold; publish changed rows in bounded batches | None | An ended generation is left as it ended; a `Discovered` or `Ready` generation accepts only existing row ids |
 | Cancel | Current activity to `Cancelled` | Signal generation cancellation and terminate supervised children | A later batch cannot change the cancelled/new generation |
 | Webview reconnect | No core transition | None | Shell replays durable Snapshot, then complete Analysis Reset under one lock |
 | Process restart | `AnalysisSnapshot::default()` | Registry starts empty | Durable facts survive; the directory tree is intentionally rediscovered |
@@ -71,20 +72,19 @@ Starting a new generation cancels the prior driver-local generation and immediat
 | Basic Scan | Allowed under its independent bounded permit pool | Idempotent/rejected if already active |
 | Conversion | Existing single conversion worker continues | Allowed; it never borrows Analysis state or permits |
 
-Current Analysis level and historical achievement are separate fields derived by `assess_analysis_levels`; neither is persisted as a mutable flag.
+Every `Scanned` or `SettledOutput` row carries an `AnalysisRowStatus` projected by `project_row_status` from the same execution composition and job policy a claim runs (`compose_execution`, `select_job_action`); nothing in it is persisted. `applicable` is the tier a claim would reuse, `historical` the highest tier the content is known to have reached, and `analyze` and `convert` the action a claim for each operation would take.
 
-| Current facts for the freshly selected `ContentKey` | Applicable level | Historical achievement |
+| Current facts for the freshly selected `ContentKey` | Applicable level | Historical level |
 | --- | --- | --- |
-| No stable observation | `Discovered` | None, or the mapped parked import status |
-| Stable record, no reusable native analysis/verdict | `Scanned` | At least `Scanned` |
-| Adopted/parked imported `Analyzed` | Unchanged (`Discovered` or `Scanned`) | `Analyzed` |
-| Adopted/parked imported `NotWorthwhile` | Unchanged | `Analyzed` |
-| Adopted/parked imported `Converted` without an applicable content verdict | Unchanged | `Converted` |
-| Native analysis satisfying the current reuse contract | `Analyzed` | `Analyzed` |
-| Native or adopted `NotWorthwhile` verdict | Does not establish reusable `Analyzed` | `Analyzed`; its separate floor policy may still skip a conversion |
-| Applicable Converted/Remuxed content verdict | `Converted` | `Converted` |
+| Stable record, no native search | `Scanned` with `Unanalyzed` | `Scanned` |
+| Searches exist, none under the profile and targets a claim composes now | `Scanned` with `Inapplicable` | `Analyzed` |
+| Located tools not yet verified | `Scanned` with `ToolchainUnverified` | Unchanged |
+| Adopted imported `Analyzed`, `NotWorthwhile`, or `Converted` provenance | Unchanged | `Analyzed` or `Converted` |
+| Native search satisfying the current reuse contract | `Analyzed` with its prediction | `Analyzed` |
+| Native or adopted `NotWorthwhile` verdict | Does not establish reusable `Analyzed`; `convert` is `Skip` when the request's floor is at or above the recorded one | `Analyzed` |
+| Converted or Remuxed content verdict | `Converted` with the measured summary | `Converted` |
 
-Historical achievement is the maximum of native analyses, verdicts, adopted provenance, and any still-parked path summary. Imported analysis is never inserted into `FileRecord.analyses`.
+Historical level is the maximum of native analyses, verdicts, and adopted provenance. Imported analysis is never inserted into `FileRecord.analyses`, and a row exists only for an observed file, so the parked inbox is never a row input.
 
 Native analysis reuse is exact except for the documented target relation:
 
@@ -101,7 +101,7 @@ Native analysis reuse is exact except for the documented target relation:
 | Overwrite/output settings | Do not affect a CRF-search measurement |
 | `AnalysisIntent::Refresh` | Explicitly bypasses reuse even when the applicable level is `Analyzed` |
 
-`AnalysisLevelAssessment` is the foundation contract; it and the prediction and confidence fields join streamed rows once Basic Scan facts land.
+Statuses refresh inside `apply` after a command's deltas fold. Content facts (observation, adoption, recorded analysis, finished job) refresh the rows observing that content; tool, base execution, or hardware decode changes refresh every row. Changed rows are published in batches of at most 128 rows. Historical estimates and confidence remain outside this record.
 
 ### Consequences
 

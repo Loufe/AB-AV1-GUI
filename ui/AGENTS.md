@@ -6,7 +6,7 @@ Gate (every commit green, mirrored by `.github/workflows/ui.yml`): `pnpm lint &&
 
 Knip keeps the tree free of dead exports: no barrel files, no unused exports (de-export symbols used only in-file), no speculative "future UI" surface. Deleted code is recoverable from git history or the shadcn registry.
 
-- `src/lib/bindings.ts`, `src/lib/store/fold-fixtures.json`, and `src/lib/projection/projection-fixtures.json` are GENERATED (crfty-shell `export_bindings` / crfty-core `export_fold_fixtures` / `export_projection_fixtures`). Never edit by hand; regenerate via cargo when Rust types or projection/fold semantics change.
+- `src/lib/bindings.ts`, `src/lib/store/fold-fixtures.json`, `src/lib/store/analysis-fixtures.json`, and `src/lib/projection/projection-fixtures.json` are GENERATED (crfty-shell `export_bindings` / crfty-core `export_fold_fixtures` / `export_analysis_fixtures` / `export_projection_fixtures`). Never edit by hand; regenerate via cargo when Rust types or projection/fold semantics change.
 - Never hand-author IPC or domain types: everything cross-boundary comes from `bindings.ts`.
 - `src/lib/store/fold.ts` is a pure mirror of `crfty_core::fold`, and `src/lib/projection/history-rows.ts` of `crfty_core::history_rows`; both are verified against the golden fixtures. Change semantics in Rust first, then port.
 - Zustand stores are containers only: reduce logic never lives in a store action.
