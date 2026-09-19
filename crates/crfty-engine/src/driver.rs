@@ -800,12 +800,11 @@ mod tests {
     use std::{io, path::PathBuf, sync::mpsc};
 
     use crfty_core::{
-        AnalysisDelta, AnalysisIntent, AnalysisProfile, AnalysisSnapshot, ClaimId, Command,
-        ConfigDelta, DurableDelta, Effect, EphemeralDelta, ExecutionSettings, ItemOutcome,
-        JobPhase, JobProgress, Operation, OutputTarget, OverwriteDecision, QueueAddRequest,
-        QueueCommand, QueueItemId, Reply, RunId, SessionCommand, SessionState, Settings,
-        SettingsCommand, SystemCommand, Telemetry, ToolAvailability, ToolRevisions, UnixMillis,
-        WorkerCommand, apply,
+        AnalysisDelta, AnalysisIntent, AnalysisSnapshot, ClaimId, Command, ConfigDelta,
+        DurableDelta, Effect, EphemeralDelta, ItemOutcome, JobPhase, JobProgress, Operation,
+        OutputTarget, OverwriteDecision, QueueAddRequest, QueueCommand, QueueItemId, Reply, RunId,
+        SessionCommand, SessionState, Settings, SettingsCommand, SystemCommand, Telemetry,
+        ToolAvailability, ToolRevisions, UnixMillis, WorkerCommand, apply,
     };
 
     fn add_command(id: u64, input: &str) -> Command {
@@ -941,13 +940,6 @@ mod tests {
     #[test]
     #[expect(clippy::expect_used, reason = "test assertion")]
     fn terminal_orders_progress_before_and_aggregates_after_the_durable_finish() {
-        let execution = {
-            let mut profile = AnalysisProfile::production();
-            profile.ab_av1_revision = "fixture".to_owned();
-            profile.ffmpeg_revision = "fixture".to_owned();
-            profile.encoder_revision = "fixture".to_owned();
-            ExecutionSettings::production(profile, false)
-        };
         let mut state = AppState::default();
         for command in [
             add_command(1, "video.mkv"),
@@ -969,6 +961,7 @@ mod tests {
                             ffmpeg: "fixture".to_owned(),
                             encoder: "fixture".to_owned(),
                         },
+                        hardware_decoders: std::collections::BTreeSet::new(),
                     },
                 },
             }),
@@ -980,7 +973,6 @@ mod tests {
                 run_id: RunId(2),
                 observation: None,
                 import_paths: Vec::new(),
-                execution,
             }),
         ] {
             let applied = apply(&mut state, command);

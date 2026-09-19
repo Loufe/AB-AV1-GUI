@@ -9,14 +9,14 @@ use crate::{
     AnalysisActivity, AnalysisCommand, AnalysisDelta, AnalysisFileScan, AnalysisIntent,
     AnalysisMutationError, AnalysisResult, AnalysisRow, AnalysisRowEntry, AppState,
     BasicScanDisposition, ClaimId, ClaimedJob, CompletionEvidence, ConfigDelta, ContentKey,
-    CorruptionSignature, CurrentFileIdentity, DecodeMode, DecodePreference, DurableDelta,
-    ExecutionSettings, FreshnessDecision, ImportPath, ImportedHistoryRecord, ItemOutcome,
-    JobAction, JobSpec, LocatedTools, MediaObservation, Operation, OutputDelta, OutputTarget,
-    OverwriteDecision, PathHash, PhaseSpan, QueueItem, QueueItemId, QueueItemState, ReservedJob,
-    RunId, SessionAggregates, SessionState, Settings, SkipReason, StatisticsPayload, Telemetry,
-    ToolAvailability, ToolPathSettings, ToolVerification, UnixMillis, apply_analysis_mutation,
-    begin_analysis_generation, decide_freshness, evaluate_enqueue, fold, fold_config,
-    select_job_action, statistics,
+    CorruptionSignature, CurrentFileIdentity, DurableDelta, ExecutionSettings, FreshnessDecision,
+    ImportPath, ImportedHistoryRecord, ItemOutcome, JobAction, JobSpec, LocatedTools,
+    MediaObservation, Operation, OutputDelta, OutputTarget, OverwriteDecision, PathHash, PhaseSpan,
+    QueueItem, QueueItemId, QueueItemState, ReservedJob, RunId, SessionAggregates, SessionState,
+    Settings, SkipReason, StatisticsPayload, Telemetry, ToolAvailability, ToolPathSettings,
+    ToolVerification, UnixMillis, apply_analysis_mutation, begin_analysis_generation,
+    compose_execution, decide_freshness, evaluate_enqueue, fold, fold_config, select_job_action,
+    statistics, validate_analysis_mutation,
 };
 
 /// Sanity bound for a requester-supplied UTC offset: one day in minutes.
@@ -180,7 +180,6 @@ pub enum WorkerCommand {
         /// same rule the import uses. Any that are parked resolve to
         /// adoption or retirement alongside the observation.
         import_paths: Vec<ImportPath>,
-        execution: ExecutionSettings,
     },
     ReleaseReservation {
         item_id: QueueItemId,
@@ -236,6 +235,12 @@ pub enum SystemCommand {
     ToolsProbed {
         tools: LocatedTools,
         verification: ToolVerification,
+    },
+    /// The base execution every later claim composes from. Engine start
+    /// submits it before reporting tool discovery; the production base is
+    /// the default, so only tests and contract fixtures configure another.
+    ConfigureExecution {
+        base: ExecutionSettings,
     },
     /// Operator consent to discard a corrupt journal tail whose identity is
     /// `signature`. The driver intercepts this before `apply` — degraded
@@ -409,6 +414,15 @@ pub fn apply(state: &mut AppState, command: Command) -> Applied {
                 Applied::accepted()
             }
         },
+        Command::System(SystemCommand::ConfigureExecution { base }) => {
+            if let Err(reason) = base.validate_base() {
+                return Applied::rejected(format!("invalid base execution settings: {reason}"));
+            }
+            // Process-local configuration rather than stream state, so it is
+            // the one field written outside the delta fold below.
+            state.execution = base;
+            Applied::accepted()
+        }
         Command::System(SystemCommand::AcknowledgeCorruption { .. }) => {
             Applied::rejected("corruption acknowledgement is handled by the driver")
         }
@@ -537,8 +551,7 @@ fn apply_analysis_state_command(state: &AppState, command: AnalysisCommand) -> A
             return Applied::rejected("Analysis scan command reached the state-only path");
         }
     };
-    let mut candidate = state.analysis.clone();
-    if let Err(error) = apply_analysis_mutation(&mut candidate, &delta) {
+    if let Err(error) = validate_analysis_mutation(&state.analysis, &delta) {
         return Applied::rejected(format!("Analysis mutation rejected: {error:?}"));
     }
     applied.ephemeral.push(EphemeralDelta::Analysis(delta));
@@ -719,8 +732,7 @@ fn upsert_scanned_row(
         generation,
         rows: vec![row],
     };
-    let mut candidate = state.analysis.clone();
-    if let Err(error) = apply_analysis_mutation(&mut candidate, &delta) {
+    if let Err(error) = validate_analysis_mutation(&state.analysis, &delta) {
         return Applied::rejected(format!("Analysis mutation rejected: {error:?}"));
     }
     let mut applied = basic_scan_reply(BasicScanDisposition::Complete);
@@ -1252,7 +1264,6 @@ fn apply_worker(state: &AppState, command: WorkerCommand) -> Applied {
             run_id,
             observation,
             import_paths,
-            mut execution,
         } => {
             let Some(item) = find_item(state, item_id) else {
                 return Applied::rejected("queue item does not exist");
@@ -1266,26 +1277,34 @@ fn apply_worker(state: &AppState, command: WorkerCommand) -> Applied {
             ) {
                 return Applied::rejected("worker preparation has a stale reservation");
             }
-            execution.overwrite_existing = match item.overwrite {
-                OverwriteDecision::FollowSettings => state.settings.output.overwrite_existing,
-                OverwriteDecision::Allow => true,
-                OverwriteDecision::Deny => false,
-            };
-            execution.decode_preference = if state.settings.hardware_decode {
-                DecodePreference::HardwarePreferred
-            } else {
-                execution.profile.decode_mode = DecodeMode::Software;
-                DecodePreference::SoftwareOnly
-            };
-            if let Err(reason) = execution.validate() {
-                return Applied::rejected(reason);
-            }
             let content_key = observation
                 .as_ref()
                 .map(|observed| observed.binding.content_key.clone());
             let record = content_key
                 .as_ref()
                 .and_then(|key| state.durable.records.get(key));
+            // The claim's decode mode follows the observed codec; without an
+            // observation there is no codec to pick a decoder for.
+            let execution = match compose_execution(
+                &state.execution,
+                &state.tools,
+                &state.settings,
+                item.overwrite,
+                observation
+                    .as_ref()
+                    .map(|observed| &observed.metadata.codec),
+            ) {
+                Ok(execution) => execution,
+                Err(unavailable) => {
+                    return Applied::rejected(format!(
+                        "cannot compose claim execution: {}",
+                        unavailable.summary()
+                    ));
+                }
+            };
+            if let Err(reason) = execution.validate() {
+                return Applied::rejected(reason);
+            }
             // Compute import effects before selecting the action: replay
             // validation recomputes that action after these deltas fold, so
             // the live decision must observe the same post-adoption record.

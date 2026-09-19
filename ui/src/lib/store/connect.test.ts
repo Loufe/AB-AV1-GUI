@@ -339,7 +339,10 @@ describe("applyPayload", () => {
           ffprobe: { source: "SearchPath" as const, path: "/usr/bin/ffprobe" },
         },
         verification: {
-          Verified: { revisions: { ab_av1: "rev-a", ffmpeg: "rev-f", encoder: "rev-s" } },
+          Verified: {
+            revisions: { ab_av1: "rev-a", ffmpeg: "rev-f", encoder: "rev-s" },
+            hardware_decoders: [],
+          },
         },
       },
     };

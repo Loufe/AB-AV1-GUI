@@ -66,7 +66,7 @@ fn add_one(
     }
 }
 
-fn fixed_tools(tools: MediaTools) -> ToolsConfig {
+fn fixed_tools(tools: MediaTools, hardware_decoders: &[HardwareDecoder]) -> ToolsConfig {
     ToolsConfig::Fixed(FixedTools {
         tools: crfty_core::LocatedTools {
             ffmpeg: crfty_core::LocatedTool {
@@ -83,6 +83,7 @@ fn fixed_tools(tools: MediaTools) -> ToolsConfig {
             ffmpeg: "contract".to_owned(),
             encoder: "contract".to_owned(),
         },
+        hardware_decoders: hardware_decoders.iter().copied().collect(),
     })
 }
 
@@ -290,7 +291,7 @@ fn run_coordinator_contract(
     let engine = EngineRuntime::start(EngineConfig {
         journal_path: output_dir.join("coordinator.jsonl"),
         config_path: output_dir.join("config.json"),
-        tools: fixed_tools(tools),
+        tools: fixed_tools(tools, &[]),
         execution: ExecutionSettings {
             requested_target: DEFAULT_VMAF_TARGET,
             fallback_floor: MIN_VMAF_FALLBACK_TARGET,
@@ -304,9 +305,9 @@ fn run_coordinator_contract(
                 sample_duration_ms: CONTRACT_SAMPLE_DURATION_MS,
                 thorough: false,
                 decode_mode: DecodeMode::Software,
-                ab_av1_revision: "contract".to_owned(),
-                ffmpeg_revision: "contract".to_owned(),
-                encoder_revision: "contract".to_owned(),
+                ab_av1_revision: String::new(),
+                ffmpeg_revision: String::new(),
+                encoder_revision: String::new(),
             },
         },
     })?;
@@ -519,7 +520,7 @@ fn run_ladder_contract(
     let engine = EngineRuntime::start(EngineConfig {
         journal_path: output_dir.join("ladder.jsonl"),
         config_path: output_dir.join("ladder-config.json"),
-        tools: fixed_tools(tools),
+        tools: fixed_tools(tools, &[HardwareDecoder::H264Cuvid]),
         execution: ExecutionSettings {
             requested_target: DEFAULT_VMAF_TARGET,
             fallback_floor: MIN_VMAF_FALLBACK_TARGET,
@@ -533,9 +534,9 @@ fn run_ladder_contract(
                 sample_duration_ms: CONTRACT_SAMPLE_DURATION_MS,
                 thorough: false,
                 decode_mode: DecodeMode::Software,
-                ab_av1_revision: "contract".to_owned(),
-                ffmpeg_revision: "contract".to_owned(),
-                encoder_revision: "contract".to_owned(),
+                ab_av1_revision: String::new(),
+                ffmpeg_revision: String::new(),
+                encoder_revision: String::new(),
             },
         },
     })?;

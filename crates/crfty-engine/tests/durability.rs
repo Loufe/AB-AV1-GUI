@@ -74,6 +74,7 @@ fn fixture_tools(media: MediaTools) -> ToolsConfig {
     ToolsConfig::Fixed(FixedTools {
         tools: fixture_located(media),
         revisions: fixture_revisions(),
+        hardware_decoders: std::collections::BTreeSet::new(),
     })
 }
 
@@ -86,6 +87,7 @@ fn fixture_available() -> ToolAvailability {
         }),
         verification: ToolVerification::Verified {
             revisions: fixture_revisions(),
+            hardware_decoders: std::collections::BTreeSet::new(),
         },
     }
 }
@@ -937,7 +939,6 @@ fn history_import_parks_compacts_adopts_and_reimports_as_noop() {
                 run_id: RunId(2),
                 observation: Some(Box::new(imported_media_observation())),
                 import_paths: vec![movie_key.clone()],
-                execution: execution(),
             }))
             .expect("preparation reply"),
         Reply::Claimed(Some(_))
@@ -1083,7 +1084,6 @@ fn telemetry_pressure_coalesces_and_terminal_value_wins() {
                 run_id: RunId(2),
                 observation: None,
                 import_paths: Vec::new(),
-                execution: execution(),
             }))
             .expect("preparation reply"),
         Reply::Claimed(Some(_))
@@ -1154,7 +1154,6 @@ fn terminal_publishes_final_telemetry_and_clear_before_item_finished() {
             run_id: RunId(2),
             observation: None,
             import_paths: Vec::new(),
-            execution: execution(),
         }),
     ] {
         let reply = driver.commands.submit(command).expect("setup reply");
@@ -1239,7 +1238,6 @@ fn restart_after_fsynced_terminal_folds_to_finished_snapshot() {
             run_id: RunId(2),
             observation: None,
             import_paths: Vec::new(),
-            execution: execution(),
         }),
         Command::Worker(WorkerCommand::Started {
             item_id: QueueItemId(1),
@@ -1413,7 +1411,7 @@ fn engine_startup_recovers_an_active_partial_staging_transaction() {
         .expect("create staging");
     fs::write(&transaction.staging, b"crash-left partial bytes").expect("partial staging");
 
-    let settings = journal_active_output_run(&journal_path, &input, &transaction, Some(initial));
+    journal_active_output_run(&journal_path, &input, &transaction, Some(initial));
 
     let executable = std::env::current_exe().expect("test executable");
     let engine = EngineRuntime::start(EngineConfig {
@@ -1423,7 +1421,7 @@ fn engine_startup_recovers_an_active_partial_staging_transaction() {
             ffmpeg: executable.clone(),
             ffprobe: executable,
         }),
-        execution: settings,
+        execution: ExecutionSettings::default(),
     })
     .expect("engine startup recovery");
     let DriverEvent::Snapshot(snapshot) = engine.events.recv().expect("recovered snapshot") else {
@@ -1457,7 +1455,7 @@ fn journal_active_output_run(
     input: &Path,
     transaction: &crfty_core::OutputTransaction,
     staging_created: Option<DestructiveIdentity>,
-) -> ExecutionSettings {
+) {
     let settings = execution();
     let run_id = transaction.run_id;
     let mut commands = vec![
@@ -1473,7 +1471,6 @@ fn journal_active_output_run(
             run_id,
             observation: None,
             import_paths: Vec::new(),
-            execution: settings.clone(),
         }),
         Command::Worker(WorkerCommand::Started {
             item_id: QueueItemId(1),
@@ -1507,7 +1504,6 @@ fn journal_active_output_run(
     writer
         .append_batch(&durable)
         .expect("recovery fixture batch");
-    settings
 }
 
 #[test]
@@ -1531,7 +1527,7 @@ fn engine_startup_abandons_intent_when_staging_was_never_created() {
         .expect("plan transaction");
     // Crash window: `OutputStarted` is durable but the staging file was never
     // created.
-    let settings = journal_active_output_run(&journal_path, &input, &transaction, None);
+    journal_active_output_run(&journal_path, &input, &transaction, None);
 
     let executable = std::env::current_exe().expect("test executable");
     let engine = EngineRuntime::start(EngineConfig {
@@ -1541,7 +1537,7 @@ fn engine_startup_abandons_intent_when_staging_was_never_created() {
             ffmpeg: executable.clone(),
             ffprobe: executable,
         }),
-        execution: settings,
+        execution: ExecutionSettings::default(),
     })
     .expect("engine startup recovery");
     let DriverEvent::Snapshot(snapshot) = engine.events.recv().expect("recovered snapshot") else {
@@ -1583,7 +1579,7 @@ fn engine_startup_removes_staging_left_before_staging_created_was_durable() {
         .create_staging(&transaction)
         .expect("create staging");
     fs::write(&transaction.staging, b"crash-left partial bytes").expect("partial staging");
-    let settings = journal_active_output_run(&journal_path, &input, &transaction, None);
+    journal_active_output_run(&journal_path, &input, &transaction, None);
 
     let executable = std::env::current_exe().expect("test executable");
     let engine = EngineRuntime::start(EngineConfig {
@@ -1593,7 +1589,7 @@ fn engine_startup_removes_staging_left_before_staging_created_was_durable() {
             ffmpeg: executable.clone(),
             ffprobe: executable,
         }),
-        execution: settings,
+        execution: ExecutionSettings::default(),
     })
     .expect("engine startup recovery");
     let DriverEvent::Snapshot(snapshot) = engine.events.recv().expect("recovered snapshot") else {
@@ -1624,7 +1620,7 @@ fn public_event_overflow_severs_the_stream_without_blocking_the_driver() {
             ffmpeg: executable.clone(),
             ffprobe: executable,
         }),
-        execution: execution(),
+        execution: ExecutionSettings::default(),
     };
     let mut engine = EngineRuntime::start(config.clone()).expect("engine start");
     // A consumer that stopped: hold the receiver alive without draining it.
@@ -1784,7 +1780,6 @@ fn settled_success_journal(
             run_id: RunId(2),
             observation: None,
             import_paths: Vec::new(),
-            execution: settings.clone(),
         }),
         Command::Worker(WorkerCommand::Started {
             item_id: QueueItemId(1),
@@ -1862,7 +1857,7 @@ fn recover_settled_success(directory: &TestDirectory, fixture: &SettledSuccessFi
             ffmpeg: executable.clone(),
             ffprobe: executable,
         }),
-        execution: execution(),
+        execution: ExecutionSettings::default(),
     })
     .expect("engine startup recovery");
     let DriverEvent::Snapshot(snapshot) = engine.events.recv().expect("recovered snapshot") else {
@@ -2463,7 +2458,7 @@ fn exhausted_runtime_ids_do_not_prevent_engine_startup_or_queue_edits() {
             ffmpeg: executable.clone(),
             ffprobe: executable,
         }),
-        execution: execution(),
+        execution: ExecutionSettings::default(),
     })
     .expect("startup remains available after identity exhaustion");
     let DriverEvent::Snapshot(snapshot) = engine.events.recv().expect("startup snapshot") else {

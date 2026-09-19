@@ -73,7 +73,7 @@ The requested target, floor, and step come from execution settings, whose produc
 
 ## Hardware decode
 
-The `hardware_decode` setting (on by default) resolves at claim into a decode preference. Software-only pins the profile's decode mode to software. Hardware-preferred asks the engine to pick the first codec-appropriate decoder that the discovered FFmpeg actually offers, falling back to software when none is available; availability is probed once per decoder and cached for the session.
+The `hardware_decode` setting (on by default) resolves at claim into a decode preference. Software-only pins the profile's decode mode to software. Hardware-preferred picks the first codec-appropriate decoder among those the capability probe found in the verified FFmpeg, falling back to software when none is available. The reducer composes the claim's execution from the configured base, the verified tool facts, Settings, and the item's overwrite decision in one place (`compose_execution`); the engine never composes execution settings of its own.
 
 The decode mode that a search actually ran with is part of the analysis identity and is decoder-granular, per ADR-007 (pin the actual decode mode in the analysis identity). An analysis recorded under one hardware decoder is not returned for a job that would run under another, or under software.
 

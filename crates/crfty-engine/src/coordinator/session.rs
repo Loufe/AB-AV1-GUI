@@ -11,7 +11,7 @@ use crfty_core::{
 use crate::{
     ab_av1::AbAv1Runtime,
     driver::CommandSender,
-    media::{DecodeResolver, MediaError, MediaInspector},
+    media::{MediaError, MediaInspector},
     process_supervisor::ProcessCancellation,
     tools::{
         MediaTools,
@@ -120,58 +120,53 @@ pub(super) fn run_session(
     let tools = MediaTools::from(&located);
     let tools = &tools;
     // The probe is the gate before the first claim (ADR-023): binaries that
-    // cannot encode or score never reserve an item, and the revisions they
-    // report are the provenance every analysis in this session records.
-    let revisions = match &config.tools {
-        ToolsConfig::Fixed(fixed) => fixed.revisions.clone(),
-        ToolsConfig::Discover(_) => {
-            let probe_cancellation = ProcessCancellation::new();
-            let outcome = {
-                let _registration = cancellation.register_probe(&probe_cancellation);
-                probe_capabilities(tools, &probe_cancellation)
-            };
-            let verification = match outcome {
-                ProbeOutcome::Verified(revisions) => ToolVerification::Verified { revisions },
-                ProbeOutcome::Failed(failure) => ToolVerification::Failed(failure),
-                ProbeOutcome::Cancelled => {
-                    return require_accepted(
-                        "finish cancelled worker session",
-                        commands.submit(Command::Worker(WorkerCommand::Finished)),
-                    );
-                }
-            };
-            let revisions = match &verification {
-                ToolVerification::Verified { revisions } => Some(revisions.clone()),
-                ToolVerification::Failed(failure) => {
-                    tracing::warn!("media tools failed verification: {}", failure.summary());
-                    None
-                }
-                ToolVerification::Pending => None,
-            };
-            require_accepted(
-                "report tool verification",
-                commands.submit(Command::System(SystemCommand::ToolsProbed {
-                    tools: located.clone(),
-                    verification,
-                })),
-            )?;
-            let Some(revisions) = revisions else {
+    // cannot encode or score never reserve an item. The reducer composes the
+    // reported revisions and decoders into every claim this session prepares.
+    if let ToolsConfig::Discover(_) = &config.tools {
+        let probe_cancellation = ProcessCancellation::new();
+        let outcome = {
+            let _registration = cancellation.register_probe(&probe_cancellation);
+            probe_capabilities(tools, &probe_cancellation)
+        };
+        let verification = match outcome {
+            ProbeOutcome::Verified {
+                revisions,
+                hardware_decoders,
+            } => ToolVerification::Verified {
+                revisions,
+                hardware_decoders,
+            },
+            ProbeOutcome::Failed(failure) => ToolVerification::Failed(failure),
+            ProbeOutcome::Cancelled => {
                 return require_accepted(
-                    "finish unverified worker session",
+                    "finish cancelled worker session",
                     commands.submit(Command::Worker(WorkerCommand::Finished)),
                 );
-            };
-            revisions
+            }
+        };
+        let verified = match &verification {
+            ToolVerification::Verified { .. } => true,
+            ToolVerification::Failed(failure) => {
+                tracing::warn!("media tools failed verification: {}", failure.summary());
+                false
+            }
+            ToolVerification::Pending => false,
+        };
+        require_accepted(
+            "report tool verification",
+            commands.submit(Command::System(SystemCommand::ToolsProbed {
+                tools: located.clone(),
+                verification,
+            })),
+        )?;
+        if !verified {
+            return require_accepted(
+                "finish unverified worker session",
+                commands.submit(Command::Worker(WorkerCommand::Finished)),
+            );
         }
-    };
+    }
     let inspector = MediaInspector::new(tools.ffprobe.clone());
-    let mut decoder_resolver = DecodeResolver::new(tools.ffmpeg.clone());
-    // Claim-time revision immutability: the composed revisions freeze into
-    // each JobSpec at PrepareReserved and survive any later tool change.
-    let mut base_execution = config.execution.clone();
-    base_execution.profile.ab_av1_revision = revisions.ab_av1.clone();
-    base_execution.profile.ffmpeg_revision = revisions.ffmpeg.clone();
-    base_execution.profile.encoder_revision = revisions.encoder.clone();
     loop {
         let reservation = commands.submit(Command::Worker(WorkerCommand::ReserveNext));
         let reserved = match reservation {
@@ -208,17 +203,6 @@ pub(super) fn run_session(
             .as_ref()
             .map(|observed| observed.metadata.duration_ms)
             .filter(|duration| *duration > 0);
-        let mut execution = base_execution.clone();
-        execution.profile.decode_mode =
-            observation
-                .as_ref()
-                .map_or(crfty_core::DecodeMode::Software, |observed| {
-                    decoder_resolver.resolve(
-                        execution.decode_preference,
-                        &observed.metadata.codec,
-                        run.probes(),
-                    )
-                });
         if run.probes().is_cancelled() {
             require_accepted(
                 "abandon force-stopped reservation",
@@ -241,7 +225,6 @@ pub(super) fn run_session(
             run_id,
             observation,
             import_paths,
-            execution,
         }));
         let job = prepared_job(prepared, |reason| {
             require_accepted(

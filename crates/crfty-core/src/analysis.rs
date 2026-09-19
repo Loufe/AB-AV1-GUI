@@ -356,6 +356,17 @@ pub(crate) fn apply_analysis_mutation(
     state: &mut AnalysisSnapshot,
     delta: &AnalysisDelta,
 ) -> Result<(), AnalysisMutationError> {
+    validate_analysis_mutation(state, delta)?;
+    fold_analysis(state, delta);
+    Ok(())
+}
+
+/// The gate alone, so a handler can check a delta against standing state
+/// without cloning the snapshot; `apply` folds the accepted delta later.
+pub(crate) fn validate_analysis_mutation(
+    state: &AnalysisSnapshot,
+    delta: &AnalysisDelta,
+) -> Result<(), AnalysisMutationError> {
     match delta {
         AnalysisDelta::Reset { snapshot } => {
             let Some(next) = snapshot.current.as_ref() else {
@@ -402,7 +413,6 @@ pub(crate) fn apply_analysis_mutation(
             }
         }
     }
-    fold_analysis(state, delta);
     Ok(())
 }
 

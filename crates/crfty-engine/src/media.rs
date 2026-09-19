@@ -7,7 +7,6 @@
 //! unsupervised probe path.
 
 use std::{
-    collections::BTreeMap,
     ffi::OsStr,
     fmt,
     fs::Metadata,
@@ -22,10 +21,9 @@ use blake2::{
     digest::{Update, VariableOutput},
 };
 use crfty_core::{
-    ArtifactIdentity, AudioCodec, AudioStreamMeta, ContentKey, DecodeMode, DecodePreference,
-    DestructiveIdentity, FileSystemId, FileTimeNs, HardwareDecoder, MediaContainer,
-    MediaObservation, ObservationStability, PathBinding, PathHash, TimestampReliability,
-    VideoCodec, VideoMeta, observation_stability,
+    ArtifactIdentity, AudioCodec, AudioStreamMeta, ContentKey, DestructiveIdentity, FileSystemId,
+    FileTimeNs, HardwareDecoder, MediaContainer, MediaObservation, ObservationStability,
+    PathBinding, PathHash, TimestampReliability, VideoCodec, VideoMeta, observation_stability,
 };
 use serde::Deserialize;
 
@@ -172,52 +170,6 @@ impl From<io::Error> for MediaError {
 pub struct MediaInspector {
     ffprobe: PathBuf,
     probe_timeout: Duration,
-}
-
-pub(crate) struct DecodeResolver {
-    ffmpeg: PathBuf,
-    availability: BTreeMap<HardwareDecoder, bool>,
-}
-
-impl DecodeResolver {
-    pub(crate) fn new(ffmpeg: PathBuf) -> Self {
-        Self {
-            ffmpeg,
-            availability: BTreeMap::new(),
-        }
-    }
-
-    /// Resolves the decode mode for `codec`, querying ffmpeg once per
-    /// decoder and caching the verdict. A cancelled query is not a verdict:
-    /// it falls back to software without caching so the next session asks
-    /// again.
-    #[must_use]
-    pub(crate) fn resolve(
-        &mut self,
-        preference: DecodePreference,
-        codec: &VideoCodec,
-        cancellation: &ProcessCancellation,
-    ) -> DecodeMode {
-        if preference == DecodePreference::SoftwareOnly {
-            return DecodeMode::Software;
-        }
-        for decoder in decoder_candidates(codec) {
-            let available = if let Some(available) = self.availability.get(decoder) {
-                *available
-            } else {
-                let Some(available) = decoder_is_available(&self.ffmpeg, *decoder, cancellation)
-                else {
-                    return DecodeMode::Software;
-                };
-                self.availability.insert(*decoder, available);
-                available
-            };
-            if available {
-                return DecodeMode::Hardware(*decoder);
-            }
-        }
-        DecodeMode::Software
-    }
 }
 
 impl MediaInspector {
@@ -455,57 +407,6 @@ pub const fn decoder_name(decoder: HardwareDecoder) -> &'static str {
         HardwareDecoder::Vp9Qsv => "vp9_qsv",
         HardwareDecoder::Av1Cuvid => "av1_cuvid",
         HardwareDecoder::Av1Qsv => "av1_qsv",
-    }
-}
-
-fn decoder_candidates(codec: &VideoCodec) -> &'static [HardwareDecoder] {
-    match codec {
-        VideoCodec::H264 => &[HardwareDecoder::H264Cuvid, HardwareDecoder::H264Qsv],
-        VideoCodec::Hevc => &[HardwareDecoder::HevcCuvid, HardwareDecoder::HevcQsv],
-        VideoCodec::Vp9 => &[HardwareDecoder::Vp9Cuvid, HardwareDecoder::Vp9Qsv],
-        VideoCodec::Av1 => &[HardwareDecoder::Av1Cuvid, HardwareDecoder::Av1Qsv],
-        VideoCodec::Other(_) => &[],
-    }
-}
-
-/// `None` means the query was cancelled before ffmpeg answered; every other
-/// failure is logged and treated as "not available".
-fn decoder_is_available(
-    ffmpeg: &Path,
-    decoder: HardwareDecoder,
-    cancellation: &ProcessCancellation,
-) -> Option<bool> {
-    let mut command = Command::new(ffmpeg);
-    command
-        .args(["-v", "error", "-hide_banner", "-h"])
-        .arg(format!("decoder={}", decoder_name(decoder)));
-    let report = process_supervisor::run(
-        &mut command,
-        cancellation,
-        ProcessLimits::new(Some(TOOL_QUERY_TIMEOUT), 0, DIAGNOSTIC_STDERR_BYTES),
-    );
-    match report.terminal {
-        ProcessTerminal::Success(_) => Some(true),
-        ProcessTerminal::ToolFailed(_) => Some(false),
-        ProcessTerminal::Cancelled => None,
-        ProcessTerminal::TimedOut => {
-            tracing::warn!(
-                "ffmpeg decoder query for {} did not finish within {} seconds",
-                decoder_name(decoder),
-                TOOL_QUERY_TIMEOUT.as_secs()
-            );
-            Some(false)
-        }
-        ProcessTerminal::SpawnFailed(failure)
-        | ProcessTerminal::SupervisionFailed(failure)
-        | ProcessTerminal::CleanupFailed(failure) => {
-            tracing::warn!(
-                "ffmpeg decoder query for {} failed: {}",
-                decoder_name(decoder),
-                failure.message
-            );
-            Some(false)
-        }
     }
 }
 

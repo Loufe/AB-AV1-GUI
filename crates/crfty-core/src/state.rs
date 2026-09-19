@@ -7,10 +7,10 @@ use serde::{Deserialize, Serialize};
 
 use crate::{
     AnalysisAttempt, AnalysisIntent, AnalysisResult, AnalysisSnapshot, ContentKey, DecodeMode,
-    DurationMs, FailureFacts, FileRecord, ImportPath, ImportedHistoryRecord, ImportedProvenance,
-    JobPhase, JobSpec, MediaObservation, Operation, OutputDelta, OutputTarget, OverwriteDecision,
-    PathBinding, PathHash, ReservedJob, Settings, SkipReason, ToolRevisions, UnixMillis, Verdict,
-    VerdictKind, phase_duration,
+    DurationMs, ExecutionSettings, FailureFacts, FileRecord, HardwareDecoder, ImportPath,
+    ImportedHistoryRecord, ImportedProvenance, JobPhase, JobSpec, MediaObservation, Operation,
+    OutputDelta, OutputTarget, OverwriteDecision, PathBinding, PathHash, ReservedJob, Settings,
+    SkipReason, ToolRevisions, UnixMillis, Verdict, VerdictKind, phase_duration,
 };
 
 macro_rules! numeric_id {
@@ -352,6 +352,9 @@ pub struct AppState {
     pub aggregates: SessionAggregates,
     pub telemetry: BTreeMap<RunId, Telemetry>,
     pub tools: ToolAvailability,
+    /// Base execution every claim composes from (`compose_execution`).
+    /// Process-local configuration: never journaled and never streamed.
+    pub execution: ExecutionSettings,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, specta::Type)]
@@ -496,11 +499,15 @@ impl ProbeFailure {
 
 /// Outcome of the capability probe on the located tools. `Pending` until a
 /// session start runs the probe; every session re-probes because the files
-/// behind a location can change between sessions.
+/// behind a location can change between sessions. `hardware_decoders` are
+/// the decoders the probed FFmpeg offers; claim composition picks from them.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, specta::Type)]
 pub enum ToolVerification {
     Pending,
-    Verified { revisions: ToolRevisions },
+    Verified {
+        revisions: ToolRevisions,
+        hardware_decoders: BTreeSet<HardwareDecoder>,
+    },
     Failed(ProbeFailure),
 }
 

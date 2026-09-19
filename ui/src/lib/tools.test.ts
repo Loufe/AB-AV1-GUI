@@ -99,7 +99,12 @@ describe("tool availability presentation", () => {
     });
     expect(
       toolsStatus(
-        located({ Verified: { revisions: { ab_av1: "a", ffmpeg: "8.1.2", encoder: "8.1.2" } } }),
+        located({
+          Verified: {
+            revisions: { ab_av1: "a", ffmpeg: "8.1.2", encoder: "8.1.2" },
+            hardware_decoders: [],
+          },
+        }),
       ),
     ).toMatchObject({ tone: "success", headline: "Media tools verified: FFmpeg 8.1.2." });
     expect(
