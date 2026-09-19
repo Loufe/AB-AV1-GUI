@@ -15,6 +15,7 @@ The delivery target is the runnable alpha defined in [the alpha delivery scope](
 - Pinned ab-av1 adapter; user-supplied FFmpeg verified by a capability probe: ADR-003, ADR-023
 - IPC bindings generated from Rust via tauri-specta: ADR-006
 - History and Statistics derive as pure projections, with imported history projected separately: ADR-015
+- One immutable observation per terminal run with file standing derived; History owns eligibility and estimation owns weighting: ADR-024
 - Analysis identity pins decode mode; queue adds filter at enqueue: ADR-007, ADR-013
 - Analysis work is scoped to ephemeral generations and its paths stay engine-native: ADR-016, ADR-017
 - Path scrubbing happens inside the log sink: ADR-014
@@ -35,7 +36,7 @@ The delivery target is the runnable alpha defined in [the alpha delivery scope](
 
 ## Open questions
 
-- Durable state model and storage engine for first-class History
+- Storage engine and durable shape for first-class History observations
 - The bounded History request/response shape and its invalidation contract; serving History from Rust is the selected direction
 - Estimation as a subsystem separate from History: sufficiency, promise level, evidence seam, evaluation (`docs/design/estimation.md`)
 - Whether the ab-av1 maintainer accepts the operation boundary ADR-021 selects (alexheretic/ab-av1#371)

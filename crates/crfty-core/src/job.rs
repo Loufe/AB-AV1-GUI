@@ -288,18 +288,18 @@ pub struct AnalysisResult {
 }
 
 impl AnalysisResult {
-    pub fn validate_for(&self, execution: &ExecutionSettings) -> Result<(), &'static str> {
-        if self.requested_target != execution.requested_target
-            || self.fallback_floor != execution.fallback_floor
-            || self.fallback_step != execution.fallback_step
-            || !crate::permitted_profiles(execution).contains(&self.profile)
-        {
-            return Err("analysis provenance does not match the claimed job");
-        }
+    /// Consistency that holds for an analysis on its own, independent of
+    /// any job it is claimed for: the achieved target sits inside its own
+    /// fallback range, every failed attempt targeted above it, and the
+    /// measurement is in range.
+    pub fn validate_consistent(&self) -> Result<(), &'static str> {
         if self.successful_target > self.requested_target
             || self.successful_target < self.fallback_floor
         {
             return Err("successful VMAF target is outside the requested fallback range");
+        }
+        if self.fallback_step == 0 {
+            return Err("VMAF fallback step must be positive");
         }
         if self
             .failed_attempts
@@ -309,6 +309,17 @@ impl AnalysisResult {
             return Err("failed analysis attempts are inconsistent with the successful target");
         }
         self.measurement.validate()
+    }
+
+    pub fn validate_for(&self, execution: &ExecutionSettings) -> Result<(), &'static str> {
+        if self.requested_target != execution.requested_target
+            || self.fallback_floor != execution.fallback_floor
+            || self.fallback_step != execution.fallback_step
+            || !crate::permitted_profiles(execution).contains(&self.profile)
+        {
+            return Err("analysis provenance does not match the claimed job");
+        }
+        self.validate_consistent()
     }
 
     pub fn validate_reusable_for(&self, execution: &ExecutionSettings) -> Result<(), &'static str> {
@@ -322,17 +333,7 @@ impl AnalysisResult {
         if !satisfies_requested_target && !repeats_same_fallback_request {
             return Err("analysis target and fallback provenance do not satisfy the claimed job");
         }
-        if self.successful_target > self.requested_target
-            || self.successful_target < self.fallback_floor
-            || self.fallback_step == 0
-            || self
-                .failed_attempts
-                .iter()
-                .any(|attempt| attempt.target <= self.successful_target)
-        {
-            return Err("reused analysis has invalid fallback provenance");
-        }
-        self.measurement.validate()
+        self.validate_consistent()
     }
 }
 

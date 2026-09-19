@@ -57,4 +57,6 @@ One-to-one adoption into otherwise undecided content preserves Statistics exactl
 
 History, Statistics, and estimation remain pure projections. Statistics stays ephemeral, and the Rust oracle remains synchronized with TypeScript through fixtures.
 
+ADR-024 fixes one immutable observation per terminal run as the unit of History. This separate imported path is replaced once translated observations share that model in durable storage; until then it describes the shipped parked path.
+
 The path-bearing privacy surfaces are `DurableState.parked` keys, `DurableState.adopted_imports`, `ImportedProvenance.import_path`, `HistoryRowKey::Parked`, and journal deltas carrying import paths. See ADR-004.

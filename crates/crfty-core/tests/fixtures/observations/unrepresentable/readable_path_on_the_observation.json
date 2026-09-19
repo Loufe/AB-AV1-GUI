@@ -1,0 +1,10 @@
+{
+  "run_id": 43,
+  "operation": "Convert",
+  "source": null,
+  "input": "/videos/movie.mkv",
+  "revisions": { "ab_av1": "ab-av1 0.10.0", "ffmpeg": "ffmpeg 7.1", "encoder": "SVT-AV1 3.0.0" },
+  "outcome": "Stopped",
+  "started_at": 1758153600000,
+  "finished_at": 1758153700000
+}

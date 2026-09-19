@@ -27,8 +27,8 @@ use crate::{
     ToolAvailability, ToolCapability, ToolLocationFailure, ToolPathSettings, ToolRevisions,
     ToolSource, ToolVerification, ToolsCommand, UnixMillis, VideoCodec, VideoMeta, VmafScore,
     VmafTarget, WorkerCommand, apply, compaction_due, compaction_quiescent, corruption_signature,
-    encode_record, encode_snapshot, permitted_profiles, recover_output, replay, resolve_parked,
-    select_analysis, select_job_action,
+    encode_record, encode_snapshot, observations, permitted_profiles, recover_output, replay,
+    resolve_parked, select_analysis, select_job_action,
 };
 
 fn revisions() -> ToolRevisions {
@@ -2218,6 +2218,11 @@ fn assert_live_and_replay_agree(
         assert_eq!(applied.reply, Reply::Accepted);
         assert_eq!(applied.durable.len(), 1);
         assert_eq!(restored.state, state.durable);
+        assert_eq!(
+            observations(&restored.state),
+            observations(&state.durable),
+            "the observation view agrees across live and replayed state"
+        );
     } else {
         assert!(matches!(applied.reply, Reply::Rejected { .. }));
         assert!(applied.durable.is_empty());

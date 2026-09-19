@@ -13,6 +13,7 @@ mod history;
 mod job;
 mod journal;
 mod media;
+mod observation;
 mod output;
 mod policy;
 mod projection;
@@ -63,6 +64,12 @@ pub use media::{
     MediaContainer, MediaObservation, ParkedStatus, PathBinding, PathHash, Verdict, VerdictKind,
     VideoCodec, VideoMeta,
 };
+pub(crate) use observation::phase_duration;
+pub use observation::{
+    DecisiveFact, DecisiveKind, EncodeEvidence, EncodeMeasurement, MeasuredSizes, Observation,
+    ObservedOutcome, OutputKind, PredictionPair, RateSample, ReductionFact, RemuxEvidence,
+    RemuxMeasurement, SearchEvidence, SourceAssessment, SourceFacts, observations, standing,
+};
 pub use output::{
     ArtifactIdentity, ConflictKind, ContentKey, DestructiveIdentity, DestructiveObservation,
     FileSystemFacts, FileSystemId, OutputDelta, OutputRecoveryAction, OutputState,
@@ -89,6 +96,8 @@ pub use state::{
 };
 pub use time::{DurationMs, FileTimeNs, UnixMillis};
 
+#[cfg(test)]
+mod test_support;
 #[cfg(test)]
 mod tests;
 pub use constants::{
