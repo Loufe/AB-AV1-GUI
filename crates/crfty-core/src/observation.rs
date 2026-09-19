@@ -736,22 +736,32 @@ mod tests {
             );
         }
         let outcomes: Vec<&ObservedOutcome> = found.iter().map(|found| &found.outcome).collect();
-        assert!(matches!(outcomes[0], ObservedOutcome::Analyzed { .. }));
-        assert!(matches!(outcomes[1], ObservedOutcome::Converted { .. }));
-        assert!(matches!(outcomes[2], ObservedOutcome::Remuxed { .. }));
+        let [
+            analyzed,
+            converted,
+            remuxed,
+            not_worthwhile,
+            failed,
+            stopped,
+            incomplete,
+        ] = outcomes.as_slice()
+        else {
+            panic!("seven observations");
+        };
+        assert!(matches!(analyzed, ObservedOutcome::Analyzed { .. }));
+        assert!(matches!(converted, ObservedOutcome::Converted { .. }));
+        assert!(matches!(remuxed, ObservedOutcome::Remuxed { .. }));
         assert!(matches!(
-            outcomes[3],
+            not_worthwhile,
             ObservedOutcome::NotWorthwhile {
                 requested: VmafTarget(95),
                 floor: VmafTarget(90),
                 ..
             }
         ));
-        assert!(
-            matches!(outcomes[4], ObservedOutcome::Failed { facts } if facts.message == "boom")
-        );
-        assert_eq!(outcomes[5], &ObservedOutcome::Stopped);
-        assert_eq!(outcomes[6], &ObservedOutcome::Incomplete);
+        assert!(matches!(failed, ObservedOutcome::Failed { facts } if facts.message == "boom"));
+        assert_eq!(*stopped, &ObservedOutcome::Stopped);
+        assert_eq!(*incomplete, &ObservedOutcome::Incomplete);
     }
 
     #[test]
@@ -1183,7 +1193,7 @@ mod tests {
                 .filter(|outcome| !matches!(outcome, ItemOutcome::Skipped { .. }))
                 .count();
             prop_assert_eq!(found.len(), expected);
-            prop_assert!(found.windows(2).all(|pair| pair[0].run_id < pair[1].run_id));
+            prop_assert!(found.is_sorted_by(|earlier, later| earlier.run_id < later.run_id));
             for observation in &found {
                 prop_assert_eq!(observation.validate(), Ok(()));
                 prop_assert_eq!(
