@@ -399,10 +399,7 @@ fn config(directory: &Path, ffmpeg: PathBuf, ffprobe: PathBuf) -> EngineConfig {
         ffmpeg: "probe-test".to_owned(),
         encoder: "probe-test".to_owned(),
     };
-    let mut profile = AnalysisProfile::production();
-    profile.ab_av1_revision = revisions.ab_av1.clone();
-    profile.ffmpeg_revision = revisions.ffmpeg.clone();
-    profile.encoder_revision = revisions.encoder.clone();
+    let profile = AnalysisProfile::production();
     EngineConfig {
         journal_path: directory.join("journal.jsonl"),
         config_path: directory.join("config.json"),
@@ -418,6 +415,7 @@ fn config(directory: &Path, ffmpeg: PathBuf, ffprobe: PathBuf) -> EngineConfig {
                 },
             },
             revisions,
+            hardware_decoders: std::collections::BTreeSet::new(),
         }),
         execution: ExecutionSettings::production(profile, false),
     }

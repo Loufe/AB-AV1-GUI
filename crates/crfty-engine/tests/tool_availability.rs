@@ -104,6 +104,7 @@ fn fixture_available() -> ToolAvailability {
         ),
         verification: ToolVerification::Verified {
             revisions: fixture_revisions(),
+            hardware_decoders: std::collections::BTreeSet::new(),
         },
     }
 }
@@ -142,7 +143,7 @@ fn engine_config(directory: &TestDirectory, tools: ToolsConfig) -> EngineConfig 
         journal_path: directory.path().join("state.jsonl"),
         config_path: directory.path().join("config.json"),
         tools,
-        execution: execution(),
+        execution: ExecutionSettings::default(),
     }
 }
 
@@ -296,7 +297,6 @@ fn startup_recovery_without_ffprobe_defers_output_settlement() {
             run_id: RunId(2),
             observation: None,
             import_paths: Vec::new(),
-            execution: settings.clone(),
         }),
         Command::Worker(WorkerCommand::Started {
             item_id: QueueItemId(1),
@@ -374,6 +374,7 @@ fn startup_recovery_without_ffprobe_defers_output_settlement() {
                 ToolSource::SearchPath,
             ),
             revisions: fixture_revisions(),
+            hardware_decoders: std::collections::BTreeSet::new(),
         }),
     ))
     .expect("recovery with tools");
@@ -664,12 +665,21 @@ fn session_start_probes_located_tools_and_records_their_revisions() {
     );
     let verified = wait_for_tools(&engine.events, is_verified, "verified tools");
     let ToolAvailability::Located {
-        verification: ToolVerification::Verified { revisions },
+        verification:
+            ToolVerification::Verified {
+                revisions,
+                hardware_decoders,
+            },
         ..
     } = verified
     else {
         unreachable!();
     };
+    // The fixture FFmpeg offers exactly one hardware decoder.
+    assert_eq!(
+        hardware_decoders,
+        std::collections::BTreeSet::from([crfty_core::HardwareDecoder::H264Cuvid])
+    );
     assert_eq!(revisions.ab_av1, AB_AV1_REVISION);
     assert_eq!(revisions.ffmpeg, "fixture-8.1.2");
     assert_eq!(revisions.encoder, "fixture-8.1.2");

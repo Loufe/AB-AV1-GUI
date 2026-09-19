@@ -52,10 +52,19 @@ fn located_tools() -> LocatedTools {
     }
 }
 
+/// Verified tools with no hardware decoder, so a composed claim decodes in
+/// software and matches [`execution`] exactly.
 fn located() -> ToolAvailability {
+    located_with_decoders(&[])
+}
+
+fn located_with_decoders(decoders: &[crate::HardwareDecoder]) -> ToolAvailability {
     ToolAvailability::Located {
         tools: located_tools(),
-        verification: ToolVerification::Pending,
+        verification: ToolVerification::Verified {
+            revisions: revisions(),
+            hardware_decoders: decoders.iter().copied().collect(),
+        },
     }
 }
 
@@ -172,6 +181,10 @@ fn base_profile_is_valid_only_until_revisions_are_required() {
     assert_eq!(base.validate_base(), Ok(()));
     assert_eq!(base.validate(), Err("tool revisions must not be empty"));
     assert_eq!(execution().validate(), Ok(()));
+    assert_eq!(
+        execution().validate_base(),
+        Err("base profile must not carry tool revisions")
+    );
 }
 
 fn analysis() -> AnalysisResult {
@@ -253,23 +266,108 @@ fn settings_change_is_typed_config_state_with_a_write_effect() {
 
 #[test]
 fn settings_control_job_overwrite_and_hardware_decode_policy() {
+    // The probed decoder is only used when the setting allows hardware
+    // decode; the same tools compose a software claim otherwise.
+    let cases = [
+        (false, DecodePreference::SoftwareOnly, DecodeMode::Software),
+        (
+            true,
+            DecodePreference::HardwarePreferred,
+            DecodeMode::Hardware(crate::HardwareDecoder::H264Qsv),
+        ),
+    ];
+    for (hardware_decode, preference, decode_mode) in cases {
+        let mut state = AppState::default();
+        state.settings.output.overwrite_existing = true;
+        state.settings.hardware_decode = hardware_decode;
+        let _added = apply(&mut state, add_command(QueueItemId(1), "video.mkv"));
+        let _started = start_session_with_tools(
+            &mut state,
+            located_with_decoders(&[crate::HardwareDecoder::H264Qsv]),
+        );
+        let prepared =
+            reserve_and_prepare_observed(&mut state, Some(media_observation("decode-content")));
+        let Reply::Claimed(Some(job)) = prepared.reply else {
+            panic!("expected claimed job");
+        };
+        assert!(job.spec.execution.overwrite_existing);
+        assert_eq!(job.spec.execution.decode_preference, preference);
+        assert_eq!(job.spec.execution.profile.decode_mode, decode_mode);
+        assert_eq!(job.spec.execution.profile.ab_av1_revision, "test-ab-av1");
+    }
+}
+
+#[test]
+fn preparation_requires_verified_tools() {
     let mut state = AppState::default();
-    state.settings.output.overwrite_existing = true;
-    state.settings.hardware_decode = false;
+    let _added = apply(&mut state, add_command(QueueItemId(1), "video.mkv"));
+    let _started = start_session_with_tools(
+        &mut state,
+        ToolAvailability::Located {
+            tools: located_tools(),
+            verification: ToolVerification::Pending,
+        },
+    );
+    let prepared = reserve_and_prepare(&mut state);
+    assert!(matches!(
+        &prepared.reply,
+        Reply::Rejected { reason } if reason.contains("not been verified")
+    ));
+    assert!(prepared.durable.is_empty());
+}
+
+#[test]
+fn base_execution_is_configured_before_claims_compose_from_it() {
+    let mut state = AppState::default();
+    let invalid = ExecutionSettings {
+        fallback_step: 0,
+        ..ExecutionSettings::default()
+    };
+    let rejected = apply(
+        &mut state,
+        Command::System(SystemCommand::ConfigureExecution { base: invalid }),
+    );
+    assert!(matches!(rejected.reply, Reply::Rejected { .. }));
+
+    // A base already naming tool facts would let two sources disagree.
+    let mut claim_time = ExecutionSettings::default();
+    claim_time.profile.ffmpeg_revision = "stale".to_owned();
+    let rejected = apply(
+        &mut state,
+        Command::System(SystemCommand::ConfigureExecution { base: claim_time }),
+    );
+    assert!(matches!(rejected.reply, Reply::Rejected { .. }));
+    assert_eq!(state.execution, ExecutionSettings::default());
+
+    let mut configured = ExecutionSettings {
+        requested_target: VmafTarget(90),
+        fallback_floor: VmafTarget(80),
+        ..ExecutionSettings::default()
+    };
+    configured.profile.preset = 4;
+    let accepted = apply(
+        &mut state,
+        Command::System(SystemCommand::ConfigureExecution {
+            base: configured.clone(),
+        }),
+    );
+    assert_eq!(accepted.reply, Reply::Accepted);
+    assert_eq!(state.execution, configured);
+
     let _added = apply(&mut state, add_command(QueueItemId(1), "video.mkv"));
     let _started = start_session(&mut state);
-    let mut requested = execution();
-    requested.profile.decode_mode = DecodeMode::Hardware(crate::HardwareDecoder::H264Qsv);
-    let prepared = reserve_and_prepare(&mut state, requested);
+    let prepared = reserve_and_prepare(&mut state);
     let Reply::Claimed(Some(job)) = prepared.reply else {
         panic!("expected claimed job");
     };
-    assert!(job.spec.execution.overwrite_existing);
-    assert_eq!(
-        job.spec.execution.decode_preference,
-        DecodePreference::SoftwareOnly
-    );
-    assert_eq!(job.spec.execution.profile.decode_mode, DecodeMode::Software);
+    assert_eq!(job.spec.execution.requested_target, VmafTarget(90));
+    assert_eq!(job.spec.execution.fallback_floor, VmafTarget(80));
+    assert_eq!(job.spec.execution.profile.preset, 4);
+    let mut expected = execution();
+    expected.requested_target = VmafTarget(90);
+    expected.fallback_floor = VmafTarget(80);
+    expected.profile.preset = 4;
+    assert_eq!(job.spec.execution, expected);
 }
 
 #[test]
@@ -329,11 +427,16 @@ fn session_start_requires_located_tools_and_discovery_is_idempotent() {
 /// Reports located tools, then starts the session. Nearly every session
 /// test needs both because `AppState` defaults to tools-missing (fail-closed).
 fn start_session(state: &mut AppState) -> crate::Applied {
+    start_session_with_tools(state, located())
+}
+
+fn start_session_with_tools(
+    state: &mut AppState,
+    availability: ToolAvailability,
+) -> crate::Applied {
     let discovered = apply(
         state,
-        Command::System(SystemCommand::ToolsDiscovered {
-            availability: located(),
-        }),
+        Command::System(SystemCommand::ToolsDiscovered { availability }),
     );
     assert_eq!(discovered.reply, Reply::Accepted);
     apply(state, Command::Session(SessionCommand::Start))
@@ -345,7 +448,10 @@ fn a_tool_probe_result_applies_only_to_the_tools_it_was_taken_on() {
     let _located = apply(
         &mut state,
         Command::System(SystemCommand::ToolsDiscovered {
-            availability: located(),
+            availability: ToolAvailability::Located {
+                tools: located_tools(),
+                verification: ToolVerification::Pending,
+            },
         }),
     );
 
@@ -355,18 +461,14 @@ fn a_tool_probe_result_applies_only_to_the_tools_it_was_taken_on() {
             tools: located_tools(),
             verification: ToolVerification::Verified {
                 revisions: revisions(),
+                hardware_decoders: std::collections::BTreeSet::new(),
             },
         }),
     );
     assert_eq!(verified.reply, Reply::Accepted);
     assert_eq!(
         verified.ephemeral,
-        vec![EphemeralDelta::ToolsChanged(ToolAvailability::Located {
-            tools: located_tools(),
-            verification: ToolVerification::Verified {
-                revisions: revisions(),
-            },
-        })]
+        vec![EphemeralDelta::ToolsChanged(located())]
     );
 
     // Discovery replaced the tools; a late probe of the old pair is dropped.
@@ -1186,7 +1288,7 @@ fn reducer_enforces_session_claim_and_terminal_ordering() {
     assert_eq!(add.reply, Reply::Accepted);
     let start = start_session(&mut state);
     assert_eq!(start.effects, vec![Effect::StartWorker]);
-    let claim = reserve_and_prepare(&mut state, execution());
+    let claim = reserve_and_prepare(&mut state);
     assert!(matches!(claim.reply, Reply::Claimed(Some(_))));
     let stale = apply(
         &mut state,
@@ -1264,7 +1366,6 @@ fn durable_analysis_is_selected_for_the_same_content_and_profile() {
             run_id: RunId(2),
             observation: Some(Box::new(moved_observation)),
             import_paths: Vec::new(),
-            execution: execution(),
         }),
     );
     assert!(matches!(prepared.reply, Reply::Claimed(Some(_))));
@@ -1305,7 +1406,6 @@ fn durable_analysis_is_selected_for_the_same_content_and_profile() {
             run_id: RunId(4),
             observation: Some(Box::new(media_observation("same-content"))),
             import_paths: Vec::new(),
-            execution: execution(),
         }),
     );
     let Reply::Claimed(Some(job)) = prepared.reply else {
@@ -1326,7 +1426,7 @@ fn reorder_fixture() -> AppState {
     }
     let start = start_session(&mut state);
     assert_eq!(start.reply, Reply::Accepted);
-    let first = reserve_and_prepare(&mut state, execution());
+    let first = reserve_and_prepare(&mut state);
     assert!(matches!(first.reply, Reply::Claimed(Some(_))));
     let finished = apply(
         &mut state,
@@ -1341,7 +1441,7 @@ fn reorder_fixture() -> AppState {
         }),
     );
     assert_eq!(finished.reply, Reply::Accepted);
-    let second = reserve_and_prepare(&mut state, execution());
+    let second = reserve_and_prepare(&mut state);
     assert!(matches!(second.reply, Reply::Claimed(Some(_))));
     assert_queue_shape(&state, &[1, 2, 3, 4, 5]);
     state
@@ -1464,7 +1564,7 @@ fn reorder_of_the_only_pending_item_above_active_is_a_no_op() {
     }
     let start = start_session(&mut state);
     assert_eq!(start.reply, Reply::Accepted);
-    let first = reserve_and_prepare(&mut state, execution());
+    let first = reserve_and_prepare(&mut state);
     assert!(matches!(first.reply, Reply::Claimed(Some(_))));
     let finished = apply(
         &mut state,
@@ -1479,7 +1579,7 @@ fn reorder_of_the_only_pending_item_above_active_is_a_no_op() {
         }),
     );
     assert_eq!(finished.reply, Reply::Accepted);
-    let second = reserve_and_prepare(&mut state, execution());
+    let second = reserve_and_prepare(&mut state);
     assert!(matches!(second.reply, Reply::Claimed(Some(_))));
 
     let applied = apply(&mut state, reorder_pending_command(&[3]));
@@ -1595,7 +1695,6 @@ fn media_record_and_analysis_checkpoint_replay_as_one_state() {
             run_id: RunId(2),
             observation: Some(Box::new(media_observation("durable-content"))),
             import_paths: Vec::new(),
-            execution: execution(),
         }),
     );
     let _recorded = apply_and_journal(
@@ -1761,7 +1860,6 @@ fn remuxed_requires_a_remux_action_and_committed_output() {
             run_id: RunId(2),
             observation: Some(Box::new(observation)),
             import_paths: Vec::new(),
-            execution: execution(),
         }),
     );
     assert!(matches!(prepared.reply, Reply::Claimed(Some(_))));
@@ -1834,7 +1932,7 @@ fn successful_outcomes_require_a_started_run_and_matching_evidence() {
     let mut state = AppState::default();
     let _added = apply(&mut state, add_command(QueueItemId(1), "video.mkv"));
     let _started = start_session(&mut state);
-    let _claimed = reserve_and_prepare(&mut state, execution());
+    let _claimed = reserve_and_prepare(&mut state);
     let _analysis = apply(
         &mut state,
         Command::Worker(WorkerCommand::RecordAnalysis {
@@ -2096,7 +2194,6 @@ fn failed_terminal_invariants_check_conflict_state_and_diagnostic_bound() {
             run_id: RunId(2),
             observation: Some(Box::new(media_observation("failed-content"))),
             import_paths: Vec::new(),
-            execution: execution(),
         }),
     );
     assert!(matches!(prepared.reply, Reply::Claimed(Some(_))));
@@ -2136,29 +2233,6 @@ fn failed_terminal_invariants_check_conflict_state_and_diagnostic_bound() {
         FailureFacts::new(FailureKind::Internal, "fixture").with_diagnostic(tail),
     );
     assert!(validate_terminal(run, None, &unbounded).is_err());
-}
-
-#[test]
-fn preparation_rejects_invalid_execution_settings() {
-    let mut state = AppState::default();
-    let _added = apply(&mut state, add_command(QueueItemId(1), "video.mkv"));
-    let _started = start_session(&mut state);
-    let mut invalid = execution();
-    invalid.fallback_step = 0;
-    let reserved = apply(&mut state, Command::Worker(WorkerCommand::ReserveNext));
-    assert!(matches!(reserved.reply, Reply::Reserved(Some(_))));
-    let prepared = apply(
-        &mut state,
-        Command::Worker(WorkerCommand::PrepareReserved {
-            item_id: QueueItemId(1),
-            claim_id: ClaimId(1),
-            run_id: RunId(2),
-            observation: None,
-            import_paths: Vec::new(),
-            execution: invalid,
-        }),
-    );
-    assert!(matches!(prepared.reply, Reply::Rejected { .. }));
 }
 
 #[test]
@@ -2341,7 +2415,6 @@ fn analysis_requires_the_same_active_claim_in_live_state_and_replay()
             run_id: RunId(2),
             observation: None,
             import_paths: Vec::new(),
-            execution: execution(),
         }),
     );
     assert!(matches!(prepared.reply, Reply::Claimed(Some(_))));
@@ -2390,7 +2463,7 @@ fn finished_run_rejects_analysis_in_live_state_and_replay() -> Result<(), serde_
     let mut state = AppState::default();
     apply(&mut state, add_command(QueueItemId(1), "video.mkv"));
     start_session(&mut state);
-    let claimed = reserve_and_prepare(&mut state, execution());
+    let claimed = reserve_and_prepare(&mut state);
     assert!(matches!(claimed.reply, Reply::Claimed(Some(_))));
     assert_started_at_live_and_replay_boundaries(
         &mut state,
@@ -2450,7 +2523,6 @@ fn started_requires_the_same_prepared_claim_in_live_state_and_replay()
             run_id: RunId(2),
             observation: None,
             import_paths: Vec::new(),
-            execution: execution(),
         }),
     );
     assert!(matches!(prepared.reply, Reply::Claimed(Some(_))));
@@ -3259,7 +3331,7 @@ fn active_state() -> AppState {
     let mut state = AppState::default();
     let _added = apply(&mut state, add_command(QueueItemId(1), "video.mkv"));
     let _started = start_session(&mut state);
-    let _claimed = reserve_and_prepare(&mut state, execution());
+    let _claimed = reserve_and_prepare(&mut state);
     let _running = apply(
         &mut state,
         Command::Worker(WorkerCommand::Started {
@@ -3281,7 +3353,14 @@ fn active_state() -> AppState {
     state
 }
 
-fn reserve_and_prepare(state: &mut AppState, execution: ExecutionSettings) -> crate::Applied {
+fn reserve_and_prepare(state: &mut AppState) -> crate::Applied {
+    reserve_and_prepare_observed(state, None)
+}
+
+fn reserve_and_prepare_observed(
+    state: &mut AppState,
+    observation: Option<MediaObservation>,
+) -> crate::Applied {
     let reserved = apply(state, Command::Worker(WorkerCommand::ReserveNext));
     let Reply::Reserved(Some(job)) = reserved.reply else {
         return reserved;
@@ -3292,9 +3371,8 @@ fn reserve_and_prepare(state: &mut AppState, execution: ExecutionSettings) -> cr
             item_id: job.item_id,
             claim_id: job.claim_id,
             run_id: job.run_id,
-            observation: None,
+            observation: observation.map(Box::new),
             import_paths: Vec::new(),
-            execution,
         }),
     )
 }
@@ -4283,7 +4361,7 @@ fn prepare_resolves_overwrite_from_the_item_not_the_settings() {
         );
         assert_eq!(added.reply, Reply::Accepted);
         let _started = start_session(&mut state);
-        let claimed = reserve_and_prepare(&mut state, execution());
+        let claimed = reserve_and_prepare(&mut state);
         let Reply::Claimed(Some(job)) = claimed.reply else {
             panic!("expected a claim for {decision:?}");
         };
@@ -4691,7 +4769,6 @@ fn retry_flows_through_the_next_reservation_and_replays() {
             run_id: RunId(2),
             observation: None,
             import_paths: Vec::new(),
-            execution: execution(),
         }),
     );
     assert!(matches!(prepared.reply, Reply::Claimed(Some(_))));
@@ -5176,7 +5253,6 @@ fn refresh_intent_forces_a_new_search_over_a_qualifying_cached_analysis() {
             run_id: RunId(2),
             observation: Some(Box::new(media_observation("refresh-content"))),
             import_paths: Vec::new(),
-            execution: execution(),
         }),
     );
     let _recorded = apply_and_journal(
@@ -5231,7 +5307,6 @@ fn refresh_intent_forces_a_new_search_over_a_qualifying_cached_analysis() {
             run_id: RunId(4),
             observation: Some(Box::new(media_observation("refresh-content"))),
             import_paths: Vec::new(),
-            execution: execution(),
         }),
     );
     let Reply::Claimed(Some(job)) = prepared.reply else {
@@ -5278,7 +5353,10 @@ fn software_fallback_analysis_is_permitted_under_a_hardware_spec() {
         &mut sequence,
         add_command(QueueItemId(1), "video.mkv"),
     );
-    let _started = start_session(&mut state);
+    let _started = start_session_with_tools(
+        &mut state,
+        located_with_decoders(&[crate::HardwareDecoder::H264Cuvid]),
+    );
     let _reserved = apply_and_journal(
         &mut state,
         &mut bytes,
@@ -5295,7 +5373,6 @@ fn software_fallback_analysis_is_permitted_under_a_hardware_spec() {
             run_id: RunId(2),
             observation: Some(Box::new(media_observation("ladder-content"))),
             import_paths: Vec::new(),
-            execution: hardware.clone(),
         }),
     );
     let Reply::Claimed(Some(job)) = prepared.reply else {
@@ -5352,7 +5429,7 @@ fn software_fallback_analysis_is_permitted_under_a_hardware_spec() {
         }),
     );
     let _added = apply(&mut state, add_command(QueueItemId(4), "again.mkv"));
-    let _claimed = reserve_and_prepare(&mut state, software);
+    let _claimed = reserve_and_prepare(&mut state);
     let mut hardware_result = analysis();
     hardware_result.profile.decode_mode = DecodeMode::Hardware(crate::HardwareDecoder::H264Cuvid);
     let rejected = apply(
@@ -5378,7 +5455,7 @@ fn worker_rejections_pair_the_reply_with_a_command_rejected_delta() {
     let mut state = AppState::default();
     let _added = apply(&mut state, add_command(QueueItemId(1), "video.mkv"));
     let _started = start_session(&mut state);
-    let _claimed = reserve_and_prepare(&mut state, execution());
+    let _claimed = reserve_and_prepare(&mut state);
     let record = |run_id| {
         Command::Worker(WorkerCommand::RecordAnalysis {
             item_id: QueueItemId(1),
@@ -5467,7 +5544,6 @@ fn restage_moves_the_staging_pin_and_is_refused_after_abandonment() {
             run_id: RunId(2),
             observation: None,
             import_paths: Vec::new(),
-            execution: execution(),
         }),
         Command::Worker(WorkerCommand::Started {
             item_id: QueueItemId(1),
@@ -6063,7 +6139,6 @@ fn prepare_resolves_parked_records_after_the_observation() {
             run_id: RunId(2),
             observation: Some(Box::new(observation.clone())),
             import_paths: vec![weaker_match.clone(), stale.clone(), matching.clone()],
-            execution: execution(),
         }),
     );
     assert!(matches!(prepared.reply, Reply::Claimed(Some(_))));
@@ -6157,7 +6232,6 @@ fn adoption_never_overwrites_a_native_verdict() {
             run_id: RunId(2),
             observation: Some(Box::new(observation.clone())),
             import_paths: vec![key.clone()],
-            execution: execution(),
         }),
     );
     assert!(matches!(prepared.reply, Reply::Claimed(Some(_))));
@@ -6335,7 +6409,7 @@ fn new_reservation_cannot_reuse_a_prepared_run_identity() {
     let _started = start_session(&mut state);
     // Prepare then finish the first item so RunId(2) keeps a conversion run
     // that outlives its reservation.
-    let _prepared = reserve_and_prepare(&mut state, execution());
+    let _prepared = reserve_and_prepare(&mut state);
     let finished = apply(
         &mut state,
         Command::Worker(WorkerCommand::Terminal {
@@ -6393,7 +6467,7 @@ fn not_worthwhile_terminal_validates_attempt_consistency() {
     let mut state = AppState::default();
     let _added = apply(&mut state, add_command(QueueItemId(1), "video.mkv"));
     let _started = start_session(&mut state);
-    let _prepared = reserve_and_prepare(&mut state, execution());
+    let _prepared = reserve_and_prepare(&mut state);
     let run = state
         .durable
         .conversion_runs
@@ -6440,7 +6514,7 @@ fn output_exists_skip_terminal_requires_producing_run_without_output() {
     let mut state = AppState::default();
     let _added = apply(&mut state, add_command(QueueItemId(1), "video.mkv"));
     let _started = start_session(&mut state);
-    let _prepared = reserve_and_prepare(&mut state, execution());
+    let _prepared = reserve_and_prepare(&mut state);
     let run = state
         .durable
         .conversion_runs

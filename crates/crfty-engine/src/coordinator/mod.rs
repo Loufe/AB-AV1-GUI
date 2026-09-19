@@ -22,9 +22,9 @@ use std::{
 
 use crfty_core::{
     AnalysisGenerationId, AppSnapshot, Command, CorruptionSignature, ExecutionSettings,
-    HistoryCommand, LocatedTools, ProjectionCommand, QueueCommand, Reply, SessionCommand,
-    SettingsCommand, SystemCommand, ToolAvailability, ToolRevisions, ToolVerification,
-    ToolsCommand, VideoExtension,
+    HardwareDecoder, HistoryCommand, LocatedTools, ProjectionCommand, QueueCommand, Reply,
+    SessionCommand, SettingsCommand, SystemCommand, ToolAvailability, ToolRevisions,
+    ToolVerification, ToolsCommand, VideoExtension,
 };
 
 use crate::{
@@ -52,9 +52,10 @@ pub struct EngineConfig {
     pub journal_path: PathBuf,
     pub config_path: PathBuf,
     pub tools: ToolsConfig,
-    /// Base execution settings. The profile carries no tool revisions — the
-    /// session worker composes the discovered revisions in before each claim,
-    /// so only [`ExecutionSettings::validate_base`] applies here.
+    /// Base execution settings, handed to the reducer at start
+    /// (`SystemCommand::ConfigureExecution`). The profile carries no tool
+    /// facts — the reducer composes the verified revisions and decoders in
+    /// at each claim — so only [`ExecutionSettings::validate_base`] applies.
     pub execution: ExecutionSettings,
 }
 
@@ -65,8 +66,8 @@ pub enum ToolsConfig {
     /// session start (ADR-023).
     Discover(DiscoveryEnvironment),
     /// Injected, already-verified tools. Tests and the contract fixture pin
-    /// binaries and revisions without touching the process environment, and
-    /// no probe runs.
+    /// binaries, revisions, and decoder availability without touching the
+    /// process environment, and no probe runs.
     Fixed(FixedTools),
 }
 
@@ -74,6 +75,7 @@ pub enum ToolsConfig {
 pub struct FixedTools {
     pub tools: LocatedTools,
     pub revisions: ToolRevisions,
+    pub hardware_decoders: BTreeSet<HardwareDecoder>,
 }
 
 #[derive(Debug)]
@@ -145,6 +147,19 @@ impl EngineRuntime {
                 )));
             }
         };
+        let configured = driver
+            .commands
+            .submit(Command::System(SystemCommand::ConfigureExecution {
+                base: config.execution.clone(),
+            }))
+            .map_err(|error| {
+                EngineStartError::Failed(format!("failed to configure execution: {error}"))
+            })?;
+        if !matches!(configured, Reply::Accepted) {
+            return Err(EngineStartError::Failed(format!(
+                "execution configuration was not accepted: {configured:?}"
+            )));
+        }
         let availability = match &config.tools {
             ToolsConfig::Discover(environment) => {
                 discovery::discover(environment, &initial.settings.tools)
@@ -153,6 +168,7 @@ impl EngineRuntime {
                 tools: fixed.tools.clone(),
                 verification: ToolVerification::Verified {
                     revisions: fixed.revisions.clone(),
+                    hardware_decoders: fixed.hardware_decoders.clone(),
                 },
             },
         };

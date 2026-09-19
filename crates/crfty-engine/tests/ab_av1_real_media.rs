@@ -351,6 +351,7 @@ fn real_engine_config(directory: &Path, tools: &MediaTools) -> EngineConfig {
                     ffmpeg: "real-contract".to_owned(),
                     encoder: "real-contract".to_owned(),
                 },
+                hardware_decoders: std::collections::BTreeSet::new(),
             },
         ),
         execution: ExecutionSettings {
@@ -366,9 +367,9 @@ fn real_engine_config(directory: &Path, tools: &MediaTools) -> EngineConfig {
                 sample_duration_ms: REAL_CONTRACT_SAMPLE_DURATION_MS,
                 thorough: false,
                 decode_mode: DecodeMode::Software,
-                ab_av1_revision: "real-contract".to_owned(),
-                ffmpeg_revision: "real-contract".to_owned(),
-                encoder_revision: "real-contract".to_owned(),
+                ab_av1_revision: String::new(),
+                ffmpeg_revision: String::new(),
+                encoder_revision: String::new(),
             },
         },
     }

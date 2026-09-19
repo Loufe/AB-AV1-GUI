@@ -151,7 +151,7 @@ fn configured_tools_are_probed_and_execute_from_a_spaces_and_unicode_directory()
         "verified tools",
     );
     let ToolAvailability::Located {
-        verification: ToolVerification::Verified { revisions },
+        verification: ToolVerification::Verified { revisions, .. },
         ..
     } = verified
     else {
@@ -229,9 +229,9 @@ fn execution() -> ExecutionSettings {
             sample_duration_ms: 1_000,
             thorough: false,
             decode_mode: DecodeMode::Software,
-            ab_av1_revision: "native-contract".to_owned(),
-            ffmpeg_revision: "native-contract".to_owned(),
-            encoder_revision: "native-contract".to_owned(),
+            ab_av1_revision: String::new(),
+            ffmpeg_revision: String::new(),
+            encoder_revision: String::new(),
         },
     }
 }

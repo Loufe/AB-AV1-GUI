@@ -38,7 +38,9 @@ function tools(): ToolAvailability {
         ffmpeg: { source: "SearchPath", path: "/usr/bin/ffmpeg" },
         ffprobe: { source: "SearchPath", path: "/usr/bin/ffprobe" },
       },
-      verification: { Verified: { revisions: { ab_av1: "1", ffmpeg: "2", encoder: "3" } } },
+      verification: {
+        Verified: { revisions: { ab_av1: "1", ffmpeg: "2", encoder: "3" }, hardware_decoders: [] },
+      },
     },
   };
 }

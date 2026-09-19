@@ -4,16 +4,18 @@
 //! can neither stall a session start nor outlive a shutdown. The ffprobe
 //! version comes from its JSON document and stands in for both the FFmpeg
 //! and encoder revisions: any FFmpeg change conservatively invalidates
-//! cached analyses.
+//! cached analyses. The hardware decoders FFmpeg offers are queried last;
+//! a decoder that is absent is a fact, not a failure.
 
-use std::{process::Command, time::Duration};
+use std::{collections::BTreeSet, process::Command, time::Duration};
 
-use crfty_core::{ProbeFailure, ToolCapability, ToolRevisions};
+use crfty_core::{HardwareDecoder, ProbeFailure, ToolCapability, ToolRevisions};
 use serde::Deserialize;
 
 use super::MediaTools;
 use crate::{
     ab_av1::AB_AV1_REVISION,
+    media::decoder_name,
     process_supervisor::{
         self, BoundedOutput, ProcessCancellation, ProcessLimits, ProcessTerminal,
     },
@@ -32,7 +34,10 @@ const SYNTHETIC_SOURCE: &str = "testsrc2=size=128x128:rate=1:duration=1";
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum ProbeOutcome {
-    Verified(ToolRevisions),
+    Verified {
+        revisions: ToolRevisions,
+        hardware_decoders: BTreeSet<HardwareDecoder>,
+    },
     Failed(ProbeFailure),
     Cancelled,
 }
@@ -40,6 +45,11 @@ pub(crate) enum ProbeOutcome {
 enum StepResult {
     Passed(Vec<u8>),
     Failed(ProbeFailure),
+    Cancelled,
+}
+
+enum DecoderQuery {
+    Available(bool),
     Cancelled,
 }
 
@@ -71,11 +81,66 @@ pub(crate) fn probe_capabilities(
             StepResult::Cancelled => return ProbeOutcome::Cancelled,
         }
     }
-    ProbeOutcome::Verified(ToolRevisions {
-        ab_av1: AB_AV1_REVISION.to_owned(),
-        ffmpeg: version.clone(),
-        encoder: version,
-    })
+    let mut hardware_decoders = BTreeSet::new();
+    for decoder in HardwareDecoder::ALL {
+        match query_decoder(tools, decoder, cancellation) {
+            DecoderQuery::Available(true) => {
+                hardware_decoders.insert(decoder);
+            }
+            DecoderQuery::Available(false) => {}
+            DecoderQuery::Cancelled => return ProbeOutcome::Cancelled,
+        }
+    }
+    ProbeOutcome::Verified {
+        revisions: ToolRevisions {
+            ab_av1: AB_AV1_REVISION.to_owned(),
+            ffmpeg: version.clone(),
+            encoder: version,
+        },
+        hardware_decoders,
+    }
+}
+
+/// `ffmpeg -h decoder=NAME` exits non-zero for a decoder this build lacks.
+/// A query that times out or cannot be supervised is logged and counted as
+/// absent: a decoder the probe cannot confirm is one no claim should rely on.
+fn query_decoder(
+    tools: &MediaTools,
+    decoder: HardwareDecoder,
+    cancellation: &ProcessCancellation,
+) -> DecoderQuery {
+    let mut command = Command::new(&tools.ffmpeg);
+    command
+        .args(["-v", "error", "-hide_banner", "-h"])
+        .arg(format!("decoder={}", decoder_name(decoder)));
+    let report = process_supervisor::run(
+        &mut command,
+        cancellation,
+        ProcessLimits::new(Some(STEP_TIMEOUT), 0, STDERR_TAIL_BYTES),
+    );
+    match report.terminal {
+        ProcessTerminal::Success(_) => DecoderQuery::Available(true),
+        ProcessTerminal::ToolFailed(_) => DecoderQuery::Available(false),
+        ProcessTerminal::Cancelled => DecoderQuery::Cancelled,
+        ProcessTerminal::TimedOut => {
+            tracing::warn!(
+                "ffmpeg decoder query for {} did not finish within {} seconds",
+                decoder_name(decoder),
+                STEP_TIMEOUT.as_secs()
+            );
+            DecoderQuery::Available(false)
+        }
+        ProcessTerminal::SpawnFailed(failure)
+        | ProcessTerminal::SupervisionFailed(failure)
+        | ProcessTerminal::CleanupFailed(failure) => {
+            tracing::warn!(
+                "ffmpeg decoder query for {} failed: {}",
+                decoder_name(decoder),
+                failure.message
+            );
+            DecoderQuery::Available(false)
+        }
+    }
 }
 
 fn version_command(tools: &MediaTools) -> Command {

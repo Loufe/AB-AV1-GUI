@@ -45,7 +45,10 @@ function verifiedTools(): ToolAvailability {
         ffprobe: { source: "SearchPath", path: "/usr/bin/ffprobe" },
       },
       verification: {
-        Verified: { revisions: { ab_av1: "0.11.1", ffmpeg: "8.1.2", encoder: "8.1.2" } },
+        Verified: {
+          revisions: { ab_av1: "0.11.1", ffmpeg: "8.1.2", encoder: "8.1.2" },
+          hardware_decoders: [],
+        },
       },
     },
   };

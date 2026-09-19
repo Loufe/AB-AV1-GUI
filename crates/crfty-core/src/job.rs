@@ -46,6 +46,20 @@ pub enum HardwareDecoder {
     Av1Qsv,
 }
 
+impl HardwareDecoder {
+    /// Every decoder the capability probe asks FFmpeg about.
+    pub const ALL: [Self; 8] = [
+        Self::H264Cuvid,
+        Self::H264Qsv,
+        Self::HevcCuvid,
+        Self::HevcQsv,
+        Self::Vp9Cuvid,
+        Self::Vp9Qsv,
+        Self::Av1Cuvid,
+        Self::Av1Qsv,
+    ];
+}
+
 #[derive(
     Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize, specta::Type,
 )]
@@ -154,8 +168,8 @@ pub struct ToolRevisions {
 }
 
 impl AnalysisProfile {
-    /// Production base profile. Tool revisions start empty: the engine
-    /// composes the discovered revisions in when it prepares a claim, so a
+    /// Production base profile. Tool revisions start empty: the reducer
+    /// composes the verified revisions in when it prepares a claim, so a
     /// base profile satisfies [`Self::validate_base`] but not
     /// [`Self::validate`].
     #[must_use]
@@ -174,8 +188,23 @@ impl AnalysisProfile {
     }
 
     /// Structural checks that a base profile must satisfy before tool
-    /// revisions are composed in at claim time.
+    /// revisions are composed in at claim time. A base carries no claim-time
+    /// facts: revisions come from the probe and the decode mode from the
+    /// probed decoders, so a base that already names them is a caller bug.
     pub fn validate_base(&self) -> Result<(), &'static str> {
+        if !self.ab_av1_revision.is_empty()
+            || !self.ffmpeg_revision.is_empty()
+            || !self.encoder_revision.is_empty()
+        {
+            return Err("base profile must not carry tool revisions");
+        }
+        if self.decode_mode != DecodeMode::Software {
+            return Err("base profile must not carry a hardware decode mode");
+        }
+        self.validate_structure()
+    }
+
+    fn validate_structure(&self) -> Result<(), &'static str> {
         if self.preset > MAX_ENCODING_PRESET {
             return Err("encoding preset is outside the supported range");
         }
@@ -192,7 +221,7 @@ impl AnalysisProfile {
     }
 
     pub fn validate(&self) -> Result<(), &'static str> {
-        self.validate_base()?;
+        self.validate_structure()?;
         if self.ab_av1_revision.is_empty()
             || self.ffmpeg_revision.is_empty()
             || self.encoder_revision.is_empty()
@@ -213,6 +242,14 @@ pub struct ExecutionSettings {
     pub profile: AnalysisProfile,
 }
 
+/// The production base: what a claim composes from when nothing else was
+/// configured (`SystemCommand::ConfigureExecution`).
+impl Default for ExecutionSettings {
+    fn default() -> Self {
+        Self::production(AnalysisProfile::production(), false)
+    }
+}
+
 impl ExecutionSettings {
     #[must_use]
     pub fn production(profile: AnalysisProfile, overwrite_existing: bool) -> Self {
@@ -226,9 +263,20 @@ impl ExecutionSettings {
         }
     }
 
-    /// Validates everything except the profile's tool revisions, which the
-    /// engine composes in at claim time.
+    /// Validates a base: the targets, plus a profile that carries no
+    /// claim-time tool facts (`AnalysisProfile::validate_base`).
     pub fn validate_base(&self) -> Result<(), &'static str> {
+        self.validate_targets()?;
+        self.profile.validate_base()
+    }
+
+    /// Validates a composed claim execution.
+    pub fn validate(&self) -> Result<(), &'static str> {
+        self.validate_targets()?;
+        self.profile.validate()
+    }
+
+    fn validate_targets(&self) -> Result<(), &'static str> {
         if u16::from(self.requested_target.0) > MAX_VMAF_SCORE
             || u16::from(self.fallback_floor.0) > MAX_VMAF_SCORE
         {
@@ -240,12 +288,7 @@ impl ExecutionSettings {
         if self.fallback_step == 0 {
             return Err("VMAF fallback step must be positive");
         }
-        self.profile.validate_base()
-    }
-
-    pub fn validate(&self) -> Result<(), &'static str> {
-        self.validate_base()?;
-        self.profile.validate()
+        Ok(())
     }
 }
 

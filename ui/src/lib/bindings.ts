@@ -1648,10 +1648,12 @@ export type ToolSource = "Environment" | "Settings" | "SearchPath";
 /**
  *  Outcome of the capability probe on the located tools. `Pending` until a
  *  session start runs the probe; every session re-probes because the files
- *  behind a location can change between sessions.
+ *  behind a location can change between sessions. `hardware_decoders` are
+ *  the decoders the probed FFmpeg offers; claim composition picks from them.
  */
 export type ToolVerification = "Pending" | ({ Verified: {
 	revisions: ToolRevisions,
+	hardware_decoders: HardwareDecoder[],
 } }) & { Failed?: never } | ({ Failed: ProbeFailure }) & { Verified?: never };
 
 /**
