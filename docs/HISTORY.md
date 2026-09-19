@@ -22,6 +22,41 @@ Estimation is the one sanctioned consumer in the other direction: completed phas
 
 One seam does run from historical records into current state, and it is deliberately narrow. An imported record adopts onto a content record only when a fresh observation confirms the file at its recorded path. Confirmation requires either matching size and modification time or the replace-mode case where the file at that path is already the AV1 output. Adoption is the one-time route for V2 history and is governed by ADR-015; a record that no longer describes the file retires and decides nothing.
 
+## One immutable observation per terminal run
+
+The unit of History is the observation, fixed by ADR-024 and implemented as `crfty_core::Observation`. One observation describes one run that reached a terminal outcome. Its identity is the run identifier, which is never reused. It names at most one source by content key, and once recorded it does not change: a retry, a changed source, or a later success on the same file is a new observation. Today the observation is derived from the run, record, and output ledgers on request; the same type becomes the stored unit once History has its own storage.
+
+Each outcome carries only the evidence it can honestly hold. Everything below is typed, and a shape outside this table does not deserialize.
+
+| Outcome | Always present | Present when known |
+| --- | --- | --- |
+| Analyzed | Search evidence: the analysis with its predictions | Search duration, source assessment |
+| Converted | Search evidence and encode evidence; a live encode carries both sizes and its decode mode | Encode duration, recovered sizes, output content key, assessments |
+| Remuxed | Remux evidence; a live remux carries both sizes | Recovered sizes, output content key, assessment |
+| Not worthwhile | Requested target, floor, and at least one fallback attempt | Each attempt's last measurement |
+| Failed | Failure kind, message, and bounded diagnostic | |
+| Stopped, Incomplete | Nothing beyond the run facts | |
+
+Every observation also carries its operation, the toolchain revisions of its execution profile, and, when the source was identified, the source's content key and media facts. Start and finish instants are optional, and an unknown instant stays unknown rather than being filled in from another clock.
+
+Three different things are called attempts, and the contract keeps them apart. Quality-target fallback attempts belong to one run's search: the analysis lists the targets that failed, and a not-worthwhile outcome lists every attempt. The hardware-to-software decode retry belongs to the encode: the live measurement records the decode mode the encode actually ran with, which the search profile may not match. A queue retry mints a new run and therefore a new observation; lineage is derived from the content key and run order and never stored.
+
+A file's standing is the latest decisive observation for its content, where converted, remuxed, and not-worthwhile outcomes decide and the others do not. Standing is computed on request and never written back. Aggregates that count files dedupe decisive observations by content key, because one file may honestly hold several conversions after its source changed.
+
+### Eligibility is decided once
+
+Consumers never read run fields directly. Each obtains facts through a typed accessor on the observation that yields a value only when the observation qualifies for that purpose, and estimation decides weighting over the observations History admits. Failed, stopped, and incomplete observations are browsable evidence and yield nothing from any accessor.
+
+| Accessor | Yields when |
+| --- | --- |
+| Decisive fact | Converted, remuxed, or not worthwhile with an identified source; no assessment required |
+| Reduction fact | Converted or remuxed with both sizes measured and the producing phase assessed as matched |
+| Analyze rate sample | Analyzed or converted with a positive search duration, a positive source duration, and the search assessed as matched |
+| Convert rate sample | Converted with a positive encode duration, a positive source duration, and the encode assessed as matched |
+| Prediction pair | Converted with measured sizes and encode duration, and both search and encode assessed as matched |
+
+Source assessment uses the classes of the [source-continuity contract](design/source-continuity.md). The shipped engine does not yet produce one, so every recorded observation is unassessed, and unassessed evidence does not qualify for aggregates or prediction pairs. Statistics and estimation still read the older per-content projections until they move onto these accessors.
+
 ## Interrupted runs and preparation failures
 
 Stopped means a user requested Force Stop and cleanup allowed that outcome to be recorded. Incomplete means a prepared run had no recorded terminal when startup recovery examined it. This can follow a crash, a persistence failure, or ordinary shutdown during active work. The recovery timestamp records when the outcome was decided, not when processing ended; recovery adds no measured phase durations.
@@ -30,11 +65,11 @@ Output evidence takes precedence: a successfully settled output reports recovere
 
 A reservation has no prepared run. Startup returns it to its original queue position without creating an outcome. A known preparation rejection instead records a failed queue item with its reason. That failure remains visible until explicit queue removal or retry, but it has no independent History observation or run-based Statistics entry. A durable identity high-water mark prevents ID reuse; it does not retain the failure as a separate observation.
 
-## Predictions and measurements are separate observations
+## Predictions and measurements are separate facts
 
-A quality search produces predictions. `SearchMeasurement` carries `predicted_size`, `predicted_percent_basis_points`, and `predicted_duration_ms` next to the CRF and VMAF score it settled on.
+A quality search produces predictions. `SearchMeasurement` carries `predicted_size`, `predicted_percent_basis_points`, and `predicted_duration_ms` next to the CRF and VMAF score it settled on, and the observation holds it as search evidence.
 
-A finished encode produces measurements. `CompletionEvidence::LiveEncode` carries input and output sizes verified against the settled output transaction.
+A finished encode produces measurements. `CompletionEvidence::LiveEncode` carries input and output sizes verified against the settled output transaction, and the observation holds them as encode evidence.
 
 Both persist, and neither replaces the other. A prediction is never overwritten, nulled out, or reconciled when its outcome arrives, because holding the pair is the only way to learn what the prediction was worth.
 
@@ -42,7 +77,7 @@ No consumer may present a prediction as a measurement. The distinction lives in 
 
 ## Sizes are measured or absent
 
-Byte sizes reach History from verified identities only. The fixed join order is live completion evidence, the promoted artifact identity in the output transaction, the summary from an adopted import, and the record's inspected input size while the output stays unknown.
+Byte sizes reach History from verified identities only. An observation takes its sizes from live completion evidence, or for a crash-recovered success from the promoted artifact identity in the output transaction, and otherwise holds none. The older per-content projections additionally fall back to the summary from an adopted import and to the record's inspected input size while the output stays unknown.
 
 Human-readable FFmpeg output is not a size source. The stream summaries FFmpeg prints when an encode ends are display text rounded to a unit FFmpeg chose, and the engine does not treat human-oriented process output as an application contract. Such a figure must never be stored as a size, and a value derived from one must never be presented as a measurement.
 

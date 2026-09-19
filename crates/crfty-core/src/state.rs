@@ -10,7 +10,7 @@ use crate::{
     DurationMs, FailureFacts, FileRecord, ImportPath, ImportedHistoryRecord, ImportedProvenance,
     JobPhase, JobSpec, MediaObservation, Operation, OutputDelta, OutputTarget, OverwriteDecision,
     PathBinding, PathHash, ReservedJob, Settings, SkipReason, ToolRevisions, UnixMillis, Verdict,
-    VerdictKind,
+    VerdictKind, phase_duration,
 };
 
 macro_rules! numeric_id {
@@ -750,7 +750,7 @@ pub fn fold(state: &mut DurableState, delta: &DurableDelta) {
                                 output_content_key: Some(output_content_key),
                                 input_size,
                                 output_size,
-                                encoding_time: encoding_duration(phase_spans),
+                                encoding_time: phase_duration(phase_spans, JobPhase::Encoding),
                                 crf: run.analysis.as_ref().map(|found| found.measurement.crf),
                                 vmaf: run.analysis.as_ref().map(|found| found.measurement.score),
                                 target: run.analysis.as_ref().map(|found| found.successful_target),
@@ -841,20 +841,6 @@ fn evidence_sizes(evidence: &CompletionEvidence) -> (Option<u64>, Option<u64>) {
         } => (Some(*input_size), Some(*output_size)),
         CompletionEvidence::RecoveredAtStartup => (None, None),
     }
-}
-
-/// Total measured encoding time across the run's phase spans; `None` when no
-/// encoding phase was measured (recovered runs, empty spans).
-fn encoding_duration(spans: &[PhaseSpan]) -> Option<DurationMs> {
-    let mut measured = false;
-    let mut total: u64 = 0;
-    for span in spans {
-        if span.phase == JobPhase::Encoding {
-            measured = true;
-            total = total.saturating_add(span.duration.0);
-        }
-    }
-    measured.then_some(DurationMs(total))
 }
 
 fn set_item_state(queue: &mut [QueueItem], item_id: QueueItemId, item_state: QueueItemState) {

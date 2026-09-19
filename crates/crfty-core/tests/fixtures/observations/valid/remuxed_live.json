@@ -1,0 +1,30 @@
+{
+  "run_id": 15,
+  "operation": "Convert",
+  "source": {
+    "content_key": "blake2b:aaaabbbbccccdddd",
+    "codec": "Av1",
+    "width": 3840,
+    "height": 2160,
+    "duration_ms": 7200000,
+    "size_bytes": 4000000000
+  },
+  "revisions": {
+    "ab_av1": "ab-av1 0.10.0",
+    "ffmpeg": "ffmpeg 7.1",
+    "encoder": "SVT-AV1 3.0.0"
+  },
+  "outcome": {
+    "Remuxed": {
+      "remux": {
+        "measurement": {
+          "Live": { "sizes": { "input": 4000000000, "output": 3998000000 } }
+        },
+        "output_content_key": "blake2b:eeeeffff00001111",
+        "assessment": "Matched"
+      }
+    }
+  },
+  "started_at": 1758153600000,
+  "finished_at": 1758153660000
+}

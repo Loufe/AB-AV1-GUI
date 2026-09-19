@@ -1,0 +1,20 @@
+{
+  "run_id": 20,
+  "operation": "Convert",
+  "source": {
+    "content_key": "blake2b:2222333344445555",
+    "codec": { "Other": "mpeg2video" },
+    "width": 720,
+    "height": 576,
+    "duration_ms": 5400000,
+    "size_bytes": 4700000000
+  },
+  "revisions": {
+    "ab_av1": "ab-av1 0.10.0",
+    "ffmpeg": "ffmpeg 7.1",
+    "encoder": "SVT-AV1 3.0.0"
+  },
+  "outcome": "Incomplete",
+  "started_at": null,
+  "finished_at": 1758240000000
+}

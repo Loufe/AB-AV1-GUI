@@ -1,0 +1,59 @@
+{
+  "run_id": 13,
+  "operation": "Convert",
+  "source": {
+    "content_key": "blake2b:4f1c0a9e2d7b3c5a",
+    "codec": "H264",
+    "width": 1920,
+    "height": 1080,
+    "duration_ms": 600000,
+    "size_bytes": 8000000
+  },
+  "revisions": {
+    "ab_av1": "ab-av1 0.10.0",
+    "ffmpeg": "ffmpeg 7.1",
+    "encoder": "SVT-AV1 3.0.0"
+  },
+  "outcome": {
+    "Converted": {
+      "search": {
+        "analysis": {
+          "requested_target": 95,
+          "successful_target": 95,
+          "fallback_floor": 90,
+          "fallback_step": 1,
+          "failed_attempts": [],
+          "measurement": {
+            "crf": 24000,
+            "score": 9512,
+            "predicted_size": 3100000,
+            "predicted_percent_basis_points": 3875,
+            "predicted_duration_ms": 240000,
+            "from_cache": false
+          },
+          "profile": {
+            "preset": 6,
+            "max_encoded_percent_basis_points": 8000,
+            "samples": null,
+            "sample_duration_ms": 20000,
+            "thorough": false,
+            "decode_mode": "Software",
+            "ab_av1_revision": "ab-av1 0.10.0",
+            "ffmpeg_revision": "ffmpeg 7.1",
+            "encoder_revision": "SVT-AV1 3.0.0"
+          }
+        },
+        "duration": 61000,
+        "assessment": null
+      },
+      "encode": {
+        "measurement": { "Recovered": { "sizes": null } },
+        "duration": null,
+        "output_content_key": "blake2b:9a8b7c6d5e4f3a2b",
+        "assessment": null
+      }
+    }
+  },
+  "started_at": 1758153600000,
+  "finished_at": 1758240000000
+}

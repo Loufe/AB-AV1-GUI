@@ -906,113 +906,18 @@ mod tests {
     use proptest::prelude::*;
 
     use super::*;
+    use crate::test_support::{analysis, finished_run, identity, key, live, meta};
     use crate::{
-        AnalysisProfile, AnalysisResult, ArtifactIdentity, AudioStreamMeta, ClaimId,
-        CompletionEvidence, ContentKey, ConversionRun, Crf, DestructiveIdentity, DurableDelta,
-        DurableState, DurationMs, ExecutionSettings, FailureFacts, FileRecord, FileSystemId,
-        FileTimeNs, ImportPath, ImportedHistoryRecord, ItemOutcome, JobAction, JobPhase, JobSpec,
-        MediaContainer, Operation, OutputState, OutputTarget, OutputTransaction, ParkedStatus,
-        PhaseSpan, QueueItemId, Replacement, RunId, SearchMeasurement, UnixMillis, Verdict,
-        VerdictKind, VideoCodec, VideoMeta, VmafScore, VmafTarget,
+        ArtifactIdentity, CompletionEvidence, Crf, DurableDelta, DurableState, DurationMs,
+        FailureFacts, FileRecord, FileTimeNs, ImportPath, ImportedHistoryRecord, ItemOutcome,
+        OutputState, OutputTransaction, ParkedStatus, Replacement, RunId, UnixMillis, Verdict,
+        VerdictKind, VideoCodec, VmafScore, VmafTarget,
     };
 
     const DAY_MS: u64 = 86_400_000;
 
-    fn key(name: &str) -> ContentKey {
-        ContentKey(name.to_owned())
-    }
-
-    fn meta(codec: VideoCodec, size_bytes: u64) -> VideoMeta {
-        VideoMeta {
-            codec,
-            container: MediaContainer::Matroska,
-            width: 1920,
-            height: 1080,
-            rotation_degrees: 0,
-            duration_ms: 600_000,
-            size_bytes,
-            audio: vec![AudioStreamMeta {
-                codec: crate::AudioCodec::Aac,
-                channels: 2,
-            }],
-            subtitle_count: 0,
-        }
-    }
-
-    fn spec(run: u64, content_key: &ContentKey, operation: Operation) -> JobSpec {
-        JobSpec {
-            item_id: QueueItemId(run),
-            claim_id: ClaimId(run),
-            run_id: RunId(run),
-            input: PathBuf::from(format!("input-{run}.mkv")),
-            content_key: Some(content_key.clone()),
-            operation,
-            intent: crate::AnalysisIntent::ReuseIfFresh,
-            output_target: OutputTarget::Suffix {
-                suffix: "-av1".to_owned(),
-            },
-            execution: ExecutionSettings::production(AnalysisProfile::production(), false),
-            action: JobAction::Encode {
-                selected_analysis: None,
-            },
-        }
-    }
-
-    fn analysis(crf_milli: u32, score_centi: u16) -> AnalysisResult {
-        AnalysisResult {
-            requested_target: VmafTarget(95),
-            successful_target: VmafTarget(95),
-            fallback_floor: VmafTarget(90),
-            fallback_step: 1,
-            failed_attempts: Vec::new(),
-            measurement: SearchMeasurement {
-                crf: Crf(crf_milli),
-                score: VmafScore(score_centi),
-                predicted_size: 1_000,
-                predicted_percent_basis_points: 5_000,
-                predicted_duration_ms: 60_000,
-                from_cache: false,
-            },
-            profile: AnalysisProfile::production(),
-        }
-    }
-
-    fn finished_run(
-        run: u64,
-        content_key: &ContentKey,
-        outcome: ItemOutcome,
-        finished_at: UnixMillis,
-    ) -> ConversionRun {
-        ConversionRun {
-            spec: spec(run, content_key, Operation::Convert),
-            analysis: Some(analysis(24_000, 9_512)),
-            output_content_key: None,
-            outcome: Some(outcome),
-            started_at: Some(UnixMillis(finished_at.0.saturating_sub(1_000))),
-            finished_at: Some(finished_at),
-            phase_spans: vec![
-                PhaseSpan {
-                    phase: JobPhase::Analyzing,
-                    duration: DurationMs(60_000),
-                },
-                PhaseSpan {
-                    phase: JobPhase::Encoding,
-                    duration: DurationMs(240_000),
-                },
-            ],
-        }
-    }
-
     fn converted(evidence: CompletionEvidence) -> ItemOutcome {
         ItemOutcome::Converted(evidence)
-    }
-
-    fn live(input_size: u64, output_size: u64) -> CompletionEvidence {
-        CompletionEvidence::LiveEncode {
-            input_size,
-            output_size,
-            encode_decode: crate::DecodeMode::Software,
-        }
     }
 
     fn imported(status: ParkedStatus, codec: Option<VideoCodec>) -> ImportedHistoryRecord {
@@ -1085,17 +990,6 @@ mod tests {
             );
         }
         state
-    }
-
-    fn identity(size: u64) -> DestructiveIdentity {
-        DestructiveIdentity {
-            file_id: FileSystemId::Unix {
-                device: 1,
-                inode: size,
-            },
-            size,
-            modified_ns: None,
-        }
     }
 
     #[test]

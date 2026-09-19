@@ -1,0 +1,20 @@
+{
+  "run_id": 44,
+  "operation": "Convert",
+  "source": null,
+  "revisions": { "ab_av1": "ab-av1 0.10.0", "ffmpeg": "ffmpeg 7.1", "encoder": "SVT-AV1 3.0.0" },
+  "outcome": {
+    "Converted": {
+      "encode": {
+        "measurement": {
+          "Live": { "sizes": { "input": 8000000, "output": 3250000 }, "decode": "Software" }
+        },
+        "duration": 251000,
+        "output_content_key": null,
+        "assessment": null
+      }
+    }
+  },
+  "started_at": 1758153600000,
+  "finished_at": 1758153912000
+}
