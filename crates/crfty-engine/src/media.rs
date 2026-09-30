@@ -9,7 +9,7 @@
 use std::{
     ffi::OsStr,
     fmt,
-    fs::Metadata,
+    fs::{File, Metadata},
     io::{self, Read, Seek, SeekFrom},
     path::{Path, PathBuf},
     process::Command,
@@ -53,6 +53,14 @@ const RECENT_MTIME_WINDOW_NS: u64 = 2 * NANOSECONDS_PER_SECOND;
 const TOOL_QUERY_TIMEOUT: Duration = Duration::from_secs(30);
 const PROBE_STDOUT_BYTES: usize = 1024 * 1024;
 const DIAGNOSTIC_STDERR_BYTES: usize = 4 * 1024;
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SourceObservation {
+    pub destructive: DestructiveIdentity,
+    /// Assessment evidence only; it is excluded from content keys and
+    /// destructive authorization because application-owned renames change it.
+    pub changed_ns: Option<FileTimeNs>,
+}
 
 /// Why a media inspection produced no observation. Process-side failures
 /// carry the bounded stderr tail so the caller can journal a scrubbed
@@ -238,17 +246,26 @@ impl MediaInspector {
         path: &Path,
         cancellation: &ProcessCancellation,
     ) -> Result<(VideoMeta, ArtifactIdentity), MediaError> {
-        let before_probe = destructive_identity(path)?;
-        let metadata = self.probe(path, before_probe.size, cancellation)?;
-        let after_probe = destructive_identity(path)?;
+        let before_probe = source_observation(path)?;
+        let metadata = self.probe(path, before_probe.destructive.size, cancellation)?;
+        let after_probe = source_observation(path)?;
         if before_probe != after_probe {
             return Err(MediaError::ChangedAfterProbe);
         }
         let identity = sampled_identity(path, &metadata, cancellation)?;
-        match observation_stability(&before_probe, &after_probe, &identity.destructive) {
-            ObservationStability::Stable => Ok((metadata, identity)),
+        let after_sampling = source_observation(path)?;
+        match observation_stability(
+            &before_probe.destructive,
+            &after_probe.destructive,
+            &after_sampling.destructive,
+        ) {
+            ObservationStability::Stable if after_probe == after_sampling => {
+                Ok((metadata, identity))
+            }
+            ObservationStability::Stable | ObservationStability::ChangedDuringSampling => {
+                Err(MediaError::ChangedDuringSampling)
+            }
             ObservationStability::ChangedAfterProbe => Err(MediaError::ChangedAfterProbe),
-            ObservationStability::ChangedDuringSampling => Err(MediaError::ChangedDuringSampling),
         }
     }
 
@@ -411,8 +428,28 @@ pub const fn decoder_name(decoder: HardwareDecoder) -> &'static str {
 }
 
 pub(crate) fn destructive_identity(path: &Path) -> io::Result<DestructiveIdentity> {
-    let metadata = std::fs::metadata(path)?;
-    identity_from_metadata(path, &metadata)
+    source_observation(path).map(|observation| observation.destructive)
+}
+
+pub fn source_observation(path: &Path) -> io::Result<SourceObservation> {
+    let file = open_observation_file(path)?;
+    observe_open_file(&file)
+}
+
+#[cfg(windows)]
+fn open_observation_file(path: &Path) -> io::Result<File> {
+    use std::{fs::OpenOptions, os::windows::fs::OpenOptionsExt as _};
+    use windows_sys::Win32::Storage::FileSystem::FILE_FLAG_BACKUP_SEMANTICS;
+
+    OpenOptions::new()
+        .access_mode(0)
+        .custom_flags(FILE_FLAG_BACKUP_SEMANTICS)
+        .open(path)
+}
+
+#[cfg(not(windows))]
+fn open_observation_file(path: &Path) -> io::Result<File> {
+    File::open(path)
 }
 
 /// Conservative metadata-cache judgment. Missing timestamps are unknown;
@@ -450,13 +487,12 @@ fn sampled_identity(
     if cancellation.is_cancelled() {
         return Err(MediaError::Cancelled);
     }
-    let before = std::fs::metadata(path)?;
-    let before_identity = identity_from_metadata(path, &before)?;
     let mut file = std::fs::File::open(path)?;
+    let before = observe_open_file(&file)?;
     let mut digest = Blake2bVar::new(DIGEST_BYTES)
         .map_err(|error| io::Error::new(io::ErrorKind::InvalidInput, error.to_string()))?;
     digest.update(CONTENT_KEY_SCHEMA);
-    digest.update(&before.len().to_le_bytes());
+    digest.update(&before.destructive.size.to_le_bytes());
     digest.update(&header.duration_ms.to_le_bytes());
     let codec = codec_header(&header.codec);
     digest.update(&(codec.len() as u64).to_le_bytes());
@@ -464,7 +500,7 @@ fn sampled_identity(
     digest.update(&header.width.to_le_bytes());
     digest.update(&header.height.to_le_bytes());
 
-    if before.len() <= WHOLE_FILE_LIMIT {
+    if before.destructive.size <= WHOLE_FILE_LIMIT {
         let mut bytes = [0_u8; READ_BUFFER_BYTES];
         loop {
             if cancellation.is_cancelled() {
@@ -481,28 +517,26 @@ fn sampled_identity(
     } else {
         hash_region(&mut digest, &mut file, 0, EDGE_SAMPLE, cancellation)?;
         for numerator in QUARTER_SAMPLE_NUMERATORS {
-            let raw = before.len().saturating_mul(numerator) / SAMPLE_QUARTERS;
+            let raw = before.destructive.size.saturating_mul(numerator) / SAMPLE_QUARTERS;
             let offset = raw / SAMPLE_ALIGNMENT_BYTES * SAMPLE_ALIGNMENT_BYTES;
             hash_region(&mut digest, &mut file, offset, MIDDLE_SAMPLE, cancellation)?;
         }
         hash_region(
             &mut digest,
             &mut file,
-            before.len().saturating_sub(EDGE_SAMPLE as u64),
+            before.destructive.size.saturating_sub(EDGE_SAMPLE as u64),
             EDGE_SAMPLE,
             cancellation,
         )?;
     }
-    let after = std::fs::metadata(path)?;
-    let after_identity = identity_from_metadata(path, &after)?;
-    if observation_stability(&before_identity, &before_identity, &after_identity)
-        != ObservationStability::Stable
-    {
+    let after_handle = observe_open_file(&file)?;
+    let after_path = source_observation(path)?;
+    if before != after_handle || before != after_path {
         return Err(MediaError::ChangedDuringSampling);
     }
     Ok(ArtifactIdentity {
         content_key: ContentKey(finalize_hex(digest, CONTENT_KEY_TEXT_PREFIX)?),
-        destructive: after_identity,
+        destructive: after_path.destructive,
     })
 }
 
@@ -609,15 +643,32 @@ fn modified_ns(metadata: &Metadata) -> Option<FileTimeNs> {
         .map(FileTimeNs)
 }
 
-fn identity_from_metadata(path: &Path, metadata: &Metadata) -> io::Result<DestructiveIdentity> {
-    let file_id = match file_id::get_file_id(path)? {
-        file_id::FileId::Inode {
-            device_id,
-            inode_number,
-        } => FileSystemId::Unix {
-            device: device_id,
-            inode: inode_number,
+fn observe_open_file(file: &File) -> io::Result<SourceObservation> {
+    let metadata = file.metadata()?;
+    let file_id = file_system_id(file, &metadata)?;
+    Ok(SourceObservation {
+        destructive: DestructiveIdentity {
+            file_id,
+            size: metadata.len(),
+            modified_ns: modified_ns(&metadata),
         },
+        changed_ns: changed_ns(&metadata),
+    })
+}
+
+#[cfg(unix)]
+fn file_system_id(_file: &File, metadata: &Metadata) -> io::Result<FileSystemId> {
+    use std::os::unix::fs::MetadataExt as _;
+
+    Ok(FileSystemId::Unix {
+        device: metadata.dev(),
+        inode: metadata.ino(),
+    })
+}
+
+#[cfg(windows)]
+fn file_system_id(file: &File, _metadata: &Metadata) -> io::Result<FileSystemId> {
+    Ok(match file_id::get_file_id_from_file(file)? {
         file_id::FileId::LowRes {
             volume_serial_number,
             file_index,
@@ -632,12 +683,30 @@ fn identity_from_metadata(path: &Path, metadata: &Metadata) -> io::Result<Destru
             volume_serial: volume_serial_number,
             file_id,
         },
-    };
-    Ok(DestructiveIdentity {
-        file_id,
-        size: metadata.len(),
-        modified_ns: modified_ns(metadata),
+        file_id::FileId::Inode { .. } => {
+            return Err(io::Error::other("Unix file ID returned on Windows"));
+        }
     })
+}
+
+#[cfg(unix)]
+fn changed_ns(metadata: &Metadata) -> Option<FileTimeNs> {
+    use std::os::unix::fs::MetadataExt as _;
+
+    let seconds = u64::try_from(metadata.ctime()).ok()?;
+    let nanos = u64::try_from(metadata.ctime_nsec()).ok()?;
+    if nanos >= NANOSECONDS_PER_SECOND {
+        return None;
+    }
+    seconds
+        .checked_mul(NANOSECONDS_PER_SECOND)?
+        .checked_add(nanos)
+        .map(FileTimeNs)
+}
+
+#[cfg(windows)]
+fn changed_ns(_metadata: &Metadata) -> Option<FileTimeNs> {
+    None
 }
 
 #[derive(Deserialize)]

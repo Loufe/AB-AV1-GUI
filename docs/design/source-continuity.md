@@ -14,7 +14,7 @@ The alpha policy rejects ordinary success when required source evidence changes 
 
 The prepared `JobSpec` retains a content key but no immutable source filesystem observation. The coordinator records a search result before output planning, which inspects the source again without comparing it with the evidence that justified the search. A later source can therefore become the transaction baseline while the run still names the earlier content.
 
-`identity_from_metadata` joins size and modification time from one metadata lookup with a file ID from a second path lookup through the [file-id crate][file-id]. Every destructive identity comparison therefore compares fields that may describe different objects, so the coherence requirement below applies to the existing ADR-020 guards, not only to the new source gates. Stable Rust exposes no Windows file index or change time from an open handle: [`MetadataExt::file_index`][rust-by-handle] and [`MetadataExt::change_time`][rust-change-time] are nightly-only, so a coherent Windows observation needs a reviewed dependency.
+The coherent observation selected below closes split-object identity assembly in preparation, sampling, and the existing ADR-020 destructive guards. It does not yet provide the source phase gates. Stable Rust exposes no Windows file index or change time from an open handle: [`MetadataExt::file_index`][rust-by-handle] and [`MetadataExt::change_time`][rust-change-time] are nightly-only, so the file ID query uses a pinned, narrow fork of the [file-id crate][file-id] with a safe handle-based entry point.
 
 `recover_ready` checks staging and the destination preimage but not the original source. Distinct-path output can promote after source replacement, disappearance, or metadata change. Retirement rejects a changed present original, but accepts an absent original without distinguishing external disappearance from deletion after a durable retirement intent.
 
@@ -46,9 +46,20 @@ Observation classes describe available evidence, not an inferred sequence of fil
 | Path absent | The source is unavailable at that path |
 | Inspection failed or required fields unavailable | The required assessment cannot be established |
 
-Identity fields must describe one coherent object observation. Combining size and timestamps from one path lookup with a file ID from another permits an identity assembled from different objects. Opening and inspecting one handle improves coherence, but a CRFty-owned handle does not prove that an external process opened that same object.
+Each observation opens the path once and obtains file ID, size, and modification time from that one handle. Unix uses device and inode from the handle's metadata. Windows uses the pinned `file-id` fork's safe handle-based query: it prefers a 128-bit high-resolution ID with volume serial, preserving ReFS identity, and falls back to the lower-resolution file index only when `FileIdInfo` is unsupported. The fallback contains less identifying information; it must not be treated as equivalent to a high-resolution ID. The sampling observation and sampled bytes use the same handle; a fresh path observation follows the read. A CRFty-owned handle does not prove that an external process opened that same object, and reopening the path cannot prove that the path always resolved to it between checks.
 
-Change-time evidence belongs to source assessment only. It never enters the sampled content digest, and it never enters destructive identity comparisons, because application-owned renames legitimately update it. Alpha reads Unix `ctime` alongside `mtime` during assessment: it detects a write followed by a restored `mtime`, and permission or ownership changes also trigger it. Windows `ChangeTime` and `LastWriteTime` are distinct fields; `ChangeTime` enters assessment only when the selected handle query exposes it without first-party unsafe code, and otherwise its absence is a documented limit. Neither platform supplies a universal continuity guarantee across all filesystems. [Borg's observation choices][borg-doc], [restic's change detection][restic], and [Microsoft's field definitions][windows-basic] establish these distinctions.
+Change-time evidence belongs to source assessment only. It never enters the sampled content digest, and it never enters destructive identity comparisons, because application-owned renames legitimately update it. Alpha reads Unix `ctime` alongside `mtime` during assessment: it detects a write followed by a restored `mtime`, and permission or ownership changes also trigger it. Windows `ChangeTime` and `LastWriteTime` are distinct fields. The selected safe handle query does not expose `ChangeTime`, so Windows source assessment uses the coherent file ID, size, and last-write observation without change time. Neither platform supplies a universal continuity guarantee across all filesystems. [Borg's observation choices][borg-doc], [restic's change detection][restic], and [Microsoft's field definitions][windows-basic] establish these distinctions.
+
+| Mutation or interval | What the selected observations can establish |
+| --- | --- |
+| Same-size write followed by restored `mtime` on Unix | A changed `ctime` can reveal the write if the filesystem records it at the observed resolution; a coarse or unavailable `ctime` can miss it |
+| Same-size write followed by restored last-write time on Windows | The selected fields may all match because `ChangeTime` is unavailable |
+| Write through a hardlink | The shared object's size, `mtime`, or Unix `ctime` can reveal it; equal observed fields cannot exclude it |
+| Path replaced and restored between observations | Both observations can match and miss the intermediate object |
+| Write after the final observation or between a guard and a path operation | The preceding assessment cannot detect a future change |
+| Different bytes outside the sampled regions with matching probe header | The sampled content key can match; its equality is only probable |
+
+The table describes limits rather than permission to publish uncertain work. Missing required fields and inspection failures remain assessment failures under the policy selected for each phase.
 
 ## Phase boundaries and reuse
 
@@ -108,7 +119,6 @@ Filesystem cases include same-size writes, restored modification times, metadata
 
 ## Unresolved observation details
 
-- Which handle-based metadata acquisition API yields file ID, size, and timestamps from one object on each supported platform without first-party unsafe code?
 - Which missing or coarse fields prevent qualification, and which weaker observations remain acceptable under an explicitly stated policy?
 - Which phase observations need their own durable representation, and which can be carried atomically with result publication or output readiness?
 - What typed retained-artifact state preserves ownership after conflict without allowing later automatic promotion or cleanup?
