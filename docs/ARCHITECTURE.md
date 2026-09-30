@@ -31,7 +31,7 @@ Crates split on hard dependency boundaries (no Tauri, no process), never by topi
 | ab-av1 adapter | ADR-003 (embed a pinned ab-av1 adapter); ADR-021 (drive ab-av1 through an owned operation; proposed) |
 | Events and IPC | `docs/design/event-stream.md`; ADR-006 (generate IPC bindings with tauri-specta) |
 | History and statistics | `docs/HISTORY.md`; ADR-015 (project imported history separately) |
-| V2 history import | `docs/HISTORY_IMPORT.md`; ADR-015 (project imported history separately) |
+| V2 history import | `docs/HISTORY_IMPORT.md`; ADR-015 (project imported history separately); ADR-025 (import history as keyed translated observations) |
 | Media tools | this file; ADR-023 (require a user-supplied FFmpeg toolchain) |
 | Privacy and logging | ADR-014 (scrub paths inside the log sink) |
 | Single-instance ownership | ADR-008 (take an engine-owned data-directory lock) |

@@ -81,7 +81,7 @@ Estimation consumers and prediction goals are owned by `docs/design/estimation.m
 | Time cohorts | phase spans split by operation; observed codec, dimensions, duration | Terminal, Scan |
 | E5 size basis | settled sizes; per-stream audio bitrate and duration | Terminal, Scan |
 | Evaluation backtest | retained prediction and measurement pairs, never reconciled | Search, Terminal |
-| E4 cold-start prior | adopted imported summaries, tagged VMAF, in the toolchain-unversioned class | Import |
+| E4 cold-start prior | translated observations' imported facts, tagged VMAF, in the toolchain-unversioned class | Import |
 
 ## Surfaces that are not History consumers
 
