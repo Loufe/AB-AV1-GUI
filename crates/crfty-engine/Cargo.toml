@@ -24,7 +24,6 @@ ab-av1 = { version = "0.11.4", git = "https://github.com/Loufe/ab-av1.git", rev 
 blake2 = { version = "0.10.6", default-features = false }
 command-group = "5.0.1"
 crfty-core = { path = "../crfty-core" }
-file-id = "0.2.3"
 keepawake = { version = "0.6.0", default-features = false }
 # The `reveal` feature adds select-in-file-manager (D-Bus FileManager1 on
 # Linux, shell item selection on Windows) alongside the default-program open.
@@ -46,6 +45,7 @@ tracing = { version = "0.1.44", default-features = false, features = ["std"] }
 tracing-subscriber = { version = "0.3.23", default-features = false, features = ["fmt", "registry", "std"] }
 
 [target.'cfg(windows)'.dependencies]
+file-id = { version = "0.2.3", git = "https://github.com/Loufe/notify.git", rev = "33e1f19264da0aacdf46acaeddaee083e7b5137d" }
 windows-sys = { version = "0.61.2", features = ["Win32_Storage_FileSystem"] }
 
 [lints]
