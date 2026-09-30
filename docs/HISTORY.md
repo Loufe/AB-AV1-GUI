@@ -98,7 +98,7 @@ Every quality target and score carries its ADR-022 metric tag once that tag land
 
 ### Browsing
 
-History is read through bounded pages and detail lookups, never as a complete dataset. A page request names an order key, an optional outcome filter, an optional search string, an optional cursor, and a limit.
+History is read through bounded pages and detail lookups, never as a complete dataset. A page request names an order key, ascending or descending direction, an optional outcome filter, an optional search string, an optional cursor, and a limit.
 
 | Order key | Value |
 | --- | --- |
@@ -111,7 +111,7 @@ History is read through bounded pages and detail lookups, never as a complete da
 | Took | Encode duration, native or translated |
 | Recorded | Recording sequence |
 
-Values compare bytewise, absent values sort last in both directions, and every tie breaks by recording sequence descending, so every order is total. The outcome filter selects among converted, remuxed, not worthwhile, analyzed, failed, stopped, and incomplete, and translated records belong to their matching class. An omitted filter is the default, which excludes failed, stopped, and incomplete; an explicitly empty filter matches nothing. Search is a literal ASCII-case-insensitive substring match on the same file-name value, so a row without a path never matches, and an empty search string means no search. The cursor is the order-key value and recording sequence of the previous page's last row, so continuation stays deterministic even when that row later changes or stops matching. Continuation across a revision change may repeat or skip rows, so a view that sees a newer revision refetches from its first page. The limit is between 1 and 200.
+Text values compare by UTF-8 bytes after the stated normalization, numeric values compare numerically, absent values sort last in both directions, and every tie breaks by recording sequence descending, so every order is total. The outcome filter selects among converted, remuxed, not worthwhile, analyzed, failed, stopped, and incomplete, and translated records belong to their matching class. An omitted filter is the default, which excludes failed, stopped, and incomplete; an explicitly empty filter matches nothing. Search is a literal ASCII-case-insensitive substring match on the same file-name value, so a row without a path never matches, and an empty search string means no search. The cursor is the order-key value and recording sequence of the previous page's last row, so continuation stays deterministic even when that row later changes or stops matching. A caller continues a cursor only with the same order key, direction, outcome filter, and search string; changing any of them starts at the first page. Continuation across a revision change may repeat or skip rows, so a view that sees a newer revision refetches from its first page. The limit is between 1 and 200.
 
 A page returns the identifiers in order, the number of observations matching the filter and search, the cursor for the next page when more rows follow, and the revision it was read at. A detail lookup returns the observation, its recording sequence, and its path row, or reports that no observation holds the identifier.
 

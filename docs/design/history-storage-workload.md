@@ -60,19 +60,19 @@ Correctness under crash is proven separately from timing. A terminal recording a
 
 Both mappings hold identical facts and pass the same scenarios. Neither uses an opaque payload column. Enumerations map to text discriminants, fallback attempts are ordered child rows, and path rows are a child table in both.
 
-**M1, one observation table.** One row per observation carries the identity, recording sequence, outcome discriminant, source facts, instants, and every outcome's evidence as nullable columns. Row-level check constraints state which columns each outcome requires and forbids.
+**M1, one observation table.** One row per observation carries the identity, recording sequence, outcome discriminant, source facts, instants, and every outcome's evidence as nullable columns. Row-level check constraints state which columns each outcome requires and forbids. The recording transaction also enforces cardinality across child rows, including the required nonempty not-worthwhile attempt list.
 
 **M2, evidence tables.** One narrow observation row carries identity, sequence, outcome, source facts, and instants. Search, encode, remux, not-worthwhile, failure, and translated evidence live in one-to-at-most-one tables keyed by sequence.
 
 | Concern | M1 | M2 |
 | --- | --- | --- |
-| Outcome shape integrity | Check constraints on one row enforce it | "Exactly this evidence row for this outcome" needs triggers or trusts the writer |
+| Outcome shape integrity | Row checks enforce required and forbidden columns; child-row cardinality needs transaction-level enforcement | Evidence-row cardinality needs triggers or transaction-level validation; child-row cardinality needs transaction-level enforcement |
 | Browse page | The observation row plus the path row | Also joins encode, remux, search, and translated evidence |
 | Order-key indexes | `Date`, `Recorded`, `Before`, `After`, `Change`, `Quality`, and `Took` index one table; `File` indexes the path table | `After`, `Change`, `Quality`, and `Took` live in evidence tables, so no single index serves those ordered pages |
 | Width | Wide rows, most columns null for any one outcome | Narrow rows |
 | Additive field | One nullable or defaulted column | One column on the owning evidence table |
 
-M1 is selected by this analysis and M2 is rejected without measurement. Schema-enforced outcome shape is the deciding property: M2 can only enforce it outside the schema. Four of the eight orders also lose single-table index support under M2. M1's null density costs little in SQLite's record format. Selection runs both engines on M1.
+M1 is selected by this analysis and M2 is rejected without measurement. M1 enforces outcome-specific columns with row checks, while M2 needs cross-table enforcement for its evidence rows; both need cross-row enforcement for nonempty fallback attempts. Four of the eight orders also lose single-table index support under M2. M1's null density costs little in SQLite's record format. Selection runs both engines on M1.
 
 ## Rehearsed changes
 
