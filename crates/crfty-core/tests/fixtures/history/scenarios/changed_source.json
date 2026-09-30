@@ -1,0 +1,288 @@
+{
+  "description": "A changed source at one path: two conversions of different content recorded under the same source path both stay browsable as separate observations, tie on File and order by recording sequence, and are told apart by sizes. Each content keeps its own standing.",
+  "steps": [
+    {
+      "Record": {
+        "observation": {
+          "run_id": 1,
+          "operation": "Convert",
+          "source": {
+            "content_key": "blake2b:dddd000000000001",
+            "codec": "H264",
+            "width": 1920,
+            "height": 1080,
+            "duration_ms": 600000,
+            "size_bytes": 5000000
+          },
+          "revisions": {
+            "ab_av1": "ab-av1 0.10.0",
+            "ffmpeg": "ffmpeg 7.1",
+            "encoder": "SVT-AV1 3.0.0"
+          },
+          "outcome": {
+            "Converted": {
+              "search": {
+                "analysis": {
+                  "requested_target": 95,
+                  "successful_target": 95,
+                  "fallback_floor": 90,
+                  "fallback_step": 1,
+                  "failed_attempts": [],
+                  "measurement": {
+                    "crf": 30000,
+                    "score": 9512,
+                    "predicted_size": 3100000,
+                    "predicted_percent_basis_points": 3875,
+                    "predicted_duration_ms": 240000,
+                    "from_cache": false
+                  },
+                  "profile": {
+                    "preset": 6,
+                    "max_encoded_percent_basis_points": 8000,
+                    "samples": null,
+                    "sample_duration_ms": 20000,
+                    "thorough": false,
+                    "decode_mode": "Software",
+                    "ab_av1_revision": "ab-av1 0.10.0",
+                    "ffmpeg_revision": "ffmpeg 7.1",
+                    "encoder_revision": "SVT-AV1 3.0.0"
+                  }
+                },
+                "duration": 60000,
+                "assessment": null
+              },
+              "encode": {
+                "measurement": {
+                  "Live": {
+                    "sizes": {
+                      "input": 5000000,
+                      "output": 2000000
+                    },
+                    "decode": "Software"
+                  }
+                },
+                "duration": 100000,
+                "output_content_key": "blake2b:out-dddd000000000001",
+                "assessment": null
+              }
+            }
+          },
+          "started_at": null,
+          "finished_at": 1758000001000
+        },
+        "paths": {
+          "source": "/library/home/Birthday.mp4",
+          "output": "/library/home/Birthday.mkv"
+        }
+      }
+    },
+    {
+      "Record": {
+        "observation": {
+          "run_id": 2,
+          "operation": "Convert",
+          "source": {
+            "content_key": "blake2b:dddd000000000002",
+            "codec": "H264",
+            "width": 1920,
+            "height": 1080,
+            "duration_ms": 600000,
+            "size_bytes": 7000000
+          },
+          "revisions": {
+            "ab_av1": "ab-av1 0.10.0",
+            "ffmpeg": "ffmpeg 7.1",
+            "encoder": "SVT-AV1 3.0.0"
+          },
+          "outcome": {
+            "Converted": {
+              "search": {
+                "analysis": {
+                  "requested_target": 95,
+                  "successful_target": 95,
+                  "fallback_floor": 90,
+                  "fallback_step": 1,
+                  "failed_attempts": [],
+                  "measurement": {
+                    "crf": 32000,
+                    "score": 9512,
+                    "predicted_size": 3100000,
+                    "predicted_percent_basis_points": 3875,
+                    "predicted_duration_ms": 240000,
+                    "from_cache": false
+                  },
+                  "profile": {
+                    "preset": 6,
+                    "max_encoded_percent_basis_points": 8000,
+                    "samples": null,
+                    "sample_duration_ms": 20000,
+                    "thorough": false,
+                    "decode_mode": "Software",
+                    "ab_av1_revision": "ab-av1 0.10.0",
+                    "ffmpeg_revision": "ffmpeg 7.1",
+                    "encoder_revision": "SVT-AV1 3.0.0"
+                  }
+                },
+                "duration": 60000,
+                "assessment": null
+              },
+              "encode": {
+                "measurement": {
+                  "Live": {
+                    "sizes": {
+                      "input": 7000000,
+                      "output": 2100000
+                    },
+                    "decode": "Software"
+                  }
+                },
+                "duration": 150000,
+                "output_content_key": "blake2b:out-dddd000000000002",
+                "assessment": null
+              }
+            }
+          },
+          "started_at": null,
+          "finished_at": 1758000002000
+        },
+        "paths": {
+          "source": "/library/home/Birthday.mp4",
+          "output": "/library/home/Birthday.mkv"
+        }
+      }
+    },
+    {
+      "Page": {
+        "order": "File",
+        "direction": "Ascending",
+        "limit": 10,
+        "expect": {
+          "ids": [
+            {
+              "Native": 2
+            },
+            {
+              "Native": 1
+            }
+          ],
+          "matched": 2,
+          "more": false,
+          "revision": 2
+        }
+      }
+    },
+    {
+      "Page": {
+        "order": "Before",
+        "direction": "Descending",
+        "limit": 10,
+        "expect": {
+          "ids": [
+            {
+              "Native": 2
+            },
+            {
+              "Native": 1
+            }
+          ],
+          "matched": 2,
+          "more": false,
+          "revision": 2
+        }
+      }
+    },
+    {
+      "Page": {
+        "order": "Change",
+        "direction": "Descending",
+        "limit": 10,
+        "expect": {
+          "ids": [
+            {
+              "Native": 2
+            },
+            {
+              "Native": 1
+            }
+          ],
+          "matched": 2,
+          "more": false,
+          "revision": 2
+        }
+      }
+    },
+    {
+      "Page": {
+        "order": "Change",
+        "direction": "Ascending",
+        "limit": 10,
+        "expect": {
+          "ids": [
+            {
+              "Native": 1
+            },
+            {
+              "Native": 2
+            }
+          ],
+          "matched": 2,
+          "more": false,
+          "revision": 2
+        }
+      }
+    },
+    {
+      "Page": {
+        "order": "Date",
+        "direction": "Ascending",
+        "search": "BIRTHDAY",
+        "limit": 10,
+        "expect": {
+          "ids": [
+            {
+              "Native": 1
+            },
+            {
+              "Native": 2
+            }
+          ],
+          "matched": 2,
+          "more": false,
+          "revision": 2
+        }
+      }
+    },
+    {
+      "Detail": {
+        "id": {
+          "Native": 1
+        },
+        "expect": {
+          "Found": {
+            "seq": 1,
+            "paths": {
+              "source": "/library/home/Birthday.mp4",
+              "output": "/library/home/Birthday.mkv"
+            }
+          }
+        }
+      }
+    },
+    {
+      "Detail": {
+        "id": {
+          "Native": 2
+        },
+        "expect": {
+          "Found": {
+            "seq": 2,
+            "paths": {
+              "source": "/library/home/Birthday.mp4",
+              "output": "/library/home/Birthday.mkv"
+            }
+          }
+        }
+      }
+    }
+  ]
+}

@@ -1,0 +1,689 @@
+{
+  "description": "Keyset continuation over several pages. Each continued page resumes strictly after the previous page last row position (order value, then recording sequence), across ties and absent values, and reports whether more rows follow. A scrub between two continued File pages leaves the continuation deterministic: every row now lacks a file name, so all rows sort after the cursor, and the revision tells the reader the store changed.",
+  "steps": [
+    {
+      "Import": {
+        "batch": [
+          {
+            "observation": {
+              "origin": "V2History",
+              "record_key": "0000000000000c01",
+              "source": {
+                "codec": "H264",
+                "width": 1280,
+                "height": 720,
+                "duration_ms": 300000,
+                "size_bytes": 1000
+              },
+              "outcome": {
+                "Converted": {
+                  "quality": {
+                    "crf": 30000,
+                    "score": 9500,
+                    "target": 95
+                  },
+                  "output_size": 600,
+                  "encode_duration": 5000
+                }
+              },
+              "updated_at": 1758000003000
+            },
+            "path": "/k/b.mkv"
+          },
+          {
+            "observation": {
+              "origin": "V2History",
+              "record_key": "0000000000000c02",
+              "source": {
+                "codec": "H264",
+                "width": 1280,
+                "height": 720,
+                "duration_ms": 300000,
+                "size_bytes": 1000
+              },
+              "outcome": {
+                "Converted": {
+                  "quality": {
+                    "crf": 30000,
+                    "score": 9500,
+                    "target": 95
+                  },
+                  "output_size": 600,
+                  "encode_duration": 5000
+                }
+              },
+              "updated_at": 1758000001000
+            },
+            "path": "/k/d.mkv"
+          },
+          {
+            "observation": {
+              "origin": "V2History",
+              "record_key": "0000000000000c03",
+              "source": {
+                "codec": "H264",
+                "width": 1280,
+                "height": 720,
+                "duration_ms": 300000,
+                "size_bytes": 1000
+              },
+              "outcome": {
+                "NotWorthwhile": {
+                  "requested": 95,
+                  "floor": 90
+                }
+              },
+              "updated_at": null
+            },
+            "path": "/k/a.mkv"
+          },
+          {
+            "observation": {
+              "origin": "V2History",
+              "record_key": "0000000000000c04",
+              "source": {
+                "codec": "H264",
+                "width": 1280,
+                "height": 720,
+                "duration_ms": 300000,
+                "size_bytes": 1000
+              },
+              "outcome": {
+                "Converted": {
+                  "quality": {
+                    "crf": 30000,
+                    "score": 9500,
+                    "target": 95
+                  },
+                  "output_size": 600,
+                  "encode_duration": 5000
+                }
+              },
+              "updated_at": 1758000003000
+            },
+            "path": "/k/c.mkv"
+          },
+          {
+            "observation": {
+              "origin": "V2History",
+              "record_key": "0000000000000c05",
+              "source": {
+                "codec": "H264",
+                "width": 1280,
+                "height": 720,
+                "duration_ms": 300000,
+                "size_bytes": null
+              },
+              "outcome": {
+                "Analyzed": {
+                  "quality": {
+                    "crf": 30000,
+                    "score": null,
+                    "target": null
+                  }
+                }
+              },
+              "updated_at": 1758000002000
+            },
+            "path": "/k/e.mkv"
+          },
+          {
+            "observation": {
+              "origin": "V2History",
+              "record_key": "0000000000000c06",
+              "source": {
+                "codec": "H264",
+                "width": 1280,
+                "height": 720,
+                "duration_ms": 300000,
+                "size_bytes": 1000
+              },
+              "outcome": {
+                "Converted": {
+                  "quality": {
+                    "crf": 30000,
+                    "score": 9500,
+                    "target": 95
+                  },
+                  "output_size": 600,
+                  "encode_duration": 5000
+                }
+              },
+              "updated_at": null
+            },
+            "path": "/k/b.mkv"
+          },
+          {
+            "observation": {
+              "origin": "V2History",
+              "record_key": "0000000000000c07",
+              "source": {
+                "codec": "H264",
+                "width": 1280,
+                "height": 720,
+                "duration_ms": 300000,
+                "size_bytes": 1000
+              },
+              "outcome": {
+                "NotWorthwhile": {
+                  "requested": 95,
+                  "floor": 90
+                }
+              },
+              "updated_at": 1758000003000
+            },
+            "path": null
+          }
+        ],
+        "expect": {
+          "Report": {
+            "inserted": 7,
+            "duplicates": 0,
+            "conflicts": []
+          }
+        }
+      }
+    },
+    {
+      "Record": {
+        "observation": {
+          "run_id": 1,
+          "operation": "Convert",
+          "source": null,
+          "revisions": {
+            "ab_av1": "ab-av1 0.10.0",
+            "ffmpeg": "ffmpeg 7.1",
+            "encoder": "SVT-AV1 3.0.0"
+          },
+          "outcome": {
+            "Failed": {
+              "facts": {
+                "kind": "EncodeRun",
+                "message": "encode failed",
+                "diagnostic": "exit status 1"
+              }
+            }
+          },
+          "started_at": null,
+          "finished_at": 1758000004000
+        },
+        "paths": {
+          "source": "/k/z.mkv",
+          "output": null
+        }
+      }
+    },
+    {
+      "Page": {
+        "order": "Date",
+        "direction": "Descending",
+        "continues": false,
+        "limit": 3,
+        "expect": {
+          "ids": [
+            {
+              "Translated": {
+                "origin": "V2History",
+                "record_key": "0000000000000c07"
+              }
+            },
+            {
+              "Translated": {
+                "origin": "V2History",
+                "record_key": "0000000000000c04"
+              }
+            },
+            {
+              "Translated": {
+                "origin": "V2History",
+                "record_key": "0000000000000c01"
+              }
+            }
+          ],
+          "matched": 7,
+          "more": true,
+          "revision": 2
+        }
+      }
+    },
+    {
+      "Page": {
+        "order": "Date",
+        "direction": "Descending",
+        "continues": true,
+        "limit": 3,
+        "expect": {
+          "ids": [
+            {
+              "Translated": {
+                "origin": "V2History",
+                "record_key": "0000000000000c05"
+              }
+            },
+            {
+              "Translated": {
+                "origin": "V2History",
+                "record_key": "0000000000000c02"
+              }
+            },
+            {
+              "Translated": {
+                "origin": "V2History",
+                "record_key": "0000000000000c06"
+              }
+            }
+          ],
+          "matched": 7,
+          "more": true,
+          "revision": 2
+        }
+      }
+    },
+    {
+      "Page": {
+        "order": "Date",
+        "direction": "Descending",
+        "continues": true,
+        "limit": 3,
+        "expect": {
+          "ids": [
+            {
+              "Translated": {
+                "origin": "V2History",
+                "record_key": "0000000000000c03"
+              }
+            }
+          ],
+          "matched": 7,
+          "more": false,
+          "revision": 2
+        }
+      }
+    },
+    {
+      "Page": {
+        "order": "Date",
+        "direction": "Ascending",
+        "continues": false,
+        "limit": 3,
+        "expect": {
+          "ids": [
+            {
+              "Translated": {
+                "origin": "V2History",
+                "record_key": "0000000000000c02"
+              }
+            },
+            {
+              "Translated": {
+                "origin": "V2History",
+                "record_key": "0000000000000c05"
+              }
+            },
+            {
+              "Translated": {
+                "origin": "V2History",
+                "record_key": "0000000000000c07"
+              }
+            }
+          ],
+          "matched": 7,
+          "more": true,
+          "revision": 2
+        }
+      }
+    },
+    {
+      "Page": {
+        "order": "Date",
+        "direction": "Ascending",
+        "continues": true,
+        "limit": 3,
+        "expect": {
+          "ids": [
+            {
+              "Translated": {
+                "origin": "V2History",
+                "record_key": "0000000000000c04"
+              }
+            },
+            {
+              "Translated": {
+                "origin": "V2History",
+                "record_key": "0000000000000c01"
+              }
+            },
+            {
+              "Translated": {
+                "origin": "V2History",
+                "record_key": "0000000000000c06"
+              }
+            }
+          ],
+          "matched": 7,
+          "more": true,
+          "revision": 2
+        }
+      }
+    },
+    {
+      "Page": {
+        "order": "Date",
+        "direction": "Ascending",
+        "continues": true,
+        "limit": 3,
+        "expect": {
+          "ids": [
+            {
+              "Translated": {
+                "origin": "V2History",
+                "record_key": "0000000000000c03"
+              }
+            }
+          ],
+          "matched": 7,
+          "more": false,
+          "revision": 2
+        }
+      }
+    },
+    {
+      "Page": {
+        "order": "Date",
+        "direction": "Descending",
+        "continues": false,
+        "limit": 7,
+        "expect": {
+          "ids": [
+            {
+              "Translated": {
+                "origin": "V2History",
+                "record_key": "0000000000000c07"
+              }
+            },
+            {
+              "Translated": {
+                "origin": "V2History",
+                "record_key": "0000000000000c04"
+              }
+            },
+            {
+              "Translated": {
+                "origin": "V2History",
+                "record_key": "0000000000000c01"
+              }
+            },
+            {
+              "Translated": {
+                "origin": "V2History",
+                "record_key": "0000000000000c05"
+              }
+            },
+            {
+              "Translated": {
+                "origin": "V2History",
+                "record_key": "0000000000000c02"
+              }
+            },
+            {
+              "Translated": {
+                "origin": "V2History",
+                "record_key": "0000000000000c06"
+              }
+            },
+            {
+              "Translated": {
+                "origin": "V2History",
+                "record_key": "0000000000000c03"
+              }
+            }
+          ],
+          "matched": 7,
+          "more": false,
+          "revision": 2
+        }
+      }
+    },
+    {
+      "Page": {
+        "order": "Date",
+        "direction": "Descending",
+        "continues": false,
+        "limit": 1,
+        "expect": {
+          "ids": [
+            {
+              "Translated": {
+                "origin": "V2History",
+                "record_key": "0000000000000c07"
+              }
+            }
+          ],
+          "matched": 7,
+          "more": true,
+          "revision": 2
+        }
+      }
+    },
+    {
+      "Page": {
+        "order": "Date",
+        "direction": "Descending",
+        "continues": true,
+        "limit": 1,
+        "expect": {
+          "ids": [
+            {
+              "Translated": {
+                "origin": "V2History",
+                "record_key": "0000000000000c04"
+              }
+            }
+          ],
+          "matched": 7,
+          "more": true,
+          "revision": 2
+        }
+      }
+    },
+    {
+      "Page": {
+        "order": "Recorded",
+        "direction": "Descending",
+        "outcomes": [
+          "Converted",
+          "Remuxed",
+          "NotWorthwhile",
+          "Analyzed",
+          "Failed",
+          "Stopped",
+          "Incomplete"
+        ],
+        "continues": false,
+        "limit": 3,
+        "expect": {
+          "ids": [
+            {
+              "Native": 1
+            },
+            {
+              "Translated": {
+                "origin": "V2History",
+                "record_key": "0000000000000c07"
+              }
+            },
+            {
+              "Translated": {
+                "origin": "V2History",
+                "record_key": "0000000000000c06"
+              }
+            }
+          ],
+          "matched": 8,
+          "more": true,
+          "revision": 2
+        }
+      }
+    },
+    {
+      "Page": {
+        "order": "Recorded",
+        "direction": "Descending",
+        "outcomes": [
+          "Converted",
+          "Remuxed",
+          "NotWorthwhile",
+          "Analyzed",
+          "Failed",
+          "Stopped",
+          "Incomplete"
+        ],
+        "continues": true,
+        "limit": 3,
+        "expect": {
+          "ids": [
+            {
+              "Translated": {
+                "origin": "V2History",
+                "record_key": "0000000000000c05"
+              }
+            },
+            {
+              "Translated": {
+                "origin": "V2History",
+                "record_key": "0000000000000c04"
+              }
+            },
+            {
+              "Translated": {
+                "origin": "V2History",
+                "record_key": "0000000000000c03"
+              }
+            }
+          ],
+          "matched": 8,
+          "more": true,
+          "revision": 2
+        }
+      }
+    },
+    {
+      "Page": {
+        "order": "Recorded",
+        "direction": "Descending",
+        "outcomes": [
+          "Converted",
+          "Remuxed",
+          "NotWorthwhile",
+          "Analyzed",
+          "Failed",
+          "Stopped",
+          "Incomplete"
+        ],
+        "continues": true,
+        "limit": 3,
+        "expect": {
+          "ids": [
+            {
+              "Translated": {
+                "origin": "V2History",
+                "record_key": "0000000000000c02"
+              }
+            },
+            {
+              "Translated": {
+                "origin": "V2History",
+                "record_key": "0000000000000c01"
+              }
+            }
+          ],
+          "matched": 8,
+          "more": false,
+          "revision": 2
+        }
+      }
+    },
+    {
+      "Page": {
+        "order": "File",
+        "direction": "Ascending",
+        "continues": false,
+        "limit": 2,
+        "expect": {
+          "ids": [
+            {
+              "Translated": {
+                "origin": "V2History",
+                "record_key": "0000000000000c03"
+              }
+            },
+            {
+              "Translated": {
+                "origin": "V2History",
+                "record_key": "0000000000000c06"
+              }
+            }
+          ],
+          "matched": 7,
+          "more": true,
+          "revision": 2
+        }
+      }
+    },
+    "Scrub",
+    {
+      "Page": {
+        "order": "File",
+        "direction": "Ascending",
+        "continues": true,
+        "limit": 2,
+        "expect": {
+          "ids": [
+            {
+              "Translated": {
+                "origin": "V2History",
+                "record_key": "0000000000000c07"
+              }
+            },
+            {
+              "Translated": {
+                "origin": "V2History",
+                "record_key": "0000000000000c06"
+              }
+            }
+          ],
+          "matched": 7,
+          "more": true,
+          "revision": 3
+        }
+      }
+    },
+    {
+      "Page": {
+        "order": "File",
+        "direction": "Ascending",
+        "continues": true,
+        "limit": 2,
+        "expect": {
+          "ids": [
+            {
+              "Translated": {
+                "origin": "V2History",
+                "record_key": "0000000000000c05"
+              }
+            },
+            {
+              "Translated": {
+                "origin": "V2History",
+                "record_key": "0000000000000c04"
+              }
+            }
+          ],
+          "matched": 7,
+          "more": true,
+          "revision": 3
+        }
+      }
+    }
+  ]
+}

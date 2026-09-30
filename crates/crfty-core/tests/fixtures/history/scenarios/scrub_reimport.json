@@ -1,0 +1,412 @@
+{
+  "description": "Scrub deletes every path row and changes no observation. A second scrub deletes nothing and leaves the revision unchanged. Re-importing after a scrub is all duplicates and restores no readable path; File then has no value to sort or search on. A new record imported afterwards still writes its path.",
+  "steps": [
+    {
+      "Record": {
+        "observation": {
+          "run_id": 1,
+          "operation": "Convert",
+          "source": {
+            "content_key": "blake2b:1111000000000001",
+            "codec": "H264",
+            "width": 1920,
+            "height": 1080,
+            "duration_ms": 600000,
+            "size_bytes": 5000
+          },
+          "revisions": {
+            "ab_av1": "ab-av1 0.10.0",
+            "ffmpeg": "ffmpeg 7.1",
+            "encoder": "SVT-AV1 3.0.0"
+          },
+          "outcome": {
+            "Converted": {
+              "search": {
+                "analysis": {
+                  "requested_target": 95,
+                  "successful_target": 95,
+                  "fallback_floor": 90,
+                  "fallback_step": 1,
+                  "failed_attempts": [],
+                  "measurement": {
+                    "crf": 30000,
+                    "score": 9512,
+                    "predicted_size": 3100000,
+                    "predicted_percent_basis_points": 3875,
+                    "predicted_duration_ms": 240000,
+                    "from_cache": false
+                  },
+                  "profile": {
+                    "preset": 6,
+                    "max_encoded_percent_basis_points": 8000,
+                    "samples": null,
+                    "sample_duration_ms": 20000,
+                    "thorough": false,
+                    "decode_mode": "Software",
+                    "ab_av1_revision": "ab-av1 0.10.0",
+                    "ffmpeg_revision": "ffmpeg 7.1",
+                    "encoder_revision": "SVT-AV1 3.0.0"
+                  }
+                },
+                "duration": 60000,
+                "assessment": null
+              },
+              "encode": {
+                "measurement": {
+                  "Live": {
+                    "sizes": {
+                      "input": 5000,
+                      "output": 2000
+                    },
+                    "decode": "Software"
+                  }
+                },
+                "duration": 100000,
+                "output_content_key": "blake2b:out-1111000000000001",
+                "assessment": null
+              }
+            }
+          },
+          "started_at": null,
+          "finished_at": 1758000001000
+        },
+        "paths": {
+          "source": "/s/native.mkv",
+          "output": "/s/native.av1.mkv"
+        }
+      }
+    },
+    {
+      "Import": {
+        "batch": [
+          {
+            "observation": {
+              "origin": "V2History",
+              "record_key": "00000000000000f1",
+              "source": {
+                "codec": "H264",
+                "width": 1280,
+                "height": 720,
+                "duration_ms": 300000,
+                "size_bytes": 1000
+              },
+              "outcome": {
+                "Converted": {
+                  "quality": {
+                    "crf": 30000,
+                    "score": 9500,
+                    "target": 95
+                  },
+                  "output_size": 600,
+                  "encode_duration": 5000
+                }
+              },
+              "updated_at": 1758000002000
+            },
+            "path": "/s/one.mkv"
+          },
+          {
+            "observation": {
+              "origin": "V2History",
+              "record_key": "00000000000000f2",
+              "source": {
+                "codec": "H264",
+                "width": 1280,
+                "height": 720,
+                "duration_ms": 300000,
+                "size_bytes": 1000
+              },
+              "outcome": {
+                "NotWorthwhile": {
+                  "requested": 95,
+                  "floor": 90
+                }
+              },
+              "updated_at": 1758000003000
+            },
+            "path": null
+          }
+        ],
+        "expect": {
+          "Report": {
+            "inserted": 2,
+            "duplicates": 0,
+            "conflicts": []
+          }
+        }
+      }
+    },
+    "Scrub",
+    {
+      "Detail": {
+        "id": {
+          "Native": 1
+        },
+        "expect": {
+          "Found": {
+            "seq": 1,
+            "paths": null
+          }
+        }
+      }
+    },
+    {
+      "Detail": {
+        "id": {
+          "Translated": {
+            "origin": "V2History",
+            "record_key": "00000000000000f1"
+          }
+        },
+        "expect": {
+          "Found": {
+            "seq": 2,
+            "paths": null
+          }
+        }
+      }
+    },
+    {
+      "Page": {
+        "order": "Recorded",
+        "direction": "Ascending",
+        "limit": 10,
+        "expect": {
+          "ids": [
+            {
+              "Native": 1
+            },
+            {
+              "Translated": {
+                "origin": "V2History",
+                "record_key": "00000000000000f1"
+              }
+            },
+            {
+              "Translated": {
+                "origin": "V2History",
+                "record_key": "00000000000000f2"
+              }
+            }
+          ],
+          "matched": 3,
+          "more": false,
+          "revision": 3
+        }
+      }
+    },
+    "Scrub",
+    {
+      "Import": {
+        "batch": [
+          {
+            "observation": {
+              "origin": "V2History",
+              "record_key": "00000000000000f1",
+              "source": {
+                "codec": "H264",
+                "width": 1280,
+                "height": 720,
+                "duration_ms": 300000,
+                "size_bytes": 1000
+              },
+              "outcome": {
+                "Converted": {
+                  "quality": {
+                    "crf": 30000,
+                    "score": 9500,
+                    "target": 95
+                  },
+                  "output_size": 600,
+                  "encode_duration": 5000
+                }
+              },
+              "updated_at": 1758000002000
+            },
+            "path": "/s/one.mkv"
+          },
+          {
+            "observation": {
+              "origin": "V2History",
+              "record_key": "00000000000000f2",
+              "source": {
+                "codec": "H264",
+                "width": 1280,
+                "height": 720,
+                "duration_ms": 300000,
+                "size_bytes": 1000
+              },
+              "outcome": {
+                "NotWorthwhile": {
+                  "requested": 95,
+                  "floor": 90
+                }
+              },
+              "updated_at": 1758000003000
+            },
+            "path": null
+          }
+        ],
+        "expect": {
+          "Report": {
+            "inserted": 0,
+            "duplicates": 2,
+            "conflicts": []
+          }
+        }
+      }
+    },
+    {
+      "Detail": {
+        "id": {
+          "Translated": {
+            "origin": "V2History",
+            "record_key": "00000000000000f1"
+          }
+        },
+        "expect": {
+          "Found": {
+            "seq": 2,
+            "paths": null
+          }
+        }
+      }
+    },
+    {
+      "Page": {
+        "order": "File",
+        "direction": "Ascending",
+        "limit": 10,
+        "expect": {
+          "ids": [
+            {
+              "Translated": {
+                "origin": "V2History",
+                "record_key": "00000000000000f2"
+              }
+            },
+            {
+              "Translated": {
+                "origin": "V2History",
+                "record_key": "00000000000000f1"
+              }
+            },
+            {
+              "Native": 1
+            }
+          ],
+          "matched": 3,
+          "more": false,
+          "revision": 3
+        }
+      }
+    },
+    {
+      "Page": {
+        "order": "Date",
+        "direction": "Descending",
+        "search": "one",
+        "limit": 10,
+        "expect": {
+          "ids": [],
+          "matched": 0,
+          "more": false,
+          "revision": 3
+        }
+      }
+    },
+    {
+      "Import": {
+        "batch": [
+          {
+            "observation": {
+              "origin": "V2History",
+              "record_key": "00000000000000f3",
+              "source": {
+                "codec": "H264",
+                "width": 1280,
+                "height": 720,
+                "duration_ms": 300000,
+                "size_bytes": 1000
+              },
+              "outcome": {
+                "Converted": {
+                  "quality": {
+                    "crf": 30000,
+                    "score": 9500,
+                    "target": 95
+                  },
+                  "output_size": 600,
+                  "encode_duration": 5000
+                }
+              },
+              "updated_at": 1758000004000
+            },
+            "path": "/s/three.mkv"
+          }
+        ],
+        "expect": {
+          "Report": {
+            "inserted": 1,
+            "duplicates": 0,
+            "conflicts": []
+          }
+        }
+      }
+    },
+    {
+      "Detail": {
+        "id": {
+          "Translated": {
+            "origin": "V2History",
+            "record_key": "00000000000000f3"
+          }
+        },
+        "expect": {
+          "Found": {
+            "seq": 4,
+            "paths": {
+              "source": "/s/three.mkv",
+              "output": null
+            }
+          }
+        }
+      }
+    },
+    {
+      "Page": {
+        "order": "File",
+        "direction": "Ascending",
+        "limit": 10,
+        "expect": {
+          "ids": [
+            {
+              "Translated": {
+                "origin": "V2History",
+                "record_key": "00000000000000f3"
+              }
+            },
+            {
+              "Translated": {
+                "origin": "V2History",
+                "record_key": "00000000000000f2"
+              }
+            },
+            {
+              "Translated": {
+                "origin": "V2History",
+                "record_key": "00000000000000f1"
+              }
+            },
+            {
+              "Native": 1
+            }
+          ],
+          "matched": 4,
+          "more": false,
+          "revision": 4
+        }
+      }
+    }
+  ]
+}

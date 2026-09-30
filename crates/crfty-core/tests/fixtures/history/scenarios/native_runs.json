@@ -1,0 +1,557 @@
+{
+  "description": "Native runs: one source analyzed after converting, a queue retry that fails then converts the same content, stopped and incomplete runs on one source, and a run that failed before its source was identified. The default filter hides failed, stopped, and incomplete; an explicit filter selects them, an empty filter matches nothing, and an empty search is no search. Before reads measured input sizes and otherwise the inspected source size.",
+  "steps": [
+    {
+      "Record": {
+        "observation": {
+          "run_id": 1,
+          "operation": "Convert",
+          "source": {
+            "content_key": "blake2b:aaaa000000000001",
+            "codec": "H264",
+            "width": 1920,
+            "height": 1080,
+            "duration_ms": 600000,
+            "size_bytes": 8000000
+          },
+          "revisions": {
+            "ab_av1": "ab-av1 0.10.0",
+            "ffmpeg": "ffmpeg 7.1",
+            "encoder": "SVT-AV1 3.0.0"
+          },
+          "outcome": {
+            "Converted": {
+              "search": {
+                "analysis": {
+                  "requested_target": 95,
+                  "successful_target": 95,
+                  "fallback_floor": 90,
+                  "fallback_step": 1,
+                  "failed_attempts": [],
+                  "measurement": {
+                    "crf": 30000,
+                    "score": 9512,
+                    "predicted_size": 3100000,
+                    "predicted_percent_basis_points": 3875,
+                    "predicted_duration_ms": 240000,
+                    "from_cache": false
+                  },
+                  "profile": {
+                    "preset": 6,
+                    "max_encoded_percent_basis_points": 8000,
+                    "samples": null,
+                    "sample_duration_ms": 20000,
+                    "thorough": false,
+                    "decode_mode": "Software",
+                    "ab_av1_revision": "ab-av1 0.10.0",
+                    "ffmpeg_revision": "ffmpeg 7.1",
+                    "encoder_revision": "SVT-AV1 3.0.0"
+                  }
+                },
+                "duration": 60000,
+                "assessment": null
+              },
+              "encode": {
+                "measurement": {
+                  "Live": {
+                    "sizes": {
+                      "input": 8000000,
+                      "output": 3000000
+                    },
+                    "decode": "Software"
+                  }
+                },
+                "duration": 240000,
+                "output_content_key": "blake2b:out-aaaa000000000001",
+                "assessment": null
+              }
+            }
+          },
+          "started_at": null,
+          "finished_at": 1758000001000
+        },
+        "paths": {
+          "source": "/library/shows/Pilot.mkv",
+          "output": "/library/shows/Pilot.av1.mkv"
+        }
+      }
+    },
+    {
+      "Record": {
+        "observation": {
+          "run_id": 2,
+          "operation": "Analyze",
+          "source": {
+            "content_key": "blake2b:aaaa000000000001",
+            "codec": "H264",
+            "width": 1920,
+            "height": 1080,
+            "duration_ms": 600000,
+            "size_bytes": 8000000
+          },
+          "revisions": {
+            "ab_av1": "ab-av1 0.10.0",
+            "ffmpeg": "ffmpeg 7.1",
+            "encoder": "SVT-AV1 3.0.0"
+          },
+          "outcome": {
+            "Analyzed": {
+              "search": {
+                "analysis": {
+                  "requested_target": 95,
+                  "successful_target": 95,
+                  "fallback_floor": 90,
+                  "fallback_step": 1,
+                  "failed_attempts": [],
+                  "measurement": {
+                    "crf": 29000,
+                    "score": 9512,
+                    "predicted_size": 3100000,
+                    "predicted_percent_basis_points": 3875,
+                    "predicted_duration_ms": 240000,
+                    "from_cache": false
+                  },
+                  "profile": {
+                    "preset": 6,
+                    "max_encoded_percent_basis_points": 8000,
+                    "samples": null,
+                    "sample_duration_ms": 20000,
+                    "thorough": false,
+                    "decode_mode": "Software",
+                    "ab_av1_revision": "ab-av1 0.10.0",
+                    "ffmpeg_revision": "ffmpeg 7.1",
+                    "encoder_revision": "SVT-AV1 3.0.0"
+                  }
+                },
+                "duration": 60000,
+                "assessment": null
+              }
+            }
+          },
+          "started_at": null,
+          "finished_at": 1758000002000
+        },
+        "paths": {
+          "source": "/library/shows/Pilot.mkv",
+          "output": null
+        }
+      }
+    },
+    {
+      "Record": {
+        "observation": {
+          "run_id": 3,
+          "operation": "Convert",
+          "source": {
+            "content_key": "blake2b:bbbb000000000002",
+            "codec": "H264",
+            "width": 1920,
+            "height": 1080,
+            "duration_ms": 600000,
+            "size_bytes": 6000000
+          },
+          "revisions": {
+            "ab_av1": "ab-av1 0.10.0",
+            "ffmpeg": "ffmpeg 7.1",
+            "encoder": "SVT-AV1 3.0.0"
+          },
+          "outcome": {
+            "Failed": {
+              "facts": {
+                "kind": "EncodeRun",
+                "message": "encode failed",
+                "diagnostic": "exit status 1"
+              }
+            }
+          },
+          "started_at": null,
+          "finished_at": 1758000003000
+        },
+        "paths": {
+          "source": "/library/films/Heist.mkv",
+          "output": null
+        }
+      }
+    },
+    {
+      "Record": {
+        "observation": {
+          "run_id": 4,
+          "operation": "Convert",
+          "source": {
+            "content_key": "blake2b:bbbb000000000002",
+            "codec": "H264",
+            "width": 1920,
+            "height": 1080,
+            "duration_ms": 600000,
+            "size_bytes": 6000000
+          },
+          "revisions": {
+            "ab_av1": "ab-av1 0.10.0",
+            "ffmpeg": "ffmpeg 7.1",
+            "encoder": "SVT-AV1 3.0.0"
+          },
+          "outcome": {
+            "Converted": {
+              "search": {
+                "analysis": {
+                  "requested_target": 95,
+                  "successful_target": 95,
+                  "fallback_floor": 90,
+                  "fallback_step": 1,
+                  "failed_attempts": [],
+                  "measurement": {
+                    "crf": 31000,
+                    "score": 9512,
+                    "predicted_size": 3100000,
+                    "predicted_percent_basis_points": 3875,
+                    "predicted_duration_ms": 240000,
+                    "from_cache": false
+                  },
+                  "profile": {
+                    "preset": 6,
+                    "max_encoded_percent_basis_points": 8000,
+                    "samples": null,
+                    "sample_duration_ms": 20000,
+                    "thorough": false,
+                    "decode_mode": "Software",
+                    "ab_av1_revision": "ab-av1 0.10.0",
+                    "ffmpeg_revision": "ffmpeg 7.1",
+                    "encoder_revision": "SVT-AV1 3.0.0"
+                  }
+                },
+                "duration": 60000,
+                "assessment": null
+              },
+              "encode": {
+                "measurement": {
+                  "Live": {
+                    "sizes": {
+                      "input": 6000000,
+                      "output": 2400000
+                    },
+                    "decode": "Software"
+                  }
+                },
+                "duration": 200000,
+                "output_content_key": "blake2b:out-bbbb000000000002",
+                "assessment": null
+              }
+            }
+          },
+          "started_at": null,
+          "finished_at": 1758000004000
+        },
+        "paths": {
+          "source": "/library/films/Heist.mkv",
+          "output": "/library/films/Heist.av1.mkv"
+        }
+      }
+    },
+    {
+      "Record": {
+        "observation": {
+          "run_id": 5,
+          "operation": "Convert",
+          "source": {
+            "content_key": "blake2b:cccc000000000003",
+            "codec": "H264",
+            "width": 1920,
+            "height": 1080,
+            "duration_ms": 600000,
+            "size_bytes": 900000000
+          },
+          "revisions": {
+            "ab_av1": "ab-av1 0.10.0",
+            "ffmpeg": "ffmpeg 7.1",
+            "encoder": "SVT-AV1 3.0.0"
+          },
+          "outcome": "Stopped",
+          "started_at": null,
+          "finished_at": 1758000005000
+        },
+        "paths": {
+          "source": "/library/clips/Long.mkv",
+          "output": null
+        }
+      }
+    },
+    {
+      "Record": {
+        "observation": {
+          "run_id": 6,
+          "operation": "Convert",
+          "source": {
+            "content_key": "blake2b:cccc000000000003",
+            "codec": "H264",
+            "width": 1920,
+            "height": 1080,
+            "duration_ms": 600000,
+            "size_bytes": 900000000
+          },
+          "revisions": {
+            "ab_av1": "ab-av1 0.10.0",
+            "ffmpeg": "ffmpeg 7.1",
+            "encoder": "SVT-AV1 3.0.0"
+          },
+          "outcome": "Incomplete",
+          "started_at": null,
+          "finished_at": 1758000006000
+        },
+        "paths": {
+          "source": "/library/clips/Long.mkv",
+          "output": null
+        }
+      }
+    },
+    {
+      "Record": {
+        "observation": {
+          "run_id": 7,
+          "operation": "Convert",
+          "source": null,
+          "revisions": {
+            "ab_av1": "ab-av1 0.10.0",
+            "ffmpeg": "ffmpeg 7.1",
+            "encoder": "SVT-AV1 3.0.0"
+          },
+          "outcome": {
+            "Failed": {
+              "facts": {
+                "kind": "EncodeRun",
+                "message": "encode failed",
+                "diagnostic": "exit status 1"
+              }
+            }
+          },
+          "started_at": null,
+          "finished_at": 1758000007000
+        },
+        "paths": {
+          "source": "/library/clips/Broken.mkv",
+          "output": null
+        }
+      }
+    },
+    {
+      "Page": {
+        "order": "Date",
+        "direction": "Descending",
+        "limit": 10,
+        "expect": {
+          "ids": [
+            {
+              "Native": 4
+            },
+            {
+              "Native": 2
+            },
+            {
+              "Native": 1
+            }
+          ],
+          "matched": 3,
+          "more": false,
+          "revision": 7
+        }
+      }
+    },
+    {
+      "Page": {
+        "order": "Date",
+        "direction": "Descending",
+        "outcomes": [
+          "Failed",
+          "Stopped",
+          "Incomplete"
+        ],
+        "limit": 10,
+        "expect": {
+          "ids": [
+            {
+              "Native": 7
+            },
+            {
+              "Native": 6
+            },
+            {
+              "Native": 5
+            },
+            {
+              "Native": 3
+            }
+          ],
+          "matched": 4,
+          "more": false,
+          "revision": 7
+        }
+      }
+    },
+    {
+      "Page": {
+        "order": "Recorded",
+        "direction": "Ascending",
+        "outcomes": [
+          "Converted",
+          "Remuxed",
+          "NotWorthwhile",
+          "Analyzed",
+          "Failed",
+          "Stopped",
+          "Incomplete"
+        ],
+        "limit": 10,
+        "expect": {
+          "ids": [
+            {
+              "Native": 1
+            },
+            {
+              "Native": 2
+            },
+            {
+              "Native": 3
+            },
+            {
+              "Native": 4
+            },
+            {
+              "Native": 5
+            },
+            {
+              "Native": 6
+            },
+            {
+              "Native": 7
+            }
+          ],
+          "matched": 7,
+          "more": false,
+          "revision": 7
+        }
+      }
+    },
+    {
+      "Page": {
+        "order": "Recorded",
+        "direction": "Ascending",
+        "outcomes": [],
+        "limit": 10,
+        "expect": {
+          "ids": [],
+          "matched": 0,
+          "more": false,
+          "revision": 7
+        }
+      }
+    },
+    {
+      "Page": {
+        "order": "Date",
+        "direction": "Descending",
+        "outcomes": [
+          "Converted"
+        ],
+        "search": "",
+        "limit": 10,
+        "expect": {
+          "ids": [
+            {
+              "Native": 4
+            },
+            {
+              "Native": 1
+            }
+          ],
+          "matched": 2,
+          "more": false,
+          "revision": 7
+        }
+      }
+    },
+    {
+      "Page": {
+        "order": "Before",
+        "direction": "Descending",
+        "outcomes": [
+          "Converted",
+          "Remuxed",
+          "NotWorthwhile",
+          "Analyzed",
+          "Failed",
+          "Stopped",
+          "Incomplete"
+        ],
+        "limit": 10,
+        "expect": {
+          "ids": [
+            {
+              "Native": 6
+            },
+            {
+              "Native": 5
+            },
+            {
+              "Native": 2
+            },
+            {
+              "Native": 1
+            },
+            {
+              "Native": 4
+            },
+            {
+              "Native": 3
+            },
+            {
+              "Native": 7
+            }
+          ],
+          "matched": 7,
+          "more": false,
+          "revision": 7
+        }
+      }
+    },
+    {
+      "Detail": {
+        "id": {
+          "Native": 4
+        },
+        "expect": {
+          "Found": {
+            "seq": 4,
+            "paths": {
+              "source": "/library/films/Heist.mkv",
+              "output": "/library/films/Heist.av1.mkv"
+            }
+          }
+        }
+      }
+    },
+    {
+      "Detail": {
+        "id": {
+          "Native": 7
+        },
+        "expect": {
+          "Found": {
+            "seq": 7,
+            "paths": {
+              "source": "/library/clips/Broken.mkv",
+              "output": null
+            }
+          }
+        }
+      }
+    },
+    {
+      "Detail": {
+        "id": {
+          "Native": 99
+        },
+        "expect": "NotFound"
+      }
+    }
+  ]
+}
