@@ -1,5 +1,5 @@
 {
-  "description": "Every order key in both directions over nine observations. Before reads the measured input for native run 1 (1000) rather than its inspected size (1100); Change is computed only from a measured pair, truncates toward zero (3333 from 1/3, -1428 from a growth of 1/7), and is absent without both sizes or when before is zero. A trailing path separator leaves File absent. Ties break by recording sequence descending, and absent values sort last in both directions.",
+  "description": "Every order key in both directions over nine observations. Before reads the measured input for native run 1 (1000) rather than its inspected size (1100); Change is computed only from a measured pair and is absent without both sizes or when before is zero. A trailing path separator leaves File absent. Ties break by recording sequence descending, and absent values sort last in both directions.",
   "steps": [
     {
       "Import": {

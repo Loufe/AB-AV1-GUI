@@ -1,5 +1,5 @@
 {
-  "description": "A changed source at one path: two conversions of different content recorded under the same source path both stay browsable as separate observations, tie on File and order by recording sequence, and are told apart by sizes. Each content keeps its own standing.",
+  "description": "A changed source at one path: two conversions of different content recorded under the same source path both stay browsable as separate observations, tie on File and order by recording sequence, and are told apart by sizes.",
   "steps": [
     {
       "Record": {

@@ -10,15 +10,29 @@
 //! and replaces this evaluator.
 //!
 //! Recording sequences, revisions, and page cursors are storage-assigned, so
-//! they exist here and not in production code. Sequences start at 1 and
-//! increase by one per inserted observation, in file order within an
-//! import. The revision starts at 0 and increases once per committed
-//! record, once per import that inserts, and once per scrub that deletes a
-//! path row. A page cursor is opaque to the scenarios: it is the order-key
-//! value and recording sequence of the page's last row, so a continued page
-//! stays deterministic even when that row's value or filter membership has
-//! since changed. A `Page` step with `continues` resumes from the cursor the
-//! previous `Page` step returned.
+//! they exist here and not in production code. Sequences start at 1, and
+//! each newly committed observation receives one more than the preceding
+//! committed observation, in file order within an import. An aborted commit
+//! and an import that inserts nothing consume no sequence, and no committed
+//! sequence is reused. The revision starts at 0 and increases once per
+//! committed record, once per import that inserts, and once per scrub that
+//! deletes a path row. A page cursor is opaque to the scenarios: it is the
+//! order-key value and recording sequence of the page's last row, so a
+//! continued page stays deterministic even when that row's value or filter
+//! membership has since changed. A `Page` step with `continues` resumes from
+//! the cursor the previous `Page` step returned, under the same order,
+//! direction, outcome filter, and search.
+//!
+//! A `Detail` step that finds an observation also requires it to read back
+//! exactly as its `Record` or `Import` step committed it. Those committed
+//! facts are kept apart from the store, so a storage runner checks what it
+//! reads back, after restarts and migrations, against the same ledger.
+//!
+//! Path recording is writer input owned by settings (the inverse of
+//! `privacy.anonymize_history`), not History state: it starts enabled,
+//! `SetPathRecording` changes it for later steps, and `Restart` keeps it.
+//! While it is disabled, `Record` and `Import` commit their observations,
+//! sequences, and revisions but write no path row.
 #![forbid(unsafe_code)]
 
 use std::{
@@ -66,6 +80,9 @@ enum Step {
     },
     Scrub,
     Restart,
+    SetPathRecording {
+        enabled: bool,
+    },
     Page {
         order: Order,
         direction: Direction,
@@ -140,7 +157,7 @@ enum Direction {
     Descending,
 }
 
-#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Deserialize)]
 enum OutcomeClass {
     Converted,
     Remuxed,
@@ -174,6 +191,8 @@ struct Position {
 struct Cursor {
     order: Order,
     direction: Direction,
+    outcomes: BTreeSet<OutcomeClass>,
+    search: Option<String>,
     after: Position,
 }
 
@@ -387,7 +406,7 @@ fn class(observation: &Observation) -> OutcomeClass {
 struct PageQuery<'a> {
     order: Order,
     direction: Direction,
-    outcomes: BTreeSet<OutcomeClass>,
+    outcomes: &'a BTreeSet<OutcomeClass>,
     search: Option<&'a str>,
     after: Option<&'a Position>,
     limit: usize,
@@ -404,7 +423,7 @@ fn page(store: &Store, query: &PageQuery<'_>) -> (PageExpectation, Option<Positi
     let matching: Vec<(&Entry, Position)> = store
         .entries
         .iter()
-        .filter(|entry| store.matches(entry, &query.outcomes, query.search))
+        .filter(|entry| store.matches(entry, query.outcomes, query.search))
         .map(|entry| (entry, store.position(entry, query.order)))
         .collect();
     let matched = matching.len();
@@ -454,9 +473,17 @@ fn pairs(store: &Store, after: Option<u64>, limit: usize) -> PairsExpectation {
     }
 }
 
-fn detail(store: &Store, id: &ObservationId) -> DetailExpectation {
+fn detail(
+    store: &Store,
+    committed: &BTreeMap<ObservationId, Observation>,
+    id: &ObservationId,
+) -> DetailExpectation {
     store.find(id).map_or(DetailExpectation::NotFound, |entry| {
-        assert_eq!(entry.observation.id(), *id);
+        assert_eq!(
+            Some(&entry.observation),
+            committed.get(id),
+            "{id:?} reads back other facts than its step committed"
+        );
         DetailExpectation::Found {
             seq: entry.seq,
             paths: store.paths.get(&entry.seq).cloned(),
@@ -470,13 +497,17 @@ fn run(name: &str, scenario: Scenario) {
         "{name}: a scenario states what it covers"
     );
     let mut store = Store::default();
+    let mut committed: BTreeMap<ObservationId, Observation> = BTreeMap::new();
+    let mut record_paths = true;
     let mut cursor: Option<Cursor> = None;
     for (index, step) in scenario.steps.into_iter().enumerate() {
         let at = format!("{name} step {index}");
         match step {
             Step::Record { observation, paths } => {
                 assert_eq!(observation.validate(), Ok(()), "{at}");
-                store.insert(Observation::Native(Box::new(observation)), paths);
+                let observation = Observation::Native(Box::new(observation));
+                committed.insert(observation.id(), observation.clone());
+                store.insert(observation, paths.filter(|_| record_paths));
                 store.revision += 1;
             }
             Step::AbortedRecord { observation, paths } => {
@@ -491,11 +522,15 @@ fn run(name: &str, scenario: Scenario) {
                         assert_eq!(plan.report, expected, "{at}");
                         if !plan.inserts.is_empty() {
                             for candidate in plan.inserts {
-                                let paths = candidate.path.map(|source| ObservationPaths {
-                                    source,
-                                    output: None,
+                                let paths = candidate.path.filter(|_| record_paths).map(|source| {
+                                    ObservationPaths {
+                                        source,
+                                        output: None,
+                                    }
                                 });
-                                store.insert(Observation::Translated(candidate.observation), paths);
+                                let observation = Observation::Translated(candidate.observation);
+                                committed.insert(observation.id(), observation.clone());
+                                store.insert(observation, paths);
                             }
                             store.revision += 1;
                         }
@@ -529,6 +564,7 @@ fn run(name: &str, scenario: Scenario) {
                 assert_eq!(reopened, store, "{at}: restart changed the store");
                 store = reopened;
             }
+            Step::SetPathRecording { enabled } => record_paths = enabled,
             Step::Page {
                 order,
                 direction,
@@ -538,14 +574,21 @@ fn run(name: &str, scenario: Scenario) {
                 limit,
                 expect,
             } => {
+                let outcomes = outcomes.unwrap_or_else(|| DEFAULT_OUTCOMES.into_iter().collect());
+                let search = search.filter(|search| !search.is_empty());
                 let after = if continues {
                     let Some(previous) = &cursor else {
                         panic!("{at}: no previous page left a cursor to continue");
                     };
                     assert_eq!(
-                        (previous.order, previous.direction),
-                        (order, direction),
-                        "{at}: a cursor continues only its own order"
+                        (
+                            previous.order,
+                            previous.direction,
+                            &previous.outcomes,
+                            &previous.search
+                        ),
+                        (order, direction, &outcomes, &search),
+                        "{at}: a cursor continues only its own order, filter, and search"
                     );
                     Some(&previous.after)
                 } else {
@@ -554,8 +597,8 @@ fn run(name: &str, scenario: Scenario) {
                 let query = PageQuery {
                     order,
                     direction,
-                    outcomes: outcomes.unwrap_or_else(|| DEFAULT_OUTCOMES.into_iter().collect()),
-                    search: search.as_deref().filter(|search| !search.is_empty()),
+                    outcomes: &outcomes,
+                    search: search.as_deref(),
                     after,
                     limit,
                 };
@@ -564,6 +607,8 @@ fn run(name: &str, scenario: Scenario) {
                 cursor = next.map(|after| Cursor {
                     order,
                     direction,
+                    outcomes,
+                    search,
                     after,
                 });
             }
@@ -575,7 +620,7 @@ fn run(name: &str, scenario: Scenario) {
                 assert_eq!(pairs(&store, after, limit), expect, "{at}");
             }
             Step::Detail { id, expect } => {
-                assert_eq!(detail(&store, &id), expect, "{at}");
+                assert_eq!(detail(&store, &committed, &id), expect, "{at}");
             }
         }
     }
@@ -590,6 +635,10 @@ fn every_scenario_reproduces_its_expected_results() {
             entry
                 .unwrap_or_else(|error| panic!("read entry in {}: {error}", directory.display()))
                 .path()
+        })
+        .filter(|path| {
+            path.extension()
+                .is_some_and(|extension| extension == "json")
         })
         .collect();
     files.sort();

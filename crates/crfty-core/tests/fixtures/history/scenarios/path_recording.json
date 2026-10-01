@@ -1,0 +1,398 @@
+{
+  "description": "Path recording disabled: a native record and an import commit their observations, recording sequences, and revisions but write no path row. The setting is writer input, so it outlasts a restart and changes no revision. Re-enabling it records paths for later observations only and restores none for earlier ones, so text search finds only the later record and every pathless row sorts last by File.",
+  "steps": [
+    {
+      "SetPathRecording": {
+        "enabled": false
+      }
+    },
+    {
+      "Record": {
+        "observation": {
+          "run_id": 1,
+          "operation": "Convert",
+          "source": {
+            "content_key": "blake2b:3333000000000001",
+            "codec": "H264",
+            "width": 1920,
+            "height": 1080,
+            "duration_ms": 600000,
+            "size_bytes": 5000000
+          },
+          "revisions": {
+            "ab_av1": "ab-av1 0.10.0",
+            "ffmpeg": "ffmpeg 7.1",
+            "encoder": "SVT-AV1 3.0.0"
+          },
+          "outcome": {
+            "Converted": {
+              "search": {
+                "analysis": {
+                  "requested_target": 95,
+                  "successful_target": 95,
+                  "fallback_floor": 90,
+                  "fallback_step": 1,
+                  "failed_attempts": [],
+                  "measurement": {
+                    "crf": 30000,
+                    "score": 9512,
+                    "predicted_size": 3100000,
+                    "predicted_percent_basis_points": 3875,
+                    "predicted_duration_ms": 240000,
+                    "from_cache": false
+                  },
+                  "profile": {
+                    "preset": 6,
+                    "max_encoded_percent_basis_points": 8000,
+                    "samples": null,
+                    "sample_duration_ms": 20000,
+                    "thorough": false,
+                    "decode_mode": "Software",
+                    "ab_av1_revision": "ab-av1 0.10.0",
+                    "ffmpeg_revision": "ffmpeg 7.1",
+                    "encoder_revision": "SVT-AV1 3.0.0"
+                  }
+                },
+                "duration": 60000,
+                "assessment": null
+              },
+              "encode": {
+                "measurement": {
+                  "Live": {
+                    "sizes": {
+                      "input": 5000000,
+                      "output": 2000000
+                    },
+                    "decode": "Software"
+                  }
+                },
+                "duration": 100000,
+                "output_content_key": "blake2b:out-3333000000000001",
+                "assessment": null
+              }
+            }
+          },
+          "started_at": null,
+          "finished_at": 1758000001000
+        },
+        "paths": {
+          "source": "/p/one.mkv",
+          "output": "/p/one.av1.mkv"
+        }
+      }
+    },
+    {
+      "Import": {
+        "batch": [
+          {
+            "observation": {
+              "origin": "V2History",
+              "record_key": "00000000000000d1",
+              "source": {
+                "codec": "H264",
+                "width": 1280,
+                "height": 720,
+                "duration_ms": 300000,
+                "size_bytes": 1000
+              },
+              "outcome": {
+                "Converted": {
+                  "quality": {
+                    "crf": 25000,
+                    "score": 9500,
+                    "target": 95
+                  },
+                  "output_size": 600,
+                  "encode_duration": 1000
+                }
+              },
+              "updated_at": 1758000002500
+            },
+            "path": "/p/old.mkv"
+          }
+        ],
+        "expect": {
+          "Report": {
+            "inserted": 1,
+            "duplicates": 0,
+            "conflicts": []
+          }
+        }
+      }
+    },
+    {
+      "Detail": {
+        "id": {
+          "Native": 1
+        },
+        "expect": {
+          "Found": {
+            "seq": 1,
+            "paths": null
+          }
+        }
+      }
+    },
+    {
+      "Detail": {
+        "id": {
+          "Translated": {
+            "origin": "V2History",
+            "record_key": "00000000000000d1"
+          }
+        },
+        "expect": {
+          "Found": {
+            "seq": 2,
+            "paths": null
+          }
+        }
+      }
+    },
+    "Restart",
+    {
+      "Record": {
+        "observation": {
+          "run_id": 2,
+          "operation": "Convert",
+          "source": {
+            "content_key": "blake2b:3333000000000002",
+            "codec": "H264",
+            "width": 1920,
+            "height": 1080,
+            "duration_ms": 600000,
+            "size_bytes": 5000000
+          },
+          "revisions": {
+            "ab_av1": "ab-av1 0.10.0",
+            "ffmpeg": "ffmpeg 7.1",
+            "encoder": "SVT-AV1 3.0.0"
+          },
+          "outcome": {
+            "Converted": {
+              "search": {
+                "analysis": {
+                  "requested_target": 95,
+                  "successful_target": 95,
+                  "fallback_floor": 90,
+                  "fallback_step": 1,
+                  "failed_attempts": [],
+                  "measurement": {
+                    "crf": 30000,
+                    "score": 9512,
+                    "predicted_size": 3100000,
+                    "predicted_percent_basis_points": 3875,
+                    "predicted_duration_ms": 240000,
+                    "from_cache": false
+                  },
+                  "profile": {
+                    "preset": 6,
+                    "max_encoded_percent_basis_points": 8000,
+                    "samples": null,
+                    "sample_duration_ms": 20000,
+                    "thorough": false,
+                    "decode_mode": "Software",
+                    "ab_av1_revision": "ab-av1 0.10.0",
+                    "ffmpeg_revision": "ffmpeg 7.1",
+                    "encoder_revision": "SVT-AV1 3.0.0"
+                  }
+                },
+                "duration": 60000,
+                "assessment": null
+              },
+              "encode": {
+                "measurement": {
+                  "Live": {
+                    "sizes": {
+                      "input": 5000000,
+                      "output": 2000000
+                    },
+                    "decode": "Software"
+                  }
+                },
+                "duration": 100000,
+                "output_content_key": "blake2b:out-3333000000000002",
+                "assessment": null
+              }
+            }
+          },
+          "started_at": null,
+          "finished_at": 1758000002000
+        },
+        "paths": {
+          "source": "/p/two.mkv",
+          "output": "/p/two.av1.mkv"
+        }
+      }
+    },
+    {
+      "Detail": {
+        "id": {
+          "Native": 2
+        },
+        "expect": {
+          "Found": {
+            "seq": 3,
+            "paths": null
+          }
+        }
+      }
+    },
+    {
+      "SetPathRecording": {
+        "enabled": true
+      }
+    },
+    {
+      "Record": {
+        "observation": {
+          "run_id": 3,
+          "operation": "Convert",
+          "source": {
+            "content_key": "blake2b:3333000000000003",
+            "codec": "H264",
+            "width": 1920,
+            "height": 1080,
+            "duration_ms": 600000,
+            "size_bytes": 5000000
+          },
+          "revisions": {
+            "ab_av1": "ab-av1 0.10.0",
+            "ffmpeg": "ffmpeg 7.1",
+            "encoder": "SVT-AV1 3.0.0"
+          },
+          "outcome": {
+            "Converted": {
+              "search": {
+                "analysis": {
+                  "requested_target": 95,
+                  "successful_target": 95,
+                  "fallback_floor": 90,
+                  "fallback_step": 1,
+                  "failed_attempts": [],
+                  "measurement": {
+                    "crf": 30000,
+                    "score": 9512,
+                    "predicted_size": 3100000,
+                    "predicted_percent_basis_points": 3875,
+                    "predicted_duration_ms": 240000,
+                    "from_cache": false
+                  },
+                  "profile": {
+                    "preset": 6,
+                    "max_encoded_percent_basis_points": 8000,
+                    "samples": null,
+                    "sample_duration_ms": 20000,
+                    "thorough": false,
+                    "decode_mode": "Software",
+                    "ab_av1_revision": "ab-av1 0.10.0",
+                    "ffmpeg_revision": "ffmpeg 7.1",
+                    "encoder_revision": "SVT-AV1 3.0.0"
+                  }
+                },
+                "duration": 60000,
+                "assessment": null
+              },
+              "encode": {
+                "measurement": {
+                  "Live": {
+                    "sizes": {
+                      "input": 5000000,
+                      "output": 2000000
+                    },
+                    "decode": "Software"
+                  }
+                },
+                "duration": 100000,
+                "output_content_key": "blake2b:out-3333000000000003",
+                "assessment": null
+              }
+            }
+          },
+          "started_at": null,
+          "finished_at": 1758000003000
+        },
+        "paths": {
+          "source": "/p/three.mkv",
+          "output": "/p/three.av1.mkv"
+        }
+      }
+    },
+    {
+      "Detail": {
+        "id": {
+          "Native": 3
+        },
+        "expect": {
+          "Found": {
+            "seq": 4,
+            "paths": {
+              "source": "/p/three.mkv",
+              "output": "/p/three.av1.mkv"
+            }
+          }
+        }
+      }
+    },
+    {
+      "Detail": {
+        "id": {
+          "Native": 1
+        },
+        "expect": {
+          "Found": {
+            "seq": 1,
+            "paths": null
+          }
+        }
+      }
+    },
+    {
+      "Page": {
+        "order": "File",
+        "direction": "Ascending",
+        "limit": 10,
+        "expect": {
+          "ids": [
+            {
+              "Native": 3
+            },
+            {
+              "Native": 2
+            },
+            {
+              "Translated": {
+                "origin": "V2History",
+                "record_key": "00000000000000d1"
+              }
+            },
+            {
+              "Native": 1
+            }
+          ],
+          "matched": 4,
+          "more": false,
+          "revision": 4
+        }
+      }
+    },
+    {
+      "Page": {
+        "order": "File",
+        "direction": "Ascending",
+        "search": "mkv",
+        "limit": 10,
+        "expect": {
+          "ids": [
+            {
+              "Native": 3
+            }
+          ],
+          "matched": 1,
+          "more": false,
+          "revision": 4
+        }
+      }
+    }
+  ]
+}

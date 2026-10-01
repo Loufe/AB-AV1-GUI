@@ -1,0 +1,290 @@
+{
+  "description": "Change is exact integer arithmetic truncating toward zero, over sizes up to the largest a signed 64-bit column holds. Each pair of rows ties only under truncation, and the tie breaks by recording sequence descending: 7 to 8 and 10000 to 11428 both give -1428 where floor gives -1429 to the first; 3 to 1 and 10000 to 3334 both give 6666 where rounding gives 6667 to the first; and 9223372036854775807 to 1 gives 9999 like 10000 to 1, where floating-point division gives 10000. Each wrong method reorders the descending page; the ascending page pins the same ties.",
+  "steps": [
+    {
+      "Import": {
+        "batch": [
+          {
+            "observation": {
+              "origin": "V2History",
+              "record_key": "000000000000000b",
+              "source": {
+                "codec": "H264",
+                "width": 1920,
+                "height": 1080,
+                "duration_ms": 600000,
+                "size_bytes": 10000
+              },
+              "outcome": {
+                "Converted": {
+                  "quality": {
+                    "crf": 30000,
+                    "score": 9500,
+                    "target": 95
+                  },
+                  "output_size": 11428,
+                  "encode_duration": 1000
+                }
+              },
+              "updated_at": 1758000001000
+            },
+            "path": null
+          },
+          {
+            "observation": {
+              "origin": "V2History",
+              "record_key": "000000000000000a",
+              "source": {
+                "codec": "H264",
+                "width": 1920,
+                "height": 1080,
+                "duration_ms": 600000,
+                "size_bytes": 7
+              },
+              "outcome": {
+                "Converted": {
+                  "quality": {
+                    "crf": 30000,
+                    "score": 9500,
+                    "target": 95
+                  },
+                  "output_size": 8,
+                  "encode_duration": 1000
+                }
+              },
+              "updated_at": 1758000002000
+            },
+            "path": null
+          },
+          {
+            "observation": {
+              "origin": "V2History",
+              "record_key": "000000000000000c",
+              "source": {
+                "codec": "H264",
+                "width": 1920,
+                "height": 1080,
+                "duration_ms": 600000,
+                "size_bytes": 3
+              },
+              "outcome": {
+                "Converted": {
+                  "quality": {
+                    "crf": 30000,
+                    "score": 9500,
+                    "target": 95
+                  },
+                  "output_size": 1,
+                  "encode_duration": 1000
+                }
+              },
+              "updated_at": 1758000003000
+            },
+            "path": null
+          },
+          {
+            "observation": {
+              "origin": "V2History",
+              "record_key": "000000000000000d",
+              "source": {
+                "codec": "H264",
+                "width": 1920,
+                "height": 1080,
+                "duration_ms": 600000,
+                "size_bytes": 10000
+              },
+              "outcome": {
+                "Converted": {
+                  "quality": {
+                    "crf": 30000,
+                    "score": 9500,
+                    "target": 95
+                  },
+                  "output_size": 3334,
+                  "encode_duration": 1000
+                }
+              },
+              "updated_at": 1758000004000
+            },
+            "path": null
+          },
+          {
+            "observation": {
+              "origin": "V2History",
+              "record_key": "000000000000000e",
+              "source": {
+                "codec": "H264",
+                "width": 1920,
+                "height": 1080,
+                "duration_ms": 600000,
+                "size_bytes": 9223372036854775807
+              },
+              "outcome": {
+                "Converted": {
+                  "quality": {
+                    "crf": 30000,
+                    "score": 9500,
+                    "target": 95
+                  },
+                  "output_size": 1,
+                  "encode_duration": 1000
+                }
+              },
+              "updated_at": 1758000005000
+            },
+            "path": null
+          },
+          {
+            "observation": {
+              "origin": "V2History",
+              "record_key": "000000000000000f",
+              "source": {
+                "codec": "H264",
+                "width": 1920,
+                "height": 1080,
+                "duration_ms": 600000,
+                "size_bytes": 10000
+              },
+              "outcome": {
+                "Converted": {
+                  "quality": {
+                    "crf": 30000,
+                    "score": 9500,
+                    "target": 95
+                  },
+                  "output_size": 1,
+                  "encode_duration": 1000
+                }
+              },
+              "updated_at": 1758000006000
+            },
+            "path": null
+          }
+        ],
+        "expect": {
+          "Report": {
+            "inserted": 6,
+            "duplicates": 0,
+            "conflicts": []
+          }
+        }
+      }
+    },
+    {
+      "Page": {
+        "order": "Change",
+        "direction": "Descending",
+        "limit": 10,
+        "expect": {
+          "ids": [
+            {
+              "Translated": {
+                "origin": "V2History",
+                "record_key": "000000000000000f"
+              }
+            },
+            {
+              "Translated": {
+                "origin": "V2History",
+                "record_key": "000000000000000e"
+              }
+            },
+            {
+              "Translated": {
+                "origin": "V2History",
+                "record_key": "000000000000000d"
+              }
+            },
+            {
+              "Translated": {
+                "origin": "V2History",
+                "record_key": "000000000000000c"
+              }
+            },
+            {
+              "Translated": {
+                "origin": "V2History",
+                "record_key": "000000000000000a"
+              }
+            },
+            {
+              "Translated": {
+                "origin": "V2History",
+                "record_key": "000000000000000b"
+              }
+            }
+          ],
+          "matched": 6,
+          "more": false,
+          "revision": 1
+        }
+      }
+    },
+    {
+      "Page": {
+        "order": "Change",
+        "direction": "Ascending",
+        "limit": 10,
+        "expect": {
+          "ids": [
+            {
+              "Translated": {
+                "origin": "V2History",
+                "record_key": "000000000000000a"
+              }
+            },
+            {
+              "Translated": {
+                "origin": "V2History",
+                "record_key": "000000000000000b"
+              }
+            },
+            {
+              "Translated": {
+                "origin": "V2History",
+                "record_key": "000000000000000d"
+              }
+            },
+            {
+              "Translated": {
+                "origin": "V2History",
+                "record_key": "000000000000000c"
+              }
+            },
+            {
+              "Translated": {
+                "origin": "V2History",
+                "record_key": "000000000000000f"
+              }
+            },
+            {
+              "Translated": {
+                "origin": "V2History",
+                "record_key": "000000000000000e"
+              }
+            }
+          ],
+          "matched": 6,
+          "more": false,
+          "revision": 1
+        }
+      }
+    },
+    {
+      "Detail": {
+        "id": {
+          "Translated": {
+            "origin": "V2History",
+            "record_key": "000000000000000e"
+          }
+        },
+        "expect": {
+          "Found": {
+            "seq": 5,
+            "paths": null
+          }
+        }
+      }
+    }
+  ]
+}

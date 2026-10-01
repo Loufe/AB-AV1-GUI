@@ -33,9 +33,15 @@ fn fixtures(family: &str, kind: &str) -> Vec<(String, String)> {
     let mut found: Vec<(String, String)> = fs::read_dir(&directory)
         .unwrap_or_else(|error| panic!("read {}: {error}", directory.display()))
         .map(|entry| {
-            let path = entry
+            entry
                 .unwrap_or_else(|error| panic!("read entry in {}: {error}", directory.display()))
-                .path();
+                .path()
+        })
+        .filter(|path| {
+            path.extension()
+                .is_some_and(|extension| extension == "json")
+        })
+        .map(|path| {
             let name = path.display().to_string();
             let text = fs::read_to_string(&path)
                 .unwrap_or_else(|error| panic!("read {}: {error}", path.display()));
