@@ -1,35 +1,72 @@
-//! One immutable observation per terminal run, the unit of History fixed by
-//! ADR-024. An observation is identified by its run identifier, names at
-//! most one source by content key, and never changes once the run is
-//! terminal: a retry, a changed source, or a later success is a new
-//! observation, and a file's standing is derived from its observations on
-//! request. Predictions (`SearchEvidence`) and measurements
+//! The immutable observation, the unit of History fixed by ADR-024. An
+//! observation is native, one terminal run identified by its run
+//! identifier, or translated, one imported record identified by its origin
+//! and record key (ADR-025). Both share one identity space and one
+//! accessor surface on [`Observation`], but not one evidence type: a
+//! translated record is too sparse to satisfy native invariants.
+//!
+//! A native observation names at most one source by content key and never
+//! changes once the run is terminal: a retry, a changed source, or a later
+//! success is a new observation, and a file's standing is derived from its
+//! observations on request. Predictions (`SearchEvidence`) and measurements
 //! (`EncodeEvidence`, `RemuxEvidence`) are distinct types so no consumer can
-//! present one as the other, and an absent fact stays absent.
+//! present one as the other, and an absent fact stays absent. Readable
+//! paths are never part of an observation; they live in the separate
+//! [`ObservationPaths`] relation, which a scrub deletes wholesale so no
+//! observation's facts change.
 //!
 //! History owns eligibility: the typed accessors on [`Observation`] yield a
 //! fact only when the outcome, source assessment, and evidence qualify for
-//! that consumer. Estimation owns weighting and never re-decides
-//! eligibility. The full contract, including the facts required per outcome
-//! and the eligibility table, is `docs/HISTORY.md`.
+//! that consumer. Translated evidence decides no standing and enters no
+//! assessed aggregate; its one accessor is the imported fact. Estimation
+//! owns weighting and never re-decides eligibility. The full contract,
+//! including the facts required per outcome and the eligibility table, is
+//! `docs/HISTORY.md`.
 //!
-//! Today the observation is a derived view over the run, record, and output
-//! ledgers of [`DurableState`]; the same type becomes the stored unit when
-//! History gains its own storage.
+//! Today the native observation is a derived view over the run, record, and
+//! output ledgers of [`DurableState`]; the same type becomes the stored unit
+//! when History gains its own storage.
+
+use std::path::PathBuf;
 
 use serde::{Deserialize, Serialize};
 
 use crate::{
     AnalysisAttempt, AnalysisResult, CompletionEvidence, ContentKey, ConversionRun, DecodeMode,
     DurableState, DurationMs, FailureFacts, ItemOutcome, JobPhase, Operation, PhaseSpan, RunId,
-    SearchMeasurement, ToolRevisions, UnixMillis, VideoCodec, VmafTarget,
+    SearchMeasurement, ToolRevisions, TranslatedId, TranslatedObservation, TranslatedOutcome,
+    TranslatedQuality, TranslatedSource, UnixMillis, VideoCodec, VmafTarget,
 };
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub enum Observation {
+    Native(Box<NativeObservation>),
+    Translated(TranslatedObservation),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub enum ObservationId {
+    Native(RunId),
+    Translated(TranslatedId),
+}
+
+/// The readable paths of one observation: zero or one row per observation,
+/// held apart from it so a scrub deletes rows and never rewrites an
+/// observation.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ObservationPaths {
+    pub source: PathBuf,
+    pub output: Option<PathBuf>,
+}
 
 /// One terminal run. Skipped work and reservation-only failures decide
 /// nothing and produce no observation; their reasons stay on the queue item.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
-pub struct Observation {
+pub struct NativeObservation {
     pub run_id: RunId,
     pub operation: Operation,
     /// `None`: the run ended before its source was identified by content.
@@ -234,7 +271,124 @@ pub struct PredictionPair<'a> {
     pub encoding: DurationMs,
 }
 
+/// Translated evidence, a labelled cohort of its own: it is never
+/// deduplicated against native observations, since the two share no
+/// identity.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ImportedFact<'a> {
+    pub source: &'a TranslatedSource,
+    pub kind: ImportedKind<'a>,
+    pub updated_at: Option<UnixMillis>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ImportedKind<'a> {
+    /// Quality-prior evidence only: the origin kept no profile, so this is
+    /// never a reusable analysis.
+    Analyzed { quality: &'a TranslatedQuality },
+    Converted {
+        quality: &'a TranslatedQuality,
+        /// Present only when the record held both the source and output size.
+        sizes: Option<MeasuredSizes>,
+        encode_duration: Option<DurationMs>,
+    },
+    NotWorthwhile {
+        requested: Option<VmafTarget>,
+        floor: Option<VmafTarget>,
+    },
+}
+
 impl Observation {
+    #[must_use]
+    pub fn id(&self) -> ObservationId {
+        match self {
+            Self::Native(native) => ObservationId::Native(native.run_id),
+            Self::Translated(translated) => ObservationId::Translated(translated.id()),
+        }
+    }
+
+    /// The instant History browses by `Date`: a native finish instant or a
+    /// translated record's last update, which are different claims.
+    #[must_use]
+    pub fn dated_at(&self) -> Option<UnixMillis> {
+        match self {
+            Self::Native(native) => native.finished_at,
+            Self::Translated(translated) => translated.updated_at,
+        }
+    }
+
+    pub fn validate(&self) -> Result<(), &'static str> {
+        match self {
+            Self::Native(native) => native.validate(),
+            Self::Translated(translated) => translated.validate(),
+        }
+    }
+
+    /// Whether this observation decides its content's standing. Translated
+    /// evidence names no content and never does.
+    #[must_use]
+    pub fn decisive_fact(&self) -> Option<DecisiveFact<'_>> {
+        self.native()?.decisive_fact()
+    }
+
+    #[must_use]
+    pub fn reduction_fact(&self) -> Option<ReductionFact<'_>> {
+        self.native()?.reduction_fact()
+    }
+
+    #[must_use]
+    pub fn rate_sample(&self, operation: Operation) -> Option<RateSample<'_>> {
+        self.native()?.rate_sample(operation)
+    }
+
+    #[must_use]
+    pub fn prediction_pair(&self) -> Option<PredictionPair<'_>> {
+        self.native()?.prediction_pair()
+    }
+
+    /// Eligible for the imported cohort: every translated observation.
+    /// Native observations are never imported evidence.
+    #[must_use]
+    pub fn imported_fact(&self) -> Option<ImportedFact<'_>> {
+        let Self::Translated(translated) = self else {
+            return None;
+        };
+        let kind = match &translated.outcome {
+            TranslatedOutcome::Converted {
+                quality,
+                output_size,
+                encode_duration,
+            } => ImportedKind::Converted {
+                quality,
+                sizes: translated
+                    .source
+                    .size_bytes
+                    .zip(*output_size)
+                    .map(|(input, output)| MeasuredSizes { input, output }),
+                encode_duration: *encode_duration,
+            },
+            TranslatedOutcome::NotWorthwhile { requested, floor } => ImportedKind::NotWorthwhile {
+                requested: *requested,
+                floor: *floor,
+            },
+            TranslatedOutcome::Analyzed { quality } => ImportedKind::Analyzed { quality },
+        };
+        Some(ImportedFact {
+            source: &translated.source,
+            kind,
+            updated_at: translated.updated_at,
+        })
+    }
+
+    fn native(&self) -> Option<&NativeObservation> {
+        match self {
+            Self::Native(native) => Some(native),
+            Self::Translated(_) => None,
+        }
+    }
+}
+
+impl NativeObservation {
     /// Consistency the type shape cannot express. Every observation derived
     /// from folded state satisfies this; deserialized fixtures prove which
     /// shapes the contract rejects.
@@ -264,6 +418,7 @@ impl Observation {
                 floor,
                 attempts,
             } => {
+                requested.validate()?;
                 if floor > requested {
                     return Err("not-worthwhile floor exceeds the requested target");
                 }
@@ -286,7 +441,7 @@ impl Observation {
 
     /// The content this observation is about, when identified.
     #[must_use]
-    pub fn content_key(&self) -> Option<&ContentKey> {
+    pub(crate) fn content_key(&self) -> Option<&ContentKey> {
         self.source.as_ref().map(|source| &source.content_key)
     }
 
@@ -294,7 +449,7 @@ impl Observation {
     /// no assessment: the decision was made, whatever its evidence is now
     /// worth to an aggregate.
     #[must_use]
-    pub fn decisive_fact(&self) -> Option<DecisiveFact<'_>> {
+    pub(crate) fn decisive_fact(&self) -> Option<DecisiveFact<'_>> {
         let kind = match &self.outcome {
             ObservedOutcome::Converted { .. } => DecisiveKind::Converted,
             ObservedOutcome::Remuxed { .. } => DecisiveKind::Remuxed,
@@ -319,7 +474,7 @@ impl Observation {
     /// Eligible for output-size reduction aggregates: a produced output with
     /// both sizes measured whose source matched across the producing phase.
     #[must_use]
-    pub fn reduction_fact(&self) -> Option<ReductionFact<'_>> {
+    pub(crate) fn reduction_fact(&self) -> Option<ReductionFact<'_>> {
         let source = self.source.as_ref()?;
         let (kind, sizes, assessment, search) = match &self.outcome {
             ObservedOutcome::Converted { search, encode } => (
@@ -355,7 +510,7 @@ impl Observation {
     /// the phase. Analyze samples come from every outcome that searched;
     /// convert samples come from conversions only.
     #[must_use]
-    pub fn rate_sample(&self, operation: Operation) -> Option<RateSample<'_>> {
+    pub(crate) fn rate_sample(&self, operation: Operation) -> Option<RateSample<'_>> {
         let source = self
             .source
             .as_ref()
@@ -397,7 +552,7 @@ impl Observation {
     /// predicted and whose encode measured sizes and time, with both phases
     /// assessed as matched.
     #[must_use]
-    pub fn prediction_pair(&self) -> Option<PredictionPair<'_>> {
+    pub(crate) fn prediction_pair(&self) -> Option<PredictionPair<'_>> {
         let source = self.source.as_ref()?;
         let ObservedOutcome::Converted { search, encode } = &self.outcome else {
             return None;
@@ -437,9 +592,9 @@ fn matched(assessment: Option<SourceAssessment>) -> Option<()> {
     (assessment == Some(SourceAssessment::Matched)).then_some(())
 }
 
-/// Every terminal, non-skipped run as an observation, in run order.
+/// Every terminal, non-skipped run as a native observation, in run order.
 #[must_use]
-pub fn observations(state: &DurableState) -> Vec<Observation> {
+pub fn observations(state: &DurableState) -> Vec<NativeObservation> {
     state
         .conversion_runs
         .values()
@@ -447,9 +602,10 @@ pub fn observations(state: &DurableState) -> Vec<Observation> {
         .collect()
 }
 
-/// The latest decisive observation about `content_key`, or `None` when
-/// nothing has decided its standing. Display standing only: queue
-/// eligibility keeps reading the record's verdict.
+/// The latest decisive observation about `content_key` among
+/// `observations` in recording order, or `None` when nothing has decided
+/// its standing. Display standing only: queue eligibility keeps reading the
+/// record's verdict.
 #[must_use]
 pub fn standing<'a>(
     observations: &'a [Observation],
@@ -462,7 +618,7 @@ pub fn standing<'a>(
     })
 }
 
-fn observe(state: &DurableState, run: &ConversionRun) -> Option<Observation> {
+fn observe(state: &DurableState, run: &ConversionRun) -> Option<NativeObservation> {
     let outcome = match run.outcome.as_ref()? {
         ItemOutcome::Skipped { .. } => return None,
         ItemOutcome::Analyzed => ObservedOutcome::Analyzed {
@@ -538,7 +694,7 @@ fn observe(state: &DurableState, run: &ConversionRun) -> Option<Observation> {
         })
     });
     let profile = &run.spec.execution.profile;
-    Some(Observation {
+    Some(NativeObservation {
         run_id: run.spec.run_id,
         operation: run.spec.operation,
         source,
@@ -593,8 +749,9 @@ mod tests {
     use super::*;
     use crate::test_support::{analysis, finished_run, identity, key, live, meta};
     use crate::{
-        ArtifactIdentity, ConversionRun, DurableState, FailureKind, FileRecord, JobAction,
-        OutputState, OutputTransaction, Replacement, SkipReason, VideoCodec, VmafScore,
+        ArtifactIdentity, ConversionRun, Crf, DurableState, FailureKind, FileRecord, ImportOrigin,
+        JobAction, OutputState, OutputTransaction, RecordKey, Replacement, SkipReason, VideoCodec,
+        VmafScore,
     };
 
     const FINISHED: UnixMillis = UnixMillis(1_700_000_000_000);
@@ -666,7 +823,10 @@ mod tests {
         }
     }
 
-    fn assessed(mut observation: Observation, assessment: Option<SourceAssessment>) -> Observation {
+    fn assessed(
+        mut observation: NativeObservation,
+        assessment: Option<SourceAssessment>,
+    ) -> NativeObservation {
         match &mut observation.outcome {
             ObservedOutcome::Analyzed { search } => search.assessment = assessment,
             ObservedOutcome::Converted { search, encode } => {
@@ -683,7 +843,7 @@ mod tests {
     }
 
     #[expect(clippy::expect_used, reason = "test assertion")]
-    fn only(state: &DurableState) -> Observation {
+    fn only(state: &DurableState) -> NativeObservation {
         let mut found = observations(state);
         assert_eq!(found.len(), 1, "exactly one observation");
         found.pop().expect("length checked")
@@ -887,12 +1047,179 @@ mod tests {
             run(5, "b", ItemOutcome::Converted(live(8_000, 3_000))),
             run(6, "c", ItemOutcome::Stopped),
         ]);
-        let found = observations(&state);
-        let standing_run = |name: &str| standing(&found, &key(name)).map(|found| found.run_id);
+        let mut found: Vec<Observation> = observations(&state)
+            .into_iter()
+            .map(|native| Observation::Native(Box::new(native)))
+            .collect();
+        found.push(Observation::Translated(translated(
+            "00000000000000a1",
+            converted_quality(),
+        )));
+        let standing_run = |name: &str| {
+            standing(&found, &key(name)).map(|found| match found.id() {
+                ObservationId::Native(run_id) => run_id,
+                ObservationId::Translated(id) => panic!("translated standing {id:?}"),
+            })
+        };
         assert_eq!(standing_run("a"), Some(RunId(1)));
         assert_eq!(standing_run("b"), Some(RunId(5)));
         assert_eq!(standing_run("c"), None);
         assert_eq!(standing_run("missing"), None);
+    }
+
+    fn converted_quality() -> TranslatedOutcome {
+        TranslatedOutcome::Converted {
+            quality: TranslatedQuality {
+                crf: Some(Crf(30_000)),
+                score: Some(VmafScore(9_512)),
+                target: Some(VmafTarget(95)),
+            },
+            output_size: Some(3_000),
+            encode_duration: Some(DurationMs(240_000)),
+        }
+    }
+
+    fn translated(record_key: &str, outcome: TranslatedOutcome) -> TranslatedObservation {
+        TranslatedObservation {
+            origin: ImportOrigin::V2History,
+            record_key: RecordKey::new(record_key.to_owned())
+                .unwrap_or_else(|error| panic!("{record_key}: {error}")),
+            source: TranslatedSource {
+                codec: Some(VideoCodec::H264),
+                width: Some(1920),
+                height: Some(1080),
+                duration_ms: Some(600_000),
+                size_bytes: Some(8_000),
+            },
+            outcome,
+            updated_at: None,
+        }
+    }
+
+    #[test]
+    fn the_enum_delegates_native_accessors_and_identifies_both_kinds() {
+        let state = state_with(vec![run(
+            1,
+            "a",
+            ItemOutcome::Converted(live(8_000, 3_000)),
+        )]);
+        let native = assessed(only(&state), Some(SourceAssessment::Matched));
+        let wrapped = Observation::Native(Box::new(native.clone()));
+        assert_eq!(wrapped.id(), ObservationId::Native(RunId(1)));
+        assert_eq!(wrapped.dated_at(), native.finished_at);
+        assert_eq!(wrapped.validate(), Ok(()));
+        assert_eq!(wrapped.decisive_fact(), native.decisive_fact());
+        assert_eq!(wrapped.reduction_fact(), native.reduction_fact());
+        assert!(wrapped.reduction_fact().is_some());
+        for operation in [Operation::Analyze, Operation::Convert] {
+            assert_eq!(
+                wrapped.rate_sample(operation),
+                native.rate_sample(operation)
+            );
+            assert!(wrapped.rate_sample(operation).is_some());
+        }
+        assert_eq!(wrapped.prediction_pair(), native.prediction_pair());
+        assert!(wrapped.prediction_pair().is_some());
+        assert_eq!(wrapped.imported_fact(), None);
+
+        let mut imported = translated("00000000000000a1", converted_quality());
+        imported.updated_at = Some(FINISHED);
+        let wrapped = Observation::Translated(imported.clone());
+        assert_eq!(wrapped.id(), ObservationId::Translated(imported.id()));
+        assert_eq!(wrapped.dated_at(), Some(FINISHED));
+        assert_eq!(wrapped.decisive_fact(), None);
+        assert_eq!(wrapped.reduction_fact(), None);
+        assert_eq!(wrapped.rate_sample(Operation::Analyze), None);
+        assert_eq!(wrapped.rate_sample(Operation::Convert), None);
+        assert_eq!(wrapped.prediction_pair(), None);
+        assert!(wrapped.imported_fact().is_some());
+    }
+
+    #[test]
+    fn imported_facts_come_from_translated_observations_only() {
+        let converted =
+            Observation::Translated(translated("00000000000000a1", converted_quality()));
+        let Some(fact) = converted.imported_fact() else {
+            panic!("translated conversion is an imported fact");
+        };
+        assert_eq!(fact.source.size_bytes, Some(8_000));
+        assert_eq!(fact.updated_at, None);
+        let ImportedKind::Converted {
+            quality,
+            sizes,
+            encode_duration,
+        } = fact.kind
+        else {
+            panic!("converted kind");
+        };
+        assert_eq!(quality.crf, Some(Crf(30_000)));
+        assert_eq!(
+            sizes,
+            Some(MeasuredSizes {
+                input: 8_000,
+                output: 3_000
+            })
+        );
+        assert_eq!(encode_duration, Some(DurationMs(240_000)));
+
+        let mut unsized_source = translated("00000000000000a2", converted_quality());
+        unsized_source.source.size_bytes = None;
+        let mut unsized_output = translated(
+            "00000000000000a3",
+            TranslatedOutcome::Converted {
+                quality: TranslatedQuality {
+                    crf: None,
+                    score: None,
+                    target: None,
+                },
+                output_size: None,
+                encode_duration: None,
+            },
+        );
+        unsized_output.source.size_bytes = Some(8_000);
+        for half_known in [unsized_source, unsized_output] {
+            let observation = Observation::Translated(half_known);
+            assert!(matches!(
+                observation.imported_fact().map(|fact| fact.kind),
+                Some(ImportedKind::Converted { sizes: None, .. })
+            ));
+        }
+
+        let declined = Observation::Translated(translated(
+            "00000000000000a4",
+            TranslatedOutcome::NotWorthwhile {
+                requested: Some(VmafTarget(95)),
+                floor: None,
+            },
+        ));
+        assert_eq!(
+            declined.imported_fact().map(|fact| fact.kind),
+            Some(ImportedKind::NotWorthwhile {
+                requested: Some(VmafTarget(95)),
+                floor: None,
+            })
+        );
+
+        let analyzed = Observation::Translated(translated(
+            "00000000000000a5",
+            TranslatedOutcome::Analyzed {
+                quality: TranslatedQuality {
+                    crf: Some(Crf(30_000)),
+                    score: None,
+                    target: None,
+                },
+            },
+        ));
+        assert_eq!(
+            analyzed.imported_fact().map(|fact| fact.kind),
+            Some(ImportedKind::Analyzed {
+                quality: &TranslatedQuality {
+                    crf: Some(Crf(30_000)),
+                    score: None,
+                    target: None,
+                },
+            })
+        );
     }
 
     #[test]
@@ -980,7 +1307,7 @@ mod tests {
             run(2, "b", not_worthwhile()),
             run(3, "c", ItemOutcome::Analyzed),
         ]);
-        let found: Vec<Observation> = observations(&state)
+        let found: Vec<NativeObservation> = observations(&state)
             .into_iter()
             .map(|observation| assessed(observation, Some(SourceAssessment::Matched)))
             .collect();
@@ -1140,7 +1467,7 @@ mod tests {
         ]);
         for observation in observations(&state) {
             let encoded = serde_json::to_string(&observation).expect("serialize observation");
-            let decoded: Observation =
+            let decoded: NativeObservation =
                 serde_json::from_str(&encoded).expect("deserialize observation");
             assert_eq!(decoded, observation);
         }

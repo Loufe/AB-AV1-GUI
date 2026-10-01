@@ -31,12 +31,12 @@ Mechanics, fixed by this record:
 
 * An observation describes one run that reached a terminal outcome: converted, remuxed, not worthwhile, analyzed, failed, stopped, or incomplete. Skipped work and reservation-only failures produce no observation; their reasons stay on the queue item.
 * A native observation is identified by its run identifier, which is never reused. A translated observation is identified by its import origin and the origin's record key, never by a readable path, so pathless evidence remains identifiable and re-import stays idempotent.
-* An observation names exactly one source by content key. Several observations may name the same content; the file's current standing is the latest decisive observation for that content and is derived on request, never stored or overwritten.
-* Once recorded an observation does not change. A later run on the same file is a new observation. Privacy scrub removes readable paths from an observation and nothing else.
+* A native observation names at most one source by content key, and several native observations may name the same content. A translated observation has no content key. The file's current standing is the latest decisive native observation for that content and is derived on request, never stored or overwritten.
+* Once recorded an observation does not change. A later run on the same file is a new observation. Readable paths live in separate optional path rows; privacy scrub deletes those rows and changes no observation.
 * Predictions and measurements are distinct typed facts on the observation; neither replaces or reconciles the other. Absent facts are absent, and an unknown decision time is represented as unknown rather than filled in.
 * Three things are called attempts and are kept distinct. Quality-target fallback attempts belong to the analysis result inside one run. The hardware-to-software decode retry belongs to the run and is visible in its encode decode mode. A queue retry mints a new run and therefore a new observation, with lineage derived by content key and run order.
 * History owns eligibility. Each consumer obtains facts through a typed accessor that yields a value only when the observation's outcome, source assessment, and provenance qualify for that purpose. Estimation owns weighting: how much an eligible observation counts for a given prediction, including by toolchain, environment, and throttling provenance. Neither reaches into the other's decision.
-* Aggregates that count files dedupe by content key, since one file may honestly hold several converted observations after its source changes.
+* Aggregates that count native files dedupe by content key, since one file may honestly hold several converted observations after its source changes. Translated observations remain a separately labelled cohort and are never deduplicated against native evidence.
 
 ### Consequences
 
@@ -48,4 +48,4 @@ Mechanics, fixed by this record:
 
 ## More information
 
-The observation contract, the required and optional facts per outcome, and the eligibility rules are in `docs/HISTORY.md`. The seam this record fixes is described in `docs/design/estimation.md`. Source assessment per phase, which the eligibility accessors consume, is the [source-continuity contract](../design/source-continuity.md). Content identity is ADR-019 and metric tagging of quality facts is ADR-022. ADR-015's separate imported projection is replaced when translated observations share this model in durable storage; until then it describes the shipped parked path.
+The observation contract, the required and optional facts per outcome, and the eligibility rules are in `docs/HISTORY.md`. The seam this record fixes is described in `docs/design/estimation.md`. Source assessment per phase, which the eligibility accessors consume, is the [source-continuity contract](../design/source-continuity.md). Content identity is ADR-019 and metric tagging of quality facts is ADR-022. ADR-025 fixes the translated observation's identity, shape, and import rules, and replaces ADR-015's separate imported projection when translated observations share this model in durable storage; until then ADR-015 describes the shipped parked path.

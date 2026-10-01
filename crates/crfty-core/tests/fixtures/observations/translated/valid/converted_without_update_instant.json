@@ -1,0 +1,19 @@
+{
+  "origin": "V2History",
+  "record_key": "00000000deadbeef",
+  "source": {
+    "codec": "Vp9",
+    "width": 1080,
+    "height": 1920,
+    "duration_ms": 45000,
+    "size_bytes": 120000000
+  },
+  "outcome": {
+    "Converted": {
+      "quality": { "crf": 30000, "score": 9601, "target": 95 },
+      "output_size": 41000000,
+      "encode_duration": null
+    }
+  },
+  "updated_at": null
+}

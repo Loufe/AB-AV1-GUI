@@ -1,0 +1,45 @@
+{
+  "observation": {
+    "run_id": 46,
+    "operation": "Analyze",
+    "source": null,
+    "revisions": { "ab_av1": "ab-av1 0.10.0", "ffmpeg": "ffmpeg 7.1", "encoder": "SVT-AV1 3.0.0" },
+    "outcome": {
+      "Analyzed": {
+        "search": {
+          "analysis": {
+            "requested_target": 101,
+            "successful_target": 100,
+            "fallback_floor": 90,
+            "fallback_step": 1,
+            "failed_attempts": [{ "target": 101, "last_measurement": null }],
+            "measurement": {
+              "crf": 12000,
+              "score": 10000,
+              "predicted_size": 7100000,
+              "predicted_percent_basis_points": 8875,
+              "predicted_duration_ms": 240000,
+              "from_cache": false
+            },
+            "profile": {
+              "preset": 6,
+              "max_encoded_percent_basis_points": 9000,
+              "samples": null,
+              "sample_duration_ms": 20000,
+              "thorough": false,
+              "decode_mode": "Software",
+              "ab_av1_revision": "ab-av1 0.10.0",
+              "ffmpeg_revision": "ffmpeg 7.1",
+              "encoder_revision": "SVT-AV1 3.0.0"
+            }
+          },
+          "duration": 61000,
+          "assessment": null
+        }
+      }
+    },
+    "started_at": 1758153600000,
+    "finished_at": 1758153912000
+  },
+  "rejects_with": "VMAF targets must be in 0..=100"
+}

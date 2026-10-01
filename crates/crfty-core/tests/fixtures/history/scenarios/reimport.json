@@ -1,0 +1,655 @@
+{
+  "description": "Import planning in file order. The first file holds an in-file duplicate, which writes nothing including its different path, and an in-file conflict, in which the earlier record stands. Re-importing the stored records is all duplicates and re-importing the first file adds only its conflict; neither changes the revision. A later file conflicts with an earlier import through a corrected update instant, and the stored observation stands.",
+  "steps": [
+    {
+      "Import": {
+        "batch": [
+          {
+            "observation": {
+              "origin": "V2History",
+              "record_key": "00000000000000c1",
+              "source": {
+                "codec": "H264",
+                "width": 1280,
+                "height": 720,
+                "duration_ms": 300000,
+                "size_bytes": 1000
+              },
+              "outcome": {
+                "Converted": {
+                  "quality": {
+                    "crf": 25000,
+                    "score": 9500,
+                    "target": 95
+                  },
+                  "output_size": 600,
+                  "encode_duration": 1000
+                }
+              },
+              "updated_at": 1758000001000
+            },
+            "path": "/old/one.mkv"
+          },
+          {
+            "observation": {
+              "origin": "V2History",
+              "record_key": "00000000000000c2",
+              "source": {
+                "codec": "H264",
+                "width": 1280,
+                "height": 720,
+                "duration_ms": 300000,
+                "size_bytes": 2000
+              },
+              "outcome": {
+                "NotWorthwhile": {
+                  "requested": 95,
+                  "floor": 90
+                }
+              },
+              "updated_at": 1758000002000
+            },
+            "path": null
+          },
+          {
+            "observation": {
+              "origin": "V2History",
+              "record_key": "00000000000000c1",
+              "source": {
+                "codec": "H264",
+                "width": 1280,
+                "height": 720,
+                "duration_ms": 300000,
+                "size_bytes": 1000
+              },
+              "outcome": {
+                "Converted": {
+                  "quality": {
+                    "crf": 25000,
+                    "score": 9500,
+                    "target": 95
+                  },
+                  "output_size": 600,
+                  "encode_duration": 1000
+                }
+              },
+              "updated_at": 1758000001000
+            },
+            "path": "/elsewhere/one.mkv"
+          },
+          {
+            "observation": {
+              "origin": "V2History",
+              "record_key": "00000000000000c3",
+              "source": {
+                "codec": "H264",
+                "width": 1280,
+                "height": 720,
+                "duration_ms": 300000,
+                "size_bytes": 1000
+              },
+              "outcome": {
+                "Converted": {
+                  "quality": {
+                    "crf": 30000,
+                    "score": 9500,
+                    "target": 95
+                  },
+                  "output_size": 500,
+                  "encode_duration": 2000
+                }
+              },
+              "updated_at": 1758000003000
+            },
+            "path": "/old/three.mkv"
+          },
+          {
+            "observation": {
+              "origin": "V2History",
+              "record_key": "00000000000000c3",
+              "source": {
+                "codec": "H264",
+                "width": 1280,
+                "height": 720,
+                "duration_ms": 300000,
+                "size_bytes": 1000
+              },
+              "outcome": {
+                "Converted": {
+                  "quality": {
+                    "crf": 20000,
+                    "score": 9500,
+                    "target": 95
+                  },
+                  "output_size": 500,
+                  "encode_duration": 2000
+                }
+              },
+              "updated_at": 1758000003000
+            },
+            "path": "/old/three.mkv"
+          }
+        ],
+        "expect": {
+          "Report": {
+            "inserted": 3,
+            "duplicates": 1,
+            "conflicts": [
+              {
+                "origin": "V2History",
+                "record_key": "00000000000000c3"
+              }
+            ]
+          }
+        }
+      }
+    },
+    {
+      "Detail": {
+        "id": {
+          "Translated": {
+            "origin": "V2History",
+            "record_key": "00000000000000c1"
+          }
+        },
+        "expect": {
+          "Found": {
+            "seq": 1,
+            "paths": {
+              "source": "/old/one.mkv",
+              "output": null
+            }
+          }
+        }
+      }
+    },
+    {
+      "Detail": {
+        "id": {
+          "Translated": {
+            "origin": "V2History",
+            "record_key": "00000000000000c3"
+          }
+        },
+        "expect": {
+          "Found": {
+            "seq": 3,
+            "paths": {
+              "source": "/old/three.mkv",
+              "output": null
+            }
+          }
+        }
+      }
+    },
+    {
+      "Page": {
+        "order": "Quality",
+        "direction": "Descending",
+        "limit": 10,
+        "expect": {
+          "ids": [
+            {
+              "Translated": {
+                "origin": "V2History",
+                "record_key": "00000000000000c3"
+              }
+            },
+            {
+              "Translated": {
+                "origin": "V2History",
+                "record_key": "00000000000000c1"
+              }
+            },
+            {
+              "Translated": {
+                "origin": "V2History",
+                "record_key": "00000000000000c2"
+              }
+            }
+          ],
+          "matched": 3,
+          "more": false,
+          "revision": 1
+        }
+      }
+    },
+    {
+      "Import": {
+        "batch": [
+          {
+            "observation": {
+              "origin": "V2History",
+              "record_key": "00000000000000c1",
+              "source": {
+                "codec": "H264",
+                "width": 1280,
+                "height": 720,
+                "duration_ms": 300000,
+                "size_bytes": 1000
+              },
+              "outcome": {
+                "Converted": {
+                  "quality": {
+                    "crf": 25000,
+                    "score": 9500,
+                    "target": 95
+                  },
+                  "output_size": 600,
+                  "encode_duration": 1000
+                }
+              },
+              "updated_at": 1758000001000
+            },
+            "path": "/old/one.mkv"
+          },
+          {
+            "observation": {
+              "origin": "V2History",
+              "record_key": "00000000000000c2",
+              "source": {
+                "codec": "H264",
+                "width": 1280,
+                "height": 720,
+                "duration_ms": 300000,
+                "size_bytes": 2000
+              },
+              "outcome": {
+                "NotWorthwhile": {
+                  "requested": 95,
+                  "floor": 90
+                }
+              },
+              "updated_at": 1758000002000
+            },
+            "path": null
+          },
+          {
+            "observation": {
+              "origin": "V2History",
+              "record_key": "00000000000000c3",
+              "source": {
+                "codec": "H264",
+                "width": 1280,
+                "height": 720,
+                "duration_ms": 300000,
+                "size_bytes": 1000
+              },
+              "outcome": {
+                "Converted": {
+                  "quality": {
+                    "crf": 30000,
+                    "score": 9500,
+                    "target": 95
+                  },
+                  "output_size": 500,
+                  "encode_duration": 2000
+                }
+              },
+              "updated_at": 1758000003000
+            },
+            "path": "/old/three.mkv"
+          }
+        ],
+        "expect": {
+          "Report": {
+            "inserted": 0,
+            "duplicates": 3,
+            "conflicts": []
+          }
+        }
+      }
+    },
+    {
+      "Import": {
+        "batch": [
+          {
+            "observation": {
+              "origin": "V2History",
+              "record_key": "00000000000000c1",
+              "source": {
+                "codec": "H264",
+                "width": 1280,
+                "height": 720,
+                "duration_ms": 300000,
+                "size_bytes": 1000
+              },
+              "outcome": {
+                "Converted": {
+                  "quality": {
+                    "crf": 25000,
+                    "score": 9500,
+                    "target": 95
+                  },
+                  "output_size": 600,
+                  "encode_duration": 1000
+                }
+              },
+              "updated_at": 1758000001000
+            },
+            "path": "/old/one.mkv"
+          },
+          {
+            "observation": {
+              "origin": "V2History",
+              "record_key": "00000000000000c2",
+              "source": {
+                "codec": "H264",
+                "width": 1280,
+                "height": 720,
+                "duration_ms": 300000,
+                "size_bytes": 2000
+              },
+              "outcome": {
+                "NotWorthwhile": {
+                  "requested": 95,
+                  "floor": 90
+                }
+              },
+              "updated_at": 1758000002000
+            },
+            "path": null
+          },
+          {
+            "observation": {
+              "origin": "V2History",
+              "record_key": "00000000000000c1",
+              "source": {
+                "codec": "H264",
+                "width": 1280,
+                "height": 720,
+                "duration_ms": 300000,
+                "size_bytes": 1000
+              },
+              "outcome": {
+                "Converted": {
+                  "quality": {
+                    "crf": 25000,
+                    "score": 9500,
+                    "target": 95
+                  },
+                  "output_size": 600,
+                  "encode_duration": 1000
+                }
+              },
+              "updated_at": 1758000001000
+            },
+            "path": "/elsewhere/one.mkv"
+          },
+          {
+            "observation": {
+              "origin": "V2History",
+              "record_key": "00000000000000c3",
+              "source": {
+                "codec": "H264",
+                "width": 1280,
+                "height": 720,
+                "duration_ms": 300000,
+                "size_bytes": 1000
+              },
+              "outcome": {
+                "Converted": {
+                  "quality": {
+                    "crf": 30000,
+                    "score": 9500,
+                    "target": 95
+                  },
+                  "output_size": 500,
+                  "encode_duration": 2000
+                }
+              },
+              "updated_at": 1758000003000
+            },
+            "path": "/old/three.mkv"
+          },
+          {
+            "observation": {
+              "origin": "V2History",
+              "record_key": "00000000000000c3",
+              "source": {
+                "codec": "H264",
+                "width": 1280,
+                "height": 720,
+                "duration_ms": 300000,
+                "size_bytes": 1000
+              },
+              "outcome": {
+                "Converted": {
+                  "quality": {
+                    "crf": 20000,
+                    "score": 9500,
+                    "target": 95
+                  },
+                  "output_size": 500,
+                  "encode_duration": 2000
+                }
+              },
+              "updated_at": 1758000003000
+            },
+            "path": "/old/three.mkv"
+          }
+        ],
+        "expect": {
+          "Report": {
+            "inserted": 0,
+            "duplicates": 4,
+            "conflicts": [
+              {
+                "origin": "V2History",
+                "record_key": "00000000000000c3"
+              }
+            ]
+          }
+        }
+      }
+    },
+    {
+      "Page": {
+        "order": "Recorded",
+        "direction": "Descending",
+        "limit": 10,
+        "expect": {
+          "ids": [
+            {
+              "Translated": {
+                "origin": "V2History",
+                "record_key": "00000000000000c3"
+              }
+            },
+            {
+              "Translated": {
+                "origin": "V2History",
+                "record_key": "00000000000000c2"
+              }
+            },
+            {
+              "Translated": {
+                "origin": "V2History",
+                "record_key": "00000000000000c1"
+              }
+            }
+          ],
+          "matched": 3,
+          "more": false,
+          "revision": 1
+        }
+      }
+    },
+    {
+      "Import": {
+        "batch": [
+          {
+            "observation": {
+              "origin": "V2History",
+              "record_key": "00000000000000c4",
+              "source": {
+                "codec": "H264",
+                "width": 1280,
+                "height": 720,
+                "duration_ms": 300000,
+                "size_bytes": 1000
+              },
+              "outcome": {
+                "Converted": {
+                  "quality": {
+                    "crf": 27000,
+                    "score": 9500,
+                    "target": 95
+                  },
+                  "output_size": 900,
+                  "encode_duration": 1500
+                }
+              },
+              "updated_at": 1758000004000
+            },
+            "path": "/old/four.mkv"
+          },
+          {
+            "observation": {
+              "origin": "V2History",
+              "record_key": "00000000000000c2",
+              "source": {
+                "codec": "H264",
+                "width": 1280,
+                "height": 720,
+                "duration_ms": 300000,
+                "size_bytes": 2000
+              },
+              "outcome": {
+                "NotWorthwhile": {
+                  "requested": 95,
+                  "floor": 90
+                }
+              },
+              "updated_at": 1758000009000
+            },
+            "path": "/old/two.mkv"
+          }
+        ],
+        "expect": {
+          "Report": {
+            "inserted": 1,
+            "duplicates": 0,
+            "conflicts": [
+              {
+                "origin": "V2History",
+                "record_key": "00000000000000c2"
+              }
+            ]
+          }
+        }
+      }
+    },
+    {
+      "Page": {
+        "order": "Quality",
+        "direction": "Descending",
+        "limit": 10,
+        "expect": {
+          "ids": [
+            {
+              "Translated": {
+                "origin": "V2History",
+                "record_key": "00000000000000c3"
+              }
+            },
+            {
+              "Translated": {
+                "origin": "V2History",
+                "record_key": "00000000000000c4"
+              }
+            },
+            {
+              "Translated": {
+                "origin": "V2History",
+                "record_key": "00000000000000c1"
+              }
+            },
+            {
+              "Translated": {
+                "origin": "V2History",
+                "record_key": "00000000000000c2"
+              }
+            }
+          ],
+          "matched": 4,
+          "more": false,
+          "revision": 2
+        }
+      }
+    },
+    {
+      "Page": {
+        "order": "Date",
+        "direction": "Descending",
+        "limit": 10,
+        "expect": {
+          "ids": [
+            {
+              "Translated": {
+                "origin": "V2History",
+                "record_key": "00000000000000c4"
+              }
+            },
+            {
+              "Translated": {
+                "origin": "V2History",
+                "record_key": "00000000000000c3"
+              }
+            },
+            {
+              "Translated": {
+                "origin": "V2History",
+                "record_key": "00000000000000c2"
+              }
+            },
+            {
+              "Translated": {
+                "origin": "V2History",
+                "record_key": "00000000000000c1"
+              }
+            }
+          ],
+          "matched": 4,
+          "more": false,
+          "revision": 2
+        }
+      }
+    },
+    {
+      "Detail": {
+        "id": {
+          "Translated": {
+            "origin": "V2History",
+            "record_key": "00000000000000c2"
+          }
+        },
+        "expect": {
+          "Found": {
+            "seq": 2,
+            "paths": null
+          }
+        }
+      }
+    },
+    {
+      "Detail": {
+        "id": {
+          "Translated": {
+            "origin": "V2History",
+            "record_key": "00000000000000c4"
+          }
+        },
+        "expect": {
+          "Found": {
+            "seq": 4,
+            "paths": {
+              "source": "/old/four.mkv",
+              "output": null
+            }
+          }
+        }
+      }
+    }
+  ]
+}

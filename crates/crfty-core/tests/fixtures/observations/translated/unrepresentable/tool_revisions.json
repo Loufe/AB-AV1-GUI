@@ -1,0 +1,8 @@
+{
+  "origin": "V2History",
+  "record_key": "3f9a0c1d2b4e5f65",
+  "source": { "codec": null, "width": null, "height": null, "duration_ms": null, "size_bytes": null },
+  "revisions": { "ab_av1": "ab-av1 0.7.0", "ffmpeg": "ffmpeg 6.0", "encoder": "SVT-AV1 1.7.0" },
+  "outcome": { "Converted": { "quality": { "crf": 30000, "score": null, "target": null }, "output_size": null, "encode_duration": null } },
+  "updated_at": 1700000000000
+}

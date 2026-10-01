@@ -1,0 +1,11 @@
+{
+  "origin": "V2History",
+  "record_key": "3f9a0c1d2b4e5f63",
+  "source": { "codec": null, "width": null, "height": null, "duration_ms": null, "size_bytes": null },
+  "outcome": {
+    "Failed": {
+      "facts": { "kind": "EncodeRun", "message": "encode failed", "diagnostic": "" }
+    }
+  },
+  "updated_at": 1700000000000
+}

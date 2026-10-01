@@ -81,7 +81,7 @@ Estimation consumers and prediction goals are owned by `docs/design/estimation.m
 | Time cohorts | phase spans split by operation; observed codec, dimensions, duration | Terminal, Scan |
 | E5 size basis | settled sizes; per-stream audio bitrate and duration | Terminal, Scan |
 | Evaluation backtest | retained prediction and measurement pairs, never reconciled | Search, Terminal |
-| E4 cold-start prior | adopted imported summaries, tagged VMAF, in the toolchain-unversioned class | Import |
+| E4 cold-start prior | translated observations' imported facts, tagged VMAF, in the toolchain-unversioned class | Import |
 
 ## Surfaces that are not History consumers
 
@@ -105,7 +105,7 @@ The V2 queue operation column and skip breakdown read current freshness-checked 
 
 **Read from source.** V2 persisted a free-text `skip_reason`; the typed verdict carrying the requested target and fallback floor supersedes it. The user-facing explanation composes from the highest-saving attempt's measurement and reads the live run today.
 
-**Decided.** The verdict embeds that highest-saving measurement, metric-tagged, so adopted imports and any future run pruning keep their explanation. The embedded value is a prediction and stays typed as one, per the prediction and measurement rule in `docs/HISTORY.md`.
+**Decided.** The verdict embeds that highest-saving measurement, metric-tagged, so any future run pruning keeps its explanation. The embedded value is a prediction and stays typed as one, per the prediction and measurement rule in `docs/HISTORY.md`.
 
 ## Field dispositions
 
@@ -125,9 +125,9 @@ A field is a free option when the stage's existing probe invocation can return i
 
 ## Enriched import
 
-Import v1 carries status, sizes, modification time, codec, dimensions, duration, encode time, CRF, VMAF, targets, and one decision timestamp (read from source). V2 records hold more than the importer keeps (read from source on `main`).
+Import v1 carries the V2 record key, status, sizes, codec, dimensions, duration, encode time, CRF, VMAF, targets, and the record's last update (read from source). V2 records hold more than the importer keeps (read from source on `main`).
 
-The enriched scope is the delta between the floor above and import v1 (derived, decided). It adds per-run CRF-search time, first-seen and last-updated, per-stream audio evidence including bitrate, and the recorded video bitrate, an observation the view derivation cannot reconstruct where audio evidence is missing. Every imported quality value is tagged VMAF. Preset is deliberately not carried: E4 records that the effective preset cannot be established after the fact, which is why imported evidence sits in a toolchain-unversioned class.
+The enriched scope is the delta between the floor above and import v1 (derived, decided). It adds per-run CRF-search time, first-seen, per-stream audio evidence including bitrate, and the recorded video bitrate, an observation the view derivation cannot reconstruct where audio evidence is missing. Every imported quality value is tagged VMAF. Preset is deliberately not carried: E4 records that the effective preset cannot be established after the fact, which is why imported evidence sits in a toolchain-unversioned class.
 
 ## Open decisions
 

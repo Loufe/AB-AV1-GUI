@@ -23,6 +23,7 @@ mod reducer;
 mod settings;
 mod state;
 mod time;
+mod translated;
 
 /// Export-only override target for `#[specta(type = ...)]` on integers wider
 /// than 32 bits. Tauri's JSON transport delivers every integer as a JavaScript
@@ -76,7 +77,8 @@ pub use media::{
 };
 pub(crate) use observation::phase_duration;
 pub use observation::{
-    DecisiveFact, DecisiveKind, EncodeEvidence, EncodeMeasurement, MeasuredSizes, Observation,
+    DecisiveFact, DecisiveKind, EncodeEvidence, EncodeMeasurement, ImportedFact, ImportedKind,
+    MeasuredSizes, NativeObservation, Observation, ObservationId, ObservationPaths,
     ObservedOutcome, OutputKind, PredictionPair, RateSample, ReductionFact, RemuxEvidence,
     RemuxMeasurement, SearchEvidence, SourceAssessment, SourceFacts, observations, standing,
 };
@@ -103,6 +105,11 @@ pub use state::{
     ToolVerification, fold, fold_config,
 };
 pub use time::{DurationMs, FileTimeNs, UnixMillis};
+pub use translated::{
+    ImportCandidate, ImportOrigin, ImportPlan, ImportRejection, ImportReport, RecordKey,
+    TranslatedId, TranslatedObservation, TranslatedOutcome, TranslatedQuality, TranslatedSource,
+    plan_import,
+};
 
 #[cfg(test)]
 mod test_support;

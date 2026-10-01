@@ -1,0 +1,17 @@
+{
+  "origin": "V2History",
+  "record_key": "ffffffff00000001",
+  "source": {
+    "codec": null,
+    "width": null,
+    "height": null,
+    "duration_ms": null,
+    "size_bytes": null
+  },
+  "outcome": {
+    "Analyzed": {
+      "quality": { "crf": 32000, "score": null, "target": null }
+    }
+  },
+  "updated_at": 1700000200000
+}

@@ -1,0 +1,7 @@
+{
+  "origin": "V2History",
+  "record_key": "/videos/movie.mkv",
+  "source": { "codec": null, "width": null, "height": null, "duration_ms": null, "size_bytes": null },
+  "outcome": { "Converted": { "quality": { "crf": 30000, "score": null, "target": null }, "output_size": null, "encode_duration": null } },
+  "updated_at": 1700000000000
+}

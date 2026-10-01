@@ -1,0 +1,13 @@
+{
+  "origin": "V2History",
+  "record_key": "1234567890abcdef",
+  "source": {
+    "codec": "Hevc",
+    "width": 1280,
+    "height": 720,
+    "duration_ms": 1500000,
+    "size_bytes": 900000000
+  },
+  "outcome": { "NotWorthwhile": { "requested": null, "floor": null } },
+  "updated_at": 1700000300000
+}

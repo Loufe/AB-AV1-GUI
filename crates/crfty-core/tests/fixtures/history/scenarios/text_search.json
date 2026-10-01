@@ -1,0 +1,618 @@
+{
+  "description": "Text search is an ASCII-case-insensitive substring of the final source path component only: a directory name never matches, a pathless row never matches, and percent and underscore are literal characters rather than wildcards. An empty search is no search. A scrub leaves nothing to match.",
+  "steps": [
+    {
+      "Record": {
+        "observation": {
+          "run_id": 1,
+          "operation": "Convert",
+          "source": {
+            "content_key": "blake2b:5555000000000001",
+            "codec": "H264",
+            "width": 1920,
+            "height": 1080,
+            "duration_ms": 600000,
+            "size_bytes": 4000
+          },
+          "revisions": {
+            "ab_av1": "ab-av1 0.10.0",
+            "ffmpeg": "ffmpeg 7.1",
+            "encoder": "SVT-AV1 3.0.0"
+          },
+          "outcome": {
+            "Remuxed": {
+              "remux": {
+                "measurement": {
+                  "Live": {
+                    "sizes": {
+                      "input": 4000,
+                      "output": 3990
+                    }
+                  }
+                },
+                "output_content_key": "blake2b:out-5555000000000001",
+                "assessment": null
+              }
+            }
+          },
+          "started_at": null,
+          "finished_at": 1758000001000
+        },
+        "paths": {
+          "source": "/Media/Summer Holiday/Beach Day.MKV",
+          "output": null
+        }
+      }
+    },
+    {
+      "Record": {
+        "observation": {
+          "run_id": 2,
+          "operation": "Convert",
+          "source": {
+            "content_key": "blake2b:5555000000000002",
+            "codec": "H264",
+            "width": 1920,
+            "height": 1080,
+            "duration_ms": 600000,
+            "size_bytes": 1000
+          },
+          "revisions": {
+            "ab_av1": "ab-av1 0.10.0",
+            "ffmpeg": "ffmpeg 7.1",
+            "encoder": "SVT-AV1 3.0.0"
+          },
+          "outcome": "Stopped",
+          "started_at": null,
+          "finished_at": 1758000002000
+        },
+        "paths": {
+          "source": "/media/beach-archive/Clip.mkv",
+          "output": null
+        }
+      }
+    },
+    {
+      "Import": {
+        "batch": [
+          {
+            "observation": {
+              "origin": "V2History",
+              "record_key": "0000000000000d01",
+              "source": {
+                "codec": "H264",
+                "width": 1280,
+                "height": 720,
+                "duration_ms": 300000,
+                "size_bytes": 1000
+              },
+              "outcome": {
+                "Converted": {
+                  "quality": {
+                    "crf": 30000,
+                    "score": 9500,
+                    "target": 95
+                  },
+                  "output_size": 600,
+                  "encode_duration": 5000
+                }
+              },
+              "updated_at": 1758000003000
+            },
+            "path": "C:\\Users\\beach\\BEACH.avi"
+          },
+          {
+            "observation": {
+              "origin": "V2History",
+              "record_key": "0000000000000d02",
+              "source": {
+                "codec": "H264",
+                "width": 1280,
+                "height": 720,
+                "duration_ms": 300000,
+                "size_bytes": 1000
+              },
+              "outcome": {
+                "Converted": {
+                  "quality": {
+                    "crf": 30000,
+                    "score": 9500,
+                    "target": 95
+                  },
+                  "output_size": 600,
+                  "encode_duration": 5000
+                }
+              },
+              "updated_at": 1758000004000
+            },
+            "path": null
+          },
+          {
+            "observation": {
+              "origin": "V2History",
+              "record_key": "0000000000000d03",
+              "source": {
+                "codec": "H264",
+                "width": 1280,
+                "height": 720,
+                "duration_ms": 300000,
+                "size_bytes": 1000
+              },
+              "outcome": {
+                "NotWorthwhile": {
+                  "requested": 95,
+                  "floor": 90
+                }
+              },
+              "updated_at": 1758000005000
+            },
+            "path": "/old/100%_done.mkv"
+          },
+          {
+            "observation": {
+              "origin": "V2History",
+              "record_key": "0000000000000d04",
+              "source": {
+                "codec": "H264",
+                "width": 1280,
+                "height": 720,
+                "duration_ms": 300000,
+                "size_bytes": null
+              },
+              "outcome": {
+                "Analyzed": {
+                  "quality": {
+                    "crf": 30000,
+                    "score": null,
+                    "target": null
+                  }
+                }
+              },
+              "updated_at": 1758000007000
+            },
+            "path": "/old/100x done.mkv"
+          },
+          {
+            "observation": {
+              "origin": "V2History",
+              "record_key": "0000000000000d05",
+              "source": {
+                "codec": "H264",
+                "width": 1280,
+                "height": 720,
+                "duration_ms": 300000,
+                "size_bytes": 1000
+              },
+              "outcome": {
+                "Converted": {
+                  "quality": {
+                    "crf": 30000,
+                    "score": 9500,
+                    "target": 95
+                  },
+                  "output_size": 600,
+                  "encode_duration": 5000
+                }
+              },
+              "updated_at": 1758000008000
+            },
+            "path": "/old/a_b.mkv"
+          },
+          {
+            "observation": {
+              "origin": "V2History",
+              "record_key": "0000000000000d06",
+              "source": {
+                "codec": "H264",
+                "width": 1280,
+                "height": 720,
+                "duration_ms": 300000,
+                "size_bytes": 1000
+              },
+              "outcome": {
+                "Converted": {
+                  "quality": {
+                    "crf": 30000,
+                    "score": 9500,
+                    "target": 95
+                  },
+                  "output_size": 600,
+                  "encode_duration": 5000
+                }
+              },
+              "updated_at": 1758000009000
+            },
+            "path": "/old/axb.mkv"
+          }
+        ],
+        "expect": {
+          "Report": {
+            "inserted": 6,
+            "duplicates": 0,
+            "conflicts": []
+          }
+        }
+      }
+    },
+    {
+      "Record": {
+        "observation": {
+          "run_id": 3,
+          "operation": "Convert",
+          "source": {
+            "content_key": "blake2b:5555000000000003",
+            "codec": "H264",
+            "width": 1920,
+            "height": 1080,
+            "duration_ms": 600000,
+            "size_bytes": 2000
+          },
+          "revisions": {
+            "ab_av1": "ab-av1 0.10.0",
+            "ffmpeg": "ffmpeg 7.1",
+            "encoder": "SVT-AV1 3.0.0"
+          },
+          "outcome": {
+            "Remuxed": {
+              "remux": {
+                "measurement": {
+                  "Live": {
+                    "sizes": {
+                      "input": 2000,
+                      "output": 1990
+                    }
+                  }
+                },
+                "output_content_key": "blake2b:out-5555000000000003",
+                "assessment": null
+              }
+            }
+          },
+          "started_at": null,
+          "finished_at": 1758000006000
+        },
+        "paths": {
+          "source": "/media/Longbeach.mkv",
+          "output": null
+        }
+      }
+    },
+    {
+      "Page": {
+        "order": "Date",
+        "direction": "Descending",
+        "search": "Beach",
+        "continues": false,
+        "limit": 10,
+        "expect": {
+          "ids": [
+            {
+              "Native": 3
+            },
+            {
+              "Translated": {
+                "origin": "V2History",
+                "record_key": "0000000000000d01"
+              }
+            },
+            {
+              "Native": 1
+            }
+          ],
+          "matched": 3,
+          "more": false,
+          "revision": 4
+        }
+      }
+    },
+    {
+      "Page": {
+        "order": "Date",
+        "direction": "Descending",
+        "outcomes": [
+          "Converted",
+          "Remuxed",
+          "NotWorthwhile",
+          "Analyzed",
+          "Failed",
+          "Stopped",
+          "Incomplete"
+        ],
+        "search": "beach",
+        "continues": false,
+        "limit": 10,
+        "expect": {
+          "ids": [
+            {
+              "Native": 3
+            },
+            {
+              "Translated": {
+                "origin": "V2History",
+                "record_key": "0000000000000d01"
+              }
+            },
+            {
+              "Native": 1
+            }
+          ],
+          "matched": 3,
+          "more": false,
+          "revision": 4
+        }
+      }
+    },
+    {
+      "Page": {
+        "order": "Recorded",
+        "direction": "Ascending",
+        "outcomes": [
+          "Converted",
+          "Remuxed",
+          "NotWorthwhile",
+          "Analyzed",
+          "Failed",
+          "Stopped",
+          "Incomplete"
+        ],
+        "search": "users",
+        "continues": false,
+        "limit": 10,
+        "expect": {
+          "ids": [],
+          "matched": 0,
+          "more": false,
+          "revision": 4
+        }
+      }
+    },
+    {
+      "Page": {
+        "order": "Recorded",
+        "direction": "Ascending",
+        "search": "100%_",
+        "continues": false,
+        "limit": 10,
+        "expect": {
+          "ids": [
+            {
+              "Translated": {
+                "origin": "V2History",
+                "record_key": "0000000000000d03"
+              }
+            }
+          ],
+          "matched": 1,
+          "more": false,
+          "revision": 4
+        }
+      }
+    },
+    {
+      "Page": {
+        "order": "Recorded",
+        "direction": "Ascending",
+        "search": "_",
+        "continues": false,
+        "limit": 10,
+        "expect": {
+          "ids": [
+            {
+              "Translated": {
+                "origin": "V2History",
+                "record_key": "0000000000000d03"
+              }
+            },
+            {
+              "Translated": {
+                "origin": "V2History",
+                "record_key": "0000000000000d05"
+              }
+            }
+          ],
+          "matched": 2,
+          "more": false,
+          "revision": 4
+        }
+      }
+    },
+    {
+      "Page": {
+        "order": "Recorded",
+        "direction": "Ascending",
+        "search": "%",
+        "continues": false,
+        "limit": 10,
+        "expect": {
+          "ids": [
+            {
+              "Translated": {
+                "origin": "V2History",
+                "record_key": "0000000000000d03"
+              }
+            }
+          ],
+          "matched": 1,
+          "more": false,
+          "revision": 4
+        }
+      }
+    },
+    {
+      "Page": {
+        "order": "Recorded",
+        "direction": "Ascending",
+        "outcomes": [
+          "Converted",
+          "Remuxed",
+          "NotWorthwhile",
+          "Analyzed",
+          "Failed",
+          "Stopped",
+          "Incomplete"
+        ],
+        "search": "MKV",
+        "continues": false,
+        "limit": 10,
+        "expect": {
+          "ids": [
+            {
+              "Native": 1
+            },
+            {
+              "Native": 2
+            },
+            {
+              "Translated": {
+                "origin": "V2History",
+                "record_key": "0000000000000d03"
+              }
+            },
+            {
+              "Translated": {
+                "origin": "V2History",
+                "record_key": "0000000000000d04"
+              }
+            },
+            {
+              "Translated": {
+                "origin": "V2History",
+                "record_key": "0000000000000d05"
+              }
+            },
+            {
+              "Translated": {
+                "origin": "V2History",
+                "record_key": "0000000000000d06"
+              }
+            },
+            {
+              "Native": 3
+            }
+          ],
+          "matched": 7,
+          "more": false,
+          "revision": 4
+        }
+      }
+    },
+    {
+      "Page": {
+        "order": "Date",
+        "direction": "Descending",
+        "search": "beach",
+        "continues": false,
+        "limit": 2,
+        "expect": {
+          "ids": [
+            {
+              "Native": 3
+            },
+            {
+              "Translated": {
+                "origin": "V2History",
+                "record_key": "0000000000000d01"
+              }
+            }
+          ],
+          "matched": 3,
+          "more": true,
+          "revision": 4
+        }
+      }
+    },
+    {
+      "Page": {
+        "order": "Date",
+        "direction": "Descending",
+        "search": "beach",
+        "continues": true,
+        "limit": 2,
+        "expect": {
+          "ids": [
+            {
+              "Native": 1
+            }
+          ],
+          "matched": 3,
+          "more": false,
+          "revision": 4
+        }
+      }
+    },
+    {
+      "Page": {
+        "order": "Recorded",
+        "direction": "Descending",
+        "search": "",
+        "continues": false,
+        "limit": 20,
+        "expect": {
+          "ids": [
+            {
+              "Native": 3
+            },
+            {
+              "Translated": {
+                "origin": "V2History",
+                "record_key": "0000000000000d06"
+              }
+            },
+            {
+              "Translated": {
+                "origin": "V2History",
+                "record_key": "0000000000000d05"
+              }
+            },
+            {
+              "Translated": {
+                "origin": "V2History",
+                "record_key": "0000000000000d04"
+              }
+            },
+            {
+              "Translated": {
+                "origin": "V2History",
+                "record_key": "0000000000000d03"
+              }
+            },
+            {
+              "Translated": {
+                "origin": "V2History",
+                "record_key": "0000000000000d02"
+              }
+            },
+            {
+              "Translated": {
+                "origin": "V2History",
+                "record_key": "0000000000000d01"
+              }
+            },
+            {
+              "Native": 1
+            }
+          ],
+          "matched": 8,
+          "more": false,
+          "revision": 4
+        }
+      }
+    },
+    "Scrub",
+    {
+      "Page": {
+        "order": "Date",
+        "direction": "Descending",
+        "search": "beach",
+        "continues": false,
+        "limit": 10,
+        "expect": {
+          "ids": [],
+          "matched": 0,
+          "more": false,
+          "revision": 5
+        }
+      }
+    }
+  ]
+}

@@ -277,11 +277,8 @@ impl ExecutionSettings {
     }
 
     fn validate_targets(&self) -> Result<(), &'static str> {
-        if u16::from(self.requested_target.0) > MAX_VMAF_SCORE
-            || u16::from(self.fallback_floor.0) > MAX_VMAF_SCORE
-        {
-            return Err("VMAF targets must be in 0..=100");
-        }
+        self.requested_target.validate()?;
+        self.fallback_floor.validate()?;
         if self.fallback_floor > self.requested_target {
             return Err("VMAF fallback floor exceeds the requested target");
         }
@@ -304,12 +301,27 @@ pub struct SearchMeasurement {
     pub from_cache: bool,
 }
 
-impl SearchMeasurement {
-    pub fn validate(&self) -> Result<(), &'static str> {
-        if self.score.0 > MAX_VMAF_SCORE.saturating_mul(VMAF_SCORE_FIXED_SCALE) {
+impl VmafTarget {
+    pub(crate) fn validate(self) -> Result<(), &'static str> {
+        if u16::from(self.0) > MAX_VMAF_SCORE {
+            return Err("VMAF targets must be in 0..=100");
+        }
+        Ok(())
+    }
+}
+
+impl VmafScore {
+    pub(crate) fn validate(self) -> Result<(), &'static str> {
+        if self.0 > MAX_VMAF_SCORE.saturating_mul(VMAF_SCORE_FIXED_SCALE) {
             return Err("VMAF score is outside the supported range");
         }
         Ok(())
+    }
+}
+
+impl SearchMeasurement {
+    pub fn validate(&self) -> Result<(), &'static str> {
+        self.score.validate()
     }
 }
 
@@ -336,6 +348,7 @@ impl AnalysisResult {
     /// fallback range, every failed attempt targeted above it, and the
     /// measurement is in range.
     pub fn validate_consistent(&self) -> Result<(), &'static str> {
+        self.requested_target.validate()?;
         if self.successful_target > self.requested_target
             || self.successful_target < self.fallback_floor
         {
@@ -350,6 +363,20 @@ impl AnalysisResult {
             .any(|attempt| attempt.target <= self.successful_target)
         {
             return Err("failed analysis attempts are inconsistent with the successful target");
+        }
+        if self
+            .failed_attempts
+            .iter()
+            .any(|attempt| attempt.target > self.requested_target)
+        {
+            return Err("failed analysis attempts are outside the requested fallback range");
+        }
+        for measurement in self
+            .failed_attempts
+            .iter()
+            .filter_map(|attempt| attempt.last_measurement.as_ref())
+        {
+            measurement.validate()?;
         }
         self.measurement.validate()
     }

@@ -15,6 +15,7 @@ Lint discipline extends to tests. Tests run under the same workspace lints as pr
 ## Layers
 
 - Pure domain, `crfty-core`. `src/tests.rs` is the large suite covering the reducer, policy, journal encode and replay, the output ledger and recovery, queue administration, session aggregates, and import adoption. Per-module `#[cfg(test)]` blocks cover analysis identity and reuse validation, estimation, history, projections, failure facts, and time.
+- History spec data, `crates/crfty-core/tests/`. `observation_fixtures.rs` checks the observation fixtures against deserialization and validation, and `history_scenarios.rs` runs the History scenarios against an in-memory reference evaluator until storage replaces it.
 - Properties, via `proptest`. `replay_equals_live_fold` generates queue command sequences, journals the emitted durable deltas, and asserts the replayed state equals the live durable state, which is the reducer's central property. Estimation and projection modules carry their own property tests.
 - Engine units. Roughly thirty `#[cfg(test)]` modules across `crfty-engine`, including output path resolution, privacy scrubbing, log rolling, config, media parsing, rate tracking, tool discovery and version parsing, and the analysis runtime.
 - Engine contracts, `crates/crfty-engine/tests/`. Real files, real child processes, real journals. Described below.
@@ -40,7 +41,7 @@ Golden fixtures are exported from Rust, committed, and freshness-gated. `cargo t
 
 Those fixtures are what make the frontend mirrors safe. `ui/src/lib/store/fold.ts` mirrors `crfty_core::fold` and `ui/src/lib/projection/history-rows.ts` mirrors `crfty_core::history_rows`, each verified against its golden file. Semantics change in Rust first, then are ported.
 
-`ui/src/lib/format/parity-fixtures.json` is the exception: hand-maintained spec data freezing V2 display semantics, with no regeneration path. Editing it is a deliberate, reviewed semantic change.
+Three fixture sets are the exception: hand-maintained spec data with no regeneration path, where every edit is a deliberate, reviewed semantic change. `ui/src/lib/format/parity-fixtures.json` freezes V2 display semantics. `crates/crfty-core/tests/fixtures/observations/` holds the observation contract (ADR-024, ADR-025) as valid, invalid, and unrepresentable observations. `crates/crfty-core/tests/fixtures/history/scenarios/` holds the History logical model as step sequences with their expected results.
 
 Process fixtures replace tools rather than mocking them. The `crfty-contract-fixture` and `crfty-process-fixture` binaries, both behind the `contract-test-fixture` feature, stand in for FFmpeg, ffprobe, and misbehaving children so process lifecycle can be tested deterministically and without media. The contract fixture answers the capability probe from a marker file beside it, so incapable and hanging tools are tested without media, and the real-tool suites locate binaries through `CRFTY_FFMPEG` and `CRFTY_FFPROBE`.
 

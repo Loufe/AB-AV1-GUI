@@ -1,0 +1,303 @@
+{
+  "description": "Strict import: one invalid record rejects the whole file at the first invalid index, inserts nothing, consumes no recording sequence, and leaves the revision unchanged. The valid record from the rejected file imports later on its own.",
+  "steps": [
+    {
+      "Import": {
+        "batch": [
+          {
+            "observation": {
+              "origin": "V2History",
+              "record_key": "00000000000000e1",
+              "source": {
+                "codec": "H264",
+                "width": 1280,
+                "height": 720,
+                "duration_ms": 300000,
+                "size_bytes": 1000
+              },
+              "outcome": {
+                "Converted": {
+                  "quality": {
+                    "crf": 30000,
+                    "score": 9500,
+                    "target": 95
+                  },
+                  "output_size": 600,
+                  "encode_duration": 5000
+                }
+              },
+              "updated_at": 1758000001000
+            },
+            "path": "/g/one.mkv"
+          }
+        ],
+        "expect": {
+          "Report": {
+            "inserted": 1,
+            "duplicates": 0,
+            "conflicts": []
+          }
+        }
+      }
+    },
+    {
+      "Import": {
+        "batch": [
+          {
+            "observation": {
+              "origin": "V2History",
+              "record_key": "00000000000000e2",
+              "source": {
+                "codec": "H264",
+                "width": 1280,
+                "height": 720,
+                "duration_ms": 300000,
+                "size_bytes": 1000
+              },
+              "outcome": {
+                "Converted": {
+                  "quality": {
+                    "crf": 30000,
+                    "score": 9500,
+                    "target": 95
+                  },
+                  "output_size": 600,
+                  "encode_duration": 5000
+                }
+              },
+              "updated_at": 1758000002000
+            },
+            "path": "/g/two.mkv"
+          },
+          {
+            "observation": {
+              "origin": "V2History",
+              "record_key": "00000000000000e3",
+              "source": {
+                "codec": "H264",
+                "width": 1280,
+                "height": 720,
+                "duration_ms": 300000,
+                "size_bytes": 1000
+              },
+              "outcome": {
+                "Converted": {
+                  "quality": {
+                    "crf": 30000,
+                    "score": 10001,
+                    "target": 95
+                  },
+                  "output_size": 600,
+                  "encode_duration": null
+                }
+              },
+              "updated_at": 1758000003000
+            },
+            "path": null
+          },
+          {
+            "observation": {
+              "origin": "V2History",
+              "record_key": "00000000000000e4",
+              "source": {
+                "codec": "H264",
+                "width": 1280,
+                "height": 720,
+                "duration_ms": 300000,
+                "size_bytes": 1000
+              },
+              "outcome": {
+                "NotWorthwhile": {
+                  "requested": 90,
+                  "floor": 95
+                }
+              },
+              "updated_at": 1758000004000
+            },
+            "path": null
+          }
+        ],
+        "expect": {
+          "Rejection": {
+            "index": 1,
+            "reason": "VMAF score is outside the supported range"
+          }
+        }
+      }
+    },
+    {
+      "Page": {
+        "order": "Recorded",
+        "direction": "Descending",
+        "limit": 10,
+        "expect": {
+          "ids": [
+            {
+              "Translated": {
+                "origin": "V2History",
+                "record_key": "00000000000000e1"
+              }
+            }
+          ],
+          "matched": 1,
+          "more": false,
+          "revision": 1
+        }
+      }
+    },
+    {
+      "Detail": {
+        "id": {
+          "Translated": {
+            "origin": "V2History",
+            "record_key": "00000000000000e2"
+          }
+        },
+        "expect": "NotFound"
+      }
+    },
+    {
+      "Import": {
+        "batch": [
+          {
+            "observation": {
+              "origin": "V2History",
+              "record_key": "00000000000000e2",
+              "source": {
+                "codec": "H264",
+                "width": 1280,
+                "height": 720,
+                "duration_ms": 300000,
+                "size_bytes": 1000
+              },
+              "outcome": {
+                "Converted": {
+                  "quality": {
+                    "crf": 30000,
+                    "score": 9500,
+                    "target": 95
+                  },
+                  "output_size": 600,
+                  "encode_duration": 5000
+                }
+              },
+              "updated_at": 1758000002000
+            },
+            "path": "/g/two.mkv"
+          }
+        ],
+        "expect": {
+          "Report": {
+            "inserted": 1,
+            "duplicates": 0,
+            "conflicts": []
+          }
+        }
+      }
+    },
+    {
+      "Detail": {
+        "id": {
+          "Translated": {
+            "origin": "V2History",
+            "record_key": "00000000000000e2"
+          }
+        },
+        "expect": {
+          "Found": {
+            "seq": 2,
+            "paths": {
+              "source": "/g/two.mkv",
+              "output": null
+            }
+          }
+        }
+      }
+    },
+    {
+      "Import": {
+        "batch": [
+          {
+            "observation": {
+              "origin": "V2History",
+              "record_key": "00000000000000e4",
+              "source": {
+                "codec": "H264",
+                "width": 1280,
+                "height": 720,
+                "duration_ms": 300000,
+                "size_bytes": 1000
+              },
+              "outcome": {
+                "NotWorthwhile": {
+                  "requested": 90,
+                  "floor": 95
+                }
+              },
+              "updated_at": 1758000004000
+            },
+            "path": null
+          },
+          {
+            "observation": {
+              "origin": "V2History",
+              "record_key": "00000000000000e1",
+              "source": {
+                "codec": "H264",
+                "width": 1280,
+                "height": 720,
+                "duration_ms": 300000,
+                "size_bytes": 1000
+              },
+              "outcome": {
+                "Converted": {
+                  "quality": {
+                    "crf": 30000,
+                    "score": 9500,
+                    "target": 95
+                  },
+                  "output_size": 600,
+                  "encode_duration": 5000
+                }
+              },
+              "updated_at": 1758000001000
+            },
+            "path": "/g/one.mkv"
+          }
+        ],
+        "expect": {
+          "Rejection": {
+            "index": 0,
+            "reason": "not-worthwhile floor exceeds the requested target"
+          }
+        }
+      }
+    },
+    {
+      "Page": {
+        "order": "Recorded",
+        "direction": "Descending",
+        "limit": 10,
+        "expect": {
+          "ids": [
+            {
+              "Translated": {
+                "origin": "V2History",
+                "record_key": "00000000000000e2"
+              }
+            },
+            {
+              "Translated": {
+                "origin": "V2History",
+                "record_key": "00000000000000e1"
+              }
+            }
+          ],
+          "matched": 2,
+          "more": false,
+          "revision": 2
+        }
+      }
+    }
+  ]
+}
