@@ -6,7 +6,7 @@ Status: working design note; recorded verdicts are authoritative and survive, ev
 
 One canonical, versioned, portable History bundle serves personal transfer, deliberate sharing, import, and later pooled research. This document records the decided direction and the open packaging, scope, and disclosure questions. The full statistical schema, manifest, validation, and version evolution are specified when the bundle is built; the settled result becomes `docs/HISTORY_BUNDLE.md`, replacing `docs/HISTORY_IMPORT.md`.
 
-The import exchange format is not the bundle. Import v1 requires a readable path in every record, so a scrubbed store structurally cannot emit it, and it carries no content key, attempt evidence, or tool revisions.
+The import exchange format is not the bundle. It translates a V2 history, which never held content keys, attempt evidence, tool revisions, or recording sequences, so it cannot carry what a V3 store records.
 
 ## Recorded verdicts
 
@@ -29,6 +29,7 @@ Labels are stable and cited bare.
 - Released bundle-version acceptance and translation policy.
 - The submission channel and its disclosure: what a contributor is shown before sending, what the training set retains, and how a shared prior is distributed back.
 - The coarsening grid for the research scope, fixed against a measured utility loss rather than chosen without evidence.
+- Whether each export scope omits or re-keys translated record keys. They are unsalted V2 path hashes that survive scrub, and B3 covers only content keys.
 
 ## Distillation
 

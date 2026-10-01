@@ -20,11 +20,11 @@ Facts flow one way. The analysis level a file stands at, the analysis it may reu
 
 Estimation is the one sanctioned consumer in the other direction: completed phase spans and settled sizes feed the cohorts behind size and time predictions. It reads History and never writes to it; its model, evidence seam, and open questions are in `docs/design/estimation.md`.
 
-One seam does run from historical records into current state, and it is deliberately narrow. An imported record adopts onto a content record only when a fresh observation confirms the file at its recorded path. Confirmation requires either matching size and modification time or the replace-mode case where the file at that path is already the AV1 output. Adoption is the one-time route for V2 history and is governed by ADR-015; a record that no longer describes the file retires and decides nothing.
+One seam does run from historical records into current state, and it is deliberately narrow. An imported record adopts onto a content record only when a fresh observation confirms the file at its recorded path. Confirmation requires either matching size and modification time or the replace-mode case where the file at that path is already the AV1 output. Adoption is the one-time route for V2 history and is governed by ADR-015; a record that no longer describes the file retires and decides nothing. ADR-025 removes this seam once History stores translated observations, as the [logical model](#logical-model) describes.
 
-## One immutable observation per terminal run
+## One immutable observation per terminal run or imported record
 
-The unit of History is the observation, fixed by ADR-024 and implemented as `crfty_core::Observation`. One observation describes one run that reached a terminal outcome. A native observation is identified by its run identifier, which is never reused; a translated observation imported from V2 history is identified by its origin record key (ADR-025). It names at most one source by content key, and once recorded it does not change: a retry, a changed source, or a later success on the same file is a new observation. Today native observations are derived from the run, record, and output ledgers on request. The stored unit, once History has its own storage, is `Observation`: either a native or a translated observation.
+The unit of History is the observation, fixed by ADR-024 and implemented as `crfty_core::Observation`. A native observation describes one run that reached a terminal outcome and is identified by its run identifier, which is never reused. A translated observation describes one imported V2 record and is identified by its origin record key (ADR-025). A native observation names at most one source by content key. Once recorded, no observation changes: a retry, a changed source, or a later success on the same file is a new native observation. Today native observations are derived from the run, record, and output ledgers on request. The stored unit, once History has its own storage, is `Observation`: either a native or a translated observation.
 
 Each outcome carries only the evidence it can honestly hold. Everything below is typed, and a shape outside this table does not deserialize. The table describes native observations; translated observations are sparser and are described under the logical model.
 
@@ -39,9 +39,9 @@ Each outcome carries only the evidence it can honestly hold. Everything below is
 
 Every native observation also carries its operation, the toolchain revisions of its execution profile, and, when the source was identified, the source's content key and media facts. Start and finish instants are optional, and an unknown instant stays unknown rather than being filled in from another clock.
 
-Three different things are called attempts, and the contract keeps them apart. Quality-target fallback attempts belong to one run's search: the analysis lists the targets that failed, and a not-worthwhile outcome lists every attempt. The hardware-to-software decode retry belongs to the encode: the live measurement records the decode mode the encode actually ran with, which the search profile may not match. A queue retry mints a new run and therefore a new observation; lineage is derived from the content key and run order and never stored.
+Three different things are called attempts, and the contract keeps them apart. Quality-target fallback attempts belong to one run's search: the analysis lists the targets that failed, and a not-worthwhile outcome lists every attempt. The hardware-to-software decode retry belongs to the encode: the live measurement records the decode mode the encode actually ran with, which the search profile may not match. A queue retry mints a new run and therefore a new native observation; lineage is derived from the content key and run order and never stored.
 
-A file's standing is the latest decisive observation for its content, where converted, remuxed, and not-worthwhile outcomes decide and the others do not. Standing is computed on request and never written back. Aggregates that count files dedupe decisive observations by content key, because one file may honestly hold several conversions after its source changed.
+A file's standing is the latest decisive native observation for its content, where converted, remuxed, and not-worthwhile outcomes decide and the others do not. Standing is computed on request and never written back. Aggregates that count files dedupe decisive observations by content key, because one file may honestly hold several conversions after its source changed.
 
 ### Eligibility is decided once
 
@@ -78,7 +78,7 @@ Readable paths never live on an observation. A path row, separate from the obser
 
 ### Recording sequence and revision
 
-The writer assigns each inserted observation a recording sequence that strictly increases and is never reused. The sequence is not an identity, because a translated identity must be derivable from its record for import to stay idempotent. It gives every observation a position independent of any clock, which is what makes ordering total when instants are absent.
+The writer assigns each observation a recording sequence when it commits. Sequences start at 1. Each newly committed observation receives one more than the preceding committed observation. An aborted commit and an import that inserts nothing consume no sequence. No committed sequence is reused. The writer therefore assigns it inside the committing transaction, never from an engine counter that a failed insert can advance. The sequence is not an identity, because a translated identity must be derivable from its record for import to stay idempotent. It gives every observation a position independent of any clock, which is what makes ordering total when instants are absent.
 
 The History revision increases once for each commit that changes what a query can return: a terminal recording, an import that inserts at least one observation, and a scrub that deletes at least one path row. A duplicate-only import and an aborted commit leave it unchanged. Views compare revisions to decide whether to refetch.
 
@@ -145,7 +145,7 @@ An unknown size is absent, not zero. Absence and zero are different claims, and 
 
 ## Pathless is pseudonymous, not anonymous
 
-A History record stripped of readable paths remains linkable. The identities that survive are pseudonyms rather than erasures: a content key is a BLAKE2b digest over sampled file bytes plus the media header, and a path hash is a BLAKE2b digest over the canonicalized path. Anyone holding the same file recomputes its content key exactly, and anyone holding a list of candidate paths can recompute path hashes and match them.
+A History record stripped of readable paths remains linkable. The identities that survive are pseudonyms rather than erasures: a content key is a BLAKE2b digest over sampled file bytes plus the media header. Two different path hashes exist. V3's operational path hash is a BLAKE2b digest over the canonicalized path. A translated observation's record key is V2's path hash, an unsalted 64-bit BLAKE2b digest over V2's normalized path. That record key is the observation's identity, so it survives scrub. Anyone holding the same file recomputes its content key exactly, and anyone holding a list of candidate paths can recompute either path hash and match it.
 
 Exports and disclosures must say so plainly. A bundle without readable paths is described as pseudonymous, never as anonymous and never as de-identified. Its technical facts, exact tool revisions and resolutions and durations and sizes and timings, are ordinary one at a time and can be distinctive in combination, so the linkability a bundle admits belongs in its own disclosure rather than in a footnote elsewhere.
 

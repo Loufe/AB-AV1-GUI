@@ -2,6 +2,8 @@
 
 CRFty can import conversion history through a versioned JSON exchange file. The app knows nothing about any older history format: a standalone converter script shipped in this repository (`tools/export_history_v3.py`, stdlib-only Python run against a V2 `conversion_history.json`) reads the old history, performs all source-format interpretation (path recovery, timestamp parsing, float scrubbing, status mapping), and emits this schema. The app strictly parses it: a malformed or unknown-version file is rejected whole, never salvaged record by record.
 
+This document describes the shipped format and import flow. ADR-025 replaces both once History stores translated observations: each record carries its V2 path hash as its key, the readable path becomes optional, anonymized records import without a path, and nothing adopts.
+
 Reader: `crfty-engine/src/history_import.rs`. Import flow: records land in `DurableState.parked`, keyed by normalized source path; when a queued file is prepared, its path spellings are matched against the parked inbox and each hit is adopted (verdict and provenance onto the observed content record) or retired (the file no longer matches). The inbox empties itself.
 
 Every adopted path is also inserted into `DurableState.adopted_imports`, the complete durable re-import guard. A content record retains one deterministic `ImportedProvenance` summary even when several path spellings resolve to the same content. The winner is the newest decision, then the strongest status (`converted`, `not_worthwhile`, `analyzed`, `scanned`), then the lexicographically smaller normalized path. A native verdict is never replaced by an imported verdict. Retirement does not consume a path, so a corrected record can be imported later.

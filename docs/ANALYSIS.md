@@ -21,7 +21,7 @@ The successful observation command is atomic at the reducer boundary:
 3. write adoption or retirement deltas;
 4. publish the row update after those durable deltas.
 
-This order makes replay and the UI stream agree. Imported `Analyzed` facts stay display-only provenance and never enter the reusable native analysis index. When an observed artifact is a settled native output, imported provenance is attached to the source-content relationship so its native verdict continues to outrank the import and statistics do not count a second conversion.
+This order makes replay and the UI stream agree. Imported `Analyzed` facts stay display-only provenance and never enter the reusable native analysis index. When an observed artifact is a settled native output, imported provenance is attached to the source-content relationship so its native verdict continues to outrank the import and statistics do not count a second conversion. Steps 2 and 3 disappear once History stores translated observations, because ADR-025 removes adoption.
 
 Replace-mode recognition follows ADR-017. With a reliable timestamp, an exact settled destructive identity is recognized before the stale source-path binding and needs no ffprobe. Unknown/coarse/recent timestamps reobserve and recognize the output only after stable probable-content comparison. A parked import also forces that observation when the fast path has no trustworthy output metadata; the implementation never substitutes source metadata for output metadata.
 

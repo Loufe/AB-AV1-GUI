@@ -84,7 +84,7 @@ Every `Scanned` or `SettledOutput` row carries an `AnalysisRowStatus` projected 
 | Native or adopted `NotWorthwhile` verdict | Does not establish reusable `Analyzed`; `convert` is `Skip` when the request's floor is at or above the recorded one | `Analyzed` |
 | Converted or Remuxed content verdict | `Converted` with the measured summary | `Converted` |
 
-Historical level is the maximum of native analyses, verdicts, and adopted provenance. Imported analysis is never inserted into `FileRecord.analyses`, and a row exists only for an observed file, so the parked inbox is never a row input.
+Historical level is the maximum of native analyses, verdicts, and adopted provenance. Imported analysis is never inserted into `FileRecord.analyses`, and a row exists only for an observed file, so the parked inbox is never a row input. ADR-025 removes adoption once History stores translated observations, and imported evidence then raises neither level.
 
 Native analysis reuse is exact except for the documented target relation:
 

@@ -42,7 +42,7 @@ A content record carries at most one standing verdict, the judgment of the lates
 
 - `Converted` and `Remuxed` apply only while the file on disk is the produced output: timestamps must be engine-confirmed reliable, and the live destructive identity (filesystem file id, size, and a known modification time) must equal the settled output identity of the verdict's source run. A missing file, a changed file, or a transaction that never settled means the verdict no longer answers for that path.
 - `NotWorthwhile` is a judgment about input content, so it applies whenever the record was resolved by content identity. Whether its targets satisfy a new request is a matter of target policy, not freshness.
-- An adopted verdict (imported, with no source run) has no transaction to resolve. Its `Converted` form therefore never applies at a path, because the imported output was never content-hashed and cannot be proven to be the file on disk. Its `NotWorthwhile` form applies by content identity as usual.
+- An adopted verdict (imported, with no source run) has no transaction to resolve. Its `Converted` form therefore never applies at a path, because the imported output was never content-hashed and cannot be proven to be the file on disk. Its `NotWorthwhile` form applies by content identity as usual. ADR-025 removes adopted verdicts once History stores translated observations.
 
 Enqueue evaluates in this order.
 
