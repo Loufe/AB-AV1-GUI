@@ -348,6 +348,7 @@ impl AnalysisResult {
     /// fallback range, every failed attempt targeted above it, and the
     /// measurement is in range.
     pub fn validate_consistent(&self) -> Result<(), &'static str> {
+        self.requested_target.validate()?;
         if self.successful_target > self.requested_target
             || self.successful_target < self.fallback_floor
         {
@@ -362,6 +363,20 @@ impl AnalysisResult {
             .any(|attempt| attempt.target <= self.successful_target)
         {
             return Err("failed analysis attempts are inconsistent with the successful target");
+        }
+        if self
+            .failed_attempts
+            .iter()
+            .any(|attempt| attempt.target > self.requested_target)
+        {
+            return Err("failed analysis attempts are outside the requested fallback range");
+        }
+        for measurement in self
+            .failed_attempts
+            .iter()
+            .filter_map(|attempt| attempt.last_measurement.as_ref())
+        {
+            measurement.validate()?;
         }
         self.measurement.validate()
     }

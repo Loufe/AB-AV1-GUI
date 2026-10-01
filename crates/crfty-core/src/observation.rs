@@ -418,6 +418,7 @@ impl NativeObservation {
                 floor,
                 attempts,
             } => {
+                requested.validate()?;
                 if floor > requested {
                     return Err("not-worthwhile floor exceeds the requested target");
                 }
