@@ -6,7 +6,7 @@ use crate::{
     UnixMillis, fold, output::validate_output_delta,
 };
 
-pub(crate) const JOURNAL_SCHEMA_VERSION: u32 = 19;
+pub(crate) const JOURNAL_SCHEMA_VERSION: u32 = 20;
 
 /// Compaction fires at an idle writer barrier when the journal is both large
 /// in absolute terms and dominated by dead upserts. The floor keeps
@@ -45,6 +45,29 @@ pub fn compaction_quiescent(state: &AppState) -> bool {
 pub struct JournalEnvelope {
     pub sequence: JournalSequence,
     pub deltas: Vec<DurableDelta>,
+}
+
+pub struct DurableBatch {
+    pub state: DurableState,
+    pub recordings: Vec<crate::NativeRecording>,
+}
+
+/// Recordings are captured after their terminal fold, before later deltas can
+/// change related facts. A rejected batch leaves the caller's state intact.
+pub fn apply_durable_batch(
+    state: &DurableState,
+    deltas: &[DurableDelta],
+) -> Result<DurableBatch, &'static str> {
+    let mut state = state.clone();
+    let mut recordings = Vec::new();
+    for delta in deltas {
+        validate_durable_delta(&state, delta)?;
+        fold(&mut state, delta);
+        if let Some(recording) = crate::observation::terminal_recording(&state, delta)? {
+            recordings.push(recording);
+        }
+    }
+    Ok(DurableBatch { state, recordings })
 }
 
 /// The folded state a compaction wrote as the new journal's head line,
@@ -264,18 +287,13 @@ pub fn replay(bytes: &[u8]) -> JournalReplay {
                     corruption = Some("empty journal batch".to_owned());
                     break;
                 }
-                let mut candidate = state.clone();
-                for delta in &envelope.deltas {
-                    if let Err(reason) = validate_replayed_delta(&candidate, delta) {
+                let batch = match apply_durable_batch(&state, &envelope.deltas) {
+                    Ok(batch) => batch,
+                    Err(reason) => {
                         corruption = Some(format!("invalid durable transition: {reason}"));
                         break;
                     }
-                    fold(&mut candidate, delta);
-                }
-                if corruption.is_some() {
-                    break;
-                }
-                state = candidate;
+                };
                 expected = match expected.checked_add(1) {
                     Some(next) => next,
                     None => {
@@ -283,6 +301,7 @@ pub fn replay(bytes: &[u8]) -> JournalReplay {
                         break;
                     }
                 };
+                state = batch.state;
             }
         }
         offset += segment.len();
@@ -307,7 +326,7 @@ pub fn replay(bytes: &[u8]) -> JournalReplay {
     }
 }
 
-fn validate_replayed_delta(state: &DurableState, delta: &DurableDelta) -> Result<(), &'static str> {
+fn validate_durable_delta(state: &DurableState, delta: &DurableDelta) -> Result<(), &'static str> {
     match delta {
         DurableDelta::QueueAdded { item } => {
             if state.queue.iter().any(|current| current.id == item.id) {
@@ -423,11 +442,18 @@ fn validate_replayed_delta(state: &DurableState, delta: &DurableDelta) -> Result
                         } if claim_id == spec.claim_id && run_id == spec.run_id
                     )
             });
-            let record = spec
-                .content_key
-                .as_ref()
-                .and_then(|key| state.records.get(key));
-            let content_exists = spec.content_key.is_none() || record.is_some();
+            let record = spec.content_key().and_then(|key| state.records.get(key));
+            let source_matches = match (&spec.source, record) {
+                (Some(source), Some(record)) => {
+                    *source
+                        == crate::SourceFacts::from_media(
+                            source.content_key.clone(),
+                            &record.metadata,
+                        )
+                }
+                (None, None) => true,
+                _ => false,
+            };
             let expected_action = crate::select_job_action(
                 record.map(|known| &known.metadata),
                 record,
@@ -436,7 +462,7 @@ fn validate_replayed_delta(state: &DurableState, delta: &DurableDelta) -> Result
                 &spec.execution,
             );
             if !matches_item
-                || !content_exists
+                || !source_matches
                 || spec.action != expected_action
                 || state.conversion_runs.contains_key(&spec.run_id)
             {

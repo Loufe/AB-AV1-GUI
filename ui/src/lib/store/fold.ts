@@ -294,7 +294,7 @@ function foldAnalysisRecorded(
     return state;
   }
   let records = state.records;
-  const contentKey = run.spec.content_key;
+  const contentKey = run.spec.source?.content_key ?? null;
   if (contentKey !== null) {
     const record = state.records[contentKey];
     if (record !== undefined) {
@@ -347,7 +347,7 @@ function foldItemFinished(
     run.analysis,
     phase_spans,
   );
-  const contentKey = run.spec.content_key;
+  const contentKey = run.spec.source?.content_key ?? null;
   if (kind !== null && contentKey !== null) {
     const record = state.records[contentKey];
     if (record !== undefined) {

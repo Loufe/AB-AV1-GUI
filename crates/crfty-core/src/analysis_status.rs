@@ -391,7 +391,7 @@ pub(crate) fn refresh_scope(state: &AppState, applied: &Applied, everything: boo
                     .durable
                     .conversion_runs
                     .get(run_id)
-                    .and_then(|run| run.spec.content_key.clone())
+                    .and_then(|run| run.spec.content_key().cloned())
                 {
                     keys.insert(content_key);
                 }

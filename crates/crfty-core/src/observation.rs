@@ -23,8 +23,8 @@
 //! including the facts required per outcome and the eligibility table, is
 //! `docs/HISTORY.md`.
 //!
-//! Today the native observation is a derived view over the run, record, and
-//! output ledgers of [`DurableState`]; the same type becomes the stored unit
+//! Today the native observation is a derived view over the run and output
+//! ledgers of [`DurableState`]; the same type becomes the stored unit
 //! when History gains its own storage.
 
 use std::path::PathBuf;
@@ -35,7 +35,7 @@ use crate::{
     AnalysisAttempt, AnalysisResult, CompletionEvidence, ContentKey, ConversionRun, DecodeMode,
     DurableState, DurationMs, FailureFacts, ItemOutcome, JobPhase, Operation, PhaseSpan, RunId,
     SearchMeasurement, ToolRevisions, TranslatedId, TranslatedObservation, TranslatedOutcome,
-    TranslatedQuality, TranslatedSource, UnixMillis, VideoCodec, VmafTarget,
+    TranslatedQuality, TranslatedSource, UnixMillis, VideoCodec, VideoMeta, VmafTarget,
 };
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -84,15 +84,38 @@ pub struct NativeObservation {
 
 /// The source as identified by content, with the media facts cohorts are
 /// built from. Width and height are post-rotation.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, specta::Type)]
 #[serde(deny_unknown_fields)]
 pub struct SourceFacts {
     pub content_key: ContentKey,
     pub codec: VideoCodec,
     pub width: u32,
     pub height: u32,
+    #[specta(type = crate::JsNumber)]
     pub duration_ms: u64,
+    #[specta(type = crate::JsNumber)]
     pub size_bytes: u64,
+}
+
+impl SourceFacts {
+    #[must_use]
+    pub fn from_media(content_key: ContentKey, metadata: &VideoMeta) -> Self {
+        let (width, height) = metadata.post_rotation_dimensions();
+        Self {
+            content_key,
+            codec: metadata.codec.clone(),
+            width,
+            height,
+            duration_ms: metadata.duration_ms,
+            size_bytes: metadata.size_bytes,
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct NativeRecording {
+    pub observation: NativeObservation,
+    pub paths: ObservationPaths,
 }
 
 /// What the run concluded, carrying only the evidence that outcome can
@@ -393,11 +416,6 @@ impl NativeObservation {
     /// from folded state satisfies this; deserialized fixtures prove which
     /// shapes the contract rejects.
     pub fn validate(&self) -> Result<(), &'static str> {
-        if let (Some(started), Some(finished)) = (self.started_at, self.finished_at)
-            && started > finished
-        {
-            return Err("observation finished before it started");
-        }
         match &self.outcome {
             ObservedOutcome::Analyzed { search } => search.analysis.validate_consistent(),
             ObservedOutcome::Converted { search, encode } => {
@@ -602,6 +620,38 @@ pub fn observations(state: &DurableState) -> Vec<NativeObservation> {
         .collect()
 }
 
+pub(crate) fn terminal_recording(
+    state: &DurableState,
+    delta: &crate::DurableDelta,
+) -> Result<Option<NativeRecording>, &'static str> {
+    let crate::DurableDelta::ItemFinished {
+        run_id, outcome, ..
+    } = delta
+    else {
+        return Ok(None);
+    };
+    if matches!(outcome, ItemOutcome::Skipped { .. }) {
+        return Ok(None);
+    }
+    let Some(run) = state.conversion_runs.get(run_id) else {
+        // A validated reservation-only terminal has no prepared run.
+        return Ok(None);
+    };
+    let observation = observe(state, run).ok_or("reportable terminal has no observation")?;
+    observation.validate()?;
+    Ok(Some(NativeRecording {
+        observation,
+        paths: ObservationPaths {
+            source: run.spec.input.clone(),
+            output: state
+                .outputs
+                .get(run_id)
+                .filter(|output| output.settled_identity().is_some())
+                .map(|output| output.final_path.clone()),
+        },
+    }))
+}
+
 /// The latest decisive observation about `content_key` among
 /// `observations` in recording order, or `None` when nothing has decided
 /// its standing. Display standing only: queue eligibility keeps reading the
@@ -681,23 +731,11 @@ fn observe(state: &DurableState, run: &ConversionRun) -> Option<NativeObservatio
         ItemOutcome::Stopped => ObservedOutcome::Stopped,
         ItemOutcome::Incomplete => ObservedOutcome::Incomplete,
     };
-    let source = run.spec.content_key.as_ref().and_then(|content_key| {
-        let metadata = &state.records.get(content_key)?.metadata;
-        let (width, height) = metadata.post_rotation_dimensions();
-        Some(SourceFacts {
-            content_key: content_key.clone(),
-            codec: metadata.codec.clone(),
-            width,
-            height,
-            duration_ms: metadata.duration_ms,
-            size_bytes: metadata.size_bytes,
-        })
-    });
     let profile = &run.spec.execution.profile;
     Some(NativeObservation {
         run_id: run.spec.run_id,
         operation: run.spec.operation,
-        source,
+        source: run.spec.source.clone(),
         revisions: ToolRevisions {
             ab_av1: profile.ab_av1_revision.clone(),
             ffmpeg: profile.ffmpeg_revision.clone(),
@@ -759,7 +797,7 @@ mod tests {
     fn state_with(runs: Vec<ConversionRun>) -> DurableState {
         let mut state = DurableState::default();
         for run in runs {
-            if let Some(content_key) = &run.spec.content_key
+            if let Some(content_key) = run.spec.content_key()
                 && !state.records.contains_key(content_key)
             {
                 state.records.insert(
@@ -1018,19 +1056,35 @@ mod tests {
     }
 
     #[test]
-    fn a_run_without_a_record_has_no_source_and_no_eligible_facts() {
+    fn a_run_without_prepared_source_has_no_eligible_facts() {
         let mut state = state_with(vec![run(
             1,
             "a",
             ItemOutcome::Converted(live(8_000, 3_000)),
         )]);
         state.records.clear();
+        for run in state.conversion_runs.values_mut() {
+            run.spec.source = None;
+        }
         let observation = assessed(only(&state), Some(SourceAssessment::Matched));
         assert_eq!(observation.source, None);
         assert!(observation.decisive_fact().is_none());
         assert!(observation.reduction_fact().is_none());
         assert!(observation.rate_sample(Operation::Convert).is_none());
         assert!(observation.prediction_pair().is_none());
+    }
+
+    #[test]
+    fn prepared_source_facts_survive_record_changes_and_removal() {
+        let mut state = state_with(vec![run(1, "a", ItemOutcome::Stopped)]);
+        let before = only(&state);
+        for record in state.records.values_mut() {
+            record.metadata.rotation_degrees = 90;
+            record.metadata.size_bytes = 1;
+        }
+        assert_eq!(only(&state), before);
+        state.records.clear();
+        assert_eq!(only(&state), before);
     }
 
     #[test]
@@ -1400,10 +1454,7 @@ mod tests {
 
         let mut reversed = converted.clone();
         reversed.started_at = Some(UnixMillis(FINISHED.0 + 10));
-        assert_eq!(
-            reversed.validate(),
-            Err("observation finished before it started")
-        );
+        assert_eq!(reversed.validate(), Ok(()));
 
         let mut unmeasured = converted.clone();
         if let ObservedOutcome::Converted { encode, .. } = &mut unmeasured.outcome {

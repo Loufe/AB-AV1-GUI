@@ -15,9 +15,9 @@ use crate::{
     QueueItem, QueueItemId, QueueItemState, ReservedJob, RunId, ScanFacts, SessionAggregates,
     SessionState, Settings, SkipReason, StatisticsPayload, Telemetry, ToolAvailability,
     ToolPathSettings, ToolVerification, UnixMillis, VideoMeta, apply_analysis_mutation,
-    begin_analysis_generation, compose_execution, decide_freshness, evaluate_enqueue, fold,
-    fold_config, project_row_status, refresh_analysis_rows, refresh_scope, select_job_action,
-    statistics, validate_analysis_mutation,
+    begin_analysis_generation, compose_execution, decide_freshness, evaluate_enqueue, fold_config,
+    project_row_status, refresh_analysis_rows, refresh_scope, select_job_action, statistics,
+    validate_analysis_mutation,
 };
 
 /// Sanity bound for a requester-supplied UTC offset: one day in minutes.
@@ -435,8 +435,11 @@ pub fn apply(state: &mut AppState, command: Command) -> Applied {
             Applied::rejected("corruption acknowledgement is handled by the driver")
         }
     };
-    for delta in &applied.durable {
-        fold(&mut state.durable, delta);
+    if !applied.durable.is_empty() {
+        match crate::apply_durable_batch(&state.durable, &applied.durable) {
+            Ok(batch) => state.durable = batch.state,
+            Err(reason) => return Applied::rejected(reason),
+        }
     }
     for delta in &applied.config {
         fold_config(&mut state.settings, delta);
@@ -919,8 +922,8 @@ fn settled_output_match(
                 .conversion_runs
                 .get(run_id)?
                 .spec
-                .content_key
-                .clone()?;
+                .content_key()
+                .cloned()?;
             Some((source, artifact.content_key.clone(), artifact.clone()))
         })
 }
@@ -1396,7 +1399,12 @@ fn apply_worker(state: &AppState, command: WorkerCommand) -> Applied {
                 claim_id,
                 run_id,
                 input: item.input.clone(),
-                content_key,
+                source: observation.as_ref().map(|observed| {
+                    crate::SourceFacts::from_media(
+                        observed.binding.content_key.clone(),
+                        &observed.metadata,
+                    )
+                }),
                 operation: item.operation,
                 intent: item.intent,
                 output_target: item.output_target.clone(),
@@ -1765,8 +1773,7 @@ pub(crate) fn validate_analysis_recorded(
     }
     if run
         .spec
-        .content_key
-        .as_ref()
+        .content_key()
         .is_some_and(|key| !state.records.contains_key(key))
     {
         return Err("analysis content record is missing");

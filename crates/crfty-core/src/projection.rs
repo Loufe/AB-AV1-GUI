@@ -675,7 +675,7 @@ pub fn history_rows(state: &DurableState) -> Vec<HistoryRow> {
     let mut latest_analysis: BTreeMap<&ContentKey, (RunId, &AnalysisResult)> = BTreeMap::new();
     let mut latest_interruption: BTreeMap<&ContentKey, (RunId, &ConversionRun)> = BTreeMap::new();
     for (run_id, run) in &state.conversion_runs {
-        let Some(content_key) = &run.spec.content_key else {
+        let Some(content_key) = run.spec.content_key() else {
             continue;
         };
         if let Some(analysis) = &run.analysis {

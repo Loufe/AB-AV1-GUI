@@ -993,7 +993,10 @@ fn basic_scan_recognizes_reliable_settled_output_before_stale_source_binding() {
                 claim_id: ClaimId(2),
                 run_id,
                 input: PathBuf::from("movie.mkv"),
-                content_key: Some(source.binding.content_key.clone()),
+                source: Some(crate::SourceFacts::from_media(
+                    source.binding.content_key.clone(),
+                    &source.metadata,
+                )),
                 operation: Operation::Convert,
                 intent: AnalysisIntent::ReuseIfFresh,
                 output_target: OutputTarget::Replace,
@@ -2446,6 +2449,189 @@ fn run_facts_fold_start_finish_instants_and_phase_spans() {
 }
 
 #[test]
+fn checked_batch_preserves_prepared_facts_across_clock_changes_and_batch_partitions()
+-> Result<(), Box<dyn std::error::Error>> {
+    let mut app = AppState::default();
+    assert_eq!(
+        apply(&mut app, add_command(QueueItemId(1), "synthetic.mkv")).reply,
+        Reply::Accepted
+    );
+    start_session(&mut app);
+    let original = media_observation("synthetic-content");
+    assert!(matches!(
+        reserve_and_prepare_observed(&mut app, Some(original.clone())).reply,
+        Reply::Claimed(Some(_))
+    ));
+    let before = app.durable.clone();
+    let mut rotated = original.clone();
+    rotated.metadata.rotation_degrees = 90;
+    let mut later = original.clone();
+    later.metadata.rotation_degrees = 180;
+    let spans = vec![PhaseSpan {
+        phase: JobPhase::Encoding,
+        duration: DurationMs(777),
+    }];
+    let deltas = vec![
+        DurableDelta::ItemRunning {
+            item_id: QueueItemId(1),
+            claim_id: ClaimId(1),
+            run_id: RunId(2),
+            at: UnixMillis(200),
+        },
+        DurableDelta::MediaObserved {
+            observation: Box::new(rotated),
+        },
+        DurableDelta::ItemFinished {
+            item_id: QueueItemId(1),
+            claim_id: ClaimId(1),
+            run_id: RunId(2),
+            outcome: ItemOutcome::Incomplete,
+            at: UnixMillis(100),
+            phase_spans: spans.clone(),
+        },
+        DurableDelta::MediaObserved {
+            observation: Box::new(later),
+        },
+    ];
+    let batch = crate::apply_durable_batch(&before, &deltas)?;
+    let [recording] = batch.recordings.as_slice() else {
+        return Err("expected one recording".into());
+    };
+    assert_eq!(
+        recording.observation.source,
+        Some(crate::SourceFacts::from_media(
+            original.binding.content_key,
+            &original.metadata
+        ))
+    );
+    assert_eq!(recording.observation.started_at, Some(UnixMillis(200)));
+    assert_eq!(recording.observation.finished_at, Some(UnixMillis(100)));
+    assert_eq!(recording.paths.source, PathBuf::from("synthetic.mkv"));
+    assert_eq!(recording.observation.validate(), Ok(()));
+    assert_eq!(
+        batch
+            .state
+            .conversion_runs
+            .get(&RunId(2))
+            .map(|run| &run.phase_spans),
+        Some(&spans)
+    );
+    let mut partitioned = before.clone();
+    let mut recordings = Vec::new();
+    for delta in &deltas {
+        let next = crate::apply_durable_batch(&partitioned, std::slice::from_ref(delta))?;
+        partitioned = next.state;
+        recordings.extend(next.recordings);
+    }
+    assert_eq!(partitioned, batch.state);
+    assert_eq!(recordings, batch.recordings);
+    let mut bytes = encode_snapshot("fixture", UnixMillis(0), JournalSequence(0), &before)?;
+    bytes.extend(encode_record(&JournalEnvelope {
+        sequence: JournalSequence(0),
+        deltas,
+    })?);
+    let restored = replay(&bytes);
+    assert_eq!(restored.corruption, None);
+    assert_eq!(restored.state, batch.state);
+    assert_eq!(app.durable, before);
+    Ok(())
+}
+
+#[test]
+fn checked_batch_rejects_inconsistent_preparation_and_discards_partial_recordings()
+-> Result<(), Box<dyn std::error::Error>> {
+    let mut app = AppState::default();
+    assert_eq!(
+        apply(&mut app, add_command(QueueItemId(1), "synthetic.mkv")).reply,
+        Reply::Accepted
+    );
+    start_session(&mut app);
+    assert!(matches!(
+        apply(&mut app, Command::Worker(WorkerCommand::ReserveNext)).reply,
+        Reply::Reserved(Some(_))
+    ));
+    let reserved = app.durable.clone();
+    let observation = media_observation("synthetic-content");
+    let prepared = apply(
+        &mut app,
+        Command::Worker(WorkerCommand::PrepareReserved {
+            item_id: QueueItemId(1),
+            claim_id: ClaimId(1),
+            run_id: RunId(2),
+            observation: Some(Box::new(observation)),
+            import_paths: Vec::new(),
+        }),
+    );
+    assert!(matches!(prepared.reply, Reply::Claimed(Some(_))));
+    let mut malformed = prepared.durable;
+    let Some(DurableDelta::ItemPrepared { spec }) = malformed.last_mut() else {
+        return Err("missing preparation".into());
+    };
+    let Some(source) = &mut spec.source else {
+        return Err("missing prepared source".into());
+    };
+    source.width = 1;
+    assert!(crate::apply_durable_batch(&reserved, &malformed).is_err());
+    let before = app.durable.clone();
+    let terminal = DurableDelta::ItemFinished {
+        item_id: QueueItemId(1),
+        claim_id: ClaimId(1),
+        run_id: RunId(2),
+        outcome: ItemOutcome::Incomplete,
+        at: UnixMillis(100),
+        phase_spans: Vec::new(),
+    };
+    assert!(crate::apply_durable_batch(&before, &[terminal.clone(), terminal]).is_err());
+    assert_eq!(app.durable, before);
+    Ok(())
+}
+
+#[test]
+fn checked_batch_excludes_skips_and_reservation_only_terminals()
+-> Result<(), Box<dyn std::error::Error>> {
+    let mut app = AppState::default();
+    assert_eq!(
+        apply(&mut app, add_command(QueueItemId(1), "synthetic.mkv")).reply,
+        Reply::Accepted
+    );
+    start_session(&mut app);
+    assert!(matches!(
+        apply(&mut app, Command::Worker(WorkerCommand::ReserveNext)).reply,
+        Reply::Reserved(Some(_))
+    ));
+    let terminal = DurableDelta::ItemFinished {
+        item_id: QueueItemId(1),
+        claim_id: ClaimId(1),
+        run_id: RunId(2),
+        outcome: ItemOutcome::Failed(FailureFacts::new(
+            FailureKind::Internal,
+            "synthetic preparation failure",
+        )),
+        at: UnixMillis(100),
+        phase_spans: Vec::new(),
+    };
+    let reservation = crate::apply_durable_batch(&app.durable, &[terminal])?;
+    assert!(reservation.recordings.is_empty());
+    assert!(reservation.state.conversion_runs.is_empty());
+    let mut app = active_state();
+    let terminal = DurableDelta::ItemFinished {
+        item_id: QueueItemId(1),
+        claim_id: ClaimId(1),
+        run_id: RunId(2),
+        outcome: ItemOutcome::Skipped {
+            reason: SkipReason::OutputExists,
+        },
+        at: UnixMillis(100),
+        phase_spans: Vec::new(),
+    };
+    let skipped = crate::apply_durable_batch(&app.durable, &[terminal])?;
+    assert!(skipped.recordings.is_empty());
+    app.durable = skipped.state;
+    assert!(observations(&app.durable).is_empty());
+    Ok(())
+}
+
+#[test]
 fn session_aggregates_absorb_counts_every_outcome_and_live_evidence() {
     let mut aggregates = SessionAggregates::default();
     aggregates.absorb(&ItemOutcome::Analyzed, &[]);
@@ -3826,7 +4012,12 @@ fn verdict_fixture(
                 claim_id: ClaimId(2),
                 run_id: RunId(run),
                 input: PathBuf::from("video.mkv"),
-                content_key: key.map(|key| ContentKey(key.to_owned())),
+                source: key.map(|key| {
+                    crate::SourceFacts::from_media(
+                        ContentKey(key.to_owned()),
+                        &media_observation(key).metadata,
+                    )
+                }),
                 operation: Operation::Convert,
                 intent: AnalysisIntent::ReuseIfFresh,
                 output_target: OutputTarget::Replace,
@@ -3991,7 +4182,10 @@ fn latest_decisive_run_wins_the_verdict() {
                 claim_id: ClaimId(8),
                 run_id: RunId(9),
                 input: PathBuf::from("video.mkv"),
-                content_key: Some(ContentKey(key.to_owned())),
+                source: Some(crate::SourceFacts::from_media(
+                    ContentKey(key.to_owned()),
+                    &media_observation(key).metadata,
+                )),
                 operation: Operation::Convert,
                 intent: AnalysisIntent::ReuseIfFresh,
                 output_target: OutputTarget::Replace,
@@ -4604,7 +4798,7 @@ fn enqueue_time_skip_reasons_are_never_terminal_outcomes() {
         claim_id: ClaimId(2),
         run_id: RunId(3),
         input: PathBuf::from("video.mkv"),
-        content_key: None,
+        source: None,
         operation: Operation::Convert,
         intent: AnalysisIntent::ReuseIfFresh,
         output_target: OutputTarget::Replace,

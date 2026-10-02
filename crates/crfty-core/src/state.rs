@@ -712,7 +712,7 @@ pub fn fold(state: &mut DurableState, delta: &DurableDelta) {
         DurableDelta::AnalysisRecorded { run_id, result } => {
             if let Some(run) = state.conversion_runs.get_mut(run_id) {
                 run.analysis = Some(result.as_ref().clone());
-                if let Some(content_key) = &run.spec.content_key
+                if let Some(content_key) = run.spec.content_key()
                     && let Some(record) = state.records.get_mut(content_key)
                 {
                     record.record_analysis(result.as_ref().clone());
@@ -785,7 +785,7 @@ pub fn fold(state: &mut DurableState, delta: &DurableDelta) {
                     | ItemOutcome::Failed(_) => None,
                 };
                 if let Some(kind) = kind
-                    && let Some(content_key) = &run.spec.content_key
+                    && let Some(content_key) = run.spec.content_key()
                     && let Some(record) = state.records.get_mut(content_key)
                 {
                     record.verdict = Some(Verdict {

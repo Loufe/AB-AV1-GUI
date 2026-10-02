@@ -28,6 +28,208 @@ fn ready(store: &mut HistoryStore) -> Result<crfty_core::JournalReplay> {
     }
 }
 
+fn media(rotation: i16) -> crfty_core::MediaObservation {
+    crfty_core::MediaObservation {
+        path_hash: crfty_core::PathHash("synthetic-path-hash".to_owned()),
+        binding: crfty_core::PathBinding {
+            identity: crfty_core::DestructiveIdentity {
+                file_id: crfty_core::FileSystemId::Unix {
+                    device: 1,
+                    inode: 1,
+                },
+                size: 1000,
+                modified_ns: None,
+            },
+            content_key: crfty_core::ContentKey("synthetic-content-key".to_owned()),
+        },
+        metadata: crfty_core::VideoMeta {
+            codec: crfty_core::VideoCodec::Hevc,
+            container: crfty_core::MediaContainer::Matroska,
+            width: 1920,
+            height: 1080,
+            rotation_degrees: rotation,
+            duration_ms: 1000,
+            size_bytes: 1000,
+            audio: Vec::new(),
+            subtitle_count: 0,
+        },
+    }
+}
+
+fn prepared_source() -> Vec<DurableDelta> {
+    let mut deltas = prepared();
+    let observation = media(0);
+    if let Some(DurableDelta::ItemPrepared { spec }) = deltas.last_mut() {
+        spec.source = Some(crfty_core::SourceFacts::from_media(
+            observation.binding.content_key.clone(),
+            &observation.metadata,
+        ));
+    }
+    deltas.insert(
+        2,
+        DurableDelta::MediaObserved {
+            observation: Box::new(observation),
+        },
+    );
+    deltas
+}
+
+#[test]
+fn backward_wall_clock_terminal_preserves_exact_stamps_and_monotonic_spans_after_restart()
+-> std::result::Result<(), Box<dyn std::error::Error>> {
+    for candidate in [Candidate::Rusqlite, Candidate::Turso] {
+        let (directory, mut store) = history(candidate)?;
+        let mut deltas = prepared();
+        deltas.push(DurableDelta::ItemRunning {
+            item_id: QueueItemId(1),
+            claim_id: ClaimId(1),
+            run_id: RunId(2),
+            at: UnixMillis(200),
+        });
+        store.append_operations(&deltas, true)?;
+        let mut terminal = stopped();
+        let spans = vec![crfty_core::PhaseSpan {
+            phase: crfty_core::JobPhase::Encoding,
+            duration: crfty_core::DurationMs(777),
+        }];
+        if let DurableDelta::ItemFinished { phase_spans, .. } = &mut terminal {
+            *phase_spans = spans.clone();
+        }
+        store.append_operations(&[terminal], true)?;
+        store.compact_operations(SessionState::Idle, UnixMillis(100))?;
+        drop(store);
+        let mut store = HistoryStore::open(candidate, directory.path())?;
+        let entry = store
+            .detail(&ObservationId::Native(RunId(2)))?
+            .ok_or("missing clock-adjusted terminal")?;
+        let Observation::Native(native) = entry.observation else {
+            return Err("expected native".into());
+        };
+        assert_eq!(native.started_at, Some(UnixMillis(200)));
+        assert_eq!(native.finished_at, Some(UnixMillis(123)));
+        assert_eq!(native.validate(), Ok(()));
+        assert_eq!(
+            ready(&mut store)?
+                .state
+                .conversion_runs
+                .get(&RunId(2))
+                .map(|run| &run.phase_spans),
+            Some(&spans)
+        );
+        assert_eq!(store::metadata(&store.database, "revision")?, 1);
+    }
+    Ok(())
+}
+
+#[test]
+fn scans_on_both_sides_of_terminal_and_batch_partitioning_preserve_prepared_facts()
+-> std::result::Result<(), Box<dyn std::error::Error>> {
+    for candidate in [Candidate::Rusqlite, Candidate::Turso] {
+        for scan_before in [false, true] {
+            let (_first, mut separate) = history(candidate)?;
+            let (second, mut together) = history(candidate)?;
+            separate.append_operations(&prepared_source(), true)?;
+            together.append_operations(&prepared_source(), true)?;
+            let mut deltas = Vec::new();
+            if scan_before {
+                deltas.push(DurableDelta::MediaObserved {
+                    observation: Box::new(media(90)),
+                });
+            }
+            deltas.extend([
+                stopped(),
+                DurableDelta::MediaObserved {
+                    observation: Box::new(media(180)),
+                },
+            ]);
+            for delta in &deltas {
+                separate.append_operations(std::slice::from_ref(delta), true)?;
+            }
+            together.append_operations(&deltas, true)?;
+            let id = ObservationId::Native(RunId(2));
+            let entry = together.detail(&id)?.ok_or("missing terminal")?;
+            assert_eq!(separate.detail(&id)?, Some(entry.clone()));
+            let Observation::Native(native) = &entry.observation else {
+                return Err("expected native".into());
+            };
+            assert_eq!(
+                native
+                    .source
+                    .as_ref()
+                    .map(|source| (source.width, source.height)),
+                Some((1920, 1080))
+            );
+            together.compact_operations(SessionState::Idle, UnixMillis(200))?;
+            drop(together);
+            let mut reopened = HistoryStore::open(candidate, second.path())?;
+            assert_eq!(reopened.detail(&id)?, Some(entry));
+        }
+    }
+    Ok(())
+}
+
+#[test]
+fn multiple_terminals_share_one_revision_and_invalid_batches_commit_nothing()
+-> std::result::Result<(), Box<dyn std::error::Error>> {
+    for candidate in [Candidate::Rusqlite, Candidate::Turso] {
+        let (_directory, mut store) = history(candidate)?;
+        store.append_operations(&prepared(), false)?;
+        let before = ready(&mut store)?;
+        assert!(
+            store
+                .append_operations(&[stopped(), stopped()], false)
+                .is_err()
+        );
+        assert_eq!(ready(&mut store)?, before);
+        assert!(store.detail(&ObservationId::Native(RunId(2)))?.is_none());
+        assert_eq!(store::metadata(&store.database, "recording_high_water")?, 0);
+        assert_eq!(store::metadata(&store.database, "revision")?, 0);
+        let mut second = prepared();
+        for delta in &mut second {
+            match delta {
+                DurableDelta::QueueAdded { item } => item.id = QueueItemId(3),
+                DurableDelta::ItemReserved { job } => {
+                    job.item_id = QueueItemId(3);
+                    job.claim_id = ClaimId(3);
+                    job.run_id = RunId(4);
+                }
+                DurableDelta::ItemPrepared { spec } => {
+                    spec.item_id = QueueItemId(3);
+                    spec.claim_id = ClaimId(3);
+                    spec.run_id = RunId(4);
+                }
+                _ => return Err("unexpected preparation delta".into()),
+            }
+        }
+        let mut last = stopped();
+        if let DurableDelta::ItemFinished {
+            item_id,
+            claim_id,
+            run_id,
+            ..
+        } = &mut last
+        {
+            *item_id = QueueItemId(3);
+            *claim_id = ClaimId(3);
+            *run_id = RunId(4);
+        }
+        let mut deltas = vec![stopped()];
+        deltas.extend(second);
+        deltas.push(last);
+        store.append_operations(&deltas, false)?;
+        for (run, seq) in [(2, 1), (4, 2)] {
+            let entry = store
+                .detail(&ObservationId::Native(RunId(run)))?
+                .ok_or("missing batch terminal")?;
+            assert_eq!(entry.seq, seq);
+            assert_eq!(entry.paths, None);
+        }
+        assert_eq!(store::metadata(&store.database, "revision")?, 1);
+        assert_eq!(store::metadata(&store.database, "runtime_high_water")?, 4);
+    }
+    Ok(())
+}
+
 #[test]
 fn terminal_batch_and_history_are_atomic_and_survive_compaction()
 -> std::result::Result<(), Box<dyn std::error::Error>> {

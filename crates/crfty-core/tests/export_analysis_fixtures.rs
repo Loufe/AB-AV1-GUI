@@ -21,14 +21,15 @@ use crfty_core::{
     AnalysisGenerationId, AnalysisIntent, AnalysisProfile, AnalysisResult, AnalysisRow,
     AnalysisRowEntry, AnalysisRowId, AnalysisScanFailure, AnalysisSnapshot, AppState,
     ArtifactIdentity, AudioCodec, AudioStreamMeta, ClaimId, Command, CompletionEvidence,
-    ContentKey, Crf, CurrentFileIdentity, DecodeMode, DestructiveIdentity, EphemeralDelta,
-    ExecutionSettings, FileSystemId, FileTimeNs, HardwareDecoder, HistoryCommand, ImportPath,
-    ImportedHistoryRecord, ItemOutcome, LocatedTool, LocatedTools, MediaContainer,
-    MediaObservation, Operation, OutputDelta, OutputState, OutputTarget, OutputTransaction,
-    OverwriteDecision, ParkedStatus, PathBinding, PathHash, QueueAddRequest, QueueCommand,
-    QueueItemId, Replacement, Reply, RunId, SearchMeasurement, SessionCommand, SettingsCommand,
-    SystemCommand, TimestampReliability, ToolAvailability, ToolRevisions, ToolSource,
-    ToolVerification, UnixMillis, VideoCodec, VideoMeta, VmafScore, WorkerCommand, apply,
+    ContentKey, Crf, CurrentFileIdentity, DecodeMode, DestructiveIdentity, DurationMs,
+    EphemeralDelta, ExecutionSettings, FileSystemId, FileTimeNs, HardwareDecoder, HistoryCommand,
+    ImportPath, ImportedHistoryRecord, ItemOutcome, JobPhase, LocatedTool, LocatedTools,
+    MediaContainer, MediaObservation, Operation, OutputDelta, OutputState, OutputTarget,
+    OutputTransaction, OverwriteDecision, ParkedStatus, PathBinding, PathHash, PhaseSpan,
+    QueueAddRequest, QueueCommand, QueueItemId, Replacement, Reply, RunId, SearchMeasurement,
+    SessionCommand, SettingsCommand, SystemCommand, TimestampReliability, ToolAvailability,
+    ToolRevisions, ToolSource, ToolVerification, UnixMillis, VideoCodec, VideoMeta, VmafScore,
+    WorkerCommand, apply,
 };
 use serde::Serialize;
 
@@ -207,13 +208,20 @@ impl Recorder {
     }
 
     fn finish_job(&mut self, item: u64, ids: (ClaimId, RunId), outcome: ItemOutcome) {
+        let phase_spans = match &outcome {
+            ItemOutcome::Converted(CompletionEvidence::LiveEncode { .. }) => vec![PhaseSpan {
+                phase: JobPhase::Encoding,
+                duration: DurationMs(1_000),
+            }],
+            _ => Vec::new(),
+        };
         self.accept(Command::Worker(WorkerCommand::Terminal {
             item_id: QueueItemId(item),
             claim_id: ids.0,
             run_id: ids.1,
             outcome,
             at: UnixMillis(2_000),
-            phase_spans: Vec::new(),
+            phase_spans,
             final_telemetry: None,
         }));
     }

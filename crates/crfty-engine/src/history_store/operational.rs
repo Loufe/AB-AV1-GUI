@@ -1,6 +1,6 @@
 use crfty_core::{
-    AppState, DurableDelta, JournalEnvelope, JournalReplay, Observation, ObservationPaths,
-    UnixMillis, compaction_quiescent, encode_record, encode_snapshot, observations, replay,
+    AppState, DurableDelta, JournalEnvelope, JournalReplay, Observation, UnixMillis,
+    apply_durable_batch, compaction_quiescent, encode_record, encode_snapshot, replay,
 };
 
 use crate::journal::DurabilityToken;
@@ -72,26 +72,13 @@ impl HistoryStore {
             deltas: deltas.to_vec(),
         })
         .map_err(|error| StoreError::context("encode operational batch", error))?;
-        let mut bytes = encode_snapshot(
-            env!("CARGO_PKG_VERSION"),
-            UnixMillis(0),
-            previous.next_sequence,
-            &previous.state,
-        )
-        .map_err(|error| StoreError::context("validate operational prestate", error))?;
-        bytes.extend_from_slice(&record);
-        let after = replay(&bytes);
-        if let Some(corruption) = after.corruption {
-            return Err(StoreError::context(
-                "invalid operational batch",
-                corruption.reason,
-            ));
-        }
-        if after.ignored_torn_tail {
-            return Err(StoreError(
-                "encoded operational batch has a torn tail".to_owned(),
-            ));
-        }
+        previous
+            .next_sequence
+            .0
+            .checked_add(1)
+            .ok_or_else(|| StoreError("operational sequence exhausted".to_owned()))?;
+        let after = apply_durable_batch(&previous.state, deltas)
+            .map_err(|reason| StoreError::context("invalid operational batch", reason))?;
         transaction.database.execute(
             "INSERT INTO operational_log(seq,record) VALUES(?,?)",
             &[
@@ -99,34 +86,12 @@ impl HistoryStore {
                 Value::Blob(record),
             ],
         )?;
-        let mut terminal = observations(&after.state)
-            .into_iter()
-            .map(|observation| (observation.run_id, observation))
-            .collect::<std::collections::BTreeMap<_, _>>();
-        let mut inserted = false;
-        for delta in deltas {
-            if let DurableDelta::ItemFinished { run_id, .. } = delta
-                && let Some(native) = terminal.remove(run_id)
-            {
-                let paths = after
-                    .state
-                    .conversion_runs
-                    .get(run_id)
-                    .filter(|_| record_paths)
-                    .map(|run| ObservationPaths {
-                        source: run.spec.input.clone(),
-                        output: after
-                            .state
-                            .outputs
-                            .get(run_id)
-                            .filter(|output| output.settled_identity().is_some())
-                            .map(|output| output.final_path.clone()),
-                    });
-                let observation = Observation::Native(Box::new(native));
-                let packed = mapping::pack(&observation)?;
-                store::insert(transaction.database, &observation, paths.as_ref(), packed)?;
-                inserted = true;
-            }
+        let inserted = !after.recordings.is_empty();
+        for recording in after.recordings {
+            let observation = Observation::Native(Box::new(recording.observation));
+            let packed = mapping::pack(&observation)?;
+            let paths = record_paths.then_some(recording.paths);
+            store::insert(transaction.database, &observation, paths.as_ref(), packed)?;
         }
         if inserted {
             store::advance_revision(transaction.database)?;

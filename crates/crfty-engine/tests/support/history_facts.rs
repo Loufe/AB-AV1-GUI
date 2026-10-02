@@ -33,7 +33,7 @@ pub(crate) fn prepared() -> Vec<DurableDelta> {
         claim_id: reserved.claim_id,
         run_id: reserved.run_id,
         input: item.input.clone(),
-        content_key: None,
+        source: None,
         operation: item.operation,
         intent: item.intent,
         output_target: item.output_target.clone(),

@@ -251,7 +251,12 @@ fn prepared(item: u64, claim: u64, run: u64, key: Option<&str>, action: JobActio
             claim_id: ClaimId(claim),
             run_id: RunId(run),
             input: PathBuf::from(format!("videos/input-{item}.mp4")),
-            content_key: key.map(|key| ContentKey(key.to_owned())),
+            source: key.map(|key| {
+                crfty_core::SourceFacts::from_media(
+                    ContentKey(key.to_owned()),
+                    &video_meta(120_000),
+                )
+            }),
             operation: Operation::Convert,
             intent: AnalysisIntent::ReuseIfFresh,
             output_target: OutputTarget::Replace,
