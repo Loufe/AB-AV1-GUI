@@ -64,6 +64,12 @@ Source assessment uses the classes of the [source-continuity contract](design/so
 
 The logical model fixes what History stores and how it is read, independently of any storage engine. Hand-maintained scenarios with expected results specify it in `crates/crfty-core/tests/fixtures/history/scenarios/`, and the storage workload that selects an engine runs those scenarios (`docs/design/history-storage-workload.md`). Until History has storage, the shipped projections and the parked import path described elsewhere in this document remain in force.
 
+### Release upgrades
+
+From 3.0.0 onward, History survives upgrades between released versions and remains browsable in the newer application. Pre-release builds may require a fresh data directory. The one-time V2 import remains governed by ADR-025.
+
+History migrations preserve observation identities and facts, recording sequences, revision, and the absence of scrubbed paths. An unsupported operational payload must leave History reads available while operational writes stop. Whether queue state, saved analyses, and pending output transactions also survive release upgrades remains open; identity continuity and safe handling of pending output are required before operational work resumes. The selected authority and the remaining storage proof obligations are specified in [History storage](design/history-storage.md).
+
 ### Identity, ownership, and cardinality
 
 An observation identifier names exactly one observation for the life of the store. Native identifiers are run identifiers. Translated identifiers pair the V2 origin with the V2 record key, 16 lowercase hexadecimal characters, so no readable path can become an identity (ADR-025). The two kinds share one identity space, one recording sequence, and one browse contract.
@@ -84,7 +90,7 @@ The History revision increases once for each commit that changes what a query ca
 
 ### Atomic terminal recording
 
-A run's terminal transition and its observation, path row, sequence, and revision form one durable commit. Every durable terminal transition has exactly one native observation committed with it, and no native observation exists without one, across any restart. The storage decision places this boundary and decides whether operational replay survives; it may not leave two independently committed authorities. Scans, skips, and reservation-only failures produce no observation.
+A run's terminal transition and its observation, path row, sequence, and revision form one durable commit. Every durable terminal transition has exactly one native observation committed with it, and no native observation exists without one, across any restart. The selected boundary stores the operational delta batch and History facts in one database transaction, retaining operational fold and replay (ADR-004). The current engine still uses the file journal until the database replacement is proven and implemented. Scans, skips, and reservation-only failures produce no observation.
 
 ### Translated observations
 

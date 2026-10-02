@@ -6,7 +6,7 @@ Status: working design note; the workload, candidate mappings, and rehearsals be
 
 Storage selection compares two candidate engines, Turso and SQLite through rusqlite, on identical facts. This note fixes those facts: the executable scenarios with their expected results, the representative volumes, the operations to time, two logical-to-relational mappings, and two schema changes to rehearse. The logical model, including the browse and evidence query contract, is durable truth in `docs/HISTORY.md` under "Logical model". Translated observation identity and import semantics are ADR-025.
 
-It selects no engine, sets no budget beyond the decided browsing guardrail, and does not decide whether operational replay survives. Environment and content collectors, export, and the historical estimator's query strategy do not gate it.
+The [selected authority](history-storage.md) is one database containing an operational row log and History tables in a shared transaction, retaining operational fold and replay. This workload selects the engine and physical schema. Environment and content collectors, export, and the historical estimator's query strategy do not gate it.
 
 ## Executable scenarios
 
@@ -55,7 +55,9 @@ Timed operations, each reported as median and 95th percentile over repeated runs
 8. Importing 15,000 new translated records as one batch, re-importing the same batch, and importing it again with 150 conflicting records.
 9. A scrub of every path row.
 
-Correctness under crash is proven separately from timing. A terminal recording and an import batch are each interrupted before and after their durability boundary, and the reopened store holds all or none of each.
+Correctness under crash is proven separately from timing. A terminal recording and an import batch are each interrupted before and after their durability boundary, and the reopened store holds all or none of each. A driver-level terminal test restarts the operational row log and asserts the terminal and observation together; the storage-only `AbortedRecord` step does not prove this boundary. Failure points also cover startup recovery, uncertain import retry, and operational compaction.
+
+Candidates must round-trip full-range `u64` facts and prove every numeric order and continuation without precision loss. Additional boundary cases include `Date` and recording sequence across the signed 64-bit limit and `Change` with before 1 and after `i64::MAX`, whose negative result exceeds signed 64-bit range. A populated History store with an unsupported operational payload must remain browsable while operational writes stop. Runtime-ID continuity includes reservations that have no History observation.
 
 ## Candidate mappings
 
@@ -77,7 +79,7 @@ M1 is selected by this analysis and M2 is rejected without measurement. M1 enfor
 
 ## Rehearsed changes
 
-Selection applies both changes to a populated store on each engine through the engine's migration path, then reruns every scenario.
+Selection applies both changes to a populated store on each engine through the engine's migration path, then reruns every scenario. Interruption before and during each migration leaves either the intact previous schema or the complete new schema; assertions preserve identities, sequences, revision, and scrubbed-path absence.
 
 **Additive field.** Native observations gain the decided throttling provenance flag. Rows recorded before the change migrate to not throttled, which is truthful because the flag marks deliberate throttling and no earlier run could be throttled. Identifiers, recording sequences, revisions, and every expected page stay unchanged.
 

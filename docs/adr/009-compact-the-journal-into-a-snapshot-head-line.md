@@ -17,7 +17,7 @@ The append-only journal (ADR-004) grows without bound: long-lived installs accum
 * A future schema version must fail distinctly, not as corruption
 * A failed compaction must never lose data or take the driver down
 * A running conversion is never interrupted by compaction
-* No new dependencies
+* Keep the compaction mechanism within the selected storage engine
 
 ## Considered options
 
@@ -25,10 +25,15 @@ The append-only journal (ADR-004) grows without bound: long-lived installs accum
 * In-place rewrite guarded by a marker record
 * Every line a version-tagged record; compaction atomically replaces the file with a single snapshot head line
 * Per-record checksums for corruption detection
+* A database snapshot and ordered row tail, compacted in one transaction
 
 ## Decision outcome
 
-Chosen option: **version-tagged lines with an atomic snapshot-head replace**. Every journal line is `{schema_version, record}` where the record is either `Deltas` (a sequenced batch) or `Snapshot` (folded state stamped with app version, timestamp, and the base sequence the next batch must carry). Replay probes the version alone before decoding the record, so an unknown schema reports "unsupported journal schema" instead of a parse error. A snapshot is only legal as the first line; one appearing later is semantic corruption.
+Chosen semantics: **a versioned operational snapshot followed by an ordered delta tail, compacted atomically at a quiescent writer barrier**. ADR-004 selects a database row log as the replacement for the current file journal. Its compaction writes the snapshot and removes the covered operational rows in one database transaction; it preserves History observations and runtime-ID continuity. The operational payload version remains separate from the SQL schema version. The engine comparison must prove failure leaves the previous snapshot and tail usable. Physical thresholds and recovery details are specified by the selected engine's evidence in [History storage](../design/history-storage.md).
+
+### Current file implementation
+
+Every journal line is `{schema_version, record}` where the record is either `Deltas` (a sequenced batch) or `Snapshot` (folded state stamped with app version, timestamp, and the base sequence the next batch must carry). Replay probes the version alone before decoding the record, so an unknown schema reports "unsupported journal schema" instead of a parse error. A snapshot is only legal as the first line; one appearing later is semantic corruption.
 
 Compaction runs on the driver's idle tick (the writer barrier is implicit because the driver is the only writer and sits between batches) and only when the state is quiescent (idle session, no reserved or claimed queue item). The size policy fires at a 64 MiB floor combined with a 4× dead-to-live ratio (Redis-AOF-style), or unconditionally at a 256 MiB hard cap; durable transforms (scrub, corruption acknowledgment, adoption) can force it. The writer encodes the snapshot to a temp file in the journal directory, fsyncs it, closes the old journal handle, atomically replaces the journal (with a bounded retry for Windows sharing violations), fsyncs the parent directory where supported, and reopens. Sequence numbering continues from the snapshot's base sequence. On any failure the temp file is discarded, the old generation stays authoritative, and the driver retries after a backoff, never a fatal.
 

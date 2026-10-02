@@ -30,7 +30,7 @@ Crates split on hard dependency boundaries (no Tauri, no process), never by topi
 | Job lifecycle, cancellation, and output settlement | `docs/design/lifecycle.md`; ADR-018 (unify job cancellation and completion; proposed), ADR-020 (own output promotion as a journaled transaction) |
 | ab-av1 adapter | ADR-003 (embed a pinned ab-av1 adapter); ADR-021 (drive ab-av1 through an owned operation; proposed) |
 | Events and IPC | `docs/design/event-stream.md`; ADR-006 (generate IPC bindings with tauri-specta) |
-| History and statistics | `docs/HISTORY.md`; ADR-015 (project imported history separately) |
+| History and statistics | `docs/HISTORY.md`; `docs/design/history-storage.md`; ADR-004 (persist state in an append-only journal); ADR-015 (project imported history separately) |
 | V2 history import | `docs/HISTORY_IMPORT.md`; ADR-015 (project imported history separately); ADR-025 (import history as keyed translated observations) |
 | Media tools | this file; ADR-023 (require a user-supplied FFmpeg toolchain) |
 | Privacy and logging | ADR-014 (scrub paths inside the log sink) |
@@ -39,7 +39,7 @@ Crates split on hard dependency boundaries (no Tauri, no process), never by topi
 | Delivery sequence | `docs/PLAN.md` |
 | Working research and design notes | `docs/design/` |
 
-History ownership is engine-side and single-boundary: an observation becomes durable only by passing through the reducer and its journal commit, and every History or Statistics view is a pure projection of that durable state rather than an independently maintained total. `docs/HISTORY.md` owns the rest, including the observation model, the transaction boundary an observation commits under, the query surface that serves those views, and how an active view learns that a mutation invalidated what it is showing.
+History ownership is engine-side and single-writer. The current engine serves projections of file-journal state; ADR-004 selects a database row log and History tables with one transaction as the replacement. `docs/HISTORY.md` owns observations and queries, and `docs/design/history-storage.md` owns the storage requirements and unresolved engine and recovery choices.
 
 ## Media tools
 
