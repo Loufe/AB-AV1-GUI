@@ -11,13 +11,14 @@ The delivery target is the runnable alpha defined in [the alpha delivery scope](
 ## Decided
 
 - Three-crate split (core/engine/shell) with one state owner: ADR-001, ADR-002
-- Append-only journal, snapshot-head compaction, generation-identity corruption handling: ADR-004, ADR-009, ADR-011
+- Current persistence: file journal, snapshot-head compaction, generation-identity corruption handling. The selected replacement keeps operational fold and replay in a database row log beside History tables: ADR-004, ADR-009, ADR-011
 - Pinned ab-av1 adapter; user-supplied FFmpeg verified by a capability probe: ADR-003, ADR-023
 - IPC bindings generated from Rust via tauri-specta: ADR-006
 - History and Statistics derive as pure projections, with imported history projected separately until translated observations are stored: ADR-015
 - One immutable observation per terminal run with file standing derived; History owns eligibility and estimation owns weighting: ADR-024
 - Imported history becomes translated observations keyed by their V2 record key, imported strictly and idempotently and never adopted onto current files: ADR-025
 - The History logical model: immutable observations beside a deletable path row, a writer-assigned recording sequence and revision, atomic terminal recording, and bounded keyset browsing (`docs/HISTORY.md`, Logical model)
+- History survives released-version upgrades from 3.0.0; pre-release builds may require a fresh data directory. One database transaction commits operational completion and History, with exact numeric storage and persistent runtime-ID continuity (`docs/design/history-storage.md`)
 - Analysis identity pins decode mode; queue adds filter at enqueue: ADR-007, ADR-013
 - Analysis work is scoped to ephemeral generations and its paths stay engine-native: ADR-016, ADR-017
 - Path scrubbing happens inside the log sink: ADR-014
@@ -38,7 +39,8 @@ The delivery target is the runnable alpha defined in [the alpha delivery scope](
 
 ## Open questions
 
-- Storage engine, physical schema, and transaction boundary for the History logical model, selected against `docs/design/history-storage-workload.md`
+- History storage engine, physical schema, and database corruption/recovery protocol, compared on the selected shared transaction against `docs/design/history-storage-workload.md`
+- Release-upgrade policy for queue state, saved analyses, and pending output transactions; History reads remain available when an operational payload is unsupported
 - The History IPC request and response types over the decided browse contract
 - Estimation as a subsystem separate from History: sufficiency, promise level, evidence seam, evaluation (`docs/design/estimation.md`)
 - Whether the ab-av1 maintainer accepts the operation boundary ADR-021 selects (alexheretic/ab-av1#371)

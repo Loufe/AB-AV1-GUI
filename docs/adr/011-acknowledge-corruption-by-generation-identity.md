@@ -27,7 +27,11 @@ A journal that fails replay validation degrades the driver: reads keep working o
 
 ## Decision outcome
 
-Chosen option: **acknowledge by suffix signature, archive by copy, rebuild by forced compaction**.
+Chosen invariant: **acknowledgment is bound to the exact corrupt generation presented to the user, and recovery preserves that generation as evidence**. ADR-004 selects a database row log and History tables as the replacement for the current file journal. Writes stop when operational replay is invalid; readable History tables remain available. An unsupported operational payload version is an upgrade limitation and must not trigger automatic corruption discard. Database-level damage may affect both operational and History reads. The selected engine must define generation identity, preserved evidence, surviving reads, and explicit recovery; a database does not establish the file journal's valid-prefix guarantee by itself. These choices remain open in [History storage](../design/history-storage.md).
+
+### Current file implementation
+
+The current file protocol acknowledges by suffix signature, archives by copy, and rebuilds by forced compaction.
 
 Core `replay` stamps every corruption report with a signature of the whole unreadable suffix: its byte length and a BLAKE2b digest, computed at detection over `bytes[valid_prefix_len..]`. Per-record identity is impossible by definition: the suffix is precisely the part that cannot be parsed. The `AcknowledgeCorruption` command carries a signature back, and the driver (not the reducer, since degraded state deliberately lives outside `AppState`) intercepts it and accepts only an exact match against the standing report. A boolean acknowledgement was rejected because it consents to a state, not to bytes: raced against a newer corruption it would silently discard a suffix the operator never saw.
 

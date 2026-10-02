@@ -59,6 +59,7 @@ Partially enforced by `crates/crfty-engine/tests/source_policy.rs`.
 
 No external consumers exist. Change APIs and schemas directly, update all call sites in the same change, and leave no compatibility artifacts. The one-time Python history adoption is a product requirement, not compatibility policy.
 
+- **Released History data**. From 3.0.0 onward, retain the History schema migrations needed to preserve and browse observations across released-version upgrades. This exception covers durable History data, not API, IPC, or operational payload compatibility. Pre-release builds may require a fresh data directory; pre-release migrations and storage-selection rehearsals are disposable.
 - **External contracts included**. When a dependency or external tool changes format, update the required version and replace the old handling. Never support both formats.
 
 ## Design discipline

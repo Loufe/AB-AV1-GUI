@@ -24,7 +24,9 @@ Output promotion and source protection keep their existing transaction guarantee
 
 The minimum History contract specifies stable observation identity, retries, terminal outcomes, source and execution facts, metric-tagged predictions and measurements, optional values, and import identity and conflicts. A reportable completion and its observation commit atomically. Discovery, Basic Scan, and queue skips do not create History observations. Failed, stopped, and incomplete work retain sparse evidence even if dedicated browsing filters arrive later.
 
-Storage selection proves these writes, deterministic pages, restart recovery, strict idempotent import, and a single writer on Windows and Linux. Representative fixtures include missing evidence, repeated work, source changes, and imported records. Prediction and measurement pairs survive as separate facts. Research collectors, future bundle packaging, and the final estimator query strategy do not gate this minimum contract. Changes to operational durability require their own explicit decision; choosing History storage alone does not authorize that replacement.
+Storage selection proves these writes, deterministic pages, restart recovery, strict idempotent import, and a single writer on Windows and Linux. Representative fixtures include missing evidence, repeated work, source changes, and imported records. Prediction and measurement pairs survive as separate facts. ADR-004 selects one database transaction for the operational row log and History tables while retaining fold and replay; [History storage](history-storage.md) specifies the remaining proof obligations. Research collectors, future bundle packaging, and the final estimator query strategy do not gate this minimum contract.
+
+Pre-release builds may require a fresh data directory. The [released History upgrade contract](../HISTORY.md#release-upgrades) applies from 3.0.0 onward; alpha restart acceptance does not establish upgrades between pre-release builds.
 
 ## Installation and product truthfulness
 
