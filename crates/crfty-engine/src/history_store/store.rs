@@ -451,18 +451,21 @@ fn encode_path(path: &Path) -> Vec<u8> {
 #[cfg(windows)]
 fn decode_path(bytes: &[u8]) -> Result<PathBuf> {
     use std::{ffi::OsString, os::windows::ffi::OsStringExt};
+    Ok(PathBuf::from(OsString::from_wide(&decode_windows_units(
+        bytes,
+    )?)))
+}
+
+#[cfg(any(windows, test))]
+pub(super) fn decode_windows_units(bytes: &[u8]) -> Result<Vec<u16>> {
     let Some((2, bytes)) = bytes.split_first() else {
         return Err(StoreError(
             "History path has an unsupported platform encoding".to_owned(),
         ));
     };
-    if !bytes.len().is_multiple_of(2) {
+    let (pairs, remainder) = bytes.as_chunks::<2>();
+    if !remainder.is_empty() {
         return Err(StoreError("invalid Windows path encoding".to_owned()));
     }
-    let units = bytes
-        .chunks_exact(2)
-        .map(|pair| <[u8; 2]>::try_from(pair).map(u16::from_le_bytes))
-        .collect::<std::result::Result<Vec<_>, _>>()
-        .map_err(|error| StoreError::context("Windows path encoding", error))?;
-    Ok(PathBuf::from(OsString::from_wide(&units)))
+    Ok(pairs.iter().copied().map(u16::from_le_bytes).collect())
 }

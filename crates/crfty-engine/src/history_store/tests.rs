@@ -372,3 +372,15 @@ fn platform_native_path_units_round_trip_without_text_conversion()
     }
     Ok(())
 }
+
+#[test]
+fn windows_path_decoding_preserves_surrogates_and_rejects_incomplete_units() -> Result<()> {
+    assert_eq!(
+        store::decode_windows_units(&[2, 0, 0xD8, 0x73, 0])?,
+        vec![0xD800, 0x73]
+    );
+    for malformed in [&[][..], &[1][..], &[2, 0][..]] {
+        assert!(store::decode_windows_units(malformed).is_err());
+    }
+    Ok(())
+}
