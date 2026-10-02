@@ -8,6 +8,7 @@ publish.workspace = true
 
 [features]
 contract-test-fixture = []
+history-storage-spike = ["dep:rusqlite", "dep:turso"]
 
 [[bin]]
 name = "crfty-contract-fixture"
@@ -18,6 +19,11 @@ required-features = ["contract-test-fixture"]
 name = "crfty-process-fixture"
 path = "tests/support/process_fixture.rs"
 required-features = ["contract-test-fixture"]
+
+[[bin]]
+name = "crfty-history-fixture"
+path = "tests/support/history_fixture.rs"
+required-features = ["contract-test-fixture", "history-storage-spike"]
 
 [dependencies]
 ab-av1 = { version = "0.11.4", git = "https://github.com/Loufe/ab-av1.git", rev = "8bde51723f6f95945792f58a94c08f59171047d7", default-features = false, features = ["library"] }
@@ -36,6 +42,7 @@ regex = "1.13.1"
 # from the OS verifier.
 reqwest = { version = "0.13.4", default-features = false, features = ["blocking", "rustls-no-provider"] }
 rustls = { version = "0.23.42", default-features = false, features = ["ring", "std", "tls12"] }
+rusqlite = { version = "0.40.2", default-features = false, features = ["bundled"], optional = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 tempfile = { version = "3.27.0", default-features = false }
@@ -43,6 +50,7 @@ tokio = { version = "1.49.0", features = ["rt", "sync"] }
 tokio-stream = "0.1.18"
 tracing = { version = "0.1.44", default-features = false, features = ["std"] }
 tracing-subscriber = { version = "0.3.23", default-features = false, features = ["fmt", "registry", "std"] }
+turso = { version = "0.8.1", default-features = false, optional = true }
 
 [target.'cfg(windows)'.dependencies]
 file-id = { version = "0.2.3", git = "https://github.com/Loufe/notify.git", rev = "33e1f19264da0aacdf46acaeddaee083e7b5137d" }

@@ -12,6 +12,7 @@ mod estimation;
 mod execution;
 mod failure;
 mod history;
+mod history_browse;
 mod job;
 mod journal;
 mod media;
@@ -58,6 +59,7 @@ pub use estimation::{
 };
 pub use execution::{ExecutionUnavailable, compose_execution, decoder_candidates};
 pub use failure::{DIAGNOSTIC_TAIL_MAX_BYTES, DiagnosticTail, FailureFacts, FailureKind};
+pub use history_browse::{HistoryBrowseFacts, HistoryOutcome};
 pub use job::{
     AnalysisAttempt, AnalysisIntent, AnalysisProfile, AnalysisResult, ClaimedJob, Crf, DecodeMode,
     DecodePreference, ExecutionSettings, HardwareDecoder, JobAction, JobPhase, JobSpec, Operation,

@@ -11,6 +11,8 @@ pub mod config;
 pub mod coordinator;
 pub mod driver;
 pub mod history_import;
+#[cfg(feature = "history-storage-spike")]
+pub mod history_store;
 pub mod journal;
 pub mod lock;
 pub mod logging;
