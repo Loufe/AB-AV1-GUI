@@ -444,12 +444,21 @@ pub struct JobSpec {
     pub claim_id: ClaimId,
     pub run_id: RunId,
     pub input: PathBuf,
-    pub content_key: Option<crate::ContentKey>,
+    /// Preparation binds media facts to their key so later scans cannot
+    /// replace the source evidence of this run.
+    pub source: Option<crate::SourceFacts>,
     pub operation: Operation,
     pub intent: AnalysisIntent,
     pub output_target: OutputTarget,
     pub execution: ExecutionSettings,
     pub action: JobAction,
+}
+
+impl JobSpec {
+    #[must_use]
+    pub fn content_key(&self) -> Option<&crate::ContentKey> {
+        self.source.as_ref().map(|source| &source.content_key)
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, specta::Type)]

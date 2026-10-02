@@ -114,7 +114,7 @@ export function historyRows(state: DurableState_Deserialize): HistoryRow[] {
     .sort((a, b) => a - b);
   for (const runId of runIds) {
     const run = state.conversion_runs[runId];
-    const contentKey = run.spec.content_key;
+    const contentKey = run.spec.source?.content_key ?? null;
     if (contentKey === null) {
       continue;
     }

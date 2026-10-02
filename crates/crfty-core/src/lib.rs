@@ -12,6 +12,7 @@ mod estimation;
 mod execution;
 mod failure;
 mod history;
+mod history_browse;
 mod job;
 mod journal;
 mod media;
@@ -58,6 +59,7 @@ pub use estimation::{
 };
 pub use execution::{ExecutionUnavailable, compose_execution, decoder_candidates};
 pub use failure::{DIAGNOSTIC_TAIL_MAX_BYTES, DiagnosticTail, FailureFacts, FailureKind};
+pub use history_browse::{HistoryBrowseFacts, HistoryOutcome};
 pub use job::{
     AnalysisAttempt, AnalysisIntent, AnalysisProfile, AnalysisResult, ClaimedJob, Crf, DecodeMode,
     DecodePreference, ExecutionSettings, HardwareDecoder, JobAction, JobPhase, JobSpec, Operation,
@@ -65,9 +67,9 @@ pub use job::{
     VmafTarget,
 };
 pub use journal::{
-    COMPACTION_IDLE_MIN_JOURNAL_BYTES, CorruptionReport, CorruptionSignature, JournalEnvelope,
-    JournalReplay, compaction_due, compaction_quiescent, corruption_signature, encode_record,
-    encode_snapshot, replay,
+    COMPACTION_IDLE_MIN_JOURNAL_BYTES, CorruptionReport, CorruptionSignature, DurableBatch,
+    JournalEnvelope, JournalReplay, apply_durable_batch, compaction_due, compaction_quiescent,
+    corruption_signature, encode_record, encode_snapshot, replay,
 };
 pub(crate) use media::FileStamp;
 pub use media::{
@@ -78,9 +80,10 @@ pub use media::{
 pub(crate) use observation::phase_duration;
 pub use observation::{
     DecisiveFact, DecisiveKind, EncodeEvidence, EncodeMeasurement, ImportedFact, ImportedKind,
-    MeasuredSizes, NativeObservation, Observation, ObservationId, ObservationPaths,
-    ObservedOutcome, OutputKind, PredictionPair, RateSample, ReductionFact, RemuxEvidence,
-    RemuxMeasurement, SearchEvidence, SourceAssessment, SourceFacts, observations, standing,
+    MeasuredSizes, NativeObservation, NativeRecording, Observation, ObservationId,
+    ObservationPaths, ObservedOutcome, OutputKind, PredictionPair, RateSample, ReductionFact,
+    RemuxEvidence, RemuxMeasurement, SearchEvidence, SourceAssessment, SourceFacts, observations,
+    standing,
 };
 pub use output::{
     ArtifactIdentity, ConflictKind, ContentKey, DestructiveIdentity, DestructiveObservation,

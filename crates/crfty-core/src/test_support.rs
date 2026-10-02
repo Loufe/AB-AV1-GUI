@@ -38,7 +38,10 @@ pub(crate) fn spec(run: u64, content_key: &ContentKey, operation: Operation) -> 
         claim_id: ClaimId(run),
         run_id: RunId(run),
         input: PathBuf::from(format!("input-{run}.mkv")),
-        content_key: Some(content_key.clone()),
+        source: Some(crate::SourceFacts::from_media(
+            content_key.clone(),
+            &meta(crate::VideoCodec::Hevc, 8_000),
+        )),
         operation,
         intent: AnalysisIntent::ReuseIfFresh,
         output_target: OutputTarget::Suffix {

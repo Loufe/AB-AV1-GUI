@@ -137,7 +137,7 @@ pub struct MediaObservation {
 /// verdicts); Stopped, Skipped, and Failed decide nothing.
 ///
 /// Lineage is derived, never stored: the runs that concern this content are
-/// `conversion_runs` filtered by `spec.content_key`, ordered by the monotonic
+/// `conversion_runs` filtered by the prepared source key, ordered by the monotonic
 /// `RunId`. `source_run` links the verdict into that chain.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, specta::Type)]
 pub struct Verdict {

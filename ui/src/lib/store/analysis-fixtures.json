@@ -726,7 +726,7 @@
                                 "Encoded": {
                                   "input_size": 4000000000,
                                   "output_size": 1600000000,
-                                  "encoding_time": null,
+                                  "encoding_time": 1000,
                                   "crf": 31000,
                                   "vmaf": 9530,
                                   "target": 95,
@@ -792,7 +792,7 @@
                                 "Encoded": {
                                   "input_size": 4000000000,
                                   "output_size": 1600000000,
-                                  "encoding_time": null,
+                                  "encoding_time": 1000,
                                   "crf": 31000,
                                   "vmaf": 9530,
                                   "target": 95,
@@ -872,7 +872,7 @@
                               "Encoded": {
                                 "input_size": 4000000000,
                                 "output_size": 1600000000,
-                                "encoding_time": null,
+                                "encoding_time": 1000,
                                 "crf": 31000,
                                 "vmaf": 9530,
                                 "target": 95,
@@ -925,7 +925,7 @@
                               "Encoded": {
                                 "input_size": 4000000000,
                                 "output_size": 1600000000,
-                                "encoding_time": null,
+                                "encoding_time": 1000,
                                 "crf": 31000,
                                 "vmaf": 9530,
                                 "target": 95,
