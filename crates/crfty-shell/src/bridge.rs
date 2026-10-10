@@ -9,20 +9,16 @@
 use std::{
     collections::BTreeMap,
     path::PathBuf,
-    sync::{
-        Arc, Mutex, MutexGuard,
-        atomic::{AtomicU64, Ordering},
-        mpsc,
-    },
+    sync::{Arc, Mutex, MutexGuard, mpsc},
 };
 
 use crfty_core::{
     AnalysisDelta, AnalysisGenerationId, AnalysisIntent, AnalysisProfile, AnalysisSnapshot,
-    AppSnapshot, ConfigDelta, CorruptionReport, CorruptionSignature, DurableDelta, DurableState,
-    EphemeralDelta, ExecutionSettings, Operation, OutputTarget, OverwriteDecision,
-    ProjectionCommand, QueueAddRequest, QueueCommand, QueueItemId, Reply, RunId, SessionAggregates,
-    SessionCommand, SessionState, Settings, SettingsCommand, Telemetry, ToolAvailability,
-    ToolsCommand, fold, fold_analysis, fold_config,
+    AppSnapshot, ConfigDelta, CorruptionReport, CorruptionSignature, DurableDelta, EphemeralDelta,
+    ExecutionSettings, Operation, OutputTarget, OverwriteDecision, ProjectionCommand,
+    QueueAddRequest, QueueCommand, Reply, RunId, SessionAggregates, SessionCommand, SessionState,
+    Settings, SettingsCommand, Telemetry, ToolAvailability, ToolsCommand, fold, fold_analysis,
+    fold_config,
 };
 use crfty_engine::{
     coordinator::{EngineConfig, EngineRuntime, ToolsConfig, UserCommandSender},
@@ -272,7 +268,6 @@ impl StreamState {
 pub(crate) struct Bridge {
     stream: Arc<Mutex<StreamState>>,
     commands: Option<UserCommandSender>,
-    next_item_id: Arc<AtomicU64>,
     /// Release page from the last successful update check. The URL never
     /// crosses IPC: the frontend asks to open it, the shell opens what the
     /// engine actually fetched.
@@ -300,7 +295,6 @@ impl Bridge {
                 Self {
                     stream: Arc::new(Mutex::new(StreamState::new(health))),
                     commands: None,
-                    next_item_id: Arc::new(AtomicU64::new(1)),
                     release_url: Arc::new(Mutex::new(None)),
                     engine: Mutex::new(None),
                 }
@@ -348,17 +342,14 @@ impl Bridge {
         })?;
         let events = std::mem::replace(&mut runtime.events, mpsc::channel().1);
         let stream = Arc::new(Mutex::new(StreamState::new(Health::Ok)));
-        let next_item_id = Arc::new(AtomicU64::new(1));
         let forwarder_stream = Arc::clone(&stream);
-        let forwarder_ids = Arc::clone(&next_item_id);
         std::thread::Builder::new()
             .name("crfty-shell-forwarder".to_owned())
-            .spawn(move || forward(events, &forwarder_stream, &forwarder_ids))
+            .spawn(move || forward(events, &forwarder_stream))
             .map_err(|error| unavailable(format!("failed to start stream forwarder: {error}")))?;
         Ok(Self {
             stream,
             commands: Some(runtime.commands.clone()),
-            next_item_id,
             release_url: Arc::new(Mutex::new(None)),
             engine: Mutex::new(Some(runtime)),
         })
@@ -377,10 +368,6 @@ impl Bridge {
         for payload in stream.replay_payloads() {
             stream.emit(payload);
         }
-    }
-
-    pub(crate) fn allocate_item_id(&self) -> QueueItemId {
-        QueueItemId(self.next_item_id.fetch_add(1, Ordering::Relaxed))
     }
 
     pub(crate) fn submit_queue(&self, command: QueueCommand) -> Result<(), CommandError> {
@@ -418,6 +405,15 @@ impl Bridge {
             .map_err(CommandError::from)
     }
 
+    pub(crate) fn enqueue_analysis(
+        &self,
+        request: crfty_core::AnalysisQueueRequest,
+    ) -> Result<crfty_core::AnalysisQueueSummary, CommandError> {
+        self.commands()?
+            .enqueue_analysis(request)
+            .map_err(CommandError::from)
+    }
+
     /// Expands files and folders into one `AddMany` batch carrying real
     /// enqueue facts (path hash + destructive identity, best-effort). The scan-extension
     /// filter comes from the settings read model; for `SeparateFolder`
@@ -449,7 +445,6 @@ impl Bridge {
                     _ => output_target.clone(),
                 };
                 QueueAddRequest {
-                    item_id: self.allocate_item_id(),
                     input: file.path,
                     path_hash: file.path_hash,
                     identity: file.identity,
@@ -622,14 +617,10 @@ fn should_defer_close(state: &StreamState) -> bool {
         && matches!(state.health, Health::Ok)
 }
 
-fn forward(
-    events: mpsc::Receiver<DriverEvent>,
-    stream: &Arc<Mutex<StreamState>>,
-    next_item_id: &AtomicU64,
-) {
+fn forward(events: mpsc::Receiver<DriverEvent>, stream: &Arc<Mutex<StreamState>>) {
     while let Ok(event) = events.recv() {
         let mut state = lock_stream(stream);
-        absorb(&mut state, event, next_item_id);
+        absorb(&mut state, event);
     }
     // The engine severs this stream only on public-channel overflow (its
     // subscriber-drop contract) — the engine itself keeps running, but this
@@ -647,10 +638,9 @@ fn forward(
 /// Folds one driver event into the read model and emits its wire payload.
 /// Separated from the forwarder loop so tests can drive it directly (with no
 /// subscriber installed, `emit` is a no-op).
-fn absorb(state: &mut StreamState, event: DriverEvent, next_item_id: &AtomicU64) {
+fn absorb(state: &mut StreamState, event: DriverEvent) {
     match event {
         DriverEvent::Snapshot(model) => {
-            seed_item_ids(next_item_id, &model.durable);
             state.model = model.clone();
             state.analysis = AnalysisSnapshot::default();
             state.emit(StreamPayload::Snapshot(model));
@@ -662,9 +652,6 @@ fn absorb(state: &mut StreamState, event: DriverEvent, next_item_id: &AtomicU64)
         }
         DriverEvent::Durable(delta) => {
             fold(&mut state.model.durable, &delta);
-            if let DurableDelta::QueueAdded { item } = &delta {
-                next_item_id.fetch_max(item.id.0.saturating_add(1), Ordering::Relaxed);
-            }
             state.emit(StreamPayload::Durable(delta));
         }
         DriverEvent::Config(delta) => {
@@ -721,11 +708,6 @@ fn absorb(state: &mut StreamState, event: DriverEvent, next_item_id: &AtomicU64)
     }
 }
 
-fn seed_item_ids(next_item_id: &AtomicU64, model: &DurableState) {
-    let maximum = model.queue.iter().map(|item| item.id.0).max().unwrap_or(0);
-    next_item_id.fetch_max(maximum.saturating_add(1), Ordering::Relaxed);
-}
-
 fn lock_stream<'a>(stream: &'a Arc<Mutex<StreamState>>) -> MutexGuard<'a, StreamState> {
     match stream.lock() {
         Ok(guard) => guard,
@@ -756,6 +738,7 @@ fn map_reply(reply: Result<Reply, crfty_engine::driver::SubmitError>) -> Result<
         }
         Ok(
             Reply::AnalysisStarted { .. }
+            | Reply::AnalysisQueued(_)
             | Reply::BasicScan(_)
             | Reply::Reserved(_)
             | Reply::Claimed(_)
@@ -860,14 +843,12 @@ mod tests {
     #[test]
     #[expect(clippy::expect_used, reason = "test assertion")]
     fn absorb_tracks_analysis_and_a_new_snapshot_clears_it() {
-        let ids = AtomicU64::new(1);
         let mut state = StreamState::new(Health::Ok);
         absorb(
             &mut state,
             ephemeral(EphemeralDelta::Analysis(AnalysisDelta::Reset {
                 snapshot: Box::new(analysis_snapshot(4)),
             })),
-            &ids,
         );
         absorb(
             &mut state,
@@ -875,7 +856,6 @@ mod tests {
                 generation: AnalysisGenerationId(4),
                 rows: vec![analysis_row(1)],
             })),
-            &ids,
         );
         assert_eq!(
             state
@@ -888,32 +868,24 @@ mod tests {
             1
         );
 
-        absorb(
-            &mut state,
-            DriverEvent::Snapshot(AppSnapshot::default()),
-            &ids,
-        );
+        absorb(&mut state, DriverEvent::Snapshot(AppSnapshot::default()));
         assert_eq!(state.analysis, AnalysisSnapshot::default());
     }
 
     #[test]
     fn absorb_retains_the_latest_telemetry_per_run_until_cleared() {
-        let ids = AtomicU64::new(1);
         let mut state = StreamState::new(Health::Ok);
         absorb(
             &mut state,
             ephemeral(EphemeralDelta::Telemetry(telemetry(1, 1, 10))),
-            &ids,
         );
         absorb(
             &mut state,
             ephemeral(EphemeralDelta::Telemetry(telemetry(1, 2, 20))),
-            &ids,
         );
         absorb(
             &mut state,
             ephemeral(EphemeralDelta::Telemetry(telemetry(2, 1, 5))),
-            &ids,
         );
         assert_eq!(state.telemetry.len(), 2);
         assert_eq!(state.telemetry.get(&RunId(1)), Some(&telemetry(1, 2, 20)));
@@ -922,7 +894,6 @@ mod tests {
         absorb(
             &mut state,
             ephemeral(EphemeralDelta::TelemetryCleared { run_id: RunId(1) }),
-            &ids,
         );
         assert_eq!(state.telemetry.get(&RunId(1)), None);
         assert_eq!(state.telemetry.get(&RunId(2)), Some(&telemetry(2, 1, 5)));
@@ -930,12 +901,10 @@ mod tests {
 
     #[test]
     fn absorb_tracks_session_and_tools_without_touching_telemetry() {
-        let ids = AtomicU64::new(1);
         let mut state = StreamState::new(Health::Ok);
         absorb(
             &mut state,
             ephemeral(EphemeralDelta::SessionChanged(SessionState::Running)),
-            &ids,
         );
         let tools = ToolAvailability::Missing {
             failures: vec![crfty_core::ToolLocationFailure::NotOnSearchPath {
@@ -945,14 +914,12 @@ mod tests {
         absorb(
             &mut state,
             ephemeral(EphemeralDelta::ToolsChanged(tools.clone())),
-            &ids,
         );
         absorb(
             &mut state,
             ephemeral(EphemeralDelta::WorkerCrashed {
                 message: "fixture".to_owned(),
             }),
-            &ids,
         );
         assert_eq!(state.session, SessionState::Running);
         assert_eq!(state.tools, tools);
@@ -962,7 +929,6 @@ mod tests {
     #[test]
     #[expect(clippy::expect_used, reason = "test assertion")]
     fn a_severed_engine_stream_marks_the_bridge_fatal() {
-        let ids = AtomicU64::new(1);
         let stream = Arc::new(Mutex::new(StreamState::new(Health::Ok)));
         let (sender, receiver) = mpsc::channel();
         sender
@@ -972,7 +938,7 @@ mod tests {
             .expect("send fixture event");
         drop(sender);
 
-        forward(receiver, &stream, &ids);
+        forward(receiver, &stream);
 
         let state = lock_stream(&stream);
         // Events before the cut were absorbed; the cut itself became fatal
@@ -1010,10 +976,9 @@ mod tests {
 
     #[test]
     fn an_abnormal_shutdown_report_stands_for_replay() {
-        let ids = AtomicU64::new(1);
         let mut state = StreamState::new(Health::Ok);
         assert!(!state.abnormal_shutdown);
-        absorb(&mut state, DriverEvent::AbnormalShutdown, &ids);
+        absorb(&mut state, DriverEvent::AbnormalShutdown);
         // Standing, not one-shot: the webview subscribes after the driver
         // emits this at boot, so the subscribe replay is how it ever arrives.
         assert!(state.abnormal_shutdown);
@@ -1022,7 +987,6 @@ mod tests {
 
     #[test]
     fn absorb_mirrors_the_latest_session_aggregates() {
-        let ids = AtomicU64::new(1);
         let mut state = StreamState::new(Health::Ok);
         let first = SessionAggregates {
             completed: 1,
@@ -1033,7 +997,6 @@ mod tests {
         absorb(
             &mut state,
             ephemeral(EphemeralDelta::SessionAggregates(first)),
-            &ids,
         );
         assert_eq!(state.aggregates, first);
 
@@ -1043,7 +1006,6 @@ mod tests {
             ephemeral(EphemeralDelta::SessionAggregates(
                 SessionAggregates::default(),
             )),
-            &ids,
         );
         assert_eq!(state.aggregates, SessionAggregates::default());
     }

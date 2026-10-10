@@ -118,7 +118,6 @@ pub struct QueueItemEdit {
 /// surfaces at claim time, where content identity is authoritative.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct QueueAddRequest {
-    pub item_id: QueueItemId,
     pub input: PathBuf,
     pub path_hash: Option<PathHash>,
     pub identity: Option<crate::DestructiveIdentity>,
@@ -306,6 +305,7 @@ pub enum Effect {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Reply {
+    AnalysisQueued(crate::AnalysisQueueSummary),
     Accepted,
     AnalysisStarted {
         generation: crate::AnalysisGenerationId,
@@ -473,6 +473,35 @@ pub fn apply(state: &mut AppState, command: Command) -> Applied {
 
 fn apply_analysis_command(state: &AppState, command: AnalysisCommand) -> Applied {
     match command {
+        AnalysisCommand::Enqueue { request, files } => {
+            let mut plan = match crate::plan_analysis_enqueue(state, request, files) {
+                Ok(plan) => plan,
+                Err(reason) => return Applied::rejected(reason),
+            };
+            let mut applied = apply_queue(
+                state,
+                QueueCommand::AddMany {
+                    requests: plan.requests,
+                },
+            );
+            if matches!(applied.reply, Reply::Accepted) {
+                for delta in &applied.ephemeral {
+                    if let EphemeralDelta::QueueAddSummary { added, skipped } = delta {
+                        plan.summary.added = *added;
+                        for (reason, count) in skipped {
+                            plan.summary.exclude_many(
+                                crate::AnalysisQueueExclusion::Policy {
+                                    reason: reason.clone(),
+                                },
+                                *count,
+                            );
+                        }
+                    }
+                }
+                applied.reply = Reply::AnalysisQueued(plan.summary);
+            }
+            applied
+        }
         AnalysisCommand::InspectFile {
             generation,
             row_id,
@@ -561,7 +590,9 @@ fn apply_analysis_state_command(state: &AppState, command: AnalysisCommand) -> A
                 rows: vec![row],
             }
         }
-        AnalysisCommand::InspectFile { .. } | AnalysisCommand::ObserveFile { .. } => {
+        AnalysisCommand::Enqueue { .. }
+        | AnalysisCommand::InspectFile { .. }
+        | AnalysisCommand::ObserveFile { .. } => {
             return Applied::rejected("Analysis scan command reached the state-only path");
         }
     };
@@ -953,20 +984,10 @@ fn apply_queue(state: &AppState, command: QueueCommand) -> Applied {
         QueueCommand::AddMany { requests } => {
             let mut accepted: Vec<QueueItem> = Vec::new();
             let mut skipped: Vec<(SkipReason, u32)> = Vec::new();
+            let mut next_id = state.durable.queue_item_id_high_water;
             for request in requests {
                 if let Err(reason) = request.output_target.validate() {
                     return Applied::rejected(reason);
-                }
-                // Item ids are caller-allocated and unique by contract; a
-                // collision is a wiring bug that rejects the whole batch.
-                if state
-                    .durable
-                    .queue
-                    .iter()
-                    .any(|item| item.id == request.item_id)
-                    || accepted.iter().any(|item| item.id == request.item_id)
-                {
-                    return Applied::rejected("queue item id already exists");
                 }
                 // One item per path: a path re-add is only meaningful once
                 // the standing item is finished. Changing an item's
@@ -994,15 +1015,22 @@ fn apply_queue(state: &AppState, command: QueueCommand) -> Applied {
                 };
                 match skip {
                     Some(reason) => count_skip(&mut skipped, reason),
-                    None => accepted.push(QueueItem {
-                        id: request.item_id,
-                        input: request.input,
-                        operation: request.operation,
-                        intent: request.intent,
-                        output_target: request.output_target,
-                        overwrite: request.overwrite,
-                        state: QueueItemState::Queued,
-                    }),
+                    None => {
+                        let id = match QueueItemId::next_after(next_id) {
+                            Ok(id) => id,
+                            Err(reason) => return Applied::rejected(reason),
+                        };
+                        next_id = id.0;
+                        accepted.push(QueueItem {
+                            id,
+                            input: request.input,
+                            operation: request.operation,
+                            intent: request.intent,
+                            output_target: request.output_target,
+                            overwrite: request.overwrite,
+                            state: QueueItemState::Queued,
+                        });
+                    }
                 }
             }
             let mut applied = Applied::accepted();

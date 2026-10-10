@@ -93,13 +93,12 @@ fn fixture_available() -> ToolAvailability {
 }
 
 fn add(item_id: QueueItemId) -> Command {
-    add_input(item_id, PathBuf::from(format!("video-{}.mkv", item_id.0)))
+    add_input(PathBuf::from(format!("video-{}.mkv", item_id.0)))
 }
 
-fn add_input(item_id: QueueItemId, input: PathBuf) -> Command {
+fn add_input(input: PathBuf) -> Command {
     Command::Queue(QueueCommand::AddMany {
         requests: vec![QueueAddRequest {
-            item_id,
             input,
             path_hash: None,
             identity: None,
@@ -470,7 +469,7 @@ fn driver_persists_before_emitting_and_replays_after_restart() {
     ));
     let reply = driver
         .commands
-        .submit(add(QueueItemId(7)))
+        .submit(add(QueueItemId(1)))
         .expect("driver reply");
     assert_eq!(reply, Reply::Accepted);
     // Per-command emit order: ephemerals precede the durable deltas they
@@ -510,7 +509,7 @@ fn driver_persists_before_emitting_and_replays_after_restart() {
             .first()
             .expect("replayed queue item")
             .id,
-        QueueItemId(7)
+        QueueItemId(1)
     );
     restarted.shutdown().expect("restarted shutdown");
 }
@@ -1459,7 +1458,7 @@ fn journal_active_output_run(
     let settings = execution();
     let run_id = transaction.run_id;
     let mut commands = vec![
-        add_input(QueueItemId(1), input.to_path_buf()),
+        add_input(input.to_path_buf()),
         Command::System(SystemCommand::ToolsDiscovered {
             availability: fixture_available(),
         }),
@@ -1686,7 +1685,6 @@ fn public_event_overflow_severs_the_stream_without_blocking_the_driver() {
 
 fn overflow_request(id: u64) -> QueueAddRequest {
     QueueAddRequest {
-        item_id: QueueItemId(id),
         input: PathBuf::from(format!("video-{id}.mkv")),
         path_hash: None,
         identity: None,
@@ -1758,7 +1756,6 @@ fn settled_success_journal(
     let mut commands = vec![
         Command::Queue(QueueCommand::AddMany {
             requests: vec![QueueAddRequest {
-                item_id: QueueItemId(1),
                 input: input.clone(),
                 path_hash: None,
                 identity: None,

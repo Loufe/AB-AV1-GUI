@@ -22,14 +22,14 @@ use super::discovery::{DiscoveryRequest, deduplicate_roots, display_text, run_di
 use super::{AnalysisError, AnalysisNativeRow, NativeEntryKind, lock, wait};
 
 #[derive(Debug)]
-pub(super) struct AnalysisGenerationRegistry {
-    pub(super) generation: AnalysisGenerationId,
+pub(crate) struct AnalysisGenerationRegistry {
+    pub(crate) generation: AnalysisGenerationId,
     pub(super) next_row_id: u64,
-    pub(super) rows: BTreeMap<AnalysisRowId, AnalysisNativeRow>,
+    pub(crate) rows: BTreeMap<AnalysisRowId, AnalysisNativeRow>,
 }
 
 impl AnalysisGenerationRegistry {
-    pub(super) fn new(generation: AnalysisGenerationId) -> Self {
+    pub(crate) fn new(generation: AnalysisGenerationId) -> Self {
         Self {
             generation,
             next_row_id: 1,
@@ -37,7 +37,7 @@ impl AnalysisGenerationRegistry {
         }
     }
 
-    pub(super) fn insert(
+    pub(crate) fn insert(
         &mut self,
         path: PathBuf,
         source_root: PathBuf,
@@ -126,6 +126,35 @@ pub(crate) struct AnalysisRuntime {
 }
 
 impl AnalysisRuntime {
+    pub(crate) fn enqueue(
+        &self,
+        request: crfty_core::AnalysisQueueRequest,
+    ) -> Result<crfty_core::AnalysisQueueSummary, AnalysisError> {
+        let _gate = lock(&self.start_gate);
+        let registry = {
+            let state = lock(&self.control.state);
+            if state.shutting_down {
+                return Err(AnalysisError::ShuttingDown);
+            }
+            let registry = state.current_registry.as_ref().ok_or_else(|| {
+                AnalysisError::Rejected("no Analysis generation exists".to_owned())
+            })?;
+            if lock(registry).generation != request.generation {
+                return Err(AnalysisError::Rejected(
+                    "queue action names a stale Analysis generation".to_owned(),
+                ));
+            }
+            Arc::clone(registry)
+        };
+        match self.commands.enqueue_analysis(request, registry)? {
+            Reply::AnalysisQueued(summary) => Ok(summary),
+            Reply::Rejected { reason } | Reply::DurabilityUnknown { reason } => {
+                Err(AnalysisError::Rejected(reason))
+            }
+            _ => Err(AnalysisError::UnexpectedReply),
+        }
+    }
+
     pub(crate) fn start(
         commands: CommandSender,
         tools: Arc<Mutex<Option<LocatedTools>>>,
@@ -181,6 +210,7 @@ impl AnalysisRuntime {
                 return Err(AnalysisError::Rejected(reason));
             }
             Reply::Accepted
+            | Reply::AnalysisQueued(_)
             | Reply::BasicScan(_)
             | Reply::Reserved(_)
             | Reply::Claimed(_)
@@ -302,6 +332,7 @@ impl AnalysisRuntime {
                 Err(AnalysisError::Rejected(reason))
             }
             Reply::AnalysisStarted { .. }
+            | Reply::AnalysisQueued(_)
             | Reply::BasicScan(_)
             | Reply::Reserved(_)
             | Reply::Claimed(_)

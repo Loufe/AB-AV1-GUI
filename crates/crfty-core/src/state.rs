@@ -37,6 +37,16 @@ numeric_id!(ClaimId);
 numeric_id!(RunId);
 numeric_id!(JournalSequence);
 
+impl QueueItemId {
+    pub(crate) fn next_after(high_water: u64) -> Result<Self, &'static str> {
+        high_water
+            .checked_add(1)
+            .filter(|id| *id <= DurableState::MAX_RUNTIME_ID)
+            .map(Self)
+            .ok_or("queue item id space is exhausted")
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, specta::Type)]
 pub struct QueueItem {
     pub id: QueueItemId,
@@ -274,6 +284,9 @@ pub enum DurableDelta {
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, specta::Type)]
 pub struct DurableState {
+    /// Highest durably allocated queue ID, retained after removal.
+    #[specta(type = crate::JsNumber)]
+    pub queue_item_id_high_water: u64,
     /// Highest durably reserved claim or run ID, retained after queue removal.
     #[specta(type = crate::JsNumber)]
     pub runtime_id_high_water: u64,
@@ -306,6 +319,18 @@ impl DurableState {
     }
 
     pub(crate) fn validate_runtime_ids(&self) -> Result<(), &'static str> {
+        if self.queue_item_id_high_water > Self::MAX_RUNTIME_ID
+            || self
+                .queue
+                .iter()
+                .any(|item| item.id.0 == 0 || item.id.0 > self.queue_item_id_high_water)
+            || self
+                .conversion_runs
+                .values()
+                .any(|run| run.spec.item_id.0 > self.queue_item_id_high_water)
+        {
+            return Err("queue item id high-water mark is invalid");
+        }
         let mark = self.runtime_id_high_water;
         let queued = self.queue.iter().filter_map(|item| match item.state {
             QueueItemState::Reserved { claim_id, run_id }
@@ -606,7 +631,10 @@ pub fn fold_config(state: &mut Settings, delta: &ConfigDelta) {
 
 pub fn fold(state: &mut DurableState, delta: &DurableDelta) {
     match delta {
-        DurableDelta::QueueAdded { item } => state.queue.push(item.clone()),
+        DurableDelta::QueueAdded { item } => {
+            state.queue_item_id_high_water = item.id.0;
+            state.queue.push(item.clone());
+        }
         DurableDelta::QueueItemsRemoved { item_ids } => {
             let removed = item_ids.iter().copied().collect::<BTreeSet<_>>();
             state.queue.retain(|item| !removed.contains(&item.id));

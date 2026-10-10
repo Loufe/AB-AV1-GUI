@@ -41,6 +41,16 @@ Statuses are refreshed inside `apply`, after every delta of a command has folded
 
 `cargo test -p crfty-core --test export_analysis_fixtures` regenerates `ui/src/lib/store/analysis-fixtures.json` from these reducer paths; the frontend fold replays it to prove the mirror and to document the wire shapes.
 
+## Queue actions
+
+`analysis_enqueue` accepts an `AnalysisQueueRequest` with the current generation, `Analyze` or `Convert`, and either `AllFiles` or selected row IDs. The engine resolves native paths from that generation's registry. The reducer captures the published rows when it handles the command; it adds no files discovered later. The action performs no traversal, probe, or content sampling. Display paths never become operational paths.
+
+Requests follow ascending row ID order, which preserves discovery order. Repeated selections, repeated native paths, and matching observed content keys count as duplicate identities; the first row wins. Bulk actions include files only. A selected folder is counted as a folder exclusion rather than expanding it. Discovered files may enqueue before Basic Scan finishes. Failed scans and failed refreshes count as scan failures, and paths that cannot round-trip through JSON count as unsupported paths. Unknown rows, stale generations, and cancelled or failed generations reject the whole action.
+
+The chosen operation reads its current `analyze` or `convert` eligibility. A policy skip keeps its typed `SkipReason`. Historical levels, estimates, and cached-search presence do not filter otherwise eligible files. The shared `AddMany` policy still prevents a second pending item at the same path. The command returns an `AnalysisQueueSummary` with the number added and exclusion counts by reason; it also emits the ordinary queue-add stream summary.
+
+Output targets come from the reducer's committed Settings at enqueue, with the native source root retained for separate-folder output. Every accepted add gets a reducer-allocated queue ID. The journal retains the highest allocated ID after removal and compaction, so concurrent actions and restarts cannot reuse an ID. Excluded files consume no IDs, and an exhausted ID range rejects the entire batch. Claim-time source inspection remains authoritative.
+
 ## Failure and privacy contract
 
 File failures distinguish missing/unavailable input, timeout, tool rejection, invalid or truncated JSON, process-supervision failure, change after probe, and change during sampling. ffprobe diagnostics are bounded before they enter core and the input path and filename are replaced with `[input]`. Starting a new generation or cancelling the current one remains the primary cleanup action; the reducer's generation check is the final correctness gate for any late result.

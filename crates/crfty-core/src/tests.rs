@@ -283,7 +283,7 @@ fn settings_control_job_overwrite_and_hardware_decode_policy() {
         let mut state = AppState::default();
         state.settings.output.overwrite_existing = true;
         state.settings.hardware_decode = hardware_decode;
-        let _added = apply(&mut state, add_command(QueueItemId(1), "video.mkv"));
+        let _added = apply(&mut state, add_command("video.mkv"));
         let _started = start_session_with_tools(
             &mut state,
             located_with_decoders(&[crate::HardwareDecoder::H264Qsv]),
@@ -303,7 +303,7 @@ fn settings_control_job_overwrite_and_hardware_decode_policy() {
 #[test]
 fn preparation_requires_verified_tools() {
     let mut state = AppState::default();
-    let _added = apply(&mut state, add_command(QueueItemId(1), "video.mkv"));
+    let _added = apply(&mut state, add_command("video.mkv"));
     let _started = start_session_with_tools(
         &mut state,
         ToolAvailability::Located {
@@ -357,7 +357,7 @@ fn base_execution_is_configured_before_claims_compose_from_it() {
     assert_eq!(accepted.reply, Reply::Accepted);
     assert_eq!(state.execution, configured);
 
-    let _added = apply(&mut state, add_command(QueueItemId(1), "video.mkv"));
+    let _added = apply(&mut state, add_command("video.mkv"));
     let _started = start_session(&mut state);
     let prepared = reserve_and_prepare(&mut state);
     let Reply::Claimed(Some(job)) = prepared.reply else {
@@ -376,7 +376,7 @@ fn base_execution_is_configured_before_claims_compose_from_it() {
 #[test]
 fn session_start_requires_located_tools_and_discovery_is_idempotent() {
     let mut state = AppState::default();
-    let _added = apply(&mut state, add_command(QueueItemId(1), "video.mkv"));
+    let _added = apply(&mut state, add_command("video.mkv"));
     let blocked = apply(&mut state, Command::Session(SessionCommand::Start));
     let Reply::Rejected { reason } = blocked.reply else {
         panic!("expected fail-closed session start");
@@ -535,7 +535,7 @@ fn a_tool_probe_result_applies_only_to_the_tools_it_was_taken_on() {
 #[test]
 fn a_failed_verification_still_lets_a_session_start_so_the_worker_re_probes() {
     let mut state = AppState::default();
-    let _added = apply(&mut state, add_command(QueueItemId(1), "video.mkv"));
+    let _added = apply(&mut state, add_command("video.mkv"));
     let _located = apply(
         &mut state,
         Command::System(SystemCommand::ToolsDiscovered {
@@ -665,17 +665,16 @@ fn rediscover_and_changed_tool_paths_ask_the_engine_to_discover() {
     assert!(refused.effects.is_empty());
 }
 
-fn add_command(item_id: QueueItemId, input: impl Into<PathBuf>) -> Command {
+fn add_command(input: impl Into<PathBuf>) -> Command {
     Command::Queue(QueueCommand::AddMany {
-        requests: vec![add_request(item_id, input)],
+        requests: vec![add_request(input)],
     })
 }
 
 /// A convert add with no enqueue facts: absent facts fail open, so the item
 /// always enqueues (unless its path is already queued).
-fn add_request(item_id: QueueItemId, input: impl Into<PathBuf>) -> QueueAddRequest {
+fn add_request(input: impl Into<PathBuf>) -> QueueAddRequest {
     QueueAddRequest {
-        item_id,
         input: input.into(),
         path_hash: None,
         identity: None,
@@ -1379,7 +1378,7 @@ fn a_recorded_analysis_refreshes_its_row_after_the_scan_is_ready() {
         Command::Queue(QueueCommand::AddMany {
             requests: vec![QueueAddRequest {
                 operation: Operation::Analyze,
-                ..add_request(QueueItemId(1), "movie.mkv")
+                ..add_request("movie.mkv")
             }],
         }),
     );
@@ -1691,7 +1690,7 @@ fn moved_or_duplicated_paths_join_the_probable_content_record_after_observation(
 #[expect(clippy::expect_used, reason = "test assertion")]
 fn reducer_enforces_session_claim_and_terminal_ordering() {
     let mut state = AppState::default();
-    let add = apply(&mut state, add_command(QueueItemId(1), "video.mkv"));
+    let add = apply(&mut state, add_command("video.mkv"));
     assert_eq!(add.reply, Reply::Accepted);
     let start = start_session(&mut state);
     assert_eq!(start.effects, vec![Effect::StartWorker]);
@@ -1741,8 +1740,8 @@ fn reducer_enforces_session_claim_and_terminal_ordering() {
 #[test]
 fn reservation_is_atomic_and_uses_current_queue_order() {
     let mut state = AppState::default();
-    let _first = apply(&mut state, add_command(QueueItemId(1), "first.mkv"));
-    let _second = apply(&mut state, add_command(QueueItemId(2), "second.mkv"));
+    let _first = apply(&mut state, add_command("first.mkv"));
+    let _second = apply(&mut state, add_command("second.mkv"));
     let moved = apply(&mut state, reorder_pending_command(&[2, 1]));
     assert_eq!(moved.reply, Reply::Accepted);
     let _started = start_session(&mut state);
@@ -1759,7 +1758,7 @@ fn reservation_is_atomic_and_uses_current_queue_order() {
 #[test]
 fn durable_analysis_is_selected_for_the_same_content_and_profile() {
     let mut state = AppState::default();
-    let _added = apply(&mut state, add_command(QueueItemId(1), "first.mkv"));
+    let _added = apply(&mut state, add_command("first.mkv"));
     let _started = start_session(&mut state);
     let reserved = apply(&mut state, Command::Worker(WorkerCommand::ReserveNext));
     assert!(matches!(reserved.reply, Reply::Reserved(Some(_))));
@@ -1802,13 +1801,13 @@ fn durable_analysis_is_selected_for_the_same_content_and_profile() {
         }),
     );
     assert_eq!(failed.reply, Reply::Accepted);
-    let _second = apply(&mut state, add_command(QueueItemId(4), "moved.mkv"));
+    let _second = apply(&mut state, add_command("moved.mkv"));
     let reserved = apply(&mut state, Command::Worker(WorkerCommand::ReserveNext));
     assert!(matches!(reserved.reply, Reply::Reserved(Some(_))));
     let prepared = apply(
         &mut state,
         Command::Worker(WorkerCommand::PrepareReserved {
-            item_id: QueueItemId(4),
+            item_id: QueueItemId(2),
             claim_id: ClaimId(3),
             run_id: RunId(4),
             observation: Some(Box::new(media_observation("same-content"))),
@@ -1825,10 +1824,7 @@ fn durable_analysis_is_selected_for_the_same_content_and_profile() {
 fn reorder_fixture() -> AppState {
     let mut state = AppState::default();
     for id in 1..=5 {
-        let added = apply(
-            &mut state,
-            add_command(QueueItemId(id), format!("video-{id}.mkv")),
-        );
+        let added = apply(&mut state, add_command(format!("video-{id}.mkv")));
         assert_eq!(added.reply, Reply::Accepted);
     }
     let start = start_session(&mut state);
@@ -1945,7 +1941,7 @@ fn whole_pending_order_rejects_every_non_permutation_without_mutation() {
 fn whole_pending_order_rejects_a_submission_made_stale_by_a_queue_edit() {
     let mut state = reorder_fixture();
     let stale_order = [5, 4, 3];
-    let added = apply(&mut state, add_command(QueueItemId(6), "video-6.mkv"));
+    let added = apply(&mut state, add_command("video-6.mkv"));
     assert_eq!(added.reply, Reply::Accepted);
 
     let applied = apply(&mut state, reorder_pending_command(&stale_order));
@@ -1963,10 +1959,7 @@ fn whole_pending_order_rejects_a_submission_made_stale_by_a_queue_edit() {
 fn reorder_of_the_only_pending_item_above_active_is_a_no_op() {
     let mut state = AppState::default();
     for id in 1..=3 {
-        let added = apply(
-            &mut state,
-            add_command(QueueItemId(id), format!("video-{id}.mkv")),
-        );
+        let added = apply(&mut state, add_command(format!("video-{id}.mkv")));
         assert_eq!(added.reply, Reply::Accepted);
     }
     let start = start_session(&mut state);
@@ -2087,7 +2080,7 @@ fn media_record_and_analysis_checkpoint_replay_as_one_state() {
         &mut state,
         &mut bytes,
         &mut sequence,
-        add_command(QueueItemId(1), "video.mkv"),
+        add_command("video.mkv"),
     );
     let _started = start_session(&mut state);
     let _reserved = apply_and_journal(
@@ -2257,7 +2250,7 @@ fn converted_requires_a_successfully_committed_output() {
 #[expect(clippy::expect_used, reason = "test assertion")]
 fn remuxed_requires_a_remux_action_and_committed_output() {
     let mut state = AppState::default();
-    let _added = apply(&mut state, add_command(QueueItemId(1), "video.mp4"));
+    let _added = apply(&mut state, add_command("video.mp4"));
     let _started = start_session(&mut state);
     let _reserved = apply(&mut state, Command::Worker(WorkerCommand::ReserveNext));
     let mut observation = media_observation("remux-content");
@@ -2341,7 +2334,7 @@ fn successful_outcomes_require_a_started_run_and_matching_evidence() {
     // Claimed but never Started: a live success is impossible from this state,
     // and recovery derives Stopped for it — Converted must be rejected.
     let mut state = AppState::default();
-    let _added = apply(&mut state, add_command(QueueItemId(1), "video.mkv"));
+    let _added = apply(&mut state, add_command("video.mkv"));
     let _started = start_session(&mut state);
     let _claimed = reserve_and_prepare(&mut state);
     let _analysis = apply(
@@ -2517,7 +2510,7 @@ fn session_aggregates_absorb_counts_every_outcome_and_live_evidence() {
 #[test]
 fn session_start_zeroes_the_aggregates_for_the_new_run() {
     let mut state = AppState::default();
-    let _added = apply(&mut state, add_command(QueueItemId(1), "video.mkv"));
+    let _added = apply(&mut state, add_command("video.mkv"));
     // Leftover totals from a previous session are display state, not history.
     state.aggregates.completed = 5;
     let started = start_session(&mut state);
@@ -2564,7 +2557,7 @@ fn terminal_and_abandonment_emit_the_updated_aggregates() {
 
     // An abandoned reservation finishes as Stopped and counts as one.
     let mut state = AppState::default();
-    let _added = apply(&mut state, add_command(QueueItemId(1), "video.mkv"));
+    let _added = apply(&mut state, add_command("video.mkv"));
     let _started = start_session(&mut state);
     let _reserved = apply(&mut state, Command::Worker(WorkerCommand::ReserveNext));
     let _stopping = apply(&mut state, Command::Session(SessionCommand::ForceStop));
@@ -2594,7 +2587,7 @@ fn terminal_and_abandonment_emit_the_updated_aggregates() {
 #[expect(clippy::expect_used, reason = "test assertion")]
 fn failed_terminal_invariants_check_conflict_state_and_diagnostic_bound() {
     let mut state = AppState::default();
-    let _added = apply(&mut state, add_command(QueueItemId(1), "video.mkv"));
+    let _added = apply(&mut state, add_command("video.mkv"));
     let _started = start_session(&mut state);
     let _reserved = apply(&mut state, Command::Worker(WorkerCommand::ReserveNext));
     let prepared = apply(
@@ -2651,7 +2644,7 @@ fn failed_terminal_invariants_check_conflict_state_and_diagnostic_bound() {
 fn reserved_item_can_be_durably_stopped_before_preparation() {
     let mut state = AppState::default();
     let mut durable = Vec::new();
-    durable.extend(apply(&mut state, add_command(QueueItemId(1), "video.mkv")).durable);
+    durable.extend(apply(&mut state, add_command("video.mkv")).durable);
     let _started = start_session(&mut state);
     durable.extend(apply(&mut state, Command::Worker(WorkerCommand::ReserveNext)).durable);
     let _stopping = apply(&mut state, Command::Session(SessionCommand::ForceStop));
@@ -2807,7 +2800,7 @@ fn fail_active_run(state: &mut AppState) {
 fn analysis_requires_the_same_active_claim_in_live_state_and_replay()
 -> Result<(), serde_json::Error> {
     let mut state = AppState::default();
-    apply(&mut state, add_command(QueueItemId(1), "video.mkv"));
+    apply(&mut state, add_command("video.mkv"));
     start_session(&mut state);
     let reserved = apply(&mut state, Command::Worker(WorkerCommand::ReserveNext));
     assert!(matches!(reserved.reply, Reply::Reserved(Some(_))));
@@ -2872,7 +2865,7 @@ fn analysis_requires_the_same_active_claim_in_live_state_and_replay()
 #[test]
 fn finished_run_rejects_analysis_in_live_state_and_replay() -> Result<(), serde_json::Error> {
     let mut state = AppState::default();
-    apply(&mut state, add_command(QueueItemId(1), "video.mkv"));
+    apply(&mut state, add_command("video.mkv"));
     start_session(&mut state);
     let claimed = reserve_and_prepare(&mut state);
     assert!(matches!(claimed.reply, Reply::Claimed(Some(_))));
@@ -2908,7 +2901,7 @@ fn output_requires_an_active_run_in_live_state_and_replay() -> Result<(), serde_
 fn started_requires_the_same_prepared_claim_in_live_state_and_replay()
 -> Result<(), serde_json::Error> {
     let mut state = AppState::default();
-    apply(&mut state, add_command(QueueItemId(1), "video.mkv"));
+    apply(&mut state, add_command("video.mkv"));
     start_session(&mut state);
     assert_started_at_live_and_replay_boundaries(
         &mut state,
@@ -3341,7 +3334,7 @@ fn compacting_a_replayed_journal_preserves_state_and_sequence() {
     .expect("snapshot");
     let tail = encode_record(&JournalEnvelope {
         sequence: original.next_sequence,
-        deltas: vec![queue_added_delta(9, "after.mkv")],
+        deltas: vec![queue_added_delta(4, "after.mkv")],
     })
     .expect("tail record");
     bytes.extend(tail.clone());
@@ -3711,7 +3704,7 @@ proptest! {
             let item_id = QueueItemId(u64::try_from(index).expect("small generated index"));
             let added = apply(
                 &mut live,
-                add_command(item_id, PathBuf::from(format!("video-{index}.mkv"))),
+                add_command(PathBuf::from(format!("video-{index}.mkv"))),
             );
             emitted.extend(added.durable);
             if remove {
@@ -3740,7 +3733,7 @@ proptest! {
 
 fn active_state() -> AppState {
     let mut state = AppState::default();
-    let _added = apply(&mut state, add_command(QueueItemId(1), "video.mkv"));
+    let _added = apply(&mut state, add_command("video.mkv"));
     let _started = start_session(&mut state);
     let _claimed = reserve_and_prepare(&mut state);
     let _running = apply(
@@ -4658,26 +4651,26 @@ fn add_many_judges_each_request_and_reports_one_summary() {
                 path_hash: Some(path_hash.clone()),
                 identity: Some(identity.clone()),
                 timestamp_reliability: crate::TimestampReliability::Reliable,
-                ..add_request(QueueItemId(1), "known.mkv")
+                ..add_request("known.mkv")
             },
             // No enqueue facts: fails open and enqueues.
-            add_request(QueueItemId(2), "new.mkv"),
+            add_request("new.mkv"),
             // Same path as a request accepted earlier in this batch.
-            add_request(QueueItemId(3), "new.mkv"),
+            add_request("new.mkv"),
             // Refresh bypasses the verdict skip even on the known content.
             QueueAddRequest {
                 path_hash: Some(path_hash),
                 identity: Some(identity),
                 timestamp_reliability: crate::TimestampReliability::Reliable,
                 intent: AnalysisIntent::Refresh,
-                ..add_request(QueueItemId(4), "known-again.mkv")
+                ..add_request("known-again.mkv")
             },
         ],
     });
     let applied = apply(&mut state, batch);
     assert_eq!(applied.reply, Reply::Accepted);
     let added_ids: Vec<QueueItemId> = state.durable.queue.iter().map(|item| item.id).collect();
-    assert_eq!(added_ids, vec![QueueItemId(2), QueueItemId(4)]);
+    assert_eq!(added_ids, vec![QueueItemId(1), QueueItemId(2)]);
     assert_eq!(
         applied.ephemeral,
         vec![EphemeralDelta::QueueAddSummary {
@@ -4699,10 +4692,10 @@ fn add_many_judges_each_request_and_reports_one_summary() {
 #[expect(clippy::expect_used, reason = "test assertion")]
 fn add_many_skips_a_queued_path_until_it_finishes() {
     let mut state = AppState::default();
-    let first = apply(&mut state, add_command(QueueItemId(1), "video.mkv"));
+    let first = apply(&mut state, add_command("video.mkv"));
     assert_eq!(first.reply, Reply::Accepted);
     // The path is pending: a re-add counts into the summary and adds nothing.
-    let readd = apply(&mut state, add_command(QueueItemId(2), "video.mkv"));
+    let readd = apply(&mut state, add_command("video.mkv"));
     assert_eq!(readd.reply, Reply::Accepted);
     assert!(readd.durable.is_empty());
     assert_eq!(
@@ -4715,37 +4708,44 @@ fn add_many_skips_a_queued_path_until_it_finishes() {
     // Once the standing item is finished, the same path enqueues again.
     state.durable.queue.first_mut().expect("queued item").state =
         QueueItemState::Finished(ItemOutcome::Stopped);
-    let after_finish = apply(&mut state, add_command(QueueItemId(3), "video.mkv"));
+    let after_finish = apply(&mut state, add_command("video.mkv"));
     assert_eq!(after_finish.durable.len(), 1);
     assert_eq!(state.durable.queue.len(), 2);
 }
 
 #[test]
-fn add_many_rejects_the_whole_batch_on_an_item_id_collision() {
+fn add_many_allocates_ids_only_for_accepted_requests() {
     let mut state = AppState::default();
-    let _first = apply(&mut state, add_command(QueueItemId(1), "one.mkv"));
-    for requests in [
-        vec![add_request(QueueItemId(1), "two.mkv")],
-        vec![
-            add_request(QueueItemId(2), "two.mkv"),
-            add_request(QueueItemId(2), "three.mkv"),
-        ],
-    ] {
-        let applied = apply(
-            &mut state,
-            Command::Queue(QueueCommand::AddMany { requests }),
-        );
-        assert!(matches!(applied.reply, Reply::Rejected { .. }));
-        assert!(applied.durable.is_empty());
-    }
-    assert_eq!(state.durable.queue.len(), 1);
+    let _first = apply(&mut state, add_command("one.mkv"));
+    let applied = apply(
+        &mut state,
+        Command::Queue(QueueCommand::AddMany {
+            requests: vec![
+                add_request("one.mkv"),
+                add_request("two.mkv"),
+                add_request("two.mkv"),
+                add_request("three.mkv"),
+            ],
+        }),
+    );
+    assert_eq!(applied.reply, Reply::Accepted);
+    assert_eq!(
+        state
+            .durable
+            .queue
+            .iter()
+            .map(|item| item.id)
+            .collect::<Vec<_>>(),
+        vec![QueueItemId(1), QueueItemId(2), QueueItemId(3)]
+    );
+    assert_eq!(state.durable.queue_item_id_high_water, 3);
 }
 
 #[test]
 fn add_many_is_allowed_while_a_session_runs() {
     let mut state = active_state();
     assert_eq!(state.session, SessionState::Running);
-    let applied = apply(&mut state, add_command(QueueItemId(9), "late.mkv"));
+    let applied = apply(&mut state, add_command("late.mkv"));
     assert_eq!(applied.reply, Reply::Accepted);
     assert_eq!(applied.durable.len(), 1);
 }
@@ -4766,7 +4766,7 @@ fn prepare_resolves_overwrite_from_the_item_not_the_settings() {
             Command::Queue(QueueCommand::AddMany {
                 requests: vec![QueueAddRequest {
                     overwrite: decision,
-                    ..add_request(QueueItemId(1), "video.mkv")
+                    ..add_request("video.mkv")
                 }],
             }),
         );
@@ -4791,10 +4791,7 @@ fn prepare_resolves_overwrite_from_the_item_not_the_settings() {
 fn admin_fixture(third: QueueItemState, session: SessionState) -> AppState {
     let mut state = AppState::default();
     for id in 1..=5 {
-        let added = apply(
-            &mut state,
-            add_command(QueueItemId(id), format!("clip-{id}.mkv")),
-        );
+        let added = apply(&mut state, add_command(format!("clip-{id}.mkv")));
         assert_eq!(added.reply, Reply::Accepted);
     }
     state
@@ -4974,10 +4971,7 @@ fn clear_completed_removes_every_terminal_outcome_except_failed() {
     let mut state = AppState::default();
     for (index, outcome) in outcomes.into_iter().enumerate() {
         let id = u64::try_from(index).expect("small index") + 1;
-        let added = apply(
-            &mut state,
-            add_command(QueueItemId(id), format!("clip-{id}.mkv")),
-        );
+        let added = apply(&mut state, add_command(format!("clip-{id}.mkv")));
         assert_eq!(added.reply, Reply::Accepted);
         state
             .durable
@@ -5152,13 +5146,8 @@ fn retry_flows_through_the_next_reservation_and_replays() {
     let mut state = AppState::default();
     let mut bytes = Vec::new();
     let mut sequence = 0;
-    for (id, input) in [(1, "first.mkv"), (2, "second.mkv")] {
-        let added = apply_and_journal(
-            &mut state,
-            &mut bytes,
-            &mut sequence,
-            add_command(QueueItemId(id), input),
-        );
+    for input in ["first.mkv", "second.mkv"] {
+        let added = apply_and_journal(&mut state, &mut bytes, &mut sequence, add_command(input));
         assert_eq!(added.reply, Reply::Accepted);
     }
     let started = start_session(&mut state);
@@ -5244,7 +5233,7 @@ fn edit_resolves_partial_patches_against_the_current_tuple() {
         &mut state,
         &mut bytes,
         &mut sequence,
-        add_command(QueueItemId(1), "video.mkv"),
+        add_command("video.mkv"),
     );
     assert_eq!(added.reply, Reply::Accepted);
     let applied = apply_and_journal(
@@ -5367,7 +5356,7 @@ fn queue_targets_are_validated_before_add_edit_and_patched_retry() {
     ];
 
     for target in &invalid_targets {
-        let mut request = add_request(QueueItemId(1), "video.mkv");
+        let mut request = add_request("video.mkv");
         request.output_target = target.clone();
         let mut state = AppState::default();
         let added = apply(
@@ -5379,7 +5368,7 @@ fn queue_targets_are_validated_before_add_edit_and_patched_retry() {
         assert!(matches!(added.reply, Reply::Rejected { .. }), "{target:?}");
         assert!(state.durable.queue.is_empty());
 
-        let accepted = apply(&mut state, add_command(QueueItemId(1), "video.mkv"));
+        let accepted = apply(&mut state, add_command("video.mkv"));
         assert_eq!(accepted.reply, Reply::Accepted);
         let edited = apply(
             &mut state,
@@ -5436,10 +5425,7 @@ fn queue_targets_are_validated_before_add_edit_and_patched_retry() {
 fn retry_and_remove_many_survive_compacted_snapshot() {
     let mut state = AppState::default();
     for id in 1..=3 {
-        let added = apply(
-            &mut state,
-            add_command(QueueItemId(id), format!("clip-{id}.mkv")),
-        );
+        let added = apply(&mut state, add_command(format!("clip-{id}.mkv")));
         assert_eq!(added.reply, Reply::Accepted);
     }
     state.durable.queue.first_mut().expect("queued item").state =
@@ -5645,7 +5631,7 @@ fn refresh_intent_forces_a_new_search_over_a_qualifying_cached_analysis() {
         &mut state,
         &mut bytes,
         &mut sequence,
-        add_command(QueueItemId(1), "video.mkv"),
+        add_command("video.mkv"),
     );
     let _started = start_session(&mut state);
     let _reserved = apply_and_journal(
@@ -5698,7 +5684,7 @@ fn refresh_intent_forces_a_new_search_over_a_qualifying_cached_analysis() {
         Command::Queue(QueueCommand::AddMany {
             requests: vec![QueueAddRequest {
                 intent: AnalysisIntent::Refresh,
-                ..add_request(QueueItemId(4), "video.mkv")
+                ..add_request("video.mkv")
             }],
         }),
     );
@@ -5713,7 +5699,7 @@ fn refresh_intent_forces_a_new_search_over_a_qualifying_cached_analysis() {
         &mut bytes,
         &mut sequence,
         Command::Worker(WorkerCommand::PrepareReserved {
-            item_id: QueueItemId(4),
+            item_id: QueueItemId(2),
             claim_id: ClaimId(3),
             run_id: RunId(4),
             observation: Some(Box::new(media_observation("refresh-content"))),
@@ -5762,7 +5748,7 @@ fn software_fallback_analysis_is_permitted_under_a_hardware_spec() {
         &mut state,
         &mut bytes,
         &mut sequence,
-        add_command(QueueItemId(1), "video.mkv"),
+        add_command("video.mkv"),
     );
     let _started = start_session_with_tools(
         &mut state,
@@ -5839,7 +5825,7 @@ fn software_fallback_analysis_is_permitted_under_a_hardware_spec() {
             final_telemetry: None,
         }),
     );
-    let _added = apply(&mut state, add_command(QueueItemId(4), "again.mkv"));
+    let _added = apply(&mut state, add_command("again.mkv"));
     let _claimed = reserve_and_prepare(&mut state);
     let mut hardware_result = analysis();
     hardware_result.profile.decode_mode = DecodeMode::Hardware(crate::HardwareDecoder::H264Cuvid);
@@ -5864,7 +5850,7 @@ fn worker_rejections_pair_the_reply_with_a_command_rejected_delta() {
     // Every rejection surfaces both ways: the worker's `Reply` and a
     // `CommandRejected` ephemeral for the stream.
     let mut state = AppState::default();
-    let _added = apply(&mut state, add_command(QueueItemId(1), "video.mkv"));
+    let _added = apply(&mut state, add_command("video.mkv"));
     let _started = start_session(&mut state);
     let _claimed = reserve_and_prepare(&mut state);
     let record = |run_id| {
@@ -5947,7 +5933,7 @@ fn restage_moves_the_staging_pin_and_is_refused_after_abandonment() {
         &mut state,
         &mut bytes,
         &mut sequence,
-        add_command(QueueItemId(1), "video.mkv"),
+        add_command("video.mkv"),
     );
     let _started = start_session(&mut state);
     for command in [
@@ -6540,7 +6526,7 @@ fn prepare_resolves_parked_records_after_the_observation() {
     );
     assert!(matches!(imported.reply, Reply::Imported { parked: 3, .. }));
 
-    apply(&mut state, add_command(QueueItemId(1), "video.mkv"));
+    apply(&mut state, add_command("video.mkv"));
     start_session(&mut state);
     let reserved = apply(&mut state, Command::Worker(WorkerCommand::ReserveNext));
     assert!(matches!(reserved.reply, Reply::Reserved(Some(_))));
@@ -6635,7 +6621,7 @@ fn adoption_never_overwrites_a_native_verdict() {
         .expect("content record")
         .verdict = Some(native.clone());
 
-    apply(&mut state, add_command(QueueItemId(1), "video.mkv"));
+    apply(&mut state, add_command("video.mkv"));
     start_session(&mut state);
     apply(&mut state, Command::Worker(WorkerCommand::ReserveNext));
     let prepared = apply(
@@ -6818,8 +6804,8 @@ fn adopted_verdicts_apply_only_by_content_identity() {
 #[expect(clippy::expect_used, reason = "test assertion")]
 fn new_reservation_cannot_reuse_a_prepared_run_identity() {
     let mut state = AppState::default();
-    let _first = apply(&mut state, add_command(QueueItemId(1), "first.mkv"));
-    let _second = apply(&mut state, add_command(QueueItemId(4), "second.mkv"));
+    let _first = apply(&mut state, add_command("first.mkv"));
+    let _second = apply(&mut state, add_command("second.mkv"));
     let _started = start_session(&mut state);
     // Prepare then finish the first item so RunId(2) keeps a conversion run
     // that outlives its reservation.
@@ -6849,7 +6835,7 @@ fn new_reservation_cannot_reuse_a_prepared_run_identity() {
         &mut state,
         Command::Worker(WorkerCommand::AbandonReservation {
             disposition: crate::ReservationDisposition::Stopped,
-            item_id: QueueItemId(4),
+            item_id: QueueItemId(2),
             claim_id: ClaimId(4),
             run_id: RunId(2),
             at: UnixMillis(2_000),
@@ -6861,7 +6847,7 @@ fn new_reservation_cannot_reuse_a_prepared_run_identity() {
             .durable
             .queue
             .iter()
-            .find(|item| item.id == QueueItemId(4))
+            .find(|item| item.id == QueueItemId(2))
             .expect("second item")
             .state,
         QueueItemState::Reserved { .. }
@@ -6879,7 +6865,7 @@ fn expect_conflict(action: OutputRecoveryAction, detail: &str) {
 #[expect(clippy::expect_used, reason = "test assertion")]
 fn not_worthwhile_terminal_validates_attempt_consistency() {
     let mut state = AppState::default();
-    let _added = apply(&mut state, add_command(QueueItemId(1), "video.mkv"));
+    let _added = apply(&mut state, add_command("video.mkv"));
     let _started = start_session(&mut state);
     let _prepared = reserve_and_prepare(&mut state);
     let run = state
@@ -6926,7 +6912,7 @@ fn not_worthwhile_terminal_validates_attempt_consistency() {
 #[expect(clippy::expect_used, reason = "test assertion")]
 fn output_exists_skip_terminal_requires_producing_run_without_output() {
     let mut state = AppState::default();
-    let _added = apply(&mut state, add_command(QueueItemId(1), "video.mkv"));
+    let _added = apply(&mut state, add_command("video.mkv"));
     let _started = start_session(&mut state);
     let _prepared = reserve_and_prepare(&mut state);
     let run = state
@@ -7355,7 +7341,7 @@ fn reservation_identity_survives_removal_restart_and_compaction() {
         &mut state,
         &mut bytes,
         &mut sequence,
-        add_command(QueueItemId(1), "first.mkv"),
+        add_command("first.mkv"),
     );
     start_session(&mut state);
     let reserved = apply_and_journal(
@@ -7408,7 +7394,7 @@ fn reservation_identity_survives_removal_restart_and_compaction() {
             durable: replayed.state,
             ..AppState::default()
         };
-        apply(&mut restarted, add_command(QueueItemId(2), "second.mkv"));
+        apply(&mut restarted, add_command("second.mkv"));
         start_session(&mut restarted);
         let next = apply(&mut restarted, Command::Worker(WorkerCommand::ReserveNext));
         let Reply::Reserved(Some(job)) = next.reply else {
@@ -7431,7 +7417,7 @@ fn runtime_identity_exhaustion_is_atomic_and_does_not_consume_empty_reservations
         let empty = apply(&mut state, Command::Worker(WorkerCommand::ReserveNext));
         assert_eq!(empty.reply, Reply::Reserved(None));
         assert!(empty.durable.is_empty());
-        apply(&mut state, add_command(QueueItemId(1), "video.mkv"));
+        apply(&mut state, add_command("video.mkv"));
         let before = state.durable.clone();
         let exhausted = apply(&mut state, Command::Worker(WorkerCommand::ReserveNext));
         assert!(matches!(exhausted.reply, Reply::Rejected { .. }));
@@ -7440,7 +7426,7 @@ fn runtime_identity_exhaustion_is_atomic_and_does_not_consume_empty_reservations
     }
     let mut state = AppState::default();
     state.durable.runtime_id_high_water = crate::DurableState::MAX_RUNTIME_ID - 3;
-    apply(&mut state, add_command(QueueItemId(1), "video.mkv"));
+    apply(&mut state, add_command("video.mkv"));
     start_session(&mut state);
     let last = apply(&mut state, Command::Worker(WorkerCommand::ReserveNext));
     let Reply::Reserved(Some(job)) = last.reply else {
@@ -7453,7 +7439,7 @@ fn runtime_identity_exhaustion_is_atomic_and_does_not_consume_empty_reservations
 #[expect(clippy::expect_used, reason = "fixture serialization")]
 fn replay_rejects_nonsequential_runtime_pairs_atomically() {
     let mut state = AppState::default();
-    apply(&mut state, add_command(QueueItemId(1), "video.mkv"));
+    apply(&mut state, add_command("video.mkv"));
     start_session(&mut state);
     let initial = state.durable.clone();
     let reserved = apply(&mut state, Command::Worker(WorkerCommand::ReserveNext));
@@ -7513,13 +7499,13 @@ fn reservation_release_preserves_order_and_replays_without_an_outcome() {
         &mut state,
         &mut bytes,
         &mut sequence,
-        add_command(QueueItemId(1), "first.mkv"),
+        add_command("first.mkv"),
     );
     let _second = apply_and_journal(
         &mut state,
         &mut bytes,
         &mut sequence,
-        add_command(QueueItemId(2), "second.mkv"),
+        add_command("second.mkv"),
     );
     let _started = start_session(&mut state);
     let reserved = apply_and_journal(
@@ -7598,7 +7584,7 @@ fn reservation_failure_records_reason_and_replays_without_a_prepared_run() {
         &mut state,
         &mut bytes,
         &mut sequence,
-        add_command(QueueItemId(1), "input.mkv"),
+        add_command("input.mkv"),
     );
     let _started = start_session(&mut state);
     let reserved = apply_and_journal(

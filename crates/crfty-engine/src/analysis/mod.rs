@@ -8,6 +8,7 @@ mod basic_scan;
 mod discovery;
 mod runtime;
 
+pub(crate) use self::runtime::AnalysisGenerationRegistry;
 pub(crate) use self::runtime::AnalysisRuntime;
 
 use std::{

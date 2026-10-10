@@ -32,6 +32,10 @@ Chosen option: **filter at add with a typed summary**, together with the command
 
 One item exists per path. Re-adding a queued path is counted in the summary rather than duplicated or offered a keep-both dialog; `Edit` changes what happens to that path. Editing is strictly per-item (operation, intent, output target, overwrite) and allowed only while no session is running. A run's work is frozen at start, so operation and output are not editable mid-run. V2's write-to-all-items bulk edits are deliberately not ported because a frontend loop over per-item commands batches into one fsync. `Retry` resets a finished item in place and moves it to the queue's end, preserving the shape invariant instead of re-adding. Analyze adds are not pre-filtered against cached analyses. Claim-time reuse makes a cached re-analysis near-instant, while earlier filtering would duplicate profile matching on weaker facts.
 
+The reducer allocates queue IDs only for accepted requests. `QueueAdded` advances a durable high-water mark that survives removal, restart, and compaction; callers never supply IDs. Allocation and membership belong to the same durable batch, and exhaustion rejects that batch without partial additions.
+
+Analysis actions use one current generation and native paths supplied by the engine registry. They filter by the chosen operation's current eligibility and then submit through `AddMany`. Their direct result also counts selection, scan, and path exclusions. Historical levels and estimates do not prevent enqueue. The complete action contract is in [`docs/ANALYSIS.md`](../ANALYSIS.md).
+
 ### Consequences
 
 * Good: Ineligible files never occupy the queue or the journal; routine adds stay non-interactive end to end
