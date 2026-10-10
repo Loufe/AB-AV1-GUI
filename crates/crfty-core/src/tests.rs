@@ -5875,8 +5875,6 @@ fn software_fallback_analysis_is_permitted_under_a_hardware_spec() {
 
 #[test]
 fn worker_rejections_preserve_the_reason() {
-    // Every rejection surfaces both ways: the worker's `SuccessReply` and a
-    // `CommandRejected` ephemeral for the stream.
     let mut state = AppState::default();
     let _added = apply_ok(&mut state, add_command("video.mkv"));
     let _started = start_session(&mut state);
