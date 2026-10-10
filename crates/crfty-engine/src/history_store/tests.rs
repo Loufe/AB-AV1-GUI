@@ -187,14 +187,14 @@ fn multiple_terminals_share_one_revision_and_invalid_batches_commit_nothing()
         let mut second = prepared();
         for delta in &mut second {
             match delta {
-                DurableDelta::QueueAdded { item } => item.id = QueueItemId(3),
+                DurableDelta::QueueAdded { item } => item.id = QueueItemId(2),
                 DurableDelta::ItemReserved { job } => {
-                    job.item_id = QueueItemId(3);
+                    job.item_id = QueueItemId(2);
                     job.claim_id = ClaimId(3);
                     job.run_id = RunId(4);
                 }
                 DurableDelta::ItemPrepared { spec } => {
-                    spec.item_id = QueueItemId(3);
+                    spec.item_id = QueueItemId(2);
                     spec.claim_id = ClaimId(3);
                     spec.run_id = RunId(4);
                 }
@@ -209,7 +209,7 @@ fn multiple_terminals_share_one_revision_and_invalid_batches_commit_nothing()
             ..
         } = &mut last
         {
-            *item_id = QueueItemId(3);
+            *item_id = QueueItemId(2);
             *claim_id = ClaimId(3);
             *run_id = RunId(4);
         }
@@ -354,6 +354,86 @@ fn reservation_only_ids_are_independent_of_history_and_unknown_operations_remain
                 .matched,
             1
         );
+    }
+    Ok(())
+}
+
+#[test]
+fn malformed_operational_rows_stop_writes_without_hiding_history()
+-> std::result::Result<(), Box<dyn std::error::Error>> {
+    for candidate in [Candidate::Rusqlite, Candidate::Turso] {
+        for corruption in 0..4 {
+            let (_directory, mut store) = history(candidate)?;
+            store.append_operations(&prepared(), true)?;
+            store.append_operations(&[stopped()], true)?;
+            let id = ObservationId::Native(RunId(2));
+            let entry = store
+                .detail(&id)?
+                .ok_or("missing terminal before corruption")?;
+            if corruption == 3 {
+                store.compact_operations(SessionState::Idle, UnixMillis(200))?;
+                store.database.execute(
+                    "INSERT INTO operational_log(seq,record) SELECT ?,record FROM operational_snapshot",
+                    &[Value::Blob(number::unsigned(0))],
+                )?;
+                store
+                    .database
+                    .execute("DELETE FROM operational_snapshot", &[])?;
+            } else if corruption == 0 {
+                store.database.execute(
+                    "UPDATE operational_log SET seq=? WHERE seq=?",
+                    &[
+                        Value::Blob(number::unsigned(99)),
+                        Value::Blob(number::unsigned(0)),
+                    ],
+                )?;
+            } else {
+                let rows = store
+                    .database
+                    .query("SELECT record FROM operational_log ORDER BY seq", &[])?;
+                let mut bytes = Vec::new();
+                let mut split = 0;
+                for row in rows {
+                    let [Value::Blob(record)] = row.as_slice() else {
+                        return Err("invalid fixture row".into());
+                    };
+                    if bytes.is_empty() {
+                        split = record.len() / 2;
+                    }
+                    bytes.extend_from_slice(record);
+                }
+                store.database.execute("DELETE FROM operational_log", &[])?;
+                if corruption == 1 {
+                    store.database.execute(
+                        "INSERT INTO operational_log(seq,record) VALUES(?,?)",
+                        &[Value::Blob(number::unsigned(0)), Value::Blob(bytes)],
+                    )?;
+                } else {
+                    let (first, second) = bytes.split_at(split);
+                    for (sequence, record) in [(0, first), (1, second)] {
+                        store.database.execute(
+                            "INSERT INTO operational_log(seq,record) VALUES(?,?)",
+                            &[
+                                Value::Blob(number::unsigned(sequence)),
+                                Value::Blob(record.to_vec()),
+                            ],
+                        )?;
+                    }
+                }
+            }
+            assert!(
+                matches!(
+                    store.operations()?,
+                    OperationalState::Unavailable {
+                        runtime_high_water: 2,
+                        ..
+                    }
+                ),
+                "{candidate:?}: corruption {corruption} was accepted"
+            );
+            assert!(store.append_operations(&[], true).is_err());
+            assert_eq!(store.detail(&id)?, Some(entry));
+        }
     }
     Ok(())
 }

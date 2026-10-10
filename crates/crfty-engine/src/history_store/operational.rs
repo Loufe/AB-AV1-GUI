@@ -166,23 +166,16 @@ impl HistoryStore {
 }
 
 fn load(database: &Database) -> Result<OperationalState> {
-    let mut bytes = Vec::new();
-    for row in database.query(
-        "SELECT record FROM operational_snapshot WHERE singleton=1",
-        &[],
-    )? {
-        let [Value::Blob(record)] = row.as_slice() else {
-            return Err(StoreError("invalid operational snapshot row".to_owned()));
-        };
-        bytes.extend_from_slice(record);
-    }
-    for row in database.query("SELECT record FROM operational_log ORDER BY seq ASC", &[])? {
-        let [Value::Blob(record)] = row.as_slice() else {
-            return Err(StoreError("invalid operational log row".to_owned()));
-        };
-        bytes.extend_from_slice(record);
-    }
     let high_water = store::metadata(database, "runtime_high_water")?;
+    let bytes = match read_records(database) {
+        Ok(bytes) => bytes,
+        Err(error) => {
+            return Ok(OperationalState::Unavailable {
+                reason: error.to_string(),
+                runtime_high_water: high_water,
+            });
+        }
+    };
     let replay = replay(&bytes);
     let reason = match &replay.corruption {
         Some(corruption) => Some(corruption.reason.clone()),
@@ -201,4 +194,60 @@ fn load(database: &Database) -> Result<OperationalState> {
         },
         None => OperationalState::Ready(Box::new(replay)),
     })
+}
+
+fn read_records(database: &Database) -> Result<Vec<u8>> {
+    let mut bytes = Vec::new();
+    for row in database.query(
+        "SELECT record FROM operational_snapshot WHERE singleton=1",
+        &[],
+    )? {
+        let [Value::Blob(record)] = row.as_slice() else {
+            return Err(StoreError("invalid operational snapshot row".to_owned()));
+        };
+        let json = record_body(record)?;
+        if json
+            .get("record")
+            .and_then(|body| body.get("Snapshot"))
+            .is_none()
+        {
+            return Err(StoreError(
+                "operational snapshot row does not contain a snapshot".to_owned(),
+            ));
+        }
+        bytes.extend_from_slice(record);
+    }
+    for row in database.query(
+        "SELECT seq,record FROM operational_log ORDER BY seq ASC",
+        &[],
+    )? {
+        let [Value::Blob(seq), Value::Blob(record)] = row.as_slice() else {
+            return Err(StoreError("invalid operational log row".to_owned()));
+        };
+        let sequence = number::read_unsigned(seq)?;
+        let json = record_body(record)?;
+        let payload_sequence = json
+            .get("record")
+            .and_then(|body| body.get("Deltas"))
+            .and_then(|body| body.get("sequence"))
+            .and_then(serde_json::Value::as_u64);
+        if payload_sequence != Some(sequence) {
+            return Err(StoreError(
+                "operational row sequence disagrees with its payload".to_owned(),
+            ));
+        }
+        bytes.extend_from_slice(record);
+    }
+    Ok(bytes)
+}
+
+// SQL row boundaries are authoritative: concatenation must not repair a
+// partial row or admit several file-journal records as one committed batch.
+fn record_body(record: &[u8]) -> Result<serde_json::Value> {
+    let line = record
+        .strip_suffix(b"\n")
+        .filter(|line| !line.contains(&b'\n'))
+        .ok_or_else(|| StoreError("operational row must contain one complete record".to_owned()))?;
+    serde_json::from_slice(line)
+        .map_err(|error| StoreError::context("decode operational row identity", error))
 }
