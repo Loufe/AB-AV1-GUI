@@ -439,6 +439,48 @@ fn malformed_operational_rows_stop_writes_without_hiding_history()
 }
 
 #[test]
+fn future_operational_versions_are_classified_before_unknown_row_shapes()
+-> std::result::Result<(), Box<dyn std::error::Error>> {
+    for candidate in [Candidate::Rusqlite, Candidate::Turso] {
+        for snapshot in [false, true] {
+            let (_directory, mut store) = history(candidate)?;
+            store.append_operations(&prepared(), true)?;
+            store.append_operations(&[stopped()], true)?;
+            let id = ObservationId::Native(RunId(2));
+            let entry = store
+                .detail(&id)?
+                .ok_or("missing terminal before upgrade")?;
+            let future = Value::Blob(
+                b"{\"schema_version\":999,\"record\":{\"UnknownFutureShape\":{}}}\n".to_vec(),
+            );
+            if snapshot {
+                store.compact_operations(SessionState::Idle, UnixMillis(200))?;
+                store
+                    .database
+                    .execute("UPDATE operational_snapshot SET record=?", &[future])?;
+            } else {
+                store.database.execute(
+                    "UPDATE operational_log SET record=? WHERE seq=?",
+                    &[future, Value::Blob(number::unsigned(1))],
+                )?;
+            }
+            let OperationalState::Unavailable {
+                reason,
+                runtime_high_water,
+            } = store.operations()?
+            else {
+                return Err("future operational payload was accepted".into());
+            };
+            assert_eq!(reason, "unsupported journal schema 999");
+            assert_eq!(runtime_high_water, 2);
+            assert!(store.append_operations(&[], true).is_err());
+            assert_eq!(store.detail(&id)?, Some(entry));
+        }
+    }
+    Ok(())
+}
+
+#[test]
 fn row_constraints_reject_missing_and_inactive_fields()
 -> std::result::Result<(), Box<dyn std::error::Error>> {
     for candidate in [Candidate::Rusqlite, Candidate::Turso] {

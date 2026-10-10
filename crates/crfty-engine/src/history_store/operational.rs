@@ -1,6 +1,6 @@
 use crfty_core::{
-    AppState, DurableDelta, JournalEnvelope, JournalReplay, Observation, UnixMillis,
-    apply_durable_batch, compaction_quiescent, encode_record, encode_snapshot, replay,
+    AppState, DurableDelta, JOURNAL_SCHEMA_VERSION, JournalEnvelope, JournalReplay, Observation,
+    UnixMillis, apply_durable_batch, compaction_quiescent, encode_record, encode_snapshot, replay,
 };
 
 use crate::journal::DurabilityToken;
@@ -249,6 +249,15 @@ fn record_body(record: &[u8]) -> Result<serde_json::Value> {
         .strip_suffix(b"\n")
         .filter(|line| !line.contains(&b'\n'))
         .ok_or_else(|| StoreError("operational row must contain one complete record".to_owned()))?;
-    serde_json::from_slice(line)
-        .map_err(|error| StoreError::context("decode operational row identity", error))
+    let json: serde_json::Value = serde_json::from_slice(line)
+        .map_err(|error| StoreError::context("decode operational row identity", error))?;
+    let version = json
+        .get("schema_version")
+        .and_then(serde_json::Value::as_u64)
+        .and_then(|version| u32::try_from(version).ok())
+        .ok_or_else(|| StoreError("invalid operational record schema".to_owned()))?;
+    if version != JOURNAL_SCHEMA_VERSION {
+        return Err(StoreError(format!("unsupported journal schema {version}")));
+    }
+    Ok(json)
 }

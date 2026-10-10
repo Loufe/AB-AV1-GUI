@@ -74,8 +74,8 @@ pub use job::{
 };
 pub use journal::{
     COMPACTION_IDLE_MIN_JOURNAL_BYTES, CorruptionReport, CorruptionSignature, DurableBatch,
-    JournalEnvelope, JournalReplay, apply_durable_batch, compaction_due, compaction_quiescent,
-    corruption_signature, encode_record, encode_snapshot, replay,
+    JOURNAL_SCHEMA_VERSION, JournalEnvelope, JournalReplay, apply_durable_batch, compaction_due,
+    compaction_quiescent, corruption_signature, encode_record, encode_snapshot, replay,
 };
 pub(crate) use media::FileStamp;
 pub use media::{
