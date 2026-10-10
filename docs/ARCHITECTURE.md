@@ -26,7 +26,7 @@ Crates split on hard dependency boundaries (no Tauri, no process), never by topi
 | Eligibility and conversion policy | `docs/POLICY.md`; ADR-007 (pin the actual decode mode in the analysis identity), ADR-013 (filter queue adds at enqueue) |
 | Content identity and durable facts | ADR-019 (key durable facts by sampled content identity) |
 | Analysis pipeline | `docs/ANALYSIS.md`; ADR-016 (scope analysis work to ephemeral generations), ADR-017 (keep analysis paths engine-native) |
-| Queue and job coordination | ADR-002 (centralize mutation in a driver reducer), ADR-013 (filter queue adds at enqueue); dedicated contract doc pending |
+| Queue and job coordination | [Queue contract](QUEUE.md); ADR-002 (centralize mutation in a driver reducer), ADR-013 (filter queue adds at enqueue) |
 | Job lifecycle, cancellation, and output settlement | `docs/design/lifecycle.md`; ADR-018 (unify job cancellation and completion; proposed), ADR-020 (own output promotion as a journaled transaction) |
 | ab-av1 adapter | ADR-003 (embed a pinned ab-av1 adapter); ADR-021 (drive ab-av1 through an owned operation; proposed) |
 | Events and IPC | `docs/design/event-stream.md`; ADR-006 (generate IPC bindings with tauri-specta) |
