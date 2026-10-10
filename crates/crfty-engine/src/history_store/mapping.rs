@@ -108,12 +108,12 @@ static OBSERVATION: LazyLock<Shape> = LazyLock::new(|| {
                     "measurement": variants!("Live": object!("sizes": sizes()), "Recovered": object!("sizes": optional(sizes()))),
                     "output_content_key": optional(Shape::Text), "assessment": assessment())),
                 "NotWorthwhile": object!("metric": metric(), "requested": Shape::Number, "floor": Shape::Number, "attempts": Shape::Attempts),
-                "Failed": object!("facts": object!("kind": variants!(
+                "Failed": object!("kind": variants!(
                     "SearchStart": Shape::Unit, "SearchRun": Shape::Unit, "EncodeStart": Shape::Unit,
                     "EncodeRun": Shape::Unit, "RemuxStart": Shape::Unit, "RemuxRun": Shape::Unit,
                     "AdapterPanicked": object!("cleanup_failed": Shape::Bool), "OutputPrepare": Shape::Unit,
                     "OutputPromote": Shape::Unit, "OutputConflict": Shape::Unit, "Internal": Shape::Unit
-                ), "message": Shape::Text, "diagnostic": Shape::Text)),
+                )),
                 "Stopped": Shape::Unit, "Incomplete": Shape::Unit
             ),
             "started_at": optional(Shape::Number), "finished_at": optional(Shape::Number)

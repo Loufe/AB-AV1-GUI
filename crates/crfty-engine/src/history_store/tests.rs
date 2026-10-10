@@ -75,6 +75,93 @@ fn prepared_source() -> Vec<DurableDelta> {
 }
 
 #[test]
+fn failure_prose_stays_operational_through_history_path_recording_scrub_and_restart()
+-> std::result::Result<(), Box<dyn std::error::Error>> {
+    let path = "/synthetic/private-video.mkv";
+    for candidate in [Candidate::Rusqlite, Candidate::Turso] {
+        for record_paths in [false, true] {
+            for kind in [
+                crfty_core::FailureKind::EncodeRun,
+                crfty_core::FailureKind::AdapterPanicked {
+                    cleanup_failed: true,
+                },
+            ] {
+                let (directory, mut store) = history(candidate)?;
+                let outcome = crfty_core::ItemOutcome::Failed(
+                    crfty_core::FailureFacts::new(
+                        kind,
+                        format!("ffmpeg -i {path}; cleanup failed: {path}"),
+                    )
+                    .with_diagnostic(crfty_core::DiagnosticTail::truncated(
+                        &format!("Error opening {path}"),
+                    )),
+                );
+                let mut terminal = stopped();
+                if let DurableDelta::ItemFinished {
+                    outcome: terminal_outcome,
+                    ..
+                } = &mut terminal
+                {
+                    *terminal_outcome = outcome.clone();
+                }
+                let mut deltas = prepared();
+                deltas.push(terminal);
+                store.append_operations(&deltas, record_paths)?;
+                let id = ObservationId::Native(RunId(2));
+                let entry = store.detail(&id)?.ok_or("missing failed observation")?;
+                assert_eq!(entry.paths.is_some(), record_paths);
+                let Observation::Native(native) = &entry.observation else {
+                    return Err("expected native failure".into());
+                };
+                assert_eq!(native.outcome, crfty_core::ObservedOutcome::Failed { kind });
+                let encoded = serde_json::to_string(&entry.observation)?;
+                assert!(!encoded.contains(path));
+                assert!(!encoded.contains("message"));
+                assert!(!encoded.contains("diagnostic"));
+                store.scrub()?;
+                store.scrub()?;
+                store.compact_operations(SessionState::Idle, UnixMillis(200))?;
+                drop(store);
+                let mut reopened = HistoryStore::open(candidate, directory.path())?;
+                let scrubbed = reopened
+                    .detail(&id)?
+                    .ok_or("missing failed observation after restart")?;
+                assert_eq!(scrubbed.observation, entry.observation);
+                assert_eq!(scrubbed.paths, None);
+                assert_eq!(
+                    ready(&mut reopened)?
+                        .state
+                        .conversion_runs
+                        .get(&RunId(2))
+                        .and_then(|run| run.outcome.as_ref()),
+                    Some(&outcome)
+                );
+                assert_eq!(
+                    store::metadata(&reopened.database, "revision")?,
+                    if record_paths { 2 } else { 1 }
+                );
+            }
+        }
+    }
+    Ok(())
+}
+
+#[test]
+fn history_schema_rejects_the_previous_failure_prose_layout()
+-> std::result::Result<(), Box<dyn std::error::Error>> {
+    for candidate in [Candidate::Rusqlite, Candidate::Turso] {
+        let (directory, store) = history(candidate)?;
+        store.database.batch("PRAGMA user_version=1")?;
+        drop(store);
+        match HistoryStore::open(candidate, directory.path()) {
+            Ok(_) => return Err("accepted unsupported History schema".into()),
+            Err(error) => assert_eq!(error.to_string(), "unsupported History schema"),
+        }
+    }
+    Ok(())
+}
+
+#[test]
 fn backward_wall_clock_terminal_preserves_exact_stamps_and_monotonic_spans_after_restart()
 -> std::result::Result<(), Box<dyn std::error::Error>> {
     for candidate in [Candidate::Rusqlite, Candidate::Turso] {

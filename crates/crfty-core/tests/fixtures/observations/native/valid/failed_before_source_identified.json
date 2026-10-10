@@ -9,11 +9,7 @@
   },
   "outcome": {
     "Failed": {
-      "facts": {
-        "kind": { "AdapterPanicked": { "cleanup_failed": false } },
-        "message": "search adapter panicked",
-        "diagnostic": "thread 'search' panicked at <input>: probe returned no streams"
-      }
+      "kind": { "AdapterPanicked": { "cleanup_failed": false } }
     }
   },
   "started_at": null,

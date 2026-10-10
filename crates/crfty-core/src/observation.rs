@@ -33,7 +33,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::{
     AnalysisAttempt, AnalysisResult, CompletionEvidence, ContentKey, ConversionRun, DecodeMode,
-    DurableState, DurationMs, FailureFacts, ItemOutcome, JobPhase, Operation, PhaseSpan,
+    DurableState, DurationMs, FailureKind, ItemOutcome, JobPhase, Operation, PhaseSpan,
     QualityMetric, QualityTarget, RunId, SearchMeasurement, ToolRevisions, TranslatedId,
     TranslatedObservation, TranslatedOutcome, TranslatedQuality, TranslatedSource, UnixMillis,
     VideoCodec, VideoMeta,
@@ -147,7 +147,9 @@ pub enum ObservedOutcome {
         attempts: Vec<AnalysisAttempt>,
     },
     Failed {
-        facts: FailureFacts,
+        /// Detailed operational errors may contain commands, paths, or other
+        /// identifying prose. Immutable History retains only the closed kind.
+        kind: FailureKind,
     },
     Stopped,
     Incomplete,
@@ -735,9 +737,7 @@ fn observe(state: &DurableState, run: &ConversionRun) -> Option<NativeObservatio
             floor: run.spec.execution.fallback_floor,
             attempts: attempts.clone(),
         },
-        ItemOutcome::Failed(facts) => ObservedOutcome::Failed {
-            facts: facts.clone(),
-        },
+        ItemOutcome::Failed(facts) => ObservedOutcome::Failed { kind: facts.kind },
         ItemOutcome::Stopped => ObservedOutcome::Stopped,
         ItemOutcome::Incomplete => ObservedOutcome::Incomplete,
     };
@@ -797,7 +797,7 @@ mod tests {
     use super::*;
     use crate::test_support::{analysis, finished_run, identity, key, live, meta};
     use crate::{
-        ArtifactIdentity, ConversionRun, Crf, DurableState, FailureKind, FileRecord, ImportOrigin,
+        ArtifactIdentity, ConversionRun, Crf, DurableState, FailureFacts, FileRecord, ImportOrigin,
         JobAction, OutputState, OutputTransaction, QualityScore, RecordKey, Replacement,
         SkipReason, VideoCodec,
     };
@@ -967,9 +967,71 @@ mod tests {
                 ..
             }
         ));
-        assert!(matches!(failed, ObservedOutcome::Failed { facts } if facts.message == "boom"));
+        assert_eq!(
+            *failed,
+            &ObservedOutcome::Failed {
+                kind: FailureKind::EncodeRun,
+            }
+        );
         assert_eq!(*stopped, &ObservedOutcome::Stopped);
         assert_eq!(*incomplete, &ObservedOutcome::Incomplete);
+    }
+
+    #[test]
+    fn failed_history_retains_typed_kind_without_operational_prose()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let path = "/synthetic/private-video.mkv";
+        for kind in [
+            FailureKind::EncodeRun,
+            FailureKind::AdapterPanicked {
+                cleanup_failed: false,
+            },
+            FailureKind::AdapterPanicked {
+                cleanup_failed: true,
+            },
+        ] {
+            let facts =
+                FailureFacts::new(kind, format!("ffmpeg -i {path}; cleanup failed: {path}"))
+                    .with_diagnostic(crate::DiagnosticTail::truncated(&format!(
+                        "Error opening {path}"
+                    )));
+            let outcome = ItemOutcome::Failed(facts);
+            let state = state_with(vec![run(1, "a", outcome.clone())]);
+            let observation = only(&state);
+            assert_eq!(observation.outcome, ObservedOutcome::Failed { kind });
+            let encoded = serde_json::to_string(&observation)?;
+            assert!(!encoded.contains(path));
+            assert!(!encoded.contains("message"));
+            assert!(!encoded.contains("diagnostic"));
+            assert_eq!(
+                state
+                    .conversion_runs
+                    .get(&RunId(1))
+                    .and_then(|run| run.outcome.as_ref()),
+                Some(&outcome)
+            );
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn failed_history_rejects_free_form_prose_fields() {
+        for field in ["message", "diagnostic", "facts"] {
+            let mut failure = serde_json::json!({ "kind": "EncodeRun" });
+            let Some(fields) = failure.as_object_mut() else {
+                panic!("failure fixture is an object");
+            };
+            fields.insert(
+                field.to_owned(),
+                serde_json::json!("ffmpeg -i /synthetic/private-video.mkv"),
+            );
+            assert!(
+                serde_json::from_value::<ObservedOutcome>(serde_json::json!({
+                    "Failed": failure
+                }))
+                .is_err()
+            );
+        }
     }
 
     #[test]
