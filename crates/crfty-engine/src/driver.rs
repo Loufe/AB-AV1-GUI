@@ -115,7 +115,13 @@ impl DriverCommand {
             Self::AnalysisQueue { request, registry } => {
                 let registry = match registry.lock() {
                     Ok(registry) => registry,
-                    Err(poisoned) => poisoned.into_inner(),
+                    Err(poisoned) => {
+                        tracing::warn!(
+                            generation = request.generation.0,
+                            "Analysis queue action recovered a poisoned native-path registry"
+                        );
+                        poisoned.into_inner()
+                    }
                 };
                 if registry.generation != request.generation {
                     return Err("queue action names a stale Analysis generation");
