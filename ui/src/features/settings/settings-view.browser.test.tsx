@@ -63,6 +63,27 @@ function deferred<T>() {
 }
 
 describe("Settings view", () => {
+  it("keeps History privacy unavailable while allowing log privacy settings to be saved", async () => {
+    const committed = settings({
+      privacy: { anonymize_logs: false, anonymize_history: true },
+    });
+    const tauri = installTauriMock({ set_settings: () => null });
+    await renderApp(<SettingsView />, { appState: { settings: committed } });
+
+    const historyPrivacy = page.getByRole("switch", { name: "Anonymize paths in history" });
+    await expect.element(historyPrivacy).toBeDisabled();
+    await expect.element(historyPrivacy).not.toBeChecked();
+    await expect
+      .element(page.getByText("History privacy support is unavailable in this build"))
+      .toBeVisible();
+
+    await page.getByRole("switch", { name: "Anonymize paths in logs" }).click();
+    await page.getByRole("button", { name: "Save changes" }).click();
+    expect(tauri.callsFor("set_settings").at(0)?.payload).toEqual({
+      settings: { ...committed, privacy: { anonymize_logs: true, anonymize_history: true } },
+    });
+  });
+
   it("discards locally, then waits for the authoritative settings delta after save ack", async () => {
     const committed = settings();
     const tauri = installTauriMock({ set_settings: () => null });

@@ -324,19 +324,9 @@ export function SettingsView() {
         </SettingContainer>
         <SettingContainer
           label="Anonymize paths in history"
-          description="Anonymize newly recorded history after history privacy support is available"
+          description="History privacy support is unavailable in this build"
         >
-          <Switch
-            aria-label="Anonymize paths in history"
-            checked={draft.privacy.anonymize_history}
-            disabled={disabled}
-            onCheckedChange={(checked) =>
-              setDraft({
-                ...draft,
-                privacy: { ...draft.privacy, anonymize_history: checked },
-              })
-            }
-          />
+          <Switch aria-label="Anonymize paths in history" checked={false} disabled />
         </SettingContainer>
         <SettingContainer
           label="Log folder"
