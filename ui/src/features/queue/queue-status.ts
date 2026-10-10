@@ -10,7 +10,7 @@ import type {
   RunId,
   SkipReason,
   Telemetry,
-  QualityScore,
+  MetricScore,
 } from "@/lib/bindings";
 import { formatVmafTarget } from "@/lib/format/engine-values";
 
@@ -47,7 +47,7 @@ export interface QueueRowData {
   timeMs: DurationMs | null;
   timeConfidence: EstimateConfidence;
   crf: Crf | null;
-  vmaf: QualityScore | null;
+  quality: MetricScore | null;
   status: RowStatus;
 }
 

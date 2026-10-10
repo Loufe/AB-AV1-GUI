@@ -16,14 +16,15 @@
   },
   "outcome": {
     "NotWorthwhile": {
-      "requested": { "metric": "Vmaf", "value": 95 },
-      "floor": { "metric": "Vmaf", "value": 93 },
+      "metric": "Vmaf",
+      "requested": 95,
+      "floor": 93,
       "attempts": [
         {
-          "target": { "metric": "Vmaf", "value": 95 },
+          "target": 95,
           "last_measurement": {
             "crf": 16000,
-            "score": { "metric": "Vmaf", "value": 9505 },
+            "score": 9505,
             "predicted_size": 950000000,
             "predicted_percent_basis_points": 10555,
             "predicted_duration_ms": 900000,
@@ -31,17 +32,17 @@
           }
         },
         {
-          "target": { "metric": "Vmaf", "value": 94 },
+          "target": 94,
           "last_measurement": {
             "crf": 18000,
-            "score": { "metric": "Vmaf", "value": 9402 },
+            "score": 9402,
             "predicted_size": 880000000,
             "predicted_percent_basis_points": 9777,
             "predicted_duration_ms": 850000,
             "from_cache": false
           }
         },
-        { "target": { "metric": "Vmaf", "value": 93 }, "last_measurement": null }
+        { "target": 93, "last_measurement": null }
       ]
     }
   },

@@ -63,8 +63,12 @@ interface Metric {
   icon: ComponentType<{ className?: string }>;
 }
 
+function vmafSpread(payload: StatisticsPayload): ValueSpread | null {
+  return payload.quality.find(({ metric }) => metric === "Vmaf")?.spread ?? null;
+}
+
 function StatStrip({ payload }: { payload: StatisticsPayload }) {
-  const vmaf = payload.quality.find(({ metric }) => metric === "Vmaf")?.spread ?? null;
+  const vmaf = vmafSpread(payload);
   const metrics: Metric[] = [
     {
       label: "Output-size reduction",
@@ -426,7 +430,7 @@ function SpreadRow({
 }
 
 function OutcomeDetailsCard({ payload }: { payload: StatisticsPayload }) {
-  const vmaf = payload.quality.find(({ metric }) => metric === "Vmaf")?.spread ?? null;
+  const vmaf = vmafSpread(payload);
   const runRows = runOutcomeRows(payload.runs);
 
   return (

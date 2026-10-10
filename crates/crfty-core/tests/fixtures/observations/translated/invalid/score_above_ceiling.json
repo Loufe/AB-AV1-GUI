@@ -11,7 +11,7 @@
     },
     "outcome": {
       "Converted": {
-        "quality": { "crf": 30000, "score": { "metric": "Vmaf", "value": 10001 }, "target": { "metric": "Vmaf", "value": 95 } },
+        "quality": { "crf": 30000, "score": 10001, "target": 95 },
         "output_size": 3250000,
         "encode_duration": 251000
       }

@@ -162,10 +162,10 @@ describe("deriveRowStatus", () => {
           NotWorthwhile: {
             attempts: [
               {
-                target: { metric: "Vmaf", value: 90 },
+                target: 90,
                 last_measurement: {
                   crf: 30,
-                  score: { metric: "Vmaf", value: 8_940 },
+                  score: 8_940,
                   predicted_size: 900,
                   predicted_percent_basis_points: 9700,
                   predicted_duration_ms: 1000,

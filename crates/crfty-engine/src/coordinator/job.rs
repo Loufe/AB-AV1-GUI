@@ -6,7 +6,7 @@ use std::time::{Duration, Instant};
 use crfty_core::{
     AnalysisAttempt, AnalysisResult, ClaimedJob, DecodeMode, FailureFacts, FailureKind,
     ItemOutcome, JobPhase, OutputDelta, OutputTransaction, PERCENT_BASIS_POINTS_SCALE,
-    QualityTarget, RunId, Telemetry,
+    QualityMetric, QualityTarget, RunId, Telemetry,
 };
 
 use crate::{
@@ -376,14 +376,14 @@ pub(super) fn search_with_fallback(
 ) -> Result<AnalysisResult, ItemOutcome> {
     let execution = &job.spec.execution;
     let mut profile = execution.profile.clone();
-    let mut target = match execution.requested_target.metric {
-        crfty_core::QualityMetric::Vmaf => execution.requested_target.value,
-    };
+    let mut target = execution.requested_target;
     let mut failed_attempts = Vec::new();
     loop {
         let request = SearchRequest {
             input: job.spec.input.clone(),
-            target_vmaf: f32::from(target),
+            target_vmaf: match profile.metric {
+                QualityMetric::Vmaf => f32::from(target.0),
+            },
             max_encoded_percent: profile.max_encoded_percent_basis_points as f32
                 / PERCENT_BASIS_POINTS_SCALE as f32,
             preset: profile.preset,
@@ -414,12 +414,12 @@ pub(super) fn search_with_fallback(
         })?;
         match report.terminal {
             JobTerminal::Completed(outcome) => {
-                let measured = measurement(outcome).map_err(|message| {
+                let measured = measurement(outcome, profile.metric).map_err(|message| {
                     ItemOutcome::Failed(FailureFacts::new(FailureKind::SearchRun, message))
                 })?;
                 return Ok(AnalysisResult {
                     requested_target: execution.requested_target,
-                    successful_target: QualityTarget::vmaf(target),
+                    successful_target: target,
                     fallback_floor: execution.fallback_floor,
                     fallback_step: execution.fallback_step,
                     failed_attempts,
@@ -429,11 +429,11 @@ pub(super) fn search_with_fallback(
             }
             JobTerminal::Failed(failure) => match failure.kind {
                 JobFailureKind::NoGoodCrf { last } => {
-                    let measured = measurement(last).map_err(|message| {
+                    let measured = measurement(last, profile.metric).map_err(|message| {
                         ItemOutcome::Failed(FailureFacts::new(FailureKind::SearchRun, message))
                     })?;
                     failed_attempts.push(AnalysisAttempt {
-                        target: QualityTarget::vmaf(target),
+                        target,
                         last_measurement: Some(measured),
                     });
                 }
@@ -452,7 +452,7 @@ pub(super) fn search_with_fallback(
                             failure.message
                         );
                         profile.decode_mode = DecodeMode::Software;
-                        target = execution.requested_target.value;
+                        target = execution.requested_target;
                         failed_attempts.clear();
                         continue;
                     }
@@ -480,15 +480,16 @@ pub(super) fn search_with_fallback(
                 return Err(ItemOutcome::Failed(facts));
             }
         }
-        if target <= execution.fallback_floor.value
+        let next = QualityTarget(target.0.saturating_sub(execution.fallback_step));
+        if target <= execution.fallback_floor
             || execution.fallback_step == 0
-            || target.saturating_sub(execution.fallback_step) < execution.fallback_floor.value
+            || next < execution.fallback_floor
         {
             return Err(ItemOutcome::NotWorthwhile {
                 attempts: failed_attempts,
             });
         }
-        target = target.saturating_sub(execution.fallback_step);
+        target = next;
     }
 }
 

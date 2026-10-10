@@ -40,7 +40,7 @@ Read from source: every V2 Statistics aggregate has a wired V3 home in `Statisti
 | V2 result (`src/gui/tabs/statistics_tab.py`) | Required evidence | Stage | V3 home |
 | --- | --- | --- | --- |
 | Total files converted | converted verdicts | Terminal | `converted_files` |
-| Average, min, max VMAF | metric-tagged verdict-carried score | Terminal | `quality` spread per metric |
+| Average, min, max VMAF | verdict-carried score and its metric | Terminal | `quality` spread per metric |
 | Average, min, max CRF | verdict-carried CRF | Terminal | `crf` spread |
 | Average, min, max size reduction | joined input and output sizes | Terminal | `reduction_percent` spread |
 | Size reduction histogram | joined sizes | Terminal | `reduction_bins` |
@@ -97,9 +97,9 @@ The V2 queue operation column and skip breakdown read current freshness-checked 
 
 ## Metric-tagged quality evidence
 
-**Read from source.** `QualityTarget` and `QualityScore` carry `QualityMetric` through the analysis map key, verdicts, `StatFact`, observations, import, and the generated bindings. Targets retain whole-point values and VMAF scores retain hundredths; Statistics returns normalized, metric-tagged spreads. The pinned interface exposes a `min_xpsnr` argument the adapter sets to none, telemetry classifies XPSNR sample work, and a search runs under exactly one quality flag.
+**Read from source.** `QualityTarget` and `QualityScore` are bare values in the metric their record names once: the analysis profile, a verdict, or a native observation. V2-origin evidence is VMAF by origin. Targets retain whole-point values and VMAF scores retain hundredths; Statistics returns normalized spreads per metric. The pinned interface exposes a `min_xpsnr` argument the adapter sets to none, telemetry classifies XPSNR sample work, and a search runs under exactly one quality flag.
 
-**Implemented (ADR-022).** VMAF is the sole metric variant. The tagged target joins the analysis identity, extending the ADR-007 precedent of pinning decode mode there. Reuse and not-worthwhile application compare metrics, and unknown metrics cannot enter the request or evidence types. Both analysis-index levels serialize as ordered entry lists so each target retains its tag. Statistics groups scores by metric, imported V2 evidence is tagged VMAF, and the journal uses schema 20. Pre-release journals require a fresh data directory; released History upgrade policy remains as defined in the [History contract](../HISTORY.md#release-upgrades).
+**Implemented (ADR-022).** VMAF is the sole metric variant. The metric joins the analysis identity as a profile field, extending the ADR-007 precedent of pinning decode mode there, so a record cannot mix metrics. Not-worthwhile application compares metrics, and unknown metrics cannot enter the request or evidence types. Statistics groups scores by metric, imported V2 evidence is VMAF by origin, and the journal uses schema 20. Pre-release journals require a fresh data directory; released History upgrade policy remains as defined in the [History contract](../HISTORY.md#release-upgrades).
 
 ## The not-worthwhile row
 

@@ -207,14 +207,8 @@
               "intent": "ReuseIfFresh",
               "output_target": "Replace",
               "execution": {
-                "requested_target": {
-                  "metric": "Vmaf",
-                  "value": 95
-                },
-                "fallback_floor": {
-                  "metric": "Vmaf",
-                  "value": 90
-                },
+                "requested_target": 95,
+                "fallback_floor": 90,
                 "fallback_step": 1,
                 "overwrite_existing": false,
                 "decode_preference": "HardwarePreferred",
@@ -224,6 +218,7 @@
                   "samples": null,
                   "sample_duration_ms": 20000,
                   "thorough": false,
+                  "metric": "Vmaf",
                   "decode_mode": "Software",
                   "ab_av1_revision": "ab-av1-test",
                   "ffmpeg_revision": "ffmpeg-test",
@@ -289,14 +284,8 @@
               "intent": "ReuseIfFresh",
               "output_target": "Replace",
               "execution": {
-                "requested_target": {
-                  "metric": "Vmaf",
-                  "value": 95
-                },
-                "fallback_floor": {
-                  "metric": "Vmaf",
-                  "value": 90
-                },
+                "requested_target": 95,
+                "fallback_floor": 90,
                 "fallback_step": 1,
                 "overwrite_existing": false,
                 "decode_preference": "HardwarePreferred",
@@ -306,6 +295,7 @@
                   "samples": null,
                   "sample_duration_ms": 20000,
                   "thorough": false,
+                  "metric": "Vmaf",
                   "decode_mode": "Software",
                   "ab_av1_revision": "ab-av1-test",
                   "ffmpeg_revision": "ffmpeg-test",
@@ -1298,14 +1288,8 @@
               "intent": "ReuseIfFresh",
               "output_target": "Replace",
               "execution": {
-                "requested_target": {
-                  "metric": "Vmaf",
-                  "value": 95
-                },
-                "fallback_floor": {
-                  "metric": "Vmaf",
-                  "value": 90
-                },
+                "requested_target": 95,
+                "fallback_floor": 90,
                 "fallback_step": 1,
                 "overwrite_existing": false,
                 "decode_preference": "HardwarePreferred",
@@ -1315,6 +1299,7 @@
                   "samples": null,
                   "sample_duration_ms": 20000,
                   "thorough": false,
+                  "metric": "Vmaf",
                   "decode_mode": "Software",
                   "ab_av1_revision": "ab-av1-test",
                   "ffmpeg_revision": "ffmpeg-test",
@@ -1363,14 +1348,8 @@
               "intent": "ReuseIfFresh",
               "output_target": "Replace",
               "execution": {
-                "requested_target": {
-                  "metric": "Vmaf",
-                  "value": 95
-                },
-                "fallback_floor": {
-                  "metric": "Vmaf",
-                  "value": 90
-                },
+                "requested_target": 95,
+                "fallback_floor": 90,
                 "fallback_step": 1,
                 "overwrite_existing": false,
                 "decode_preference": "HardwarePreferred",
@@ -1380,6 +1359,7 @@
                   "samples": null,
                   "sample_duration_ms": 20000,
                   "thorough": false,
+                  "metric": "Vmaf",
                   "decode_mode": "Software",
                   "ab_av1_revision": "ab-av1-test",
                   "ffmpeg_revision": "ffmpeg-test",
@@ -1439,14 +1419,8 @@
               "intent": "ReuseIfFresh",
               "output_target": "Replace",
               "execution": {
-                "requested_target": {
-                  "metric": "Vmaf",
-                  "value": 95
-                },
-                "fallback_floor": {
-                  "metric": "Vmaf",
-                  "value": 90
-                },
+                "requested_target": 95,
+                "fallback_floor": 90,
                 "fallback_step": 1,
                 "overwrite_existing": false,
                 "decode_preference": "HardwarePreferred",
@@ -1456,6 +1430,7 @@
                   "samples": null,
                   "sample_duration_ms": 20000,
                   "thorough": false,
+                  "metric": "Vmaf",
                   "decode_mode": "Software",
                   "ab_av1_revision": "ab-av1-test",
                   "ffmpeg_revision": "ffmpeg-test",
@@ -1465,26 +1440,14 @@
               "action": {
                 "Encode": {
                   "selected_analysis": {
-                    "requested_target": {
-                      "metric": "Vmaf",
-                      "value": 95
-                    },
-                    "successful_target": {
-                      "metric": "Vmaf",
-                      "value": 95
-                    },
-                    "fallback_floor": {
-                      "metric": "Vmaf",
-                      "value": 90
-                    },
+                    "requested_target": 95,
+                    "successful_target": 95,
+                    "fallback_floor": 90,
                     "fallback_step": 1,
                     "failed_attempts": [],
                     "measurement": {
                       "crf": 30,
-                      "score": {
-                        "metric": "Vmaf",
-                        "value": 9550
-                      },
+                      "score": 9550,
                       "predicted_size": 1000000,
                       "predicted_percent_basis_points": 4200,
                       "predicted_duration_ms": 60000,
@@ -1496,6 +1459,7 @@
                       "samples": null,
                       "sample_duration_ms": 20000,
                       "thorough": false,
+                      "metric": "Vmaf",
                       "decode_mode": "Software",
                       "ab_av1_revision": "ab-av1-test",
                       "ffmpeg_revision": "ffmpeg-test",
@@ -1541,14 +1505,8 @@
               "intent": "ReuseIfFresh",
               "output_target": "Replace",
               "execution": {
-                "requested_target": {
-                  "metric": "Vmaf",
-                  "value": 95
-                },
-                "fallback_floor": {
-                  "metric": "Vmaf",
-                  "value": 90
-                },
+                "requested_target": 95,
+                "fallback_floor": 90,
                 "fallback_step": 1,
                 "overwrite_existing": false,
                 "decode_preference": "HardwarePreferred",
@@ -1558,6 +1516,7 @@
                   "samples": null,
                   "sample_duration_ms": 20000,
                   "thorough": false,
+                  "metric": "Vmaf",
                   "decode_mode": "Software",
                   "ab_av1_revision": "ab-av1-test",
                   "ffmpeg_revision": "ffmpeg-test",
@@ -1567,26 +1526,14 @@
               "action": {
                 "Encode": {
                   "selected_analysis": {
-                    "requested_target": {
-                      "metric": "Vmaf",
-                      "value": 95
-                    },
-                    "successful_target": {
-                      "metric": "Vmaf",
-                      "value": 95
-                    },
-                    "fallback_floor": {
-                      "metric": "Vmaf",
-                      "value": 90
-                    },
+                    "requested_target": 95,
+                    "successful_target": 95,
+                    "fallback_floor": 90,
                     "fallback_step": 1,
                     "failed_attempts": [],
                     "measurement": {
                       "crf": 30,
-                      "score": {
-                        "metric": "Vmaf",
-                        "value": 9550
-                      },
+                      "score": 9550,
                       "predicted_size": 1000000,
                       "predicted_percent_basis_points": 4200,
                       "predicted_duration_ms": 60000,
@@ -1598,6 +1545,7 @@
                       "samples": null,
                       "sample_duration_ms": 20000,
                       "thorough": false,
+                      "metric": "Vmaf",
                       "decode_mode": "Software",
                       "ab_av1_revision": "ab-av1-test",
                       "ffmpeg_revision": "ffmpeg-test",
@@ -1608,26 +1556,14 @@
               }
             },
             "analysis": {
-              "requested_target": {
-                "metric": "Vmaf",
-                "value": 95
-              },
-              "successful_target": {
-                "metric": "Vmaf",
-                "value": 95
-              },
-              "fallback_floor": {
-                "metric": "Vmaf",
-                "value": 90
-              },
+              "requested_target": 95,
+              "successful_target": 95,
+              "fallback_floor": 90,
               "fallback_step": 1,
               "failed_attempts": [],
               "measurement": {
                 "crf": 30,
-                "score": {
-                  "metric": "Vmaf",
-                  "value": 9550
-                },
+                "score": 9550,
                 "predicted_size": 1000000,
                 "predicted_percent_basis_points": 4200,
                 "predicted_duration_ms": 60000,
@@ -1639,6 +1575,7 @@
                 "samples": null,
                 "sample_duration_ms": 20000,
                 "thorough": false,
+                "metric": "Vmaf",
                 "decode_mode": "Software",
                 "ab_av1_revision": "ab-av1-test",
                 "ffmpeg_revision": "ffmpeg-test",
@@ -1735,14 +1672,8 @@
               "intent": "ReuseIfFresh",
               "output_target": "Replace",
               "execution": {
-                "requested_target": {
-                  "metric": "Vmaf",
-                  "value": 95
-                },
-                "fallback_floor": {
-                  "metric": "Vmaf",
-                  "value": 90
-                },
+                "requested_target": 95,
+                "fallback_floor": 90,
                 "fallback_step": 1,
                 "overwrite_existing": false,
                 "decode_preference": "HardwarePreferred",
@@ -1752,6 +1683,7 @@
                   "samples": null,
                   "sample_duration_ms": 20000,
                   "thorough": false,
+                  "metric": "Vmaf",
                   "decode_mode": "Software",
                   "ab_av1_revision": "ab-av1-test",
                   "ffmpeg_revision": "ffmpeg-test",
@@ -1780,26 +1712,14 @@
           "AnalysisRecorded": {
             "run_id": 100,
             "result": {
-              "requested_target": {
-                "metric": "Vmaf",
-                "value": 95
-              },
-              "successful_target": {
-                "metric": "Vmaf",
-                "value": 95
-              },
-              "fallback_floor": {
-                "metric": "Vmaf",
-                "value": 90
-              },
+              "requested_target": 95,
+              "successful_target": 95,
+              "fallback_floor": 90,
               "fallback_step": 1,
               "failed_attempts": [],
               "measurement": {
                 "crf": 30,
-                "score": {
-                  "metric": "Vmaf",
-                  "value": 9550
-                },
+                "score": 9550,
                 "predicted_size": 1000000,
                 "predicted_percent_basis_points": 4200,
                 "predicted_duration_ms": 60000,
@@ -1811,6 +1731,7 @@
                 "samples": null,
                 "sample_duration_ms": 20000,
                 "thorough": false,
+                "metric": "Vmaf",
                 "decode_mode": "Software",
                 "ab_av1_revision": "ab-av1-test",
                 "ffmpeg_revision": "ffmpeg-test",
@@ -1887,57 +1808,41 @@
                   "samples": null,
                   "sample_duration_ms": 20000,
                   "thorough": false,
+                  "metric": "Vmaf",
                   "decode_mode": "Software",
                   "ab_av1_revision": "ab-av1-test",
                   "ffmpeg_revision": "ffmpeg-test",
                   "encoder_revision": "svt-av1-test"
                 },
-                [
-                  [
-                    {
-                      "metric": "Vmaf",
-                      "value": 95
+                {
+                  "95": {
+                    "requested_target": 95,
+                    "successful_target": 95,
+                    "fallback_floor": 90,
+                    "fallback_step": 1,
+                    "failed_attempts": [],
+                    "measurement": {
+                      "crf": 30,
+                      "score": 9550,
+                      "predicted_size": 1000000,
+                      "predicted_percent_basis_points": 4200,
+                      "predicted_duration_ms": 60000,
+                      "from_cache": false
                     },
-                    {
-                      "requested_target": {
-                        "metric": "Vmaf",
-                        "value": 95
-                      },
-                      "successful_target": {
-                        "metric": "Vmaf",
-                        "value": 95
-                      },
-                      "fallback_floor": {
-                        "metric": "Vmaf",
-                        "value": 90
-                      },
-                      "fallback_step": 1,
-                      "failed_attempts": [],
-                      "measurement": {
-                        "crf": 30,
-                        "score": {
-                          "metric": "Vmaf",
-                          "value": 9550
-                        },
-                        "predicted_size": 1000000,
-                        "predicted_percent_basis_points": 4200,
-                        "predicted_duration_ms": 60000,
-                        "from_cache": false
-                      },
-                      "profile": {
-                        "preset": 6,
-                        "max_encoded_percent_basis_points": 8000,
-                        "samples": null,
-                        "sample_duration_ms": 20000,
-                        "thorough": false,
-                        "decode_mode": "Software",
-                        "ab_av1_revision": "ab-av1-test",
-                        "ffmpeg_revision": "ffmpeg-test",
-                        "encoder_revision": "svt-av1-test"
-                      }
+                    "profile": {
+                      "preset": 6,
+                      "max_encoded_percent_basis_points": 8000,
+                      "samples": null,
+                      "sample_duration_ms": 20000,
+                      "thorough": false,
+                      "metric": "Vmaf",
+                      "decode_mode": "Software",
+                      "ab_av1_revision": "ab-av1-test",
+                      "ffmpeg_revision": "ffmpeg-test",
+                      "encoder_revision": "svt-av1-test"
                     }
-                  ]
-                ]
+                  }
+                }
               ]
             ],
             "verdict": null,
@@ -1957,14 +1862,8 @@
               "intent": "ReuseIfFresh",
               "output_target": "Replace",
               "execution": {
-                "requested_target": {
-                  "metric": "Vmaf",
-                  "value": 95
-                },
-                "fallback_floor": {
-                  "metric": "Vmaf",
-                  "value": 90
-                },
+                "requested_target": 95,
+                "fallback_floor": 90,
                 "fallback_step": 1,
                 "overwrite_existing": false,
                 "decode_preference": "HardwarePreferred",
@@ -1974,6 +1873,7 @@
                   "samples": null,
                   "sample_duration_ms": 20000,
                   "thorough": false,
+                  "metric": "Vmaf",
                   "decode_mode": "Software",
                   "ab_av1_revision": "ab-av1-test",
                   "ffmpeg_revision": "ffmpeg-test",
@@ -1987,26 +1887,14 @@
               }
             },
             "analysis": {
-              "requested_target": {
-                "metric": "Vmaf",
-                "value": 95
-              },
-              "successful_target": {
-                "metric": "Vmaf",
-                "value": 95
-              },
-              "fallback_floor": {
-                "metric": "Vmaf",
-                "value": 90
-              },
+              "requested_target": 95,
+              "successful_target": 95,
+              "fallback_floor": 90,
               "fallback_step": 1,
               "failed_attempts": [],
               "measurement": {
                 "crf": 30,
-                "score": {
-                  "metric": "Vmaf",
-                  "value": 9550
-                },
+                "score": 9550,
                 "predicted_size": 1000000,
                 "predicted_percent_basis_points": 4200,
                 "predicted_duration_ms": 60000,
@@ -2018,6 +1906,7 @@
                 "samples": null,
                 "sample_duration_ms": 20000,
                 "thorough": false,
+                "metric": "Vmaf",
                 "decode_mode": "Software",
                 "ab_av1_revision": "ab-av1-test",
                 "ffmpeg_revision": "ffmpeg-test",
@@ -2052,26 +1941,14 @@
           "AnalysisRecorded": {
             "run_id": 9,
             "result": {
-              "requested_target": {
-                "metric": "Vmaf",
-                "value": 95
-              },
-              "successful_target": {
-                "metric": "Vmaf",
-                "value": 95
-              },
-              "fallback_floor": {
-                "metric": "Vmaf",
-                "value": 90
-              },
+              "requested_target": 95,
+              "successful_target": 95,
+              "fallback_floor": 90,
               "fallback_step": 1,
               "failed_attempts": [],
               "measurement": {
                 "crf": 30,
-                "score": {
-                  "metric": "Vmaf",
-                  "value": 9550
-                },
+                "score": 9550,
                 "predicted_size": 1000000,
                 "predicted_percent_basis_points": 4200,
                 "predicted_duration_ms": 60000,
@@ -2083,6 +1960,7 @@
                 "samples": null,
                 "sample_duration_ms": 20000,
                 "thorough": false,
+                "metric": "Vmaf",
                 "decode_mode": "Software",
                 "ab_av1_revision": "ab-av1-test",
                 "ffmpeg_revision": "ffmpeg-test",
@@ -2186,57 +2064,41 @@
                   "samples": null,
                   "sample_duration_ms": 20000,
                   "thorough": false,
+                  "metric": "Vmaf",
                   "decode_mode": "Software",
                   "ab_av1_revision": "ab-av1-test",
                   "ffmpeg_revision": "ffmpeg-test",
                   "encoder_revision": "svt-av1-test"
                 },
-                [
-                  [
-                    {
-                      "metric": "Vmaf",
-                      "value": 95
+                {
+                  "95": {
+                    "requested_target": 95,
+                    "successful_target": 95,
+                    "fallback_floor": 90,
+                    "fallback_step": 1,
+                    "failed_attempts": [],
+                    "measurement": {
+                      "crf": 30,
+                      "score": 9550,
+                      "predicted_size": 1000000,
+                      "predicted_percent_basis_points": 4200,
+                      "predicted_duration_ms": 60000,
+                      "from_cache": false
                     },
-                    {
-                      "requested_target": {
-                        "metric": "Vmaf",
-                        "value": 95
-                      },
-                      "successful_target": {
-                        "metric": "Vmaf",
-                        "value": 95
-                      },
-                      "fallback_floor": {
-                        "metric": "Vmaf",
-                        "value": 90
-                      },
-                      "fallback_step": 1,
-                      "failed_attempts": [],
-                      "measurement": {
-                        "crf": 30,
-                        "score": {
-                          "metric": "Vmaf",
-                          "value": 9550
-                        },
-                        "predicted_size": 1000000,
-                        "predicted_percent_basis_points": 4200,
-                        "predicted_duration_ms": 60000,
-                        "from_cache": false
-                      },
-                      "profile": {
-                        "preset": 8,
-                        "max_encoded_percent_basis_points": 8000,
-                        "samples": null,
-                        "sample_duration_ms": 20000,
-                        "thorough": false,
-                        "decode_mode": "Software",
-                        "ab_av1_revision": "ab-av1-test",
-                        "ffmpeg_revision": "ffmpeg-test",
-                        "encoder_revision": "svt-av1-test"
-                      }
+                    "profile": {
+                      "preset": 8,
+                      "max_encoded_percent_basis_points": 8000,
+                      "samples": null,
+                      "sample_duration_ms": 20000,
+                      "thorough": false,
+                      "metric": "Vmaf",
+                      "decode_mode": "Software",
+                      "ab_av1_revision": "ab-av1-test",
+                      "ffmpeg_revision": "ffmpeg-test",
+                      "encoder_revision": "svt-av1-test"
                     }
-                  ]
-                ]
+                  }
+                }
               ]
             ],
             "verdict": null,
@@ -2256,14 +2118,8 @@
               "intent": "ReuseIfFresh",
               "output_target": "Replace",
               "execution": {
-                "requested_target": {
-                  "metric": "Vmaf",
-                  "value": 95
-                },
-                "fallback_floor": {
-                  "metric": "Vmaf",
-                  "value": 90
-                },
+                "requested_target": 95,
+                "fallback_floor": 90,
                 "fallback_step": 1,
                 "overwrite_existing": false,
                 "decode_preference": "HardwarePreferred",
@@ -2273,6 +2129,7 @@
                   "samples": null,
                   "sample_duration_ms": 20000,
                   "thorough": false,
+                  "metric": "Vmaf",
                   "decode_mode": "Software",
                   "ab_av1_revision": "ab-av1-test",
                   "ffmpeg_revision": "ffmpeg-test",
@@ -2286,26 +2143,14 @@
               }
             },
             "analysis": {
-              "requested_target": {
-                "metric": "Vmaf",
-                "value": 95
-              },
-              "successful_target": {
-                "metric": "Vmaf",
-                "value": 95
-              },
-              "fallback_floor": {
-                "metric": "Vmaf",
-                "value": 90
-              },
+              "requested_target": 95,
+              "successful_target": 95,
+              "fallback_floor": 90,
               "fallback_step": 1,
               "failed_attempts": [],
               "measurement": {
                 "crf": 30,
-                "score": {
-                  "metric": "Vmaf",
-                  "value": 9550
-                },
+                "score": 9550,
                 "predicted_size": 1000000,
                 "predicted_percent_basis_points": 4200,
                 "predicted_duration_ms": 60000,
@@ -2317,6 +2162,7 @@
                 "samples": null,
                 "sample_duration_ms": 20000,
                 "thorough": false,
+                "metric": "Vmaf",
                 "decode_mode": "Software",
                 "ab_av1_revision": "ab-av1-test",
                 "ffmpeg_revision": "ffmpeg-test",
@@ -2340,14 +2186,8 @@
               "intent": "ReuseIfFresh",
               "output_target": "Replace",
               "execution": {
-                "requested_target": {
-                  "metric": "Vmaf",
-                  "value": 95
-                },
-                "fallback_floor": {
-                  "metric": "Vmaf",
-                  "value": 90
-                },
+                "requested_target": 95,
+                "fallback_floor": 90,
                 "fallback_step": 1,
                 "overwrite_existing": false,
                 "decode_preference": "HardwarePreferred",
@@ -2357,6 +2197,7 @@
                   "samples": null,
                   "sample_duration_ms": 20000,
                   "thorough": false,
+                  "metric": "Vmaf",
                   "decode_mode": "Software",
                   "ab_av1_revision": "ab-av1-test",
                   "ffmpeg_revision": "ffmpeg-test",
@@ -2385,26 +2226,14 @@
           "AnalysisRecorded": {
             "run_id": 101,
             "result": {
-              "requested_target": {
-                "metric": "Vmaf",
-                "value": 95
-              },
-              "successful_target": {
-                "metric": "Vmaf",
-                "value": 95
-              },
-              "fallback_floor": {
-                "metric": "Vmaf",
-                "value": 90
-              },
+              "requested_target": 95,
+              "successful_target": 95,
+              "fallback_floor": 90,
               "fallback_step": 1,
               "failed_attempts": [],
               "measurement": {
                 "crf": 30,
-                "score": {
-                  "metric": "Vmaf",
-                  "value": 9550
-                },
+                "score": 9550,
                 "predicted_size": 1000000,
                 "predicted_percent_basis_points": 4200,
                 "predicted_duration_ms": 60000,
@@ -2416,6 +2245,7 @@
                 "samples": null,
                 "sample_duration_ms": 20000,
                 "thorough": false,
+                "metric": "Vmaf",
                 "decode_mode": "Software",
                 "ab_av1_revision": "ab-av1-test",
                 "ffmpeg_revision": "ffmpeg-test",
@@ -2428,26 +2258,14 @@
           "AnalysisRecorded": {
             "run_id": 100,
             "result": {
-              "requested_target": {
-                "metric": "Vmaf",
-                "value": 95
-              },
-              "successful_target": {
-                "metric": "Vmaf",
-                "value": 93
-              },
-              "fallback_floor": {
-                "metric": "Vmaf",
-                "value": 90
-              },
+              "requested_target": 95,
+              "successful_target": 93,
+              "fallback_floor": 90,
               "fallback_step": 1,
               "failed_attempts": [],
               "measurement": {
                 "crf": 30,
-                "score": {
-                  "metric": "Vmaf",
-                  "value": 9550
-                },
+                "score": 9550,
                 "predicted_size": 1000000,
                 "predicted_percent_basis_points": 4200,
                 "predicted_duration_ms": 60000,
@@ -2459,6 +2277,7 @@
                 "samples": null,
                 "sample_duration_ms": 20000,
                 "thorough": false,
+                "metric": "Vmaf",
                 "decode_mode": "Software",
                 "ab_av1_revision": "ab-av1-test",
                 "ffmpeg_revision": "ffmpeg-test",
@@ -2549,57 +2368,41 @@
                   "samples": null,
                   "sample_duration_ms": 20000,
                   "thorough": false,
+                  "metric": "Vmaf",
                   "decode_mode": "Software",
                   "ab_av1_revision": "ab-av1-test",
                   "ffmpeg_revision": "ffmpeg-test",
                   "encoder_revision": "svt-av1-test"
                 },
-                [
-                  [
-                    {
-                      "metric": "Vmaf",
-                      "value": 95
+                {
+                  "95": {
+                    "requested_target": 95,
+                    "successful_target": 95,
+                    "fallback_floor": 90,
+                    "fallback_step": 1,
+                    "failed_attempts": [],
+                    "measurement": {
+                      "crf": 30,
+                      "score": 9550,
+                      "predicted_size": 1000000,
+                      "predicted_percent_basis_points": 4200,
+                      "predicted_duration_ms": 60000,
+                      "from_cache": false
                     },
-                    {
-                      "requested_target": {
-                        "metric": "Vmaf",
-                        "value": 95
-                      },
-                      "successful_target": {
-                        "metric": "Vmaf",
-                        "value": 95
-                      },
-                      "fallback_floor": {
-                        "metric": "Vmaf",
-                        "value": 90
-                      },
-                      "fallback_step": 1,
-                      "failed_attempts": [],
-                      "measurement": {
-                        "crf": 30,
-                        "score": {
-                          "metric": "Vmaf",
-                          "value": 9550
-                        },
-                        "predicted_size": 1000000,
-                        "predicted_percent_basis_points": 4200,
-                        "predicted_duration_ms": 60000,
-                        "from_cache": false
-                      },
-                      "profile": {
-                        "preset": 4,
-                        "max_encoded_percent_basis_points": 8000,
-                        "samples": null,
-                        "sample_duration_ms": 20000,
-                        "thorough": false,
-                        "decode_mode": "Software",
-                        "ab_av1_revision": "ab-av1-test",
-                        "ffmpeg_revision": "ffmpeg-test",
-                        "encoder_revision": "svt-av1-test"
-                      }
+                    "profile": {
+                      "preset": 4,
+                      "max_encoded_percent_basis_points": 8000,
+                      "samples": null,
+                      "sample_duration_ms": 20000,
+                      "thorough": false,
+                      "metric": "Vmaf",
+                      "decode_mode": "Software",
+                      "ab_av1_revision": "ab-av1-test",
+                      "ffmpeg_revision": "ffmpeg-test",
+                      "encoder_revision": "svt-av1-test"
                     }
-                  ]
-                ]
+                  }
+                }
               ],
               [
                 {
@@ -2608,101 +2411,68 @@
                   "samples": null,
                   "sample_duration_ms": 20000,
                   "thorough": false,
+                  "metric": "Vmaf",
                   "decode_mode": "Software",
                   "ab_av1_revision": "ab-av1-test",
                   "ffmpeg_revision": "ffmpeg-test",
                   "encoder_revision": "svt-av1-test"
                 },
-                [
-                  [
-                    {
-                      "metric": "Vmaf",
-                      "value": 93
+                {
+                  "93": {
+                    "requested_target": 95,
+                    "successful_target": 93,
+                    "fallback_floor": 90,
+                    "fallback_step": 1,
+                    "failed_attempts": [],
+                    "measurement": {
+                      "crf": 30,
+                      "score": 9550,
+                      "predicted_size": 1000000,
+                      "predicted_percent_basis_points": 4200,
+                      "predicted_duration_ms": 60000,
+                      "from_cache": false
                     },
-                    {
-                      "requested_target": {
-                        "metric": "Vmaf",
-                        "value": 95
-                      },
-                      "successful_target": {
-                        "metric": "Vmaf",
-                        "value": 93
-                      },
-                      "fallback_floor": {
-                        "metric": "Vmaf",
-                        "value": 90
-                      },
-                      "fallback_step": 1,
-                      "failed_attempts": [],
-                      "measurement": {
-                        "crf": 30,
-                        "score": {
-                          "metric": "Vmaf",
-                          "value": 9550
-                        },
-                        "predicted_size": 1000000,
-                        "predicted_percent_basis_points": 4200,
-                        "predicted_duration_ms": 60000,
-                        "from_cache": false
-                      },
-                      "profile": {
-                        "preset": 8,
-                        "max_encoded_percent_basis_points": 8000,
-                        "samples": null,
-                        "sample_duration_ms": 20000,
-                        "thorough": false,
-                        "decode_mode": "Software",
-                        "ab_av1_revision": "ab-av1-test",
-                        "ffmpeg_revision": "ffmpeg-test",
-                        "encoder_revision": "svt-av1-test"
-                      }
-                    }
-                  ],
-                  [
-                    {
+                    "profile": {
+                      "preset": 8,
+                      "max_encoded_percent_basis_points": 8000,
+                      "samples": null,
+                      "sample_duration_ms": 20000,
+                      "thorough": false,
                       "metric": "Vmaf",
-                      "value": 95
-                    },
-                    {
-                      "requested_target": {
-                        "metric": "Vmaf",
-                        "value": 95
-                      },
-                      "successful_target": {
-                        "metric": "Vmaf",
-                        "value": 95
-                      },
-                      "fallback_floor": {
-                        "metric": "Vmaf",
-                        "value": 90
-                      },
-                      "fallback_step": 1,
-                      "failed_attempts": [],
-                      "measurement": {
-                        "crf": 30,
-                        "score": {
-                          "metric": "Vmaf",
-                          "value": 9550
-                        },
-                        "predicted_size": 1000000,
-                        "predicted_percent_basis_points": 4200,
-                        "predicted_duration_ms": 60000,
-                        "from_cache": false
-                      },
-                      "profile": {
-                        "preset": 8,
-                        "max_encoded_percent_basis_points": 8000,
-                        "samples": null,
-                        "sample_duration_ms": 20000,
-                        "thorough": false,
-                        "decode_mode": "Software",
-                        "ab_av1_revision": "ab-av1-test",
-                        "ffmpeg_revision": "ffmpeg-test",
-                        "encoder_revision": "svt-av1-test"
-                      }
+                      "decode_mode": "Software",
+                      "ab_av1_revision": "ab-av1-test",
+                      "ffmpeg_revision": "ffmpeg-test",
+                      "encoder_revision": "svt-av1-test"
                     }
-                  ]
-                ]
+                  },
+                  "95": {
+                    "requested_target": 95,
+                    "successful_target": 95,
+                    "fallback_floor": 90,
+                    "fallback_step": 1,
+                    "failed_attempts": [],
+                    "measurement": {
+                      "crf": 30,
+                      "score": 9550,
+                      "predicted_size": 1000000,
+                      "predicted_percent_basis_points": 4200,
+                      "predicted_duration_ms": 60000,
+                      "from_cache": false
+                    },
+                    "profile": {
+                      "preset": 8,
+                      "max_encoded_percent_basis_points": 8000,
+                      "samples": null,
+                      "sample_duration_ms": 20000,
+                      "thorough": false,
+                      "metric": "Vmaf",
+                      "decode_mode": "Software",
+                      "ab_av1_revision": "ab-av1-test",
+                      "ffmpeg_revision": "ffmpeg-test",
+                      "encoder_revision": "svt-av1-test"
+                    }
+                  }
+                }
               ]
             ],
             "verdict": null,
@@ -2722,14 +2492,8 @@
               "intent": "ReuseIfFresh",
               "output_target": "Replace",
               "execution": {
-                "requested_target": {
-                  "metric": "Vmaf",
-                  "value": 95
-                },
-                "fallback_floor": {
-                  "metric": "Vmaf",
-                  "value": 90
-                },
+                "requested_target": 95,
+                "fallback_floor": 90,
                 "fallback_step": 1,
                 "overwrite_existing": false,
                 "decode_preference": "HardwarePreferred",
@@ -2739,6 +2503,7 @@
                   "samples": null,
                   "sample_duration_ms": 20000,
                   "thorough": false,
+                  "metric": "Vmaf",
                   "decode_mode": "Software",
                   "ab_av1_revision": "ab-av1-test",
                   "ffmpeg_revision": "ffmpeg-test",
@@ -2752,26 +2517,14 @@
               }
             },
             "analysis": {
-              "requested_target": {
-                "metric": "Vmaf",
-                "value": 95
-              },
-              "successful_target": {
-                "metric": "Vmaf",
-                "value": 93
-              },
-              "fallback_floor": {
-                "metric": "Vmaf",
-                "value": 90
-              },
+              "requested_target": 95,
+              "successful_target": 93,
+              "fallback_floor": 90,
               "fallback_step": 1,
               "failed_attempts": [],
               "measurement": {
                 "crf": 30,
-                "score": {
-                  "metric": "Vmaf",
-                  "value": 9550
-                },
+                "score": 9550,
                 "predicted_size": 1000000,
                 "predicted_percent_basis_points": 4200,
                 "predicted_duration_ms": 60000,
@@ -2783,6 +2536,7 @@
                 "samples": null,
                 "sample_duration_ms": 20000,
                 "thorough": false,
+                "metric": "Vmaf",
                 "decode_mode": "Software",
                 "ab_av1_revision": "ab-av1-test",
                 "ffmpeg_revision": "ffmpeg-test",
@@ -2806,14 +2560,8 @@
               "intent": "ReuseIfFresh",
               "output_target": "Replace",
               "execution": {
-                "requested_target": {
-                  "metric": "Vmaf",
-                  "value": 95
-                },
-                "fallback_floor": {
-                  "metric": "Vmaf",
-                  "value": 90
-                },
+                "requested_target": 95,
+                "fallback_floor": 90,
                 "fallback_step": 1,
                 "overwrite_existing": false,
                 "decode_preference": "HardwarePreferred",
@@ -2823,6 +2571,7 @@
                   "samples": null,
                   "sample_duration_ms": 20000,
                   "thorough": false,
+                  "metric": "Vmaf",
                   "decode_mode": "Software",
                   "ab_av1_revision": "ab-av1-test",
                   "ffmpeg_revision": "ffmpeg-test",
@@ -2836,26 +2585,14 @@
               }
             },
             "analysis": {
-              "requested_target": {
-                "metric": "Vmaf",
-                "value": 95
-              },
-              "successful_target": {
-                "metric": "Vmaf",
-                "value": 95
-              },
-              "fallback_floor": {
-                "metric": "Vmaf",
-                "value": 90
-              },
+              "requested_target": 95,
+              "successful_target": 95,
+              "fallback_floor": 90,
               "fallback_step": 1,
               "failed_attempts": [],
               "measurement": {
                 "crf": 30,
-                "score": {
-                  "metric": "Vmaf",
-                  "value": 9550
-                },
+                "score": 9550,
                 "predicted_size": 1000000,
                 "predicted_percent_basis_points": 4200,
                 "predicted_duration_ms": 60000,
@@ -2867,6 +2604,7 @@
                 "samples": null,
                 "sample_duration_ms": 20000,
                 "thorough": false,
+                "metric": "Vmaf",
                 "decode_mode": "Software",
                 "ab_av1_revision": "ab-av1-test",
                 "ffmpeg_revision": "ffmpeg-test",
@@ -2919,14 +2657,8 @@
               "intent": "ReuseIfFresh",
               "output_target": "Replace",
               "execution": {
-                "requested_target": {
-                  "metric": "Vmaf",
-                  "value": 95
-                },
-                "fallback_floor": {
-                  "metric": "Vmaf",
-                  "value": 90
-                },
+                "requested_target": 95,
+                "fallback_floor": 90,
                 "fallback_step": 1,
                 "overwrite_existing": false,
                 "decode_preference": "HardwarePreferred",
@@ -2936,6 +2668,7 @@
                   "samples": null,
                   "sample_duration_ms": 20000,
                   "thorough": false,
+                  "metric": "Vmaf",
                   "decode_mode": "Software",
                   "ab_av1_revision": "ab-av1-test",
                   "ffmpeg_revision": "ffmpeg-test",
@@ -3010,14 +2743,8 @@
               "intent": "ReuseIfFresh",
               "output_target": "Replace",
               "execution": {
-                "requested_target": {
-                  "metric": "Vmaf",
-                  "value": 95
-                },
-                "fallback_floor": {
-                  "metric": "Vmaf",
-                  "value": 90
-                },
+                "requested_target": 95,
+                "fallback_floor": 90,
                 "fallback_step": 1,
                 "overwrite_existing": false,
                 "decode_preference": "HardwarePreferred",
@@ -3027,6 +2754,7 @@
                   "samples": null,
                   "sample_duration_ms": 20000,
                   "thorough": false,
+                  "metric": "Vmaf",
                   "decode_mode": "Software",
                   "ab_av1_revision": "ab-av1-test",
                   "ffmpeg_revision": "ffmpeg-test",
@@ -3175,14 +2903,8 @@
               "intent": "ReuseIfFresh",
               "output_target": "Replace",
               "execution": {
-                "requested_target": {
-                  "metric": "Vmaf",
-                  "value": 95
-                },
-                "fallback_floor": {
-                  "metric": "Vmaf",
-                  "value": 90
-                },
+                "requested_target": 95,
+                "fallback_floor": 90,
                 "fallback_step": 1,
                 "overwrite_existing": false,
                 "decode_preference": "HardwarePreferred",
@@ -3192,6 +2914,7 @@
                   "samples": null,
                   "sample_duration_ms": 20000,
                   "thorough": false,
+                  "metric": "Vmaf",
                   "decode_mode": "Software",
                   "ab_av1_revision": "ab-av1-test",
                   "ffmpeg_revision": "ffmpeg-test",
@@ -3317,7 +3040,8 @@
                   "output_size": 1000000,
                   "encoding_time": 88000,
                   "crf": null,
-                  "vmaf": null,
+                  "metric": "Vmaf",
+                  "score": null,
                   "target": null
                 }
               },
@@ -3376,14 +3100,8 @@
               "intent": "ReuseIfFresh",
               "output_target": "Replace",
               "execution": {
-                "requested_target": {
-                  "metric": "Vmaf",
-                  "value": 95
-                },
-                "fallback_floor": {
-                  "metric": "Vmaf",
-                  "value": 90
-                },
+                "requested_target": 95,
+                "fallback_floor": 90,
                 "fallback_step": 1,
                 "overwrite_existing": false,
                 "decode_preference": "HardwarePreferred",
@@ -3393,6 +3111,7 @@
                   "samples": null,
                   "sample_duration_ms": 20000,
                   "thorough": false,
+                  "metric": "Vmaf",
                   "decode_mode": "Software",
                   "ab_av1_revision": "ab-av1-test",
                   "ffmpeg_revision": "ffmpeg-test",
@@ -3549,14 +3268,8 @@
               "intent": "ReuseIfFresh",
               "output_target": "Replace",
               "execution": {
-                "requested_target": {
-                  "metric": "Vmaf",
-                  "value": 95
-                },
-                "fallback_floor": {
-                  "metric": "Vmaf",
-                  "value": 90
-                },
+                "requested_target": 95,
+                "fallback_floor": 90,
                 "fallback_step": 1,
                 "overwrite_existing": false,
                 "decode_preference": "HardwarePreferred",
@@ -3566,6 +3279,7 @@
                   "samples": null,
                   "sample_duration_ms": 20000,
                   "thorough": false,
+                  "metric": "Vmaf",
                   "decode_mode": "Software",
                   "ab_av1_revision": "ab-av1-test",
                   "ffmpeg_revision": "ffmpeg-test",
@@ -3744,14 +3458,8 @@
               "intent": "ReuseIfFresh",
               "output_target": "Replace",
               "execution": {
-                "requested_target": {
-                  "metric": "Vmaf",
-                  "value": 95
-                },
-                "fallback_floor": {
-                  "metric": "Vmaf",
-                  "value": 90
-                },
+                "requested_target": 95,
+                "fallback_floor": 90,
                 "fallback_step": 1,
                 "overwrite_existing": false,
                 "decode_preference": "HardwarePreferred",
@@ -3761,6 +3469,7 @@
                   "samples": null,
                   "sample_duration_ms": 20000,
                   "thorough": false,
+                  "metric": "Vmaf",
                   "decode_mode": "Software",
                   "ab_av1_revision": "ab-av1-test",
                   "ffmpeg_revision": "ffmpeg-test",
@@ -3916,14 +3625,8 @@
               "intent": "ReuseIfFresh",
               "output_target": "Replace",
               "execution": {
-                "requested_target": {
-                  "metric": "Vmaf",
-                  "value": 95
-                },
-                "fallback_floor": {
-                  "metric": "Vmaf",
-                  "value": 90
-                },
+                "requested_target": 95,
+                "fallback_floor": 90,
                 "fallback_step": 1,
                 "overwrite_existing": false,
                 "decode_preference": "HardwarePreferred",
@@ -3933,6 +3636,7 @@
                   "samples": null,
                   "sample_duration_ms": 20000,
                   "thorough": false,
+                  "metric": "Vmaf",
                   "decode_mode": "Software",
                   "ab_av1_revision": "ab-av1-test",
                   "ffmpeg_revision": "ffmpeg-test",
@@ -4103,14 +3807,8 @@
               "intent": "ReuseIfFresh",
               "output_target": "Replace",
               "execution": {
-                "requested_target": {
-                  "metric": "Vmaf",
-                  "value": 95
-                },
-                "fallback_floor": {
-                  "metric": "Vmaf",
-                  "value": 90
-                },
+                "requested_target": 95,
+                "fallback_floor": 90,
                 "fallback_step": 1,
                 "overwrite_existing": false,
                 "decode_preference": "HardwarePreferred",
@@ -4120,6 +3818,7 @@
                   "samples": null,
                   "sample_duration_ms": 20000,
                   "thorough": false,
+                  "metric": "Vmaf",
                   "decode_mode": "Software",
                   "ab_av1_revision": "ab-av1-test",
                   "ffmpeg_revision": "ffmpeg-test",
@@ -4276,14 +3975,8 @@
               "intent": "ReuseIfFresh",
               "output_target": "Replace",
               "execution": {
-                "requested_target": {
-                  "metric": "Vmaf",
-                  "value": 95
-                },
-                "fallback_floor": {
-                  "metric": "Vmaf",
-                  "value": 90
-                },
+                "requested_target": 95,
+                "fallback_floor": 90,
                 "fallback_step": 1,
                 "overwrite_existing": false,
                 "decode_preference": "HardwarePreferred",
@@ -4293,6 +3986,7 @@
                   "samples": null,
                   "sample_duration_ms": 20000,
                   "thorough": false,
+                  "metric": "Vmaf",
                   "decode_mode": "Software",
                   "ab_av1_revision": "ab-av1-test",
                   "ffmpeg_revision": "ffmpeg-test",
@@ -4406,7 +4100,8 @@
                   "output_size": null,
                   "encoding_time": 88000,
                   "crf": null,
-                  "vmaf": null,
+                  "metric": "Vmaf",
+                  "score": null,
                   "target": null
                 }
               },
@@ -4465,14 +4160,8 @@
               "intent": "ReuseIfFresh",
               "output_target": "Replace",
               "execution": {
-                "requested_target": {
-                  "metric": "Vmaf",
-                  "value": 95
-                },
-                "fallback_floor": {
-                  "metric": "Vmaf",
-                  "value": 90
-                },
+                "requested_target": 95,
+                "fallback_floor": 90,
                 "fallback_step": 1,
                 "overwrite_existing": false,
                 "decode_preference": "HardwarePreferred",
@@ -4482,6 +4171,7 @@
                   "samples": null,
                   "sample_duration_ms": 20000,
                   "thorough": false,
+                  "metric": "Vmaf",
                   "decode_mode": "Software",
                   "ab_av1_revision": "ab-av1-test",
                   "ffmpeg_revision": "ffmpeg-test",
@@ -4596,14 +4286,8 @@
               "intent": "ReuseIfFresh",
               "output_target": "Replace",
               "execution": {
-                "requested_target": {
-                  "metric": "Vmaf",
-                  "value": 95
-                },
-                "fallback_floor": {
-                  "metric": "Vmaf",
-                  "value": 90
-                },
+                "requested_target": 95,
+                "fallback_floor": 90,
                 "fallback_step": 1,
                 "overwrite_existing": false,
                 "decode_preference": "HardwarePreferred",
@@ -4613,6 +4297,7 @@
                   "samples": null,
                   "sample_duration_ms": 20000,
                   "thorough": false,
+                  "metric": "Vmaf",
                   "decode_mode": "Software",
                   "ab_av1_revision": "ab-av1-test",
                   "ffmpeg_revision": "ffmpeg-test",
@@ -4743,14 +4428,8 @@
               "intent": "ReuseIfFresh",
               "output_target": "Replace",
               "execution": {
-                "requested_target": {
-                  "metric": "Vmaf",
-                  "value": 95
-                },
-                "fallback_floor": {
-                  "metric": "Vmaf",
-                  "value": 90
-                },
+                "requested_target": 95,
+                "fallback_floor": 90,
                 "fallback_step": 1,
                 "overwrite_existing": false,
                 "decode_preference": "HardwarePreferred",
@@ -4760,6 +4439,7 @@
                   "samples": null,
                   "sample_duration_ms": 20000,
                   "thorough": false,
+                  "metric": "Vmaf",
                   "decode_mode": "Software",
                   "ab_av1_revision": "ab-av1-test",
                   "ffmpeg_revision": "ffmpeg-test",
@@ -4878,14 +4558,8 @@
               "intent": "ReuseIfFresh",
               "output_target": "Replace",
               "execution": {
-                "requested_target": {
-                  "metric": "Vmaf",
-                  "value": 95
-                },
-                "fallback_floor": {
-                  "metric": "Vmaf",
-                  "value": 90
-                },
+                "requested_target": 95,
+                "fallback_floor": 90,
                 "fallback_step": 1,
                 "overwrite_existing": false,
                 "decode_preference": "HardwarePreferred",
@@ -4895,6 +4569,7 @@
                   "samples": null,
                   "sample_duration_ms": 20000,
                   "thorough": false,
+                  "metric": "Vmaf",
                   "decode_mode": "Software",
                   "ab_av1_revision": "ab-av1-test",
                   "ffmpeg_revision": "ffmpeg-test",
@@ -4928,16 +4603,10 @@
               "NotWorthwhile": {
                 "attempts": [
                   {
-                    "target": {
-                      "metric": "Vmaf",
-                      "value": 95
-                    },
+                    "target": 95,
                     "last_measurement": {
                       "crf": 22,
-                      "score": {
-                        "metric": "Vmaf",
-                        "value": 9550
-                      },
+                      "score": 9550,
                       "predicted_size": 1000000,
                       "predicted_percent_basis_points": 4200,
                       "predicted_duration_ms": 60000,
@@ -4945,10 +4614,7 @@
                     }
                   },
                   {
-                    "target": {
-                      "metric": "Vmaf",
-                      "value": 90
-                    },
+                    "target": 90,
                     "last_measurement": null
                   }
                 ]
@@ -4983,16 +4649,10 @@
                 "NotWorthwhile": {
                   "attempts": [
                     {
-                      "target": {
-                        "metric": "Vmaf",
-                        "value": 95
-                      },
+                      "target": 95,
                       "last_measurement": {
                         "crf": 22,
-                        "score": {
-                          "metric": "Vmaf",
-                          "value": 9550
-                        },
+                        "score": 9550,
                         "predicted_size": 1000000,
                         "predicted_percent_basis_points": 4200,
                         "predicted_duration_ms": 60000,
@@ -5000,10 +4660,7 @@
                       }
                     },
                     {
-                      "target": {
-                        "metric": "Vmaf",
-                        "value": 90
-                      },
+                      "target": 90,
                       "last_measurement": null
                     }
                   ]
@@ -5057,14 +4714,9 @@
             "verdict": {
               "kind": {
                 "NotWorthwhile": {
-                  "requested": {
-                    "metric": "Vmaf",
-                    "value": 95
-                  },
-                  "floor": {
-                    "metric": "Vmaf",
-                    "value": 90
-                  }
+                  "metric": "Vmaf",
+                  "requested": 95,
+                  "floor": 90
                 }
               },
               "source_run": 100,
@@ -5086,14 +4738,8 @@
               "intent": "ReuseIfFresh",
               "output_target": "Replace",
               "execution": {
-                "requested_target": {
-                  "metric": "Vmaf",
-                  "value": 95
-                },
-                "fallback_floor": {
-                  "metric": "Vmaf",
-                  "value": 90
-                },
+                "requested_target": 95,
+                "fallback_floor": 90,
                 "fallback_step": 1,
                 "overwrite_existing": false,
                 "decode_preference": "HardwarePreferred",
@@ -5103,6 +4749,7 @@
                   "samples": null,
                   "sample_duration_ms": 20000,
                   "thorough": false,
+                  "metric": "Vmaf",
                   "decode_mode": "Software",
                   "ab_av1_revision": "ab-av1-test",
                   "ffmpeg_revision": "ffmpeg-test",
@@ -5121,16 +4768,10 @@
               "NotWorthwhile": {
                 "attempts": [
                   {
-                    "target": {
-                      "metric": "Vmaf",
-                      "value": 95
-                    },
+                    "target": 95,
                     "last_measurement": {
                       "crf": 22,
-                      "score": {
-                        "metric": "Vmaf",
-                        "value": 9550
-                      },
+                      "score": 9550,
                       "predicted_size": 1000000,
                       "predicted_percent_basis_points": 4200,
                       "predicted_duration_ms": 60000,
@@ -5138,10 +4779,7 @@
                     }
                   },
                   {
-                    "target": {
-                      "metric": "Vmaf",
-                      "value": 90
-                    },
+                    "target": 90,
                     "last_measurement": null
                   }
                 ]
@@ -5244,14 +4882,8 @@
               "intent": "ReuseIfFresh",
               "output_target": "Replace",
               "execution": {
-                "requested_target": {
-                  "metric": "Vmaf",
-                  "value": 95
-                },
-                "fallback_floor": {
-                  "metric": "Vmaf",
-                  "value": 90
-                },
+                "requested_target": 95,
+                "fallback_floor": 90,
                 "fallback_step": 1,
                 "overwrite_existing": false,
                 "decode_preference": "HardwarePreferred",
@@ -5261,6 +4893,7 @@
                   "samples": null,
                   "sample_duration_ms": 20000,
                   "thorough": false,
+                  "metric": "Vmaf",
                   "decode_mode": "Software",
                   "ab_av1_revision": "ab-av1-test",
                   "ffmpeg_revision": "ffmpeg-test",
@@ -5397,14 +5030,8 @@
               "intent": "ReuseIfFresh",
               "output_target": "Replace",
               "execution": {
-                "requested_target": {
-                  "metric": "Vmaf",
-                  "value": 95
-                },
-                "fallback_floor": {
-                  "metric": "Vmaf",
-                  "value": 90
-                },
+                "requested_target": 95,
+                "fallback_floor": 90,
                 "fallback_step": 1,
                 "overwrite_existing": false,
                 "decode_preference": "HardwarePreferred",
@@ -5414,6 +5041,7 @@
                   "samples": null,
                   "sample_duration_ms": 20000,
                   "thorough": false,
+                  "metric": "Vmaf",
                   "decode_mode": "Software",
                   "ab_av1_revision": "ab-av1-test",
                   "ffmpeg_revision": "ffmpeg-test",
@@ -5535,14 +5163,8 @@
               "intent": "ReuseIfFresh",
               "output_target": "Replace",
               "execution": {
-                "requested_target": {
-                  "metric": "Vmaf",
-                  "value": 95
-                },
-                "fallback_floor": {
-                  "metric": "Vmaf",
-                  "value": 90
-                },
+                "requested_target": 95,
+                "fallback_floor": 90,
                 "fallback_step": 1,
                 "overwrite_existing": false,
                 "decode_preference": "HardwarePreferred",
@@ -5552,6 +5174,7 @@
                   "samples": null,
                   "sample_duration_ms": 20000,
                   "thorough": false,
+                  "metric": "Vmaf",
                   "decode_mode": "Software",
                   "ab_av1_revision": "ab-av1-test",
                   "ffmpeg_revision": "ffmpeg-test",
@@ -5670,14 +5293,8 @@
               "intent": "ReuseIfFresh",
               "output_target": "Replace",
               "execution": {
-                "requested_target": {
-                  "metric": "Vmaf",
-                  "value": 95
-                },
-                "fallback_floor": {
-                  "metric": "Vmaf",
-                  "value": 90
-                },
+                "requested_target": 95,
+                "fallback_floor": 90,
                 "fallback_step": 1,
                 "overwrite_existing": false,
                 "decode_preference": "HardwarePreferred",
@@ -5687,6 +5304,7 @@
                   "samples": null,
                   "sample_duration_ms": 20000,
                   "thorough": false,
+                  "metric": "Vmaf",
                   "decode_mode": "Software",
                   "ab_av1_revision": "ab-av1-test",
                   "ffmpeg_revision": "ffmpeg-test",
@@ -5819,14 +5437,8 @@
               "intent": "ReuseIfFresh",
               "output_target": "Replace",
               "execution": {
-                "requested_target": {
-                  "metric": "Vmaf",
-                  "value": 95
-                },
-                "fallback_floor": {
-                  "metric": "Vmaf",
-                  "value": 90
-                },
+                "requested_target": 95,
+                "fallback_floor": 90,
                 "fallback_step": 1,
                 "overwrite_existing": false,
                 "decode_preference": "HardwarePreferred",
@@ -5836,6 +5448,7 @@
                   "samples": null,
                   "sample_duration_ms": 20000,
                   "thorough": false,
+                  "metric": "Vmaf",
                   "decode_mode": "Software",
                   "ab_av1_revision": "ab-av1-test",
                   "ffmpeg_revision": "ffmpeg-test",
@@ -5965,14 +5578,8 @@
               "intent": "ReuseIfFresh",
               "output_target": "Replace",
               "execution": {
-                "requested_target": {
-                  "metric": "Vmaf",
-                  "value": 95
-                },
-                "fallback_floor": {
-                  "metric": "Vmaf",
-                  "value": 90
-                },
+                "requested_target": 95,
+                "fallback_floor": 90,
                 "fallback_step": 1,
                 "overwrite_existing": false,
                 "decode_preference": "HardwarePreferred",
@@ -5982,6 +5589,7 @@
                   "samples": null,
                   "sample_duration_ms": 20000,
                   "thorough": false,
+                  "metric": "Vmaf",
                   "decode_mode": "Software",
                   "ab_av1_revision": "ab-av1-test",
                   "ffmpeg_revision": "ffmpeg-test",
@@ -6121,14 +5729,8 @@
               "intent": "ReuseIfFresh",
               "output_target": "Replace",
               "execution": {
-                "requested_target": {
-                  "metric": "Vmaf",
-                  "value": 95
-                },
-                "fallback_floor": {
-                  "metric": "Vmaf",
-                  "value": 90
-                },
+                "requested_target": 95,
+                "fallback_floor": 90,
                 "fallback_step": 1,
                 "overwrite_existing": false,
                 "decode_preference": "HardwarePreferred",
@@ -6138,6 +5740,7 @@
                   "samples": null,
                   "sample_duration_ms": 20000,
                   "thorough": false,
+                  "metric": "Vmaf",
                   "decode_mode": "Software",
                   "ab_av1_revision": "ab-av1-test",
                   "ffmpeg_revision": "ffmpeg-test",
@@ -6283,14 +5886,8 @@
               "intent": "ReuseIfFresh",
               "output_target": "Replace",
               "execution": {
-                "requested_target": {
-                  "metric": "Vmaf",
-                  "value": 95
-                },
-                "fallback_floor": {
-                  "metric": "Vmaf",
-                  "value": 90
-                },
+                "requested_target": 95,
+                "fallback_floor": 90,
                 "fallback_step": 1,
                 "overwrite_existing": false,
                 "decode_preference": "HardwarePreferred",
@@ -6300,6 +5897,7 @@
                   "samples": null,
                   "sample_duration_ms": 20000,
                   "thorough": false,
+                  "metric": "Vmaf",
                   "decode_mode": "Software",
                   "ab_av1_revision": "ab-av1-test",
                   "ffmpeg_revision": "ffmpeg-test",
@@ -6423,14 +6021,8 @@
               "intent": "ReuseIfFresh",
               "output_target": "Replace",
               "execution": {
-                "requested_target": {
-                  "metric": "Vmaf",
-                  "value": 95
-                },
-                "fallback_floor": {
-                  "metric": "Vmaf",
-                  "value": 90
-                },
+                "requested_target": 95,
+                "fallback_floor": 90,
                 "fallback_step": 1,
                 "overwrite_existing": false,
                 "decode_preference": "HardwarePreferred",
@@ -6440,6 +6032,7 @@
                   "samples": null,
                   "sample_duration_ms": 20000,
                   "thorough": false,
+                  "metric": "Vmaf",
                   "decode_mode": "Software",
                   "ab_av1_revision": "ab-av1-test",
                   "ffmpeg_revision": "ffmpeg-test",
@@ -6592,14 +6185,8 @@
               "intent": "ReuseIfFresh",
               "output_target": "Replace",
               "execution": {
-                "requested_target": {
-                  "metric": "Vmaf",
-                  "value": 95
-                },
-                "fallback_floor": {
-                  "metric": "Vmaf",
-                  "value": 90
-                },
+                "requested_target": 95,
+                "fallback_floor": 90,
                 "fallback_step": 1,
                 "overwrite_existing": false,
                 "decode_preference": "HardwarePreferred",
@@ -6609,6 +6196,7 @@
                   "samples": null,
                   "sample_duration_ms": 20000,
                   "thorough": false,
+                  "metric": "Vmaf",
                   "decode_mode": "Software",
                   "ab_av1_revision": "ab-av1-test",
                   "ffmpeg_revision": "ffmpeg-test",
@@ -6745,14 +6333,8 @@
               "intent": "ReuseIfFresh",
               "output_target": "Replace",
               "execution": {
-                "requested_target": {
-                  "metric": "Vmaf",
-                  "value": 95
-                },
-                "fallback_floor": {
-                  "metric": "Vmaf",
-                  "value": 90
-                },
+                "requested_target": 95,
+                "fallback_floor": 90,
                 "fallback_step": 1,
                 "overwrite_existing": false,
                 "decode_preference": "HardwarePreferred",
@@ -6762,6 +6344,7 @@
                   "samples": null,
                   "sample_duration_ms": 20000,
                   "thorough": false,
+                  "metric": "Vmaf",
                   "decode_mode": "Software",
                   "ab_av1_revision": "ab-av1-test",
                   "ffmpeg_revision": "ffmpeg-test",
@@ -6914,14 +6497,8 @@
               "intent": "ReuseIfFresh",
               "output_target": "Replace",
               "execution": {
-                "requested_target": {
-                  "metric": "Vmaf",
-                  "value": 95
-                },
-                "fallback_floor": {
-                  "metric": "Vmaf",
-                  "value": 90
-                },
+                "requested_target": 95,
+                "fallback_floor": 90,
                 "fallback_step": 1,
                 "overwrite_existing": false,
                 "decode_preference": "HardwarePreferred",
@@ -6931,6 +6508,7 @@
                   "samples": null,
                   "sample_duration_ms": 20000,
                   "thorough": false,
+                  "metric": "Vmaf",
                   "decode_mode": "Software",
                   "ab_av1_revision": "ab-av1-test",
                   "ffmpeg_revision": "ffmpeg-test",
@@ -7054,14 +6632,8 @@
               "intent": "ReuseIfFresh",
               "output_target": "Replace",
               "execution": {
-                "requested_target": {
-                  "metric": "Vmaf",
-                  "value": 95
-                },
-                "fallback_floor": {
-                  "metric": "Vmaf",
-                  "value": 90
-                },
+                "requested_target": 95,
+                "fallback_floor": 90,
                 "fallback_step": 1,
                 "overwrite_existing": false,
                 "decode_preference": "HardwarePreferred",
@@ -7071,6 +6643,7 @@
                   "samples": null,
                   "sample_duration_ms": 20000,
                   "thorough": false,
+                  "metric": "Vmaf",
                   "decode_mode": "Software",
                   "ab_av1_revision": "ab-av1-test",
                   "ffmpeg_revision": "ffmpeg-test",
@@ -7217,14 +6790,8 @@
               "intent": "ReuseIfFresh",
               "output_target": "Replace",
               "execution": {
-                "requested_target": {
-                  "metric": "Vmaf",
-                  "value": 95
-                },
-                "fallback_floor": {
-                  "metric": "Vmaf",
-                  "value": 90
-                },
+                "requested_target": 95,
+                "fallback_floor": 90,
                 "fallback_step": 1,
                 "overwrite_existing": false,
                 "decode_preference": "HardwarePreferred",
@@ -7234,6 +6801,7 @@
                   "samples": null,
                   "sample_duration_ms": 20000,
                   "thorough": false,
+                  "metric": "Vmaf",
                   "decode_mode": "Software",
                   "ab_av1_revision": "ab-av1-test",
                   "ffmpeg_revision": "ffmpeg-test",
@@ -7357,14 +6925,8 @@
               "intent": "ReuseIfFresh",
               "output_target": "Replace",
               "execution": {
-                "requested_target": {
-                  "metric": "Vmaf",
-                  "value": 95
-                },
-                "fallback_floor": {
-                  "metric": "Vmaf",
-                  "value": 90
-                },
+                "requested_target": 95,
+                "fallback_floor": 90,
                 "fallback_step": 1,
                 "overwrite_existing": false,
                 "decode_preference": "HardwarePreferred",
@@ -7374,6 +6936,7 @@
                   "samples": null,
                   "sample_duration_ms": 20000,
                   "thorough": false,
+                  "metric": "Vmaf",
                   "decode_mode": "Software",
                   "ab_av1_revision": "ab-av1-test",
                   "ffmpeg_revision": "ffmpeg-test",
@@ -7510,14 +7073,8 @@
               "intent": "ReuseIfFresh",
               "output_target": "Replace",
               "execution": {
-                "requested_target": {
-                  "metric": "Vmaf",
-                  "value": 95
-                },
-                "fallback_floor": {
-                  "metric": "Vmaf",
-                  "value": 90
-                },
+                "requested_target": 95,
+                "fallback_floor": 90,
                 "fallback_step": 1,
                 "overwrite_existing": false,
                 "decode_preference": "HardwarePreferred",
@@ -7527,6 +7084,7 @@
                   "samples": null,
                   "sample_duration_ms": 20000,
                   "thorough": false,
+                  "metric": "Vmaf",
                   "decode_mode": "Software",
                   "ab_av1_revision": "ab-av1-test",
                   "ffmpeg_revision": "ffmpeg-test",
@@ -7625,22 +7183,10 @@
                   "output_size": 1000000,
                   "encoding_time": 88000,
                   "crf": 30000,
-                  "vmaf": {
-                    "metric": "Vmaf",
-                    "value": 9550
-                  },
-                  "target": {
-                    "metric": "Vmaf",
-                    "value": 95
-                  },
-                  "requested_target": {
-                    "metric": "Vmaf",
-                    "value": 95
-                  },
-                  "floor_target": {
-                    "metric": "Vmaf",
-                    "value": 90
-                  },
+                  "vmaf": 9550,
+                  "target": 95,
+                  "requested_target": 95,
+                  "floor_target": 90,
                   "decided_at": 1700000000000
                 }
               ],
@@ -7704,22 +7250,10 @@
             "output_size": 1000000,
             "encoding_time": 88000,
             "crf": 30000,
-            "vmaf": {
-              "metric": "Vmaf",
-              "value": 9550
-            },
-            "target": {
-              "metric": "Vmaf",
-              "value": 95
-            },
-            "requested_target": {
-              "metric": "Vmaf",
-              "value": 95
-            },
-            "floor_target": {
-              "metric": "Vmaf",
-              "value": 90
-            },
+            "vmaf": 9550,
+            "target": 95,
+            "requested_target": 95,
+            "floor_target": 90,
             "decided_at": 1700000000000
           }
         },
@@ -7808,22 +7342,10 @@
             "output_size": 1000000,
             "encoding_time": 88000,
             "crf": 30000,
-            "vmaf": {
-              "metric": "Vmaf",
-              "value": 9550
-            },
-            "target": {
-              "metric": "Vmaf",
-              "value": 95
-            },
-            "requested_target": {
-              "metric": "Vmaf",
-              "value": 95
-            },
-            "floor_target": {
-              "metric": "Vmaf",
-              "value": 90
-            },
+            "vmaf": 9550,
+            "target": 95,
+            "requested_target": 95,
+            "floor_target": 90,
             "decided_at": 1700000000000
           }
         },
@@ -7845,22 +7367,10 @@
               "output_size": 1000000,
               "encoding_time": 88000,
               "crf": 30000,
-              "vmaf": {
-                "metric": "Vmaf",
-                "value": 9550
-              },
-              "target": {
-                "metric": "Vmaf",
-                "value": 95
-              },
-              "requested_target": {
-                "metric": "Vmaf",
-                "value": 95
-              },
-              "floor_target": {
-                "metric": "Vmaf",
-                "value": 90
-              },
+              "vmaf": 9550,
+              "target": 95,
+              "requested_target": 95,
+              "floor_target": 90,
               "decided_at": 1700000000000
             },
             "verdict": {
@@ -7871,14 +7381,9 @@
                   "output_size": 1000000,
                   "encoding_time": 88000,
                   "crf": 30000,
-                  "vmaf": {
-                    "metric": "Vmaf",
-                    "value": 9550
-                  },
-                  "target": {
-                    "metric": "Vmaf",
-                    "value": 95
-                  }
+                  "metric": "Vmaf",
+                  "score": 9550,
+                  "target": 95
                 }
               },
               "source_run": null,
@@ -7940,14 +7445,9 @@
                   "output_size": 1000000,
                   "encoding_time": 88000,
                   "crf": 30000,
-                  "vmaf": {
-                    "metric": "Vmaf",
-                    "value": 9550
-                  },
-                  "target": {
-                    "metric": "Vmaf",
-                    "value": 95
-                  }
+                  "metric": "Vmaf",
+                  "score": 9550,
+                  "target": 95
                 }
               },
               "source_run": null,
@@ -7966,22 +7466,10 @@
                 "output_size": 1000000,
                 "encoding_time": 88000,
                 "crf": 30000,
-                "vmaf": {
-                  "metric": "Vmaf",
-                  "value": 9550
-                },
-                "target": {
-                  "metric": "Vmaf",
-                  "value": 95
-                },
-                "requested_target": {
-                  "metric": "Vmaf",
-                  "value": 95
-                },
-                "floor_target": {
-                  "metric": "Vmaf",
-                  "value": 90
-                },
+                "vmaf": 9550,
+                "target": 95,
+                "requested_target": 95,
+                "floor_target": 90,
                 "decided_at": 1700000000000
               }
             }
@@ -8095,22 +7583,10 @@
             "output_size": 1000000,
             "encoding_time": 88000,
             "crf": 30000,
-            "vmaf": {
-              "metric": "Vmaf",
-              "value": 9550
-            },
-            "target": {
-              "metric": "Vmaf",
-              "value": 95
-            },
-            "requested_target": {
-              "metric": "Vmaf",
-              "value": 95
-            },
-            "floor_target": {
-              "metric": "Vmaf",
-              "value": 90
-            },
+            "vmaf": 9550,
+            "target": 95,
+            "requested_target": 95,
+            "floor_target": 90,
             "decided_at": 1700000000000
           }
         },
@@ -8224,22 +7700,10 @@
             "output_size": 1000000,
             "encoding_time": 88000,
             "crf": 30000,
-            "vmaf": {
-              "metric": "Vmaf",
-              "value": 9550
-            },
-            "target": {
-              "metric": "Vmaf",
-              "value": 95
-            },
-            "requested_target": {
-              "metric": "Vmaf",
-              "value": 95
-            },
-            "floor_target": {
-              "metric": "Vmaf",
-              "value": 90
-            },
+            "vmaf": 9550,
+            "target": 95,
+            "requested_target": 95,
+            "floor_target": 90,
             "decided_at": 1700000000000
           }
         },
@@ -8330,22 +7794,10 @@
             "output_size": 1000000,
             "encoding_time": 88000,
             "crf": 30000,
-            "vmaf": {
-              "metric": "Vmaf",
-              "value": 9550
-            },
-            "target": {
-              "metric": "Vmaf",
-              "value": 95
-            },
-            "requested_target": {
-              "metric": "Vmaf",
-              "value": 95
-            },
-            "floor_target": {
-              "metric": "Vmaf",
-              "value": 90
-            },
+            "vmaf": 9550,
+            "target": 95,
+            "requested_target": 95,
+            "floor_target": 90,
             "decided_at": 1700000000000
           }
         },
@@ -8391,22 +7843,10 @@
               "output_size": 1000000,
               "encoding_time": 88000,
               "crf": 30000,
-              "vmaf": {
-                "metric": "Vmaf",
-                "value": 9550
-              },
-              "target": {
-                "metric": "Vmaf",
-                "value": 95
-              },
-              "requested_target": {
-                "metric": "Vmaf",
-                "value": 95
-              },
-              "floor_target": {
-                "metric": "Vmaf",
-                "value": 90
-              },
+              "vmaf": 9550,
+              "target": 95,
+              "requested_target": 95,
+              "floor_target": 90,
               "decided_at": 1700000000000
             },
             "verdict": {
@@ -8417,14 +7857,9 @@
                   "output_size": 1000000,
                   "encoding_time": 88000,
                   "crf": 30000,
-                  "vmaf": {
-                    "metric": "Vmaf",
-                    "value": 9550
-                  },
-                  "target": {
-                    "metric": "Vmaf",
-                    "value": 95
-                  }
+                  "metric": "Vmaf",
+                  "score": 9550,
+                  "target": 95
                 }
               },
               "source_run": null,
@@ -8486,14 +7921,9 @@
                   "output_size": 1000000,
                   "encoding_time": 88000,
                   "crf": 30000,
-                  "vmaf": {
-                    "metric": "Vmaf",
-                    "value": 9550
-                  },
-                  "target": {
-                    "metric": "Vmaf",
-                    "value": 95
-                  }
+                  "metric": "Vmaf",
+                  "score": 9550,
+                  "target": 95
                 }
               },
               "source_run": null,
@@ -8512,22 +7942,10 @@
                 "output_size": 1000000,
                 "encoding_time": 88000,
                 "crf": 30000,
-                "vmaf": {
-                  "metric": "Vmaf",
-                  "value": 9550
-                },
-                "target": {
-                  "metric": "Vmaf",
-                  "value": 95
-                },
-                "requested_target": {
-                  "metric": "Vmaf",
-                  "value": 95
-                },
-                "floor_target": {
-                  "metric": "Vmaf",
-                  "value": 90
-                },
+                "vmaf": 9550,
+                "target": 95,
+                "requested_target": 95,
+                "floor_target": 90,
                 "decided_at": 1700000000000
               }
             }
@@ -8580,22 +7998,10 @@
             "output_size": 1000000,
             "encoding_time": 88000,
             "crf": 30000,
-            "vmaf": {
-              "metric": "Vmaf",
-              "value": 9550
-            },
-            "target": {
-              "metric": "Vmaf",
-              "value": 95
-            },
-            "requested_target": {
-              "metric": "Vmaf",
-              "value": 95
-            },
-            "floor_target": {
-              "metric": "Vmaf",
-              "value": 90
-            },
+            "vmaf": 9550,
+            "target": 95,
+            "requested_target": 95,
+            "floor_target": 90,
             "decided_at": 1700000000000
           }
         },
@@ -8617,22 +8023,10 @@
               "output_size": 1000000,
               "encoding_time": 88000,
               "crf": 30000,
-              "vmaf": {
-                "metric": "Vmaf",
-                "value": 9550
-              },
-              "target": {
-                "metric": "Vmaf",
-                "value": 95
-              },
-              "requested_target": {
-                "metric": "Vmaf",
-                "value": 95
-              },
-              "floor_target": {
-                "metric": "Vmaf",
-                "value": 90
-              },
+              "vmaf": 9550,
+              "target": 95,
+              "requested_target": 95,
+              "floor_target": 90,
               "decided_at": 1700000000000
             },
             "verdict": {
@@ -8643,14 +8037,9 @@
                   "output_size": 1000000,
                   "encoding_time": 88000,
                   "crf": 30000,
-                  "vmaf": {
-                    "metric": "Vmaf",
-                    "value": 9550
-                  },
-                  "target": {
-                    "metric": "Vmaf",
-                    "value": 95
-                  }
+                  "metric": "Vmaf",
+                  "score": 9550,
+                  "target": 95
                 }
               },
               "source_run": null,
@@ -8728,22 +8117,10 @@
             "output_size": 1000000,
             "encoding_time": 88000,
             "crf": 30000,
-            "vmaf": {
-              "metric": "Vmaf",
-              "value": 9550
-            },
-            "target": {
-              "metric": "Vmaf",
-              "value": 95
-            },
-            "requested_target": {
-              "metric": "Vmaf",
-              "value": 95
-            },
-            "floor_target": {
-              "metric": "Vmaf",
-              "value": 90
-            },
+            "vmaf": 9550,
+            "target": 95,
+            "requested_target": 95,
+            "floor_target": 90,
             "decided_at": 1700000000000
           }
         },
@@ -8854,57 +8231,41 @@
                   "samples": null,
                   "sample_duration_ms": 20000,
                   "thorough": false,
+                  "metric": "Vmaf",
                   "decode_mode": "Software",
                   "ab_av1_revision": "ab-av1-test",
                   "ffmpeg_revision": "ffmpeg-test",
                   "encoder_revision": "svt-av1-test"
                 },
-                [
-                  [
-                    {
-                      "metric": "Vmaf",
-                      "value": 95
+                {
+                  "95": {
+                    "requested_target": 95,
+                    "successful_target": 95,
+                    "fallback_floor": 90,
+                    "fallback_step": 1,
+                    "failed_attempts": [],
+                    "measurement": {
+                      "crf": 30,
+                      "score": 9550,
+                      "predicted_size": 1000000,
+                      "predicted_percent_basis_points": 4200,
+                      "predicted_duration_ms": 60000,
+                      "from_cache": false
                     },
-                    {
-                      "requested_target": {
-                        "metric": "Vmaf",
-                        "value": 95
-                      },
-                      "successful_target": {
-                        "metric": "Vmaf",
-                        "value": 95
-                      },
-                      "fallback_floor": {
-                        "metric": "Vmaf",
-                        "value": 90
-                      },
-                      "fallback_step": 1,
-                      "failed_attempts": [],
-                      "measurement": {
-                        "crf": 30,
-                        "score": {
-                          "metric": "Vmaf",
-                          "value": 9550
-                        },
-                        "predicted_size": 1000000,
-                        "predicted_percent_basis_points": 4200,
-                        "predicted_duration_ms": 60000,
-                        "from_cache": false
-                      },
-                      "profile": {
-                        "preset": 6,
-                        "max_encoded_percent_basis_points": 8000,
-                        "samples": null,
-                        "sample_duration_ms": 20000,
-                        "thorough": false,
-                        "decode_mode": "Software",
-                        "ab_av1_revision": "ab-av1-test",
-                        "ffmpeg_revision": "ffmpeg-test",
-                        "encoder_revision": "svt-av1-test"
-                      }
+                    "profile": {
+                      "preset": 6,
+                      "max_encoded_percent_basis_points": 8000,
+                      "samples": null,
+                      "sample_duration_ms": 20000,
+                      "thorough": false,
+                      "metric": "Vmaf",
+                      "decode_mode": "Software",
+                      "ab_av1_revision": "ab-av1-test",
+                      "ffmpeg_revision": "ffmpeg-test",
+                      "encoder_revision": "svt-av1-test"
                     }
-                  ]
-                ]
+                  }
+                }
               ]
             ],
             "verdict": null,
@@ -8960,14 +8321,8 @@
               "intent": "ReuseIfFresh",
               "output_target": "Replace",
               "execution": {
-                "requested_target": {
-                  "metric": "Vmaf",
-                  "value": 95
-                },
-                "fallback_floor": {
-                  "metric": "Vmaf",
-                  "value": 90
-                },
+                "requested_target": 95,
+                "fallback_floor": 90,
                 "fallback_step": 1,
                 "overwrite_existing": false,
                 "decode_preference": "HardwarePreferred",
@@ -8977,6 +8332,7 @@
                   "samples": null,
                   "sample_duration_ms": 20000,
                   "thorough": false,
+                  "metric": "Vmaf",
                   "decode_mode": "Software",
                   "ab_av1_revision": "ab-av1-test",
                   "ffmpeg_revision": "ffmpeg-test",
@@ -8990,26 +8346,14 @@
               }
             },
             "analysis": {
-              "requested_target": {
-                "metric": "Vmaf",
-                "value": 95
-              },
-              "successful_target": {
-                "metric": "Vmaf",
-                "value": 95
-              },
-              "fallback_floor": {
-                "metric": "Vmaf",
-                "value": 90
-              },
+              "requested_target": 95,
+              "successful_target": 95,
+              "fallback_floor": 90,
               "fallback_step": 1,
               "failed_attempts": [],
               "measurement": {
                 "crf": 30,
-                "score": {
-                  "metric": "Vmaf",
-                  "value": 9550
-                },
+                "score": 9550,
                 "predicted_size": 1000000,
                 "predicted_percent_basis_points": 4200,
                 "predicted_duration_ms": 60000,
@@ -9021,6 +8365,7 @@
                 "samples": null,
                 "sample_duration_ms": 20000,
                 "thorough": false,
+                "metric": "Vmaf",
                 "decode_mode": "Software",
                 "ab_av1_revision": "ab-av1-test",
                 "ffmpeg_revision": "ffmpeg-test",
@@ -9138,57 +8483,41 @@
                   "samples": null,
                   "sample_duration_ms": 20000,
                   "thorough": false,
+                  "metric": "Vmaf",
                   "decode_mode": "Software",
                   "ab_av1_revision": "ab-av1-test",
                   "ffmpeg_revision": "ffmpeg-test",
                   "encoder_revision": "svt-av1-test"
                 },
-                [
-                  [
-                    {
-                      "metric": "Vmaf",
-                      "value": 95
+                {
+                  "95": {
+                    "requested_target": 95,
+                    "successful_target": 95,
+                    "fallback_floor": 90,
+                    "fallback_step": 1,
+                    "failed_attempts": [],
+                    "measurement": {
+                      "crf": 30,
+                      "score": 9550,
+                      "predicted_size": 1000000,
+                      "predicted_percent_basis_points": 4200,
+                      "predicted_duration_ms": 60000,
+                      "from_cache": false
                     },
-                    {
-                      "requested_target": {
-                        "metric": "Vmaf",
-                        "value": 95
-                      },
-                      "successful_target": {
-                        "metric": "Vmaf",
-                        "value": 95
-                      },
-                      "fallback_floor": {
-                        "metric": "Vmaf",
-                        "value": 90
-                      },
-                      "fallback_step": 1,
-                      "failed_attempts": [],
-                      "measurement": {
-                        "crf": 30,
-                        "score": {
-                          "metric": "Vmaf",
-                          "value": 9550
-                        },
-                        "predicted_size": 1000000,
-                        "predicted_percent_basis_points": 4200,
-                        "predicted_duration_ms": 60000,
-                        "from_cache": false
-                      },
-                      "profile": {
-                        "preset": 6,
-                        "max_encoded_percent_basis_points": 8000,
-                        "samples": null,
-                        "sample_duration_ms": 20000,
-                        "thorough": false,
-                        "decode_mode": "Software",
-                        "ab_av1_revision": "ab-av1-test",
-                        "ffmpeg_revision": "ffmpeg-test",
-                        "encoder_revision": "svt-av1-test"
-                      }
+                    "profile": {
+                      "preset": 6,
+                      "max_encoded_percent_basis_points": 8000,
+                      "samples": null,
+                      "sample_duration_ms": 20000,
+                      "thorough": false,
+                      "metric": "Vmaf",
+                      "decode_mode": "Software",
+                      "ab_av1_revision": "ab-av1-test",
+                      "ffmpeg_revision": "ffmpeg-test",
+                      "encoder_revision": "svt-av1-test"
                     }
-                  ]
-                ]
+                  }
+                }
               ]
             ],
             "verdict": {
@@ -9199,14 +8528,9 @@
                   "output_size": 1000000,
                   "encoding_time": 88000,
                   "crf": 30,
-                  "vmaf": {
-                    "metric": "Vmaf",
-                    "value": 9550
-                  },
-                  "target": {
-                    "metric": "Vmaf",
-                    "value": 95
-                  }
+                  "metric": "Vmaf",
+                  "score": 9550,
+                  "target": 95
                 }
               },
               "source_run": 100,
@@ -9264,14 +8588,8 @@
               "intent": "ReuseIfFresh",
               "output_target": "Replace",
               "execution": {
-                "requested_target": {
-                  "metric": "Vmaf",
-                  "value": 95
-                },
-                "fallback_floor": {
-                  "metric": "Vmaf",
-                  "value": 90
-                },
+                "requested_target": 95,
+                "fallback_floor": 90,
                 "fallback_step": 1,
                 "overwrite_existing": false,
                 "decode_preference": "HardwarePreferred",
@@ -9281,6 +8599,7 @@
                   "samples": null,
                   "sample_duration_ms": 20000,
                   "thorough": false,
+                  "metric": "Vmaf",
                   "decode_mode": "Software",
                   "ab_av1_revision": "ab-av1-test",
                   "ffmpeg_revision": "ffmpeg-test",
@@ -9294,26 +8613,14 @@
               }
             },
             "analysis": {
-              "requested_target": {
-                "metric": "Vmaf",
-                "value": 95
-              },
-              "successful_target": {
-                "metric": "Vmaf",
-                "value": 95
-              },
-              "fallback_floor": {
-                "metric": "Vmaf",
-                "value": 90
-              },
+              "requested_target": 95,
+              "successful_target": 95,
+              "fallback_floor": 90,
               "fallback_step": 1,
               "failed_attempts": [],
               "measurement": {
                 "crf": 30,
-                "score": {
-                  "metric": "Vmaf",
-                  "value": 9550
-                },
+                "score": 9550,
                 "predicted_size": 1000000,
                 "predicted_percent_basis_points": 4200,
                 "predicted_duration_ms": 60000,
@@ -9325,6 +8632,7 @@
                 "samples": null,
                 "sample_duration_ms": 20000,
                 "thorough": false,
+                "metric": "Vmaf",
                 "decode_mode": "Software",
                 "ab_av1_revision": "ab-av1-test",
                 "ffmpeg_revision": "ffmpeg-test",

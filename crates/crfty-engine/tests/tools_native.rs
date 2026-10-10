@@ -31,7 +31,7 @@ use crfty_engine::{
 const FIXTURE_DURATION_SECONDS: &str = "2";
 const FIXTURE_SIZE: &str = "1280x720";
 const FIXTURE_FRAME_RATE: u8 = 24;
-const CONTRACT_TARGET: QualityTarget = QualityTarget::vmaf(80);
+const CONTRACT_TARGET: QualityTarget = QualityTarget(80);
 const CONTRACT_PRESET: u8 = 12;
 const CONTRACT_MAX_ENCODED_PERCENT_BASIS_POINTS: u32 = 50_000;
 /// Generous bound for two real probe encodes plus a two-second conversion on
@@ -223,6 +223,7 @@ fn execution() -> ExecutionSettings {
         overwrite_existing: false,
         decode_preference: DecodePreference::SoftwareOnly,
         profile: AnalysisProfile {
+            metric: crfty_core::QualityMetric::Vmaf,
             preset: CONTRACT_PRESET,
             max_encoded_percent_basis_points: CONTRACT_MAX_ENCODED_PERCENT_BASIS_POINTS,
             samples: Some(1),

@@ -29,7 +29,7 @@ The delivery target is the runnable alpha defined in [the alpha delivery scope](
 - The caller-driven owned ab-av1 operation, pending upstream: ADR-021
 - Every V2 statistic survives as a V3 consumer, with richer evidence where collection allows; the consumer matrix and field dispositions are frozen (`docs/design/history-consumer-matrix.md`)
 - Collection budgets are development-time acceptance thresholds, never runtime mechanisms. A collector ships only when it measures under 5 percent of the search it informs on the benchmark corpus. Collection is event-driven, with no periodic resource sampling and no media or network I/O of its own; scan and startup collection add no process and no file read, and the compatibility probe waits for first claim (`docs/design/history-collection-budgets.md`)
-- Durable quality targets and scores carry a metric tag, VMAF the sole initial variant; the metric joins the analysis identity and aggregates never blend metrics: ADR-022
+- Durable quality evidence names its metric once per record, VMAF the sole initial variant; the metric joins the analysis identity and aggregates never blend metrics: ADR-022
 - The durable model gains per-stream audio bitrate and first-observed and last-updated stamps, and the not-worthwhile verdict embeds its highest-saving measurement (`docs/design/history-consumer-matrix.md`)
 - History browsing guardrail: first paint under 100 ms at 50,000 records, a regression tripwire rather than an engine-forcing constraint
 - Failed and stopped runs are browsable behind default-off History filters and excluded from Statistics aggregates; deliberately throttled runs carry a provenance flag and never enter unthrottled time cohorts

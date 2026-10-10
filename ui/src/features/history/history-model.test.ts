@@ -47,7 +47,7 @@ function historyRow(
     input_size_bytes: null,
     output_size_bytes: null,
     encoding_time_ms: null,
-    vmaf: null,
+    quality: null,
     crf: null,
     ...overrides,
   };
@@ -107,8 +107,9 @@ describe("History standing vocabulary", () => {
       "Remuxed",
       {
         NotWorthwhile: {
-          requested: { metric: "Vmaf", value: 95 },
-          floor: { metric: "Vmaf", value: 90 },
+          metric: "Vmaf",
+          requested: 95,
+          floor: 90,
         },
       },
       "Analyzed",
@@ -145,8 +146,9 @@ describe("History standing vocabulary", () => {
     expect(
       statusPresentation({
         NotWorthwhile: {
-          requested: { metric: "Vmaf", value: 96 },
-          floor: { metric: "Vmaf", value: 89 },
+          metric: "Vmaf",
+          requested: 96,
+          floor: 89,
         },
       }).detail,
     ).toContain("96 through 89");

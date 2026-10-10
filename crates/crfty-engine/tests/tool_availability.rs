@@ -316,7 +316,7 @@ fn startup_recovery_without_ffprobe_defers_output_settlement() {
                 failed_attempts: Vec::new(),
                 measurement: SearchMeasurement {
                     crf: Crf(30_000),
-                    score: QualityScore::vmaf(9_500),
+                    score: QualityScore(9_500),
                     predicted_size: 1_000,
                     predicted_percent_basis_points: 5_000,
                     predicted_duration_ms: 60_000,

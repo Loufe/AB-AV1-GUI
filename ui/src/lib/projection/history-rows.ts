@@ -16,11 +16,19 @@ import type {
   HistoryRow,
   HistoryStatus,
   ImportedHistoryRecord,
+  MetricScore,
   OutputTransaction,
+  QualityMetric,
+  QualityTarget,
   RunId,
   Verdict,
   VideoMeta,
 } from "@/lib/bindings";
+
+// crfty-core's production targets and the V2 import metric.
+const DEFAULT_VMAF_TARGET = 95;
+const MIN_VMAF_FALLBACK_TARGET = 90;
+const IMPORTED_METRIC: QualityMetric = "Vmaf";
 
 /**
  * Input/output sizes for the run backing a verdict, joined in evidence →
@@ -199,7 +207,7 @@ function baseRow(
     input_size_bytes: record.metadata.size_bytes,
     output_size_bytes: null,
     encoding_time_ms: null,
-    vmaf: null,
+    quality: null,
     crf: null,
   };
 }
@@ -219,6 +227,7 @@ function verdictRow(
   } else {
     status = {
       NotWorthwhile: {
+        metric: kind.NotWorthwhile.metric,
         requested: kind.NotWorthwhile.requested,
         floor: kind.NotWorthwhile.floor,
       },
@@ -227,11 +236,17 @@ function verdictRow(
   const run: ConversionRun | undefined =
     verdict.source_run === null ? undefined : state.conversion_runs[verdict.source_run];
   const { input, output } = joinedSizes(verdict, run, state, record);
-  const measurement = status === "Converted" ? (run?.analysis?.measurement ?? null) : null;
+  const analysis = status === "Converted" ? (run?.analysis ?? null) : null;
   const carried =
     "Converted" in kind && kind.Converted !== undefined
-      ? { crf: kind.Converted.crf, vmaf: kind.Converted.vmaf }
-      : { crf: null, vmaf: null };
+      ? {
+          crf: kind.Converted.crf,
+          quality:
+            kind.Converted.score === null
+              ? null
+              : { metric: kind.Converted.metric, score: kind.Converted.score },
+        }
+      : { crf: null, quality: null };
   const row = baseRow(contentKey, record, status);
   row.source_run = verdict.source_run;
   row.happened_at = run?.finished_at ?? verdict.decided_at;
@@ -245,8 +260,8 @@ function verdictRow(
         ? kind.Converted.encoding_time
         : null
       : encodingDuration(run);
-  row.vmaf = measurement === null ? carried.vmaf : measurement.score;
-  row.crf = measurement === null ? carried.crf : measurement.crf;
+  row.quality = analysis === null ? carried.quality : analysisQuality(analysis);
+  row.crf = analysis === null ? carried.crf : analysis.measurement.crf;
   return row;
 }
 
@@ -292,9 +307,13 @@ function analyzedRow(
   // which is the case this fallback exists for.
   const analysis = latest?.analysis ?? lastRecordedAnalysis(record);
   row.source_run = latest === undefined ? null : latest.runId;
-  row.vmaf = analysis === null ? null : analysis.measurement.score;
+  row.quality = analysis === null ? null : analysisQuality(analysis);
   row.crf = analysis === null ? null : analysis.measurement.crf;
   return row;
+}
+
+function analysisQuality(analysis: AnalysisResult): MetricScore {
+  return { metric: analysis.profile.metric, score: analysis.measurement.score };
 }
 
 function lastRecordedAnalysis(record: FileRecord_Deserialize): AnalysisResult | null {
@@ -302,25 +321,44 @@ function lastRecordedAnalysis(record: FileRecord_Deserialize): AnalysisResult | 
   if (entry === undefined) {
     return null;
   }
-  return entry[1].at(-1)?.[1] ?? null;
+  const byTarget = entry[1];
+  const targets = Object.keys(byTarget)
+    .map(Number)
+    .sort((a, b) => a - b);
+  const highest = targets.at(-1);
+  return highest === undefined ? null : byTarget[highest];
 }
 
 function importedStatus(imported: ImportedHistoryRecord): HistoryStatus | null {
   switch (imported.status) {
     case "Converted":
       return "Converted";
-    case "NotWorthwhile":
-      return {
-        NotWorthwhile: {
-          requested: imported.requested_target ?? { metric: "Vmaf", value: 95 },
-          floor: imported.floor_target ?? { metric: "Vmaf", value: 90 },
-        },
-      };
+    case "NotWorthwhile": {
+      const [requested, floor] = notWorthwhileRange(imported);
+      return { NotWorthwhile: { metric: IMPORTED_METRIC, requested, floor } };
+    }
     case "Analyzed":
       return "Analyzed";
     case "Scanned":
       return null;
   }
+}
+
+// Mirrors ImportedHistoryRecord::not_worthwhile_range: a missing end takes
+// the production default, clamped against the end that is present.
+function notWorthwhileRange(imported: ImportedHistoryRecord): [QualityTarget, QualityTarget] {
+  const requested = imported.requested_target;
+  const floor = imported.floor_target;
+  if (requested !== null && floor !== null) {
+    return [requested, floor];
+  }
+  if (requested !== null) {
+    return [requested, Math.min(MIN_VMAF_FALLBACK_TARGET, requested)];
+  }
+  if (floor !== null) {
+    return [Math.max(DEFAULT_VMAF_TARGET, floor), floor];
+  }
+  return [DEFAULT_VMAF_TARGET, MIN_VMAF_FALLBACK_TARGET];
 }
 
 function importedRow(
@@ -342,7 +380,7 @@ function importedRow(
     input_size_bytes: imported.size,
     output_size_bytes: imported.output_size,
     encoding_time_ms: imported.encoding_time,
-    vmaf: imported.vmaf,
+    quality: imported.vmaf === null ? null : { metric: IMPORTED_METRIC, score: imported.vmaf },
     crf: imported.crf,
   };
 }

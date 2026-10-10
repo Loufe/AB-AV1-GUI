@@ -21,9 +21,9 @@ use serde::Serialize;
 
 use crate::{
     AnalysisResult, AudioCodec, CompletionEvidence, ContentKey, ConversionRun, Crf, DurableState,
-    FailureKind, FileRecord, ImportedHistoryRecord, ItemOutcome, JobPhase, MediaContainer,
-    ParkedStatus, QualityMetric, QualityScore, QualityTarget, RunId, UnixMillis, VerdictKind,
-    VideoCodec,
+    DurationMs, FailureKind, FileRecord, ImportedHistoryRecord, ItemOutcome, JobPhase,
+    MediaContainer, MetricScore, ParkedStatus, QualityMetric, QualityTarget, RunId, UnixMillis,
+    VerdictKind, VideoCodec,
 };
 
 const MILLIS_PER_DAY: i128 = 86_400_000;
@@ -39,6 +39,7 @@ pub(crate) enum StatFactKind {
     Converted,
     Remuxed,
     NotWorthwhile {
+        metric: QualityMetric,
         requested: QualityTarget,
         floor: QualityTarget,
     },
@@ -64,7 +65,7 @@ pub(crate) struct StatFact {
     pub output_size_bytes: Option<u64>,
     pub analyzing_ms: u64,
     pub encoding_ms: u64,
-    pub vmaf: Option<QualityScore>,
+    pub quality: Option<MetricScore>,
     pub crf: Option<Crf>,
 }
 
@@ -94,22 +95,18 @@ pub(crate) fn collect_stat_facts(state: &DurableState) -> Vec<StatFact> {
             .and_then(|run_id| state.conversion_runs.get(&run_id));
         let (input_size_bytes, output_size_bytes) = joined_sizes(verdict, run, state, record);
         let (analyzing_ms, encoding_ms) = phase_totals(run);
-        let measurement = run
-            .and_then(|run| run.analysis.as_ref())
-            .map(|analysis| &analysis.measurement);
-        let (carried_encoding, carried_crf, carried_vmaf) = match &verdict.kind {
-            VerdictKind::Converted {
-                encoding_time,
-                crf,
-                vmaf,
-                ..
-            } => (*encoding_time, *crf, *vmaf),
-            VerdictKind::Remuxed { .. } | VerdictKind::NotWorthwhile { .. } => (None, None, None),
-        };
+        let analysis = run.and_then(|run| run.analysis.as_ref());
+        let measurement = analysis.map(|analysis| &analysis.measurement);
+        let (carried_encoding, carried_crf, carried_quality) = carried_summary(&verdict.kind);
         let kind = match &verdict.kind {
             VerdictKind::Converted { .. } => StatFactKind::Converted,
             VerdictKind::Remuxed { .. } => StatFactKind::Remuxed,
-            VerdictKind::NotWorthwhile { requested, floor } => StatFactKind::NotWorthwhile {
+            VerdictKind::NotWorthwhile {
+                metric,
+                requested,
+                floor,
+            } => StatFactKind::NotWorthwhile {
+                metric: *metric,
                 requested: *requested,
                 floor: *floor,
             },
@@ -134,10 +131,10 @@ pub(crate) fn collect_stat_facts(state: &DurableState) -> Vec<StatFact> {
             } else {
                 encoding_ms
             },
-            vmaf: measurement
+            quality: analysis
                 .filter(|_| is_converted)
-                .map(|measurement| measurement.score)
-                .or(carried_vmaf),
+                .map(analysis_quality)
+                .or(carried_quality),
             crf: measurement
                 .filter(|_| is_converted)
                 .map(|measurement| measurement.crf)
@@ -145,6 +142,42 @@ pub(crate) fn collect_stat_facts(state: &DurableState) -> Vec<StatFact> {
         });
     }
     facts
+}
+
+/// The encode time, CRF, and quality a converted verdict carries for
+/// consumers whose deciding run is gone.
+fn carried_summary(kind: &VerdictKind) -> (Option<DurationMs>, Option<Crf>, Option<MetricScore>) {
+    match kind {
+        VerdictKind::Converted {
+            encoding_time,
+            crf,
+            metric,
+            score,
+            ..
+        } => (
+            *encoding_time,
+            *crf,
+            score.map(|score| MetricScore {
+                metric: *metric,
+                score,
+            }),
+        ),
+        VerdictKind::Remuxed { .. } | VerdictKind::NotWorthwhile { .. } => (None, None, None),
+    }
+}
+
+fn analysis_quality(analysis: &AnalysisResult) -> MetricScore {
+    MetricScore {
+        metric: analysis.profile.metric,
+        score: analysis.measurement.score,
+    }
+}
+
+fn imported_quality(imported: &ImportedHistoryRecord) -> Option<MetricScore> {
+    imported.vmaf.map(|score| MetricScore {
+        metric: ImportedHistoryRecord::METRIC,
+        score,
+    })
 }
 
 /// Input/output sizes for the run backing a verdict. Live evidence is the
@@ -393,7 +426,7 @@ struct ConvertedStatisticsInput<'a> {
     input_size_bytes: Option<u64>,
     output_size_bytes: Option<u64>,
     time_ms: u64,
-    vmaf: Option<QualityScore>,
+    quality: Option<MetricScore>,
     crf: Option<Crf>,
 }
 
@@ -429,7 +462,7 @@ impl StatisticsAccumulator {
                 input_size_bytes: fact.input_size_bytes,
                 output_size_bytes: fact.output_size_bytes,
                 time_ms: fact.analyzing_ms.saturating_add(fact.encoding_ms),
-                vmaf: fact.vmaf,
+                quality: fact.quality,
                 crf: fact.crf,
             }),
             StatFactKind::Remuxed => {
@@ -452,7 +485,7 @@ impl StatisticsAccumulator {
                 input_size_bytes: imported.size,
                 output_size_bytes: imported.output_size,
                 time_ms: imported.encoding_time.map_or(0, |duration| duration.0),
-                vmaf: imported.vmaf,
+                quality: imported_quality(imported),
                 crf: imported.crf,
             }),
             ParkedStatus::NotWorthwhile => {
@@ -469,7 +502,7 @@ impl StatisticsAccumulator {
             input_size_bytes,
             output_size_bytes,
             time_ms,
-            vmaf,
+            quality,
             crf,
         } = converted;
         self.converted_files = self.converted_files.saturating_add(1);
@@ -478,11 +511,11 @@ impl StatisticsAccumulator {
             let count = self.codecs.entry(codec.clone()).or_default();
             *count = count.saturating_add(1);
         }
-        if let Some(score) = vmaf {
+        if let Some(MetricScore { metric, score }) = quality {
             self.quality_values
-                .entry(score.metric)
+                .entry(metric)
                 .or_default()
-                .push(score.normalized());
+                .push(metric.normalize(score));
         }
         if let Some(crf) = crf {
             self.crf_values
@@ -629,6 +662,7 @@ pub enum HistoryStatus {
     Converted,
     Remuxed,
     NotWorthwhile {
+        metric: QualityMetric,
         requested: QualityTarget,
         floor: QualityTarget,
     },
@@ -675,7 +709,7 @@ pub struct HistoryRow {
     pub output_size_bytes: Option<u64>,
     #[specta(type = Option<crate::JsNumber>)]
     pub encoding_time_ms: Option<u64>,
-    pub vmaf: Option<QualityScore>,
+    pub quality: Option<MetricScore>,
     pub crf: Option<Crf>,
 }
 
@@ -778,7 +812,7 @@ fn base_row(content_key: &ContentKey, record: &FileRecord, status: HistoryStatus
         input_size_bytes: Some(record.metadata.size_bytes),
         output_size_bytes: None,
         encoding_time_ms: None,
-        vmaf: None,
+        quality: None,
         crf: None,
     }
 }
@@ -792,7 +826,12 @@ fn verdict_row(
     let status = match &verdict.kind {
         VerdictKind::Converted { .. } => HistoryStatus::Converted,
         VerdictKind::Remuxed { .. } => HistoryStatus::Remuxed,
-        VerdictKind::NotWorthwhile { requested, floor } => HistoryStatus::NotWorthwhile {
+        VerdictKind::NotWorthwhile {
+            metric,
+            requested,
+            floor,
+        } => HistoryStatus::NotWorthwhile {
+            metric: *metric,
             requested: *requested,
             floor: *floor,
         },
@@ -801,19 +840,10 @@ fn verdict_row(
         .source_run
         .and_then(|run_id| state.conversion_runs.get(&run_id));
     let (input_size, output_size) = joined_sizes(verdict, run, state, record);
-    let measurement = run
+    let analysis = run
         .and_then(|run| run.analysis.as_ref())
-        .map(|analysis| &analysis.measurement)
         .filter(|_| status == HistoryStatus::Converted);
-    let (carried_time, carried_crf, carried_vmaf) = match &verdict.kind {
-        VerdictKind::Converted {
-            encoding_time,
-            crf,
-            vmaf,
-            ..
-        } => (*encoding_time, *crf, *vmaf),
-        VerdictKind::Remuxed { .. } | VerdictKind::NotWorthwhile { .. } => (None, None, None),
-    };
+    let (carried_time, carried_crf, carried_quality) = carried_summary(&verdict.kind);
     let mut row = base_row(content_key, record, status);
     row.source_run = verdict.source_run;
     row.happened_at = Some(
@@ -825,11 +855,9 @@ fn verdict_row(
     row.encoding_time_ms = run
         .map(|run| phase_totals(Some(run)).1)
         .or(carried_time.map(|duration| duration.0));
-    row.vmaf = measurement
-        .map(|measurement| measurement.score)
-        .or(carried_vmaf);
-    row.crf = measurement
-        .map(|measurement| measurement.crf)
+    row.quality = analysis.map(analysis_quality).or(carried_quality);
+    row.crf = analysis
+        .map(|analysis| analysis.measurement.crf)
         .or(carried_crf);
     row
 }
@@ -872,7 +900,7 @@ fn analyzed_row(
             .and_then(|(_, by_target)| by_target.values().next_back())
     });
     row.source_run = latest.map(|(run_id, _)| run_id);
-    row.vmaf = analysis.map(|analysis| analysis.measurement.score);
+    row.quality = analysis.map(analysis_quality);
     row.crf = analysis.map(|analysis| analysis.measurement.crf);
     row
 }
@@ -880,14 +908,14 @@ fn analyzed_row(
 fn imported_status(imported: &ImportedHistoryRecord) -> Option<HistoryStatus> {
     match imported.status {
         ParkedStatus::Converted => Some(HistoryStatus::Converted),
-        ParkedStatus::NotWorthwhile => Some(HistoryStatus::NotWorthwhile {
-            requested: imported
-                .requested_target
-                .unwrap_or(crate::DEFAULT_VMAF_TARGET),
-            floor: imported
-                .floor_target
-                .unwrap_or(crate::MIN_VMAF_FALLBACK_TARGET),
-        }),
+        ParkedStatus::NotWorthwhile => {
+            let (requested, floor) = imported.not_worthwhile_range();
+            Some(HistoryStatus::NotWorthwhile {
+                metric: ImportedHistoryRecord::METRIC,
+                requested,
+                floor,
+            })
+        }
         ParkedStatus::Analyzed => Some(HistoryStatus::Analyzed),
         ParkedStatus::Scanned => None,
     }
@@ -912,7 +940,7 @@ fn imported_row(
         input_size_bytes: imported.size,
         output_size_bytes: imported.output_size,
         encoding_time_ms: imported.encoding_time.map(|duration| duration.0),
-        vmaf: imported.vmaf,
+        quality: imported_quality(imported),
         crf: imported.crf,
     }
 }
@@ -950,10 +978,10 @@ mod tests {
             output_size: Some(4_000),
             encoding_time: Some(DurationMs(120_000)),
             crf: Some(Crf(30_000)),
-            vmaf: Some(QualityScore::vmaf(9_512)),
-            target: Some(QualityTarget::vmaf(95)),
-            requested_target: Some(QualityTarget::vmaf(94)),
-            floor_target: Some(QualityTarget::vmaf(91)),
+            vmaf: Some(QualityScore(9_512)),
+            target: Some(QualityTarget(95)),
+            requested_target: Some(QualityTarget(94)),
+            floor_target: Some(QualityTarget(91)),
             decided_at: UnixMillis(DAY_MS * 20_000),
         }
     }
@@ -966,7 +994,8 @@ mod tests {
                 output_size: imported.output_size,
                 encoding_time: imported.encoding_time,
                 crf: imported.crf,
-                vmaf: imported.vmaf,
+                metric: crate::QualityMetric::Vmaf,
+                score: imported.vmaf,
                 target: imported.target,
             },
             source_run: None,
@@ -990,7 +1019,8 @@ mod tests {
                     output_size: None,
                     encoding_time: None,
                     crf: None,
-                    vmaf: None,
+                    metric: crate::QualityMetric::Vmaf,
+                    score: None,
                     target: None,
                 },
                 source_run: Some(RunId(run)),
@@ -1067,10 +1097,10 @@ mod tests {
     }
 
     #[test]
-    fn native_and_imported_scores_share_only_their_tagged_statistics_group() {
+    fn native_and_imported_vmaf_scores_aggregate_in_one_metric_group() {
         let mut state = converted_state(&[(10_000, 5_000)], DAY_MS * 20_000);
         let mut recorded = imported(ParkedStatus::Converted, Some(VideoCodec::H264));
-        recorded.vmaf = Some(QualityScore::vmaf(9_900));
+        recorded.vmaf = Some(QualityScore(9_900));
         state.parked.insert(
             ImportPath("/fixtures/imported.mkv".to_owned()),
             recorded.clone(),
@@ -1300,7 +1330,8 @@ mod tests {
                 output_size: None,
                 encoding_time: None,
                 crf: None,
-                vmaf: None,
+                metric: crate::QualityMetric::Vmaf,
+                score: None,
                 target: None,
             },
             source_run: Some(RunId(77)),
@@ -1375,7 +1406,7 @@ mod tests {
             .find(|row| row.status == HistoryStatus::Remuxed)
             .expect("remux history row");
         assert_eq!(remux_row.output_size_bytes, Some(8_900));
-        assert_eq!(remux_row.vmaf, None);
+        assert_eq!(remux_row.quality, None);
     }
 
     #[test]
@@ -1441,8 +1472,9 @@ mod tests {
         let mut record = FileRecord::new(meta(VideoCodec::H264, 5_000));
         record.verdict = Some(Verdict {
             kind: VerdictKind::NotWorthwhile {
-                requested: QualityTarget::vmaf(95),
-                floor: QualityTarget::vmaf(90),
+                metric: crate::QualityMetric::Vmaf,
+                requested: QualityTarget(95),
+                floor: QualityTarget(90),
             },
             source_run: Some(RunId(9)),
             decided_at: UnixMillis(DAY_MS * 20_000),
@@ -1467,8 +1499,9 @@ mod tests {
         assert_eq!(
             rows.first().expect("one history row").status,
             HistoryStatus::NotWorthwhile {
-                requested: QualityTarget::vmaf(95),
-                floor: QualityTarget::vmaf(90),
+                metric: crate::QualityMetric::Vmaf,
+                requested: QualityTarget(95),
+                floor: QualityTarget(90),
             }
         );
     }
@@ -1553,7 +1586,13 @@ mod tests {
         let row = rows.first().expect("one history row");
         assert_eq!(row.status, HistoryStatus::Analyzed);
         assert_eq!(row.crf, Some(Crf(26_000)));
-        assert_eq!(row.vmaf, Some(QualityScore::vmaf(9_600)));
+        assert_eq!(
+            row.quality,
+            Some(MetricScore {
+                metric: QualityMetric::Vmaf,
+                score: QualityScore(9_600)
+            })
+        );
         assert_eq!(row.source_run, Some(RunId(4)));
         // Analyses alone never create a StatFact.
         assert!(collect_stat_facts(&state).is_empty());
@@ -1579,8 +1618,9 @@ mod tests {
         let mut record = FileRecord::new(portrait);
         record.verdict = Some(Verdict {
             kind: VerdictKind::NotWorthwhile {
-                requested: QualityTarget::vmaf(95),
-                floor: QualityTarget::vmaf(90),
+                metric: crate::QualityMetric::Vmaf,
+                requested: QualityTarget(95),
+                floor: QualityTarget(90),
             },
             source_run: Some(RunId(1)),
             decided_at: UnixMillis(0),

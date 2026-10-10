@@ -319,7 +319,7 @@ fn result_for(execution: &ExecutionSettings) -> AnalysisResult {
         failed_attempts: Vec::new(),
         measurement: SearchMeasurement {
             crf: Crf(31_000),
-            score: QualityScore::vmaf(9_530),
+            score: QualityScore(9_530),
             predicted_size: 1_600_000_000,
             predicted_percent_basis_points: 4_000,
             predicted_duration_ms: 2_700_000,

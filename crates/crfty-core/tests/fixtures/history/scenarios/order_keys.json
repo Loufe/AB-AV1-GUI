@@ -19,8 +19,8 @@
                 "Converted": {
                   "quality": {
                     "crf": 30000,
-                    "score": { "metric": "Vmaf", "value": 9500 },
-                    "target": { "metric": "Vmaf", "value": 95 }
+                    "score": 9500,
+                    "target": 95
                   },
                   "output_size": 700,
                   "encode_duration": 5000
@@ -45,8 +45,8 @@
                 "Converted": {
                   "quality": {
                     "crf": 28000,
-                    "score": { "metric": "Vmaf", "value": 9500 },
-                    "target": { "metric": "Vmaf", "value": 95 }
+                    "score": 9500,
+                    "target": 95
                   },
                   "output_size": 2,
                   "encode_duration": 9000
@@ -71,8 +71,8 @@
                 "Converted": {
                   "quality": {
                     "crf": 35000,
-                    "score": { "metric": "Vmaf", "value": 9500 },
-                    "target": { "metric": "Vmaf", "value": 95 }
+                    "score": 9500,
+                    "target": 95
                   },
                   "output_size": 8,
                   "encode_duration": null
@@ -97,8 +97,8 @@
                 "Converted": {
                   "quality": {
                     "crf": null,
-                    "score": { "metric": "Vmaf", "value": 9500 },
-                    "target": { "metric": "Vmaf", "value": 95 }
+                    "score": 9500,
+                    "target": 95
                   },
                   "output_size": 500,
                   "encode_duration": 7000
@@ -121,8 +121,8 @@
               },
               "outcome": {
                 "NotWorthwhile": {
-                  "requested": { "metric": "Vmaf", "value": 95 },
-                  "floor": { "metric": "Vmaf", "value": 90 }
+                  "requested": 95,
+                  "floor": 90
                 }
               },
               "updated_at": 1758000004000
@@ -144,8 +144,8 @@
                 "Converted": {
                   "quality": {
                     "crf": 30000,
-                    "score": { "metric": "Vmaf", "value": 9500 },
-                    "target": { "metric": "Vmaf", "value": 95 }
+                    "score": 9500,
+                    "target": 95
                   },
                   "output_size": 100,
                   "encode_duration": 5000
@@ -187,14 +187,14 @@
             "Converted": {
               "search": {
                 "analysis": {
-                  "requested_target": { "metric": "Vmaf", "value": 95 },
-                  "successful_target": { "metric": "Vmaf", "value": 95 },
-                  "fallback_floor": { "metric": "Vmaf", "value": 90 },
+                  "requested_target": 95,
+                  "successful_target": 95,
+                  "fallback_floor": 90,
                   "fallback_step": 1,
                   "failed_attempts": [],
                   "measurement": {
                     "crf": 24000,
-                    "score": { "metric": "Vmaf", "value": 9512 },
+                    "score": 9512,
                     "predicted_size": 3100000,
                     "predicted_percent_basis_points": 3875,
                     "predicted_duration_ms": 240000,
@@ -206,6 +206,7 @@
                     "samples": null,
                     "sample_duration_ms": 20000,
                     "thorough": false,
+                    "metric": "Vmaf",
                     "decode_mode": "Software",
                     "ab_av1_revision": "ab-av1 0.10.0",
                     "ffmpeg_revision": "ffmpeg 7.1",

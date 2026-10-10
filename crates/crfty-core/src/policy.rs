@@ -1,10 +1,9 @@
 use serde::{Deserialize, Serialize};
 
 use crate::{
-    AnalysisIntent, AnalysisProfile, AnalysisResult, DEFAULT_VMAF_TARGET, DecodeMode,
-    DestructiveIdentity, DurableState, ExecutionSettings, FileRecord, FileStamp,
-    IMPORT_MTIME_TOLERANCE_NS, ImportedHistoryRecord, JobAction, MIN_VMAF_FALLBACK_TARGET,
-    MediaContainer, MediaObservation, Operation, ParkedStatus, PathHash, RunId,
+    AnalysisIntent, AnalysisProfile, AnalysisResult, DecodeMode, DestructiveIdentity, DurableState,
+    ExecutionSettings, FileRecord, FileStamp, IMPORT_MTIME_TOLERANCE_NS, ImportedHistoryRecord,
+    JobAction, MediaContainer, MediaObservation, Operation, ParkedStatus, PathHash, RunId,
     TimestampReliability, Verdict, VerdictKind, VideoCodec, VideoMeta,
 };
 
@@ -213,7 +212,8 @@ fn converted_verdict(parked: &ImportedHistoryRecord) -> Verdict {
             output_size: parked.output_size,
             encoding_time: parked.encoding_time,
             crf: parked.crf,
-            vmaf: parked.vmaf,
+            metric: ImportedHistoryRecord::METRIC,
+            score: parked.vmaf,
             target: parked.target,
         },
         source_run: None,
@@ -222,10 +222,12 @@ fn converted_verdict(parked: &ImportedHistoryRecord) -> Verdict {
 }
 
 fn not_worthwhile_verdict(parked: &ImportedHistoryRecord) -> Verdict {
+    let (requested, floor) = parked.not_worthwhile_range();
     Verdict {
         kind: VerdictKind::NotWorthwhile {
-            requested: parked.requested_target.unwrap_or(DEFAULT_VMAF_TARGET),
-            floor: parked.floor_target.unwrap_or(MIN_VMAF_FALLBACK_TARGET),
+            metric: ImportedHistoryRecord::METRIC,
+            requested,
+            floor,
         },
         source_run: None,
         decided_at: parked.decided_at,
@@ -382,14 +384,12 @@ pub(crate) fn select_job_action(
                     },
                 };
             }
-            VerdictKind::NotWorthwhile { floor, .. } => {
+            VerdictKind::NotWorthwhile { metric, floor, .. } => {
                 // Failure at the floor implies failure at every higher
                 // target (higher VMAF → larger file), so the verdict decides
                 // any request whose ladder stops at or above it. A lower
                 // floor is untried ground and proceeds.
-                if execution.fallback_floor.metric == floor.metric
-                    && execution.fallback_floor.value >= floor.value
-                {
+                if execution.profile.metric == *metric && execution.fallback_floor >= *floor {
                     return JobAction::Skip {
                         reason: SkipReason::NotWorthwhile {
                             source_run: verdict.source_run,

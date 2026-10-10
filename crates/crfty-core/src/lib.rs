@@ -60,9 +60,9 @@ pub use execution::{ExecutionUnavailable, compose_execution, decoder_candidates}
 pub use failure::{DIAGNOSTIC_TAIL_MAX_BYTES, DiagnosticTail, FailureFacts, FailureKind};
 pub use job::{
     AnalysisAttempt, AnalysisIntent, AnalysisProfile, AnalysisResult, ClaimedJob, Crf, DecodeMode,
-    DecodePreference, ExecutionSettings, HardwareDecoder, JobAction, JobPhase, JobSpec, Operation,
-    OutputTarget, OverwriteDecision, QualityMetric, QualityScore, QualityTarget, ReservedJob,
-    SearchMeasurement, ToolRevisions,
+    DecodePreference, ExecutionSettings, HardwareDecoder, JobAction, JobPhase, JobSpec,
+    MetricScore, Operation, OutputTarget, OverwriteDecision, QualityMetric, QualityScore,
+    QualityTarget, ReservedJob, SearchMeasurement, ToolRevisions,
 };
 pub use journal::{
     COMPACTION_IDLE_MIN_JOURNAL_BYTES, CorruptionReport, CorruptionSignature, JournalEnvelope,

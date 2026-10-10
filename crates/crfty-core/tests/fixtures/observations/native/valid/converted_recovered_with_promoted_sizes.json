@@ -18,14 +18,14 @@
     "Converted": {
       "search": {
         "analysis": {
-          "requested_target": { "metric": "Vmaf", "value": 95 },
-          "successful_target": { "metric": "Vmaf", "value": 95 },
-          "fallback_floor": { "metric": "Vmaf", "value": 90 },
+          "requested_target": 95,
+          "successful_target": 95,
+          "fallback_floor": 90,
           "fallback_step": 1,
           "failed_attempts": [],
           "measurement": {
             "crf": 30000,
-            "score": { "metric": "Vmaf", "value": 9601 },
+            "score": 9601,
             "predicted_size": 40000000,
             "predicted_percent_basis_points": 3333,
             "predicted_duration_ms": 30000,
@@ -37,6 +37,7 @@
             "samples": null,
             "sample_duration_ms": 20000,
             "thorough": false,
+            "metric": "Vmaf",
             "decode_mode": "Software",
             "ab_av1_revision": "ab-av1 0.10.0",
             "ffmpeg_revision": "ffmpeg 7.1",

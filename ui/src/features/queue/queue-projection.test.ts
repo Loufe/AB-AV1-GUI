@@ -27,14 +27,14 @@ function item(id: number, state: QueueItem["state"] = "Queued"): QueueItem {
 
 function analysis(): AnalysisResult {
   return {
-    requested_target: { metric: "Vmaf", value: 95 },
-    successful_target: { metric: "Vmaf", value: 95 },
-    fallback_floor: { metric: "Vmaf", value: 90 },
+    requested_target: 95,
+    successful_target: 95,
+    fallback_floor: 90,
     fallback_step: 1,
     failed_attempts: [],
     measurement: {
       crf: 24_250,
-      score: { metric: "Vmaf", value: 9_530 },
+      score: 9_530,
       predicted_size: 600,
       predicted_percent_basis_points: 6_000,
       predicted_duration_ms: 90_000,
@@ -46,6 +46,7 @@ function analysis(): AnalysisResult {
       samples: null,
       sample_duration_ms: 2_000,
       thorough: false,
+      metric: "Vmaf",
       decode_mode: "Software",
       ab_av1_revision: "1",
       ffmpeg_revision: "2",
@@ -66,8 +67,8 @@ function run(queueItem: QueueItem, id = 10): ConversionRun {
       intent: queueItem.intent,
       output_target: queueItem.output_target,
       execution: {
-        requested_target: { metric: "Vmaf", value: 95 },
-        fallback_floor: { metric: "Vmaf", value: 90 },
+        requested_target: 95,
+        fallback_floor: 90,
         fallback_step: 1,
         overwrite_existing: false,
         decode_preference: "SoftwareOnly",
@@ -124,7 +125,7 @@ describe("queueRows", () => {
       mediaDurationMs: 120_000,
       timeMs: null,
       crf: 24_250,
-      vmaf: { metric: "Vmaf", value: 9_530 },
+      quality: { metric: "Vmaf", score: 9_530 },
       status: { kind: "working", phase: "Preparing", percent: null },
     });
     expect(rows[1]).toMatchObject({ runId: null, streams: null, status: { kind: "queued" } });

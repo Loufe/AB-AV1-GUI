@@ -143,13 +143,13 @@ function MediaText({ displayRow }: { displayRow: HistoryDisplayRow }) {
 }
 
 function QualityText({ displayRow }: { displayRow: HistoryDisplayRow }) {
-  const { crf, vmaf } = displayRow.row;
-  if (crf === null && vmaf === null) {
+  const { crf, quality } = displayRow.row;
+  if (crf === null && quality === null) {
     return <span className="text-muted-foreground">{EM_DASH}</span>;
   }
   return (
     <span className="whitespace-nowrap text-muted-foreground tabular-nums">
-      VMAF {formatEngineVmafScore(vmaf)} · CRF {formatEngineCrf(crf)}
+      VMAF {formatEngineVmafScore(quality)} · CRF {formatEngineCrf(crf)}
     </span>
   );
 }

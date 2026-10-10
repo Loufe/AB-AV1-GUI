@@ -399,7 +399,8 @@ function verdictKind(
         output_size,
         encoding_time: encodingDuration(phaseSpans),
         crf: analysis === null ? null : analysis.measurement.crf,
-        vmaf: analysis === null ? null : analysis.measurement.score,
+        metric: execution.profile.metric,
+        score: analysis === null ? null : analysis.measurement.score,
         target: analysis === null ? null : analysis.successful_target,
       },
     };
@@ -414,6 +415,7 @@ function verdictKind(
   if ("NotWorthwhile" in outcome && outcome.NotWorthwhile !== undefined) {
     return {
       NotWorthwhile: {
+        metric: execution.profile.metric,
         requested: execution.requested_target,
         floor: execution.fallback_floor,
       },
@@ -576,28 +578,13 @@ function withAnalysis(
   if (index === -1) {
     return {
       ...record,
-      analyses: [...record.analyses, [result.profile, [[result.successful_target, result]]]],
+      analyses: [...record.analyses, [result.profile, { [result.successful_target]: result }]],
     };
   }
   return {
     ...record,
     analyses: record.analyses.map((entry, position) =>
-      position === index
-        ? [
-            entry[0],
-            [
-              ...entry[1].filter(
-                ([target]) =>
-                  target.metric !== result.successful_target.metric ||
-                  target.value !== result.successful_target.value,
-              ),
-              [result.successful_target, result] as [
-                AnalysisResult["successful_target"],
-                AnalysisResult,
-              ],
-            ].sort(([a], [b]) => a.metric.localeCompare(b.metric) || a.value - b.value),
-          ]
-        : entry,
+      position === index ? [entry[0], { ...entry[1], [result.successful_target]: result }] : entry,
     ),
   };
 }
@@ -609,6 +596,7 @@ function profileEquals(a: AnalysisProfile, b: AnalysisProfile): boolean {
     a.samples === b.samples &&
     a.sample_duration_ms === b.sample_duration_ms &&
     a.thorough === b.thorough &&
+    a.metric === b.metric &&
     decodeModeEquals(a.decode_mode, b.decode_mode) &&
     a.ab_av1_revision === b.ab_av1_revision &&
     a.ffmpeg_revision === b.ffmpeg_revision &&

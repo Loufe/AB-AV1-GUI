@@ -980,7 +980,8 @@ fn history_import_parks_compacts_adopts_and_reimports_as_noop() {
             output_size,
             encoding_time,
             crf,
-            vmaf,
+            metric,
+            score,
             target,
         } => {
             assert_eq!(*output_content_key, None);
@@ -988,8 +989,9 @@ fn history_import_parks_compacts_adopts_and_reimports_as_noop() {
             assert_eq!(*output_size, Some(4_000));
             assert_eq!(*encoding_time, Some(crfty_core::DurationMs(88_000)));
             assert_eq!(*crf, Some(Crf(30_000)));
-            assert_eq!(*vmaf, Some(QualityScore::vmaf(9_550)));
-            assert_eq!(*target, Some(QualityTarget::vmaf(95)));
+            assert_eq!(*metric, crfty_core::QualityMetric::Vmaf);
+            assert_eq!(*score, Some(QualityScore(9_550)));
+            assert_eq!(*target, Some(QualityTarget(95)));
         }
         other => panic!("expected an adopted converted verdict, got {other:?}"),
     }
@@ -1925,7 +1927,7 @@ fn fixture_analysis(settings: &ExecutionSettings) -> AnalysisResult {
         failed_attempts: Vec::new(),
         measurement: SearchMeasurement {
             crf: Crf(30_000),
-            score: QualityScore::vmaf(9_500),
+            score: QualityScore(9_500),
             predicted_size: 1_000,
             predicted_percent_basis_points: 5_000,
             predicted_duration_ms: 60_000,

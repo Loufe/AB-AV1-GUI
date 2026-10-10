@@ -1645,17 +1645,16 @@ pub(crate) fn validate_terminal(
             if run.analysis.is_some() || output.is_some() {
                 return Err("not-worthwhile outcome cannot retain analysis or output state");
             }
+            let execution = &run.spec.execution;
             if attempts.is_empty()
                 || attempts.iter().any(|attempt| {
-                    attempt.target.metric != run.spec.execution.requested_target.metric
-                        || attempt.target > run.spec.execution.requested_target
-                        || attempt.target < run.spec.execution.fallback_floor
+                    attempt.target > execution.requested_target
+                        || attempt.target < execution.fallback_floor
                         || attempt
                             .last_measurement
                             .as_ref()
                             .is_some_and(|measurement| {
-                                measurement.score.metric != attempt.target.metric
-                                    || measurement.validate().is_err()
+                                measurement.validate(execution.profile.metric).is_err()
                             })
                 })
             {

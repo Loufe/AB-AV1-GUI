@@ -18,10 +18,10 @@ import {
 // Values mirror converted_with_live_evidence in projection-fixtures.json.
 const HISTORY_WIRE_VALUES = {
   crf: 24_000,
-  vmaf: { metric: "Vmaf", value: 9_512 },
+  quality: { metric: "Vmaf", score: 9_512 },
   encoding_time_ms: 240_000,
   happened_at: 1_728_003_600_000,
-} satisfies Pick<HistoryRow, "crf" | "vmaf" | "encoding_time_ms" | "happened_at">;
+} satisfies Pick<HistoryRow, "crf" | "quality" | "encoding_time_ms" | "happened_at">;
 
 // Statistics spreads have already crossed the fixed-point boundary in Rust.
 const STATISTICS_WIRE_VALUES = {
@@ -36,7 +36,7 @@ const STATISTICS_WIRE_VALUES = {
 describe("serialized fixed-point values", () => {
   it("formats History CRF and VMAF after scaling each exactly once", () => {
     expect(formatEngineCrf(HISTORY_WIRE_VALUES.crf)).toBe("24");
-    expect(formatEngineVmafScore(HISTORY_WIRE_VALUES.vmaf)).toBe("95.1");
+    expect(formatEngineVmafScore(HISTORY_WIRE_VALUES.quality)).toBe("95.1");
   });
 
   it("preserves fractional CRF precision after scaling", () => {
@@ -47,7 +47,7 @@ describe("serialized fixed-point values", () => {
     for (const invalid of [null, -1, Number.NaN, Number.POSITIVE_INFINITY]) {
       expect(formatEngineCrf(invalid)).toBe("?");
       expect(
-        formatEngineVmafScore(invalid === null ? null : { metric: "Vmaf", value: invalid }),
+        formatEngineVmafScore(invalid === null ? null : { metric: "Vmaf", score: invalid }),
       ).toBe("—");
     }
   });
@@ -78,7 +78,7 @@ describe("serialized millisecond values", () => {
 
 describe("already-normalized engine values", () => {
   it("does not scale a VMAF target", () => {
-    expect(formatVmafTarget({ metric: "Vmaf", value: 95 })).toBe("95");
+    expect(formatVmafTarget(95)).toBe("95");
   });
 
   it("does not divide Statistics CRF or VMAF spreads again", () => {
@@ -100,8 +100,8 @@ describe("already-normalized engine values", () => {
 
   it("keeps unavailable and invalid normalized values intentional", () => {
     expect(formatVmafTarget(null)).toBe("—");
-    expect(formatVmafTarget({ metric: "Vmaf", value: -1 })).toBe("—");
-    expect(formatVmafTarget({ metric: "Vmaf", value: Number.NaN })).toBe("—");
+    expect(formatVmafTarget(-1)).toBe("—");
+    expect(formatVmafTarget(Number.NaN)).toBe("—");
     expect(formatStatisticsCrf(Number.NaN)).toBe("?");
     expect(formatStatisticsVmaf(-1)).toBe("—");
     expect(formatStatisticsVmaf(Number.POSITIVE_INFINITY)).toBe("—");

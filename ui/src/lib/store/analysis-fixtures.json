@@ -391,22 +391,14 @@
                           "applicable": {
                             "Analyzed": {
                               "prediction": {
+                                "metric": "Vmaf",
                                 "crf": 31000,
-                                "score": {
-                                  "metric": "Vmaf",
-                                  "value": 9530
-                                },
+                                "score": 9530,
                                 "predicted_size": 1600000000,
                                 "predicted_percent_basis_points": 4000,
                                 "predicted_duration_ms": 2700000,
-                                "requested_target": {
-                                  "metric": "Vmaf",
-                                  "value": 95
-                                },
-                                "successful_target": {
-                                  "metric": "Vmaf",
-                                  "value": 95
-                                }
+                                "requested_target": 95,
+                                "successful_target": 95
                               }
                             }
                           },
@@ -471,22 +463,14 @@
                         "applicable": {
                           "Analyzed": {
                             "prediction": {
+                              "metric": "Vmaf",
                               "crf": 31000,
-                              "score": {
-                                "metric": "Vmaf",
-                                "value": 9530
-                              },
+                              "score": 9530,
                               "predicted_size": 1600000000,
                               "predicted_percent_basis_points": 4000,
                               "predicted_duration_ms": 2700000,
-                              "requested_target": {
-                                "metric": "Vmaf",
-                                "value": 95
-                              },
-                              "successful_target": {
-                                "metric": "Vmaf",
-                                "value": 95
-                              }
+                              "requested_target": 95,
+                              "successful_target": 95
                             }
                           }
                         },
@@ -678,22 +662,14 @@
                           "applicable": {
                             "Analyzed": {
                               "prediction": {
+                                "metric": "Vmaf",
                                 "crf": 31000,
-                                "score": {
-                                  "metric": "Vmaf",
-                                  "value": 9530
-                                },
+                                "score": 9530,
                                 "predicted_size": 1600000000,
                                 "predicted_percent_basis_points": 4000,
                                 "predicted_duration_ms": 2700000,
-                                "requested_target": {
-                                  "metric": "Vmaf",
-                                  "value": 95
-                                },
-                                "successful_target": {
-                                  "metric": "Vmaf",
-                                  "value": 95
-                                }
+                                "requested_target": 95,
+                                "successful_target": 95
                               }
                             }
                           },
@@ -755,14 +731,9 @@
                                   "output_size": 1600000000,
                                   "encoding_time": null,
                                   "crf": 31000,
-                                  "vmaf": {
-                                    "metric": "Vmaf",
-                                    "value": 9530
-                                  },
-                                  "target": {
-                                    "metric": "Vmaf",
-                                    "value": 95
-                                  },
+                                  "metric": "Vmaf",
+                                  "score": 9530,
+                                  "target": 95,
                                   "decided_at": 2000,
                                   "source_run": 2
                                 }
@@ -827,14 +798,9 @@
                                   "output_size": 1600000000,
                                   "encoding_time": null,
                                   "crf": 31000,
-                                  "vmaf": {
-                                    "metric": "Vmaf",
-                                    "value": 9530
-                                  },
-                                  "target": {
-                                    "metric": "Vmaf",
-                                    "value": 95
-                                  },
+                                  "metric": "Vmaf",
+                                  "score": 9530,
+                                  "target": 95,
                                   "decided_at": 2000,
                                   "source_run": 2
                                 }
@@ -913,14 +879,9 @@
                                 "output_size": 1600000000,
                                 "encoding_time": null,
                                 "crf": 31000,
-                                "vmaf": {
-                                  "metric": "Vmaf",
-                                  "value": 9530
-                                },
-                                "target": {
-                                  "metric": "Vmaf",
-                                  "value": 95
-                                },
+                                "metric": "Vmaf",
+                                "score": 9530,
+                                "target": 95,
                                 "decided_at": 2000,
                                 "source_run": 2
                               }
@@ -972,14 +933,9 @@
                                 "output_size": 1600000000,
                                 "encoding_time": null,
                                 "crf": 31000,
-                                "vmaf": {
-                                  "metric": "Vmaf",
-                                  "value": 9530
-                                },
-                                "target": {
-                                  "metric": "Vmaf",
-                                  "value": 95
-                                },
+                                "metric": "Vmaf",
+                                "score": 9530,
+                                "target": 95,
                                 "decided_at": 2000,
                                 "source_run": 2
                               }
@@ -1157,22 +1113,14 @@
                           "applicable": {
                             "Analyzed": {
                               "prediction": {
+                                "metric": "Vmaf",
                                 "crf": 31000,
-                                "score": {
-                                  "metric": "Vmaf",
-                                  "value": 9530
-                                },
+                                "score": 9530,
                                 "predicted_size": 1600000000,
                                 "predicted_percent_basis_points": 4000,
                                 "predicted_duration_ms": 2700000,
-                                "requested_target": {
-                                  "metric": "Vmaf",
-                                  "value": 95
-                                },
-                                "successful_target": {
-                                  "metric": "Vmaf",
-                                  "value": 95
-                                }
+                                "requested_target": 95,
+                                "successful_target": 95
                               }
                             }
                           },
@@ -1465,22 +1413,14 @@
                           "applicable": {
                             "Analyzed": {
                               "prediction": {
+                                "metric": "Vmaf",
                                 "crf": 31000,
-                                "score": {
-                                  "metric": "Vmaf",
-                                  "value": 9530
-                                },
+                                "score": 9530,
                                 "predicted_size": 1600000000,
                                 "predicted_percent_basis_points": 4000,
                                 "predicted_duration_ms": 2700000,
-                                "requested_target": {
-                                  "metric": "Vmaf",
-                                  "value": 95
-                                },
-                                "successful_target": {
-                                  "metric": "Vmaf",
-                                  "value": 95
-                                }
+                                "requested_target": 95,
+                                "successful_target": 95
                               }
                             }
                           },

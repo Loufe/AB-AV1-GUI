@@ -18,16 +18,16 @@
     "Converted": {
       "search": {
         "analysis": {
-          "requested_target": { "metric": "Vmaf", "value": 95 },
-          "successful_target": { "metric": "Vmaf", "value": 94 },
-          "fallback_floor": { "metric": "Vmaf", "value": 90 },
+          "requested_target": 95,
+          "successful_target": 94,
+          "fallback_floor": 90,
           "fallback_step": 1,
           "failed_attempts": [
             {
-              "target": { "metric": "Vmaf", "value": 95 },
+              "target": 95,
               "last_measurement": {
                 "crf": 18000,
-                "score": { "metric": "Vmaf", "value": 9480 },
+                "score": 9480,
                 "predicted_size": 9100000,
                 "predicted_percent_basis_points": 11375,
                 "predicted_duration_ms": 300000,
@@ -37,7 +37,7 @@
           ],
           "measurement": {
             "crf": 24000,
-            "score": { "metric": "Vmaf", "value": 9412 },
+            "score": 9412,
             "predicted_size": 3100000,
             "predicted_percent_basis_points": 3875,
             "predicted_duration_ms": 240000,
@@ -49,6 +49,7 @@
             "samples": null,
             "sample_duration_ms": 20000,
             "thorough": false,
+            "metric": "Vmaf",
             "decode_mode": { "Hardware": "H264Cuvid" },
             "ab_av1_revision": "ab-av1 0.10.0",
             "ffmpeg_revision": "ffmpeg 7.1",
