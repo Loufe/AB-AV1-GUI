@@ -333,8 +333,9 @@ fn startup_recovery_without_ffprobe_defers_output_settlement() {
             initial,
         })),
     ] {
-        let applied = apply(&mut state, command);
-        assert!(!matches!(applied.reply, Reply::Rejected { .. }));
+        let Ok(applied) = apply(&mut state, command) else {
+            panic!("fixture command was rejected");
+        };
         durable.extend(applied.durable);
     }
     let (mut writer, _replay) = JournalWriter::open(&journal_path).expect("journal writer");

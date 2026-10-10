@@ -305,6 +305,21 @@ pub enum Effect {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+pub enum SuccessReply {
+    Accepted,
+    AnalysisStarted {
+        generation: crate::AnalysisGenerationId,
+    },
+    BasicScan(BasicScanDisposition),
+    Reserved(Option<Box<ReservedJob>>),
+    Claimed(Option<Box<ClaimedJob>>),
+    Imported {
+        parked: u32,
+        skipped: u32,
+    },
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Reply {
     Accepted,
     AnalysisStarted {
@@ -325,44 +340,82 @@ pub enum Reply {
     },
 }
 
+impl From<SuccessReply> for Reply {
+    fn from(reply: SuccessReply) -> Self {
+        match reply {
+            SuccessReply::Accepted => Self::Accepted,
+            SuccessReply::AnalysisStarted { generation } => Self::AnalysisStarted { generation },
+            SuccessReply::BasicScan(disposition) => Self::BasicScan(disposition),
+            SuccessReply::Reserved(job) => Self::Reserved(job),
+            SuccessReply::Claimed(job) => Self::Claimed(job),
+            SuccessReply::Imported { parked, skipped } => Self::Imported { parked, skipped },
+        }
+    }
+}
+
+/// A refused command carries no state changes or work to perform.
+///
+/// ```compile_fail,E0560
+/// use crfty_core::Rejection;
+/// let rejected = Rejection { reason: "refused".into(), durable: vec![] };
+/// ```
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Rejection {
+    pub reason: String,
+}
+
+impl Rejection {
+    pub fn new(reason: impl Into<String>) -> Self {
+        Self {
+            reason: reason.into(),
+        }
+    }
+}
+
+impl From<Rejection> for Reply {
+    fn from(rejection: Rejection) -> Self {
+        Self::Rejected {
+            reason: rejection.reason,
+        }
+    }
+}
+
+/// Only successfully applied commands can carry changes and effects.
+///
+/// ```compile_fail,E0308
+/// use crfty_core::{Applied, Reply};
+/// let applied = Applied {
+///     reply: Reply::Rejected { reason: "refused".into() },
+///     ..Applied::accepted()
+/// };
+/// ```
 #[derive(Debug, Clone, PartialEq)]
 pub struct Applied {
     pub durable: Vec<DurableDelta>,
     pub config: Vec<ConfigDelta>,
     pub ephemeral: Vec<EphemeralDelta>,
     pub effects: Vec<Effect>,
-    pub reply: Reply,
+    pub reply: SuccessReply,
 }
 
 impl Applied {
-    fn accepted() -> Self {
+    #[must_use]
+    pub fn accepted() -> Self {
         Self {
             durable: Vec::new(),
             config: Vec::new(),
             ephemeral: Vec::new(),
             effects: Vec::new(),
-            reply: Reply::Accepted,
+            reply: SuccessReply::Accepted,
         }
-    }
-
-    fn rejected(reason: impl Into<String>) -> Self {
-        let mut applied = Self::accepted();
-        applied.reject(reason);
-        applied
-    }
-
-    /// Every rejection surfaces the same two ways: the caller's `Reply` and a
-    /// `CommandRejected` ephemeral on the stream. Keep them in lockstep here.
-    fn reject(&mut self, reason: impl Into<String>) {
-        let reason = reason.into();
-        self.ephemeral.push(EphemeralDelta::CommandRejected {
-            reason: reason.clone(),
-        });
-        self.reply = Reply::Rejected { reason };
     }
 }
 
-pub fn apply(state: &mut AppState, command: Command) -> Applied {
+fn rejected(reason: impl Into<String>) -> Result<Applied, Rejection> {
+    Err(Rejection::new(reason))
+}
+
+pub fn apply(state: &mut AppState, command: Command) -> Result<Applied, Rejection> {
     // Row statuses derive from the base execution and hardware decode
     // setting; both change outside the delta folds, so note them here.
     let refresh_everything = matches!(
@@ -381,11 +434,11 @@ pub fn apply(state: &mut AppState, command: Command) -> Applied {
             applied.effects.push(Effect::DiscoverTools {
                 configured: state.settings.tools.clone(),
             });
-            applied
+            Ok(applied)
         }
         Command::Projection(ProjectionCommand::RequestStatistics { utc_offset_minutes }) => {
             if !(-MAX_UTC_OFFSET_MINUTES..=MAX_UTC_OFFSET_MINUTES).contains(&utc_offset_minutes) {
-                return Applied::rejected("UTC offset is outside a plausible range");
+                return rejected("UTC offset is outside a plausible range");
             }
             let mut applied = Applied::accepted();
             applied
@@ -394,13 +447,13 @@ pub fn apply(state: &mut AppState, command: Command) -> Applied {
                     &state.durable,
                     utc_offset_minutes,
                 ))));
-            applied
+            Ok(applied)
         }
         Command::History(command) => apply_history(state, command),
         Command::System(SystemCommand::Shutdown) => {
             let mut applied = Applied::accepted();
             applied.effects.push(Effect::StopDriver);
-            applied
+            Ok(applied)
         }
         Command::System(SystemCommand::ToolsDiscovered { availability }) => {
             tools_transition(state, availability)
@@ -419,22 +472,22 @@ pub fn apply(state: &mut AppState, command: Command) -> Applied {
                 )
             }
             ToolAvailability::Located { .. } | ToolAvailability::Missing { .. } => {
-                Applied::accepted()
+                Ok(Applied::accepted())
             }
         },
         Command::System(SystemCommand::ConfigureExecution { base }) => {
             if let Err(reason) = base.validate_base() {
-                return Applied::rejected(format!("invalid base execution settings: {reason}"));
+                return rejected(format!("invalid base execution settings: {reason}"));
             }
             // Process-local configuration rather than stream state, so it is
             // the one field written outside the delta fold below.
             state.execution = base;
-            Applied::accepted()
+            Ok(Applied::accepted())
         }
         Command::System(SystemCommand::AcknowledgeCorruption { .. }) => {
-            Applied::rejected("corruption acknowledgement is handled by the driver")
+            rejected("corruption acknowledgement is handled by the driver")
         }
-    };
+    }?;
     for delta in &applied.durable {
         fold(&mut state.durable, delta);
     }
@@ -468,10 +521,13 @@ pub fn apply(state: &mut AppState, command: Command) -> Applied {
         refresh_everything || state.settings.hardware_decode != hardware_decode_before,
     );
     refresh_analysis_rows(state, &mut applied, &scope);
-    applied
+    Ok(applied)
 }
 
-fn apply_analysis_command(state: &AppState, command: AnalysisCommand) -> Applied {
+fn apply_analysis_command(
+    state: &AppState,
+    command: AnalysisCommand,
+) -> Result<Applied, Rejection> {
     match command {
         AnalysisCommand::InspectFile {
             generation,
@@ -499,29 +555,30 @@ fn apply_analysis_command(state: &AppState, command: AnalysisCommand) -> Applied
     }
 }
 
-fn apply_analysis_state_command(state: &AppState, command: AnalysisCommand) -> Applied {
+fn apply_analysis_state_command(
+    state: &AppState,
+    command: AnalysisCommand,
+) -> Result<Applied, Rejection> {
     let mut applied = Applied::accepted();
     let delta = match command {
         AnalysisCommand::Begin { roots } => {
             let delta = match begin_analysis_generation(&state.analysis, roots) {
                 Ok(delta) => delta,
                 Err(AnalysisMutationError::EmptyRoots) => {
-                    return Applied::rejected("Analysis discovery requires at least one root");
+                    return rejected("Analysis discovery requires at least one root");
                 }
-                Err(_) => return Applied::rejected("Analysis generation id space is exhausted"),
+                Err(_) => return rejected("Analysis generation id space is exhausted"),
             };
             let generation = match &delta {
                 AnalysisDelta::Reset { snapshot } => match &snapshot.current {
                     Some(generation) => generation.id,
-                    None => return Applied::rejected("Analysis generation Reset is empty"),
+                    None => return rejected("Analysis generation Reset is empty"),
                 },
                 AnalysisDelta::RowsUpserted { .. } | AnalysisDelta::ActivityChanged { .. } => {
-                    return Applied::rejected(
-                        "Analysis generation allocator returned a live delta",
-                    );
+                    return rejected("Analysis generation allocator returned a live delta");
                 }
             };
-            applied.reply = Reply::AnalysisStarted { generation };
+            applied.reply = SuccessReply::AnalysisStarted { generation };
             delta
         }
         AnalysisCommand::UpsertRows { generation, rows } => {
@@ -536,7 +593,7 @@ fn apply_analysis_state_command(state: &AppState, command: AnalysisCommand) -> A
         },
         AnalysisCommand::BeginBasicScan { generation } => {
             if let Some(summary) = state.tools.blocking_summary() {
-                return Applied::rejected(format!("media tools are unavailable: {summary}"));
+                return rejected(format!("media tools are unavailable: {summary}"));
             }
             AnalysisDelta::ActivityChanged {
                 generation,
@@ -554,7 +611,7 @@ fn apply_analysis_state_command(state: &AppState, command: AnalysisCommand) -> A
         } => {
             let row = match analysis_file_with_failure(state, generation, row_id, failure) {
                 Ok(row) => row,
-                Err(reason) => return Applied::rejected(reason),
+                Err(reason) => return rejected(reason),
             };
             AnalysisDelta::RowsUpserted {
                 generation,
@@ -562,14 +619,14 @@ fn apply_analysis_state_command(state: &AppState, command: AnalysisCommand) -> A
             }
         }
         AnalysisCommand::InspectFile { .. } | AnalysisCommand::ObserveFile { .. } => {
-            return Applied::rejected("Analysis scan command reached the state-only path");
+            return rejected("Analysis scan command reached the state-only path");
         }
     };
     if let Err(error) = validate_analysis_mutation(&state.analysis, &delta) {
-        return Applied::rejected(format!("Analysis mutation rejected: {error:?}"));
+        return rejected(format!("Analysis mutation rejected: {error:?}"));
     }
     applied.ephemeral.push(EphemeralDelta::Analysis(delta));
-    applied
+    Ok(applied)
 }
 
 fn inspect_analysis_file(
@@ -580,9 +637,9 @@ fn inspect_analysis_file(
     current: CurrentFileIdentity,
     timestamp_reliability: crate::TimestampReliability,
     import_paths: &[ImportPath],
-) -> Applied {
+) -> Result<Applied, Rejection> {
     if let Err(reason) = validate_analysis_file(state, generation, row_id) {
-        return Applied::rejected(reason);
+        return rejected(reason);
     }
     let settled = match &current {
         CurrentFileIdentity::Present(identity) => {
@@ -600,9 +657,9 @@ fn inspect_analysis_file(
         timestamp_reliability,
     );
     match decision {
-        FreshnessDecision::Missing => basic_scan_reply(BasicScanDisposition::Missing),
-        FreshnessDecision::Unavailable => basic_scan_reply(BasicScanDisposition::Unavailable),
-        FreshnessDecision::Reobserve(_) => basic_scan_reply(BasicScanDisposition::Observe),
+        FreshnessDecision::Missing => Ok(basic_scan_reply(BasicScanDisposition::Missing)),
+        FreshnessDecision::Unavailable => Ok(basic_scan_reply(BasicScanDisposition::Unavailable)),
+        FreshnessDecision::Reobserve(_) => Ok(basic_scan_reply(BasicScanDisposition::Observe)),
         FreshnessDecision::RecognizeSettledOutput => {
             // Imported stamps need real output metadata before they can be
             // adopted honestly. Do not manufacture it from the source row.
@@ -610,10 +667,10 @@ fn inspect_analysis_file(
                 .iter()
                 .any(|path| state.durable.parked.contains_key(path))
             {
-                return basic_scan_reply(BasicScanDisposition::Observe);
+                return Ok(basic_scan_reply(BasicScanDisposition::Observe));
             }
             let Some((source_content_key, output_content_key, _)) = settled else {
-                return Applied::rejected("settled output recognition lost its matching output");
+                return rejected("settled output recognition lost its matching output");
             };
             let metadata = state
                 .durable
@@ -630,10 +687,10 @@ fn inspect_analysis_file(
         }
         FreshnessDecision::ReuseObservation => {
             let Some(binding) = binding else {
-                return Applied::rejected("fresh Analysis binding is missing");
+                return rejected("fresh Analysis binding is missing");
             };
             let Some(record) = state.durable.records.get(&binding.content_key) else {
-                return basic_scan_reply(BasicScanDisposition::Observe);
+                return Ok(basic_scan_reply(BasicScanDisposition::Observe));
             };
             let observation = MediaObservation {
                 path_hash,
@@ -664,9 +721,9 @@ fn observe_analysis_file(
     row_id: crate::AnalysisRowId,
     observation: MediaObservation,
     import_paths: &[ImportPath],
-) -> Applied {
+) -> Result<Applied, Rejection> {
     if let Err(reason) = validate_analysis_file(state, generation, row_id) {
-        return Applied::rejected(reason);
+        return rejected(reason);
     }
     let settled = settled_output_match(state, |artifact| {
         artifact.content_key == observation.binding.content_key
@@ -768,7 +825,7 @@ fn settled_output_scan(
 
 fn basic_scan_reply(disposition: BasicScanDisposition) -> Applied {
     let mut applied = Applied::accepted();
-    applied.reply = Reply::BasicScan(disposition);
+    applied.reply = SuccessReply::BasicScan(disposition);
     applied
 }
 
@@ -778,22 +835,22 @@ fn upsert_scanned_row(
     row_id: crate::AnalysisRowId,
     scan: AnalysisFileScan,
     durable: Vec<DurableDelta>,
-) -> Applied {
+) -> Result<Applied, Rejection> {
     let row = match analysis_file_with_scan(state, generation, row_id, scan) {
         Ok(row) => row,
-        Err(reason) => return Applied::rejected(reason),
+        Err(reason) => return rejected(reason),
     };
     let delta = AnalysisDelta::RowsUpserted {
         generation,
         rows: vec![row],
     };
     if let Err(error) = validate_analysis_mutation(&state.analysis, &delta) {
-        return Applied::rejected(format!("Analysis mutation rejected: {error:?}"));
+        return rejected(format!("Analysis mutation rejected: {error:?}"));
     }
     let mut applied = basic_scan_reply(BasicScanDisposition::Complete);
     applied.durable = durable;
     applied.ephemeral.push(EphemeralDelta::Analysis(delta));
-    applied
+    Ok(applied)
 }
 
 fn validate_analysis_file(
@@ -925,11 +982,11 @@ fn settled_output_match(
         })
 }
 
-fn apply_settings(state: &AppState, command: SettingsCommand) -> Applied {
+fn apply_settings(state: &AppState, command: SettingsCommand) -> Result<Applied, Rejection> {
     match command {
         SettingsCommand::Set { settings } => {
             if let Err(reason) = settings.validate() {
-                return Applied::rejected(reason);
+                return rejected(reason);
             }
             let mut applied = Applied::accepted();
             if settings != state.settings {
@@ -943,19 +1000,19 @@ fn apply_settings(state: &AppState, command: SettingsCommand) -> Applied {
                 });
             }
             applied.effects.push(Effect::WriteSettings { settings });
-            applied
+            Ok(applied)
         }
     }
 }
 
-fn apply_queue(state: &AppState, command: QueueCommand) -> Applied {
+fn apply_queue(state: &AppState, command: QueueCommand) -> Result<Applied, Rejection> {
     match command {
         QueueCommand::AddMany { requests } => {
             let mut accepted: Vec<QueueItem> = Vec::new();
             let mut skipped: Vec<(SkipReason, u32)> = Vec::new();
             for request in requests {
                 if let Err(reason) = request.output_target.validate() {
-                    return Applied::rejected(reason);
+                    return rejected(reason);
                 }
                 // Item ids are caller-allocated and unique by contract; a
                 // collision is a wiring bug that rejects the whole batch.
@@ -966,7 +1023,7 @@ fn apply_queue(state: &AppState, command: QueueCommand) -> Applied {
                     .any(|item| item.id == request.item_id)
                     || accepted.iter().any(|item| item.id == request.item_id)
                 {
-                    return Applied::rejected("queue item id already exists");
+                    return rejected("queue item id already exists");
                 }
                 // One item per path: a path re-add is only meaningful once
                 // the standing item is finished. Changing an item's
@@ -1013,25 +1070,25 @@ fn apply_queue(state: &AppState, command: QueueCommand) -> Applied {
             applied
                 .ephemeral
                 .push(EphemeralDelta::QueueAddSummary { added, skipped });
-            applied
+            Ok(applied)
         }
         QueueCommand::RemoveMany { item_ids } => {
             if item_ids.is_empty() {
-                return Applied::rejected("at least one queue item must be removed");
+                return rejected("at least one queue item must be removed");
             }
             let requested = item_ids.iter().copied().collect::<BTreeSet<_>>();
             if requested.len() != item_ids.len() {
-                return Applied::rejected("queue removal contains duplicate item ids");
+                return rejected("queue removal contains duplicate item ids");
             }
             for item_id in &requested {
                 let Some(item) = find_item(state, *item_id) else {
-                    return Applied::rejected("queue item does not exist");
+                    return rejected("queue item does not exist");
                 };
                 if !matches!(
                     item.state,
                     QueueItemState::Queued | QueueItemState::Finished(_)
                 ) {
-                    return Applied::rejected("active queue item cannot be removed");
+                    return rejected("active queue item cannot be removed");
                 }
             }
             // Canonical queue order makes the durable set deterministic while
@@ -1047,13 +1104,13 @@ fn apply_queue(state: &AppState, command: QueueCommand) -> Applied {
             applied
                 .durable
                 .push(DurableDelta::QueueItemsRemoved { item_ids });
-            applied
+            Ok(applied)
         }
         QueueCommand::ReorderPending { pending_order } => {
             if let Err(reason) =
                 crate::state::validate_pending_order(&state.durable.queue, &pending_order)
             {
-                return Applied::rejected(reason);
+                return rejected(reason);
             }
             let current_order = state
                 .durable
@@ -1063,17 +1120,17 @@ fn apply_queue(state: &AppState, command: QueueCommand) -> Applied {
                 .map(|item| item.id)
                 .collect::<Vec<_>>();
             if current_order == pending_order {
-                return Applied::accepted();
+                return Ok(Applied::accepted());
             }
             let mut applied = Applied::accepted();
             applied
                 .durable
                 .push(DurableDelta::QueueReordered { pending_order });
-            applied
+            Ok(applied)
         }
         QueueCommand::Clear => {
             if state.session != SessionState::Idle {
-                return Applied::rejected("queue can only be cleared while idle");
+                return rejected("queue can only be cleared while idle");
             }
             let item_ids = state
                 .durable
@@ -1093,7 +1150,7 @@ fn apply_queue(state: &AppState, command: QueueCommand) -> Applied {
                     .durable
                     .push(DurableDelta::QueueItemsRemoved { item_ids });
             }
-            applied
+            Ok(applied)
         }
         QueueCommand::ClearCompleted => {
             let item_ids = state
@@ -1112,17 +1169,17 @@ fn apply_queue(state: &AppState, command: QueueCommand) -> Applied {
                     .durable
                     .push(DurableDelta::QueueItemsRemoved { item_ids });
             }
-            applied
+            Ok(applied)
         }
         QueueCommand::Retry { item_id, patch } => {
             if patch.is_some() && state.session != SessionState::Idle {
-                return Applied::rejected("queue items can only be edited while idle");
+                return rejected("queue items can only be edited while idle");
             }
             let Some(item) = find_item(state, item_id) else {
-                return Applied::rejected("queue item does not exist");
+                return rejected("queue item does not exist");
             };
             if !matches!(item.state, QueueItemState::Finished(_)) {
-                return Applied::rejected("only finished items can be retried");
+                return rejected("only finished items can be retried");
             }
             let patch = patch.unwrap_or_default();
             let operation = patch.operation.unwrap_or(item.operation);
@@ -1131,7 +1188,7 @@ fn apply_queue(state: &AppState, command: QueueCommand) -> Applied {
                 .output_target
                 .unwrap_or_else(|| item.output_target.clone());
             if let Err(reason) = output_target.validate() {
-                return Applied::rejected(reason);
+                return rejected(reason);
             }
             let overwrite = patch.overwrite.unwrap_or(item.overwrite);
             let mut applied = Applied::accepted();
@@ -1142,17 +1199,17 @@ fn apply_queue(state: &AppState, command: QueueCommand) -> Applied {
                 output_target,
                 overwrite,
             });
-            applied
+            Ok(applied)
         }
         QueueCommand::Edit { item_id, patch } => {
             if state.session != SessionState::Idle {
-                return Applied::rejected("queue items can only be edited while idle");
+                return rejected("queue items can only be edited while idle");
             }
             let Some(item) = find_item(state, item_id) else {
-                return Applied::rejected("queue item does not exist");
+                return rejected("queue item does not exist");
             };
             if !matches!(item.state, QueueItemState::Queued) {
-                return Applied::rejected("only queued items can be edited");
+                return rejected("only queued items can be edited");
             }
             let operation = patch.operation.unwrap_or(item.operation);
             let intent = patch.intent.unwrap_or(item.intent);
@@ -1160,7 +1217,7 @@ fn apply_queue(state: &AppState, command: QueueCommand) -> Applied {
                 .output_target
                 .unwrap_or_else(|| item.output_target.clone());
             if let Err(reason) = output_target.validate() {
-                return Applied::rejected(reason);
+                return rejected(reason);
             }
             let overwrite = patch.overwrite.unwrap_or(item.overwrite);
             if operation == item.operation
@@ -1168,7 +1225,7 @@ fn apply_queue(state: &AppState, command: QueueCommand) -> Applied {
                 && output_target == item.output_target
                 && overwrite == item.overwrite
             {
-                return Applied::accepted();
+                return Ok(Applied::accepted());
             }
             let mut applied = Applied::accepted();
             applied.durable.push(DurableDelta::QueueEdited {
@@ -1178,7 +1235,7 @@ fn apply_queue(state: &AppState, command: QueueCommand) -> Applied {
                 output_target,
                 overwrite,
             });
-            applied
+            Ok(applied)
         }
     }
 }
@@ -1191,15 +1248,15 @@ fn count_skip(skipped: &mut Vec<(SkipReason, u32)>, reason: SkipReason) {
     }
 }
 
-fn tools_transition(state: &AppState, next: ToolAvailability) -> Applied {
+fn tools_transition(state: &AppState, next: ToolAvailability) -> Result<Applied, Rejection> {
     let mut applied = Applied::accepted();
     if state.tools != next {
         applied.ephemeral.push(EphemeralDelta::ToolsChanged(next));
     }
-    applied
+    Ok(applied)
 }
 
-fn apply_history(state: &AppState, command: HistoryCommand) -> Applied {
+fn apply_history(state: &AppState, command: HistoryCommand) -> Result<Applied, Rejection> {
     match command {
         HistoryCommand::Import { records } => {
             let mut applied = Applied::accepted();
@@ -1226,17 +1283,17 @@ fn apply_history(state: &AppState, command: HistoryCommand) -> Applied {
                     .durable
                     .push(DurableDelta::HistoryImported { records: fresh });
             }
-            applied.reply = Reply::Imported { parked, skipped };
-            applied
+            applied.reply = SuccessReply::Imported { parked, skipped };
+            Ok(applied)
         }
     }
 }
 
-fn apply_session(state: &AppState, command: SessionCommand) -> Applied {
+fn apply_session(state: &AppState, command: SessionCommand) -> Result<Applied, Rejection> {
     match command {
         SessionCommand::Start if state.session == SessionState::Idle => {
             if let Some(summary) = state.tools.blocking_summary() {
-                return Applied::rejected(format!("media tools are unavailable: {summary}"));
+                return rejected(format!("media tools are unavailable: {summary}"));
             }
             let mut applied = Applied::accepted();
             applied
@@ -1248,17 +1305,17 @@ fn apply_session(state: &AppState, command: SessionCommand) -> Applied {
                 SessionAggregates::default(),
             ));
             applied.effects.push(Effect::StartWorker);
-            applied
+            Ok(applied)
         }
-        SessionCommand::Start => Applied::rejected("session is already active"),
+        SessionCommand::Start => rejected("session is already active"),
         SessionCommand::StopAfterCurrent if state.session == SessionState::Running => {
             let mut applied = Applied::accepted();
             applied.ephemeral.push(EphemeralDelta::SessionChanged(
                 SessionState::StopAfterCurrent,
             ));
-            applied
+            Ok(applied)
         }
-        SessionCommand::StopAfterCurrent => Applied::rejected("session is not running"),
+        SessionCommand::StopAfterCurrent => rejected("session is not running"),
         SessionCommand::ForceStop
             if matches!(
                 state.session,
@@ -1272,20 +1329,20 @@ fn apply_session(state: &AppState, command: SessionCommand) -> Applied {
             applied.effects.push(Effect::KillActiveRun {
                 run_id: active_run(state),
             });
-            applied
+            Ok(applied)
         }
-        SessionCommand::ForceStop => Applied::rejected("session is not running"),
+        SessionCommand::ForceStop => rejected("session is not running"),
     }
 }
 
-fn apply_worker(state: &AppState, command: WorkerCommand) -> Applied {
+fn apply_worker(state: &AppState, command: WorkerCommand) -> Result<Applied, Rejection> {
     match command {
         WorkerCommand::ReserveNext => {
             if state.session != SessionState::Running {
-                return Applied::rejected("session is not accepting another claim");
+                return rejected("session is not accepting another claim");
             }
             if active_run(state).is_some() {
-                return Applied::rejected("another queue item is active");
+                return rejected("another queue item is active");
             }
             let Some(item) = state
                 .durable
@@ -1294,12 +1351,12 @@ fn apply_worker(state: &AppState, command: WorkerCommand) -> Applied {
                 .find(|item| matches!(item.state, QueueItemState::Queued))
             else {
                 let mut applied = Applied::accepted();
-                applied.reply = Reply::Reserved(None);
-                return applied;
+                applied.reply = SuccessReply::Reserved(None);
+                return Ok(applied);
             };
             let (claim_id, run_id) = match state.durable.next_runtime_ids() {
                 Ok(ids) => ids,
-                Err(reason) => return Applied::rejected(reason),
+                Err(reason) => return rejected(reason),
             };
             let job = ReservedJob {
                 item_id: item.id,
@@ -1314,8 +1371,8 @@ fn apply_worker(state: &AppState, command: WorkerCommand) -> Applied {
             applied.durable.push(DurableDelta::ItemReserved {
                 job: Box::new(job.clone()),
             });
-            applied.reply = Reply::Reserved(Some(Box::new(job)));
-            applied
+            applied.reply = SuccessReply::Reserved(Some(Box::new(job)));
+            Ok(applied)
         }
         WorkerCommand::PrepareReserved {
             item_id,
@@ -1325,7 +1382,7 @@ fn apply_worker(state: &AppState, command: WorkerCommand) -> Applied {
             import_paths,
         } => {
             let Some(item) = find_item(state, item_id) else {
-                return Applied::rejected("queue item does not exist");
+                return rejected("queue item does not exist");
             };
             if !matches!(
                 item.state,
@@ -1334,7 +1391,7 @@ fn apply_worker(state: &AppState, command: WorkerCommand) -> Applied {
                     run_id: current_run,
                 } if current_claim == claim_id && current_run == run_id
             ) {
-                return Applied::rejected("worker preparation has a stale reservation");
+                return rejected("worker preparation has a stale reservation");
             }
             let content_key = observation
                 .as_ref()
@@ -1355,14 +1412,14 @@ fn apply_worker(state: &AppState, command: WorkerCommand) -> Applied {
             ) {
                 Ok(execution) => execution,
                 Err(unavailable) => {
-                    return Applied::rejected(format!(
+                    return rejected(format!(
                         "cannot compose claim execution: {}",
                         unavailable.summary()
                     ));
                 }
             };
             if let Err(reason) = execution.validate() {
-                return Applied::rejected(reason);
+                return rejected(reason);
             }
             // Compute import effects before selecting the action: replay
             // validation recomputes that action after these deltas fold, so
@@ -1389,7 +1446,7 @@ fn apply_worker(state: &AppState, command: WorkerCommand) -> Applied {
             if let Some(selected) = action.selected_analysis()
                 && let Err(reason) = selected.validate_reusable_for(&execution)
             {
-                return Applied::rejected(reason);
+                return rejected(reason);
             }
             let spec = JobSpec {
                 item_id,
@@ -1427,8 +1484,8 @@ fn apply_worker(state: &AppState, command: WorkerCommand) -> Applied {
             applied.durable.push(DurableDelta::ItemPrepared {
                 spec: Box::new(spec.clone()),
             });
-            applied.reply = Reply::Claimed(Some(Box::new(ClaimedJob { spec })));
-            applied
+            applied.reply = SuccessReply::Claimed(Some(Box::new(ClaimedJob { spec })));
+            Ok(applied)
         }
         WorkerCommand::ReleaseReservation {
             item_id,
@@ -1436,10 +1493,10 @@ fn apply_worker(state: &AppState, command: WorkerCommand) -> Applied {
             run_id,
         } => {
             if state.session != SessionState::Idle {
-                return Applied::rejected("reservation release requires idle recovery");
+                return rejected("reservation release requires idle recovery");
             }
             if let Err(reason) = validate_reservation(&state.durable, item_id, claim_id, run_id) {
-                return Applied::rejected(reason);
+                return rejected(reason);
             }
             let mut applied = Applied::accepted();
             applied.durable.push(DurableDelta::ReservationReleased {
@@ -1447,7 +1504,7 @@ fn apply_worker(state: &AppState, command: WorkerCommand) -> Applied {
                 claim_id,
                 run_id,
             });
-            applied
+            Ok(applied)
         }
         WorkerCommand::AbandonReservation {
             item_id,
@@ -1457,16 +1514,16 @@ fn apply_worker(state: &AppState, command: WorkerCommand) -> Applied {
             disposition,
         } => {
             if let Err(reason) = validate_reservation(&state.durable, item_id, claim_id, run_id) {
-                return Applied::rejected(reason);
+                return rejected(reason);
             }
             let outcome = disposition.into_outcome();
             if matches!(outcome, ItemOutcome::Stopped)
                 && state.session != SessionState::ForceStopping
             {
-                return Applied::rejected("stopped outcome requires a user force stop");
+                return rejected("stopped outcome requires a user force stop");
             }
             if let Err(reason) = validate_reservation_outcome(&outcome) {
-                return Applied::rejected(reason);
+                return rejected(reason);
             }
             let mut applied = Applied::accepted();
             let mut aggregates = state.aggregates;
@@ -1482,7 +1539,7 @@ fn apply_worker(state: &AppState, command: WorkerCommand) -> Applied {
                 at,
                 phase_spans: Vec::new(),
             });
-            applied
+            Ok(applied)
         }
         WorkerCommand::Started {
             item_id,
@@ -1491,7 +1548,7 @@ fn apply_worker(state: &AppState, command: WorkerCommand) -> Applied {
             at,
         } => {
             if let Err(reason) = validate_started(&state.durable, item_id, claim_id, run_id) {
-                return Applied::rejected(reason);
+                return rejected(reason);
             }
             let mut applied = Applied::accepted();
             applied.durable.push(DurableDelta::ItemRunning {
@@ -1500,16 +1557,16 @@ fn apply_worker(state: &AppState, command: WorkerCommand) -> Applied {
                 run_id,
                 at,
             });
-            applied
+            Ok(applied)
         }
         WorkerCommand::Output(output_delta) => {
             if let Err(reason) = crate::output::validate_output_delta(&state.durable, &output_delta)
             {
-                return Applied::rejected(reason);
+                return rejected(reason);
             }
             let mut applied = Applied::accepted();
             applied.durable.push(DurableDelta::Output(output_delta));
-            applied
+            Ok(applied)
         }
         WorkerCommand::RecordAnalysis {
             item_id,
@@ -1520,13 +1577,13 @@ fn apply_worker(state: &AppState, command: WorkerCommand) -> Applied {
             if let Err(reason) =
                 validate_analysis_recorded(&state.durable, item_id, claim_id, run_id, &result)
             {
-                return Applied::rejected(reason);
+                return rejected(reason);
             }
             let mut applied = Applied::accepted();
             applied
                 .durable
                 .push(DurableDelta::AnalysisRecorded { run_id, result });
-            applied
+            Ok(applied)
         }
         WorkerCommand::Terminal {
             item_id,
@@ -1540,12 +1597,12 @@ fn apply_worker(state: &AppState, command: WorkerCommand) -> Applied {
             if matches!(outcome, ItemOutcome::Stopped)
                 && state.session != SessionState::ForceStopping
             {
-                return Applied::rejected("stopped outcome requires a user force stop");
+                return rejected("stopped outcome requires a user force stop");
             }
             if let Err(reason) =
                 validate_prepared_terminal(&state.durable, item_id, claim_id, run_id, &outcome)
             {
-                return Applied::rejected(reason);
+                return rejected(reason);
             }
             let mut applied = Applied::accepted();
             if let Some(telemetry) = final_telemetry {
@@ -1567,20 +1624,20 @@ fn apply_worker(state: &AppState, command: WorkerCommand) -> Applied {
                 at,
                 phase_spans,
             });
-            applied
+            Ok(applied)
         }
         WorkerCommand::Finished => {
             if active_run(state).is_some() {
-                return Applied::rejected("worker cannot finish while an item is active");
+                return rejected("worker cannot finish while an item is active");
             }
             if state.session == SessionState::Idle {
-                return Applied::accepted();
+                return Ok(Applied::accepted());
             }
             let mut applied = Applied::accepted();
             applied
                 .ephemeral
                 .push(EphemeralDelta::SessionChanged(SessionState::Idle));
-            applied
+            Ok(applied)
         }
         WorkerCommand::Crashed { message } => {
             let mut applied = Applied::accepted();
@@ -1588,7 +1645,7 @@ fn apply_worker(state: &AppState, command: WorkerCommand) -> Applied {
                 .ephemeral
                 .push(EphemeralDelta::WorkerCrashed { message });
             applied.effects.push(Effect::StopDriver);
-            applied
+            Ok(applied)
         }
     }
 }
