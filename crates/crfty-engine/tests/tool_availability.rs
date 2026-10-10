@@ -19,11 +19,11 @@ use std::{
 use crfty_core::{
     AnalysisIntent, AnalysisProfile, AnalysisResult, AppState, ClaimId, Command, Crf, DurableDelta,
     EphemeralDelta, ExecutionSettings, ItemOutcome, LocatedTool, LocatedTools, MediaTool,
-    Operation, OutputDelta, OutputTarget, OverwriteDecision, ProbeFailure, QueueAddRequest,
-    QueueCommand, QueueItemId, QueueItemState, Replacement, Reply, RunId, SearchMeasurement,
-    SessionCommand, SessionState, Settings, SettingsCommand, ToolAvailability, ToolCapability,
-    ToolLocationFailure, ToolPathSettings, ToolRevisions, ToolSource, ToolVerification,
-    ToolsCommand, UnixMillis, VmafScore, WorkerCommand, apply,
+    Operation, OutputDelta, OutputTarget, OverwriteDecision, ProbeFailure, QualityScore,
+    QueueAddRequest, QueueCommand, QueueItemId, QueueItemState, Replacement, Reply, RunId,
+    SearchMeasurement, SessionCommand, SessionState, Settings, SettingsCommand, ToolAvailability,
+    ToolCapability, ToolLocationFailure, ToolPathSettings, ToolRevisions, ToolSource,
+    ToolVerification, ToolsCommand, UnixMillis, WorkerCommand, apply,
 };
 
 fn add_one(item_id: QueueItemId, input: PathBuf) -> QueueCommand {
@@ -316,7 +316,7 @@ fn startup_recovery_without_ffprobe_defers_output_settlement() {
                 failed_attempts: Vec::new(),
                 measurement: SearchMeasurement {
                     crf: Crf(30_000),
-                    score: VmafScore(9_500),
+                    score: QualityScore::vmaf(9_500),
                     predicted_size: 1_000,
                     predicted_percent_basis_points: 5_000,
                     predicted_duration_ms: 60_000,

@@ -61,7 +61,7 @@ Content identity is the sampled probabilistic `ContentKey`, so duplicate reuse a
 
 ## Analysis reuse and VMAF targets
 
-Each content record stores analyses as a map from `AnalysisProfile` to a map from the successful `VmafTarget` to the result. The profile is the reuse identity: preset, maximum encoded percent, sample count, sample duration, thorough flag, decode mode, and the ab-av1, FFmpeg, and encoder revisions. Reuse requires exact profile equality, so a tool upgrade or settings change starts a new search.
+Each content record stores analyses as a map from `AnalysisProfile` to a map from the successful `QualityTarget` to the result. A target carries its metric and whole-point value (ADR-022). The profile covers preset, maximum encoded percent, sample count, sample duration, thorough flag, decode mode, and the ab-av1, FFmpeg, and encoder revisions. Reuse requires exact profile equality and a matching quality metric, so a tool upgrade, metric change, or settings change starts a new search. Both index levels serialize as ordered entry lists to retain their structured keys.
 
 Selection for a requested target T works as follows.
 

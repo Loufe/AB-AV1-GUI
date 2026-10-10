@@ -19,8 +19,8 @@
                 "Converted": {
                   "quality": {
                     "crf": 30000,
-                    "score": 9500,
-                    "target": 95
+                    "score": { "metric": "Vmaf", "value": 9500 },
+                    "target": { "metric": "Vmaf", "value": 95 }
                   },
                   "output_size": 600,
                   "encode_duration": 5000
@@ -45,8 +45,8 @@
                 "Converted": {
                   "quality": {
                     "crf": 30000,
-                    "score": 9500,
-                    "target": 95
+                    "score": { "metric": "Vmaf", "value": 9500 },
+                    "target": { "metric": "Vmaf", "value": 95 }
                   },
                   "output_size": 600,
                   "encode_duration": 5000
@@ -69,8 +69,8 @@
               },
               "outcome": {
                 "NotWorthwhile": {
-                  "requested": 95,
-                  "floor": 90
+                  "requested": { "metric": "Vmaf", "value": 95 },
+                  "floor": { "metric": "Vmaf", "value": 90 }
                 }
               },
               "updated_at": null
@@ -92,8 +92,8 @@
                 "Converted": {
                   "quality": {
                     "crf": 30000,
-                    "score": 9500,
-                    "target": 95
+                    "score": { "metric": "Vmaf", "value": 9500 },
+                    "target": { "metric": "Vmaf", "value": 95 }
                   },
                   "output_size": 600,
                   "encode_duration": 5000
@@ -142,8 +142,8 @@
                 "Converted": {
                   "quality": {
                     "crf": 30000,
-                    "score": 9500,
-                    "target": 95
+                    "score": { "metric": "Vmaf", "value": 9500 },
+                    "target": { "metric": "Vmaf", "value": 95 }
                   },
                   "output_size": 600,
                   "encode_duration": 5000
@@ -166,8 +166,8 @@
               },
               "outcome": {
                 "NotWorthwhile": {
-                  "requested": 95,
-                  "floor": 90
+                  "requested": { "metric": "Vmaf", "value": 95 },
+                  "floor": { "metric": "Vmaf", "value": 90 }
                 }
               },
               "updated_at": 1758000003000

@@ -302,12 +302,7 @@ function lastRecordedAnalysis(record: FileRecord_Deserialize): AnalysisResult | 
   if (entry === undefined) {
     return null;
   }
-  const byTarget = entry[1];
-  const targets = Object.keys(byTarget)
-    .map(Number)
-    .sort((a, b) => a - b);
-  const highest = targets.at(-1);
-  return highest === undefined ? null : byTarget[highest];
+  return entry[1].at(-1)?.[1] ?? null;
 }
 
 function importedStatus(imported: ImportedHistoryRecord): HistoryStatus | null {
@@ -317,8 +312,8 @@ function importedStatus(imported: ImportedHistoryRecord): HistoryStatus | null {
     case "NotWorthwhile":
       return {
         NotWorthwhile: {
-          requested: imported.requested_target ?? 95,
-          floor: imported.floor_target ?? 90,
+          requested: imported.requested_target ?? { metric: "Vmaf", value: 95 },
+          floor: imported.floor_target ?? { metric: "Vmaf", value: 90 },
         },
       };
     case "Analyzed":

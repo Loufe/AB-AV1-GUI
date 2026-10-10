@@ -19,8 +19,8 @@
                 "Converted": {
                   "quality": {
                     "crf": 30000,
-                    "score": 9500,
-                    "target": 95
+                    "score": { "metric": "Vmaf", "value": 9500 },
+                    "target": { "metric": "Vmaf", "value": 95 }
                   },
                   "output_size": 600,
                   "encode_duration": 5000
@@ -58,8 +58,8 @@
                 "Converted": {
                   "quality": {
                     "crf": 30000,
-                    "score": 9500,
-                    "target": 95
+                    "score": { "metric": "Vmaf", "value": 9500 },
+                    "target": { "metric": "Vmaf", "value": 95 }
                   },
                   "output_size": 600,
                   "encode_duration": 5000
@@ -84,8 +84,8 @@
                 "Converted": {
                   "quality": {
                     "crf": 30000,
-                    "score": 10001,
-                    "target": 95
+                    "score": { "metric": "Vmaf", "value": 10001 },
+                    "target": { "metric": "Vmaf", "value": 95 }
                   },
                   "output_size": 600,
                   "encode_duration": null
@@ -108,8 +108,8 @@
               },
               "outcome": {
                 "NotWorthwhile": {
-                  "requested": 90,
-                  "floor": 95
+                  "requested": { "metric": "Vmaf", "value": 90 },
+                  "floor": { "metric": "Vmaf", "value": 95 }
                 }
               },
               "updated_at": 1758000004000
@@ -174,8 +174,8 @@
                 "Converted": {
                   "quality": {
                     "crf": 30000,
-                    "score": 9500,
-                    "target": 95
+                    "score": { "metric": "Vmaf", "value": 9500 },
+                    "target": { "metric": "Vmaf", "value": 95 }
                   },
                   "output_size": 600,
                   "encode_duration": 5000
@@ -230,8 +230,8 @@
               },
               "outcome": {
                 "NotWorthwhile": {
-                  "requested": 90,
-                  "floor": 95
+                  "requested": { "metric": "Vmaf", "value": 90 },
+                  "floor": { "metric": "Vmaf", "value": 95 }
                 }
               },
               "updated_at": 1758000004000
@@ -253,8 +253,8 @@
                 "Converted": {
                   "quality": {
                     "crf": 30000,
-                    "score": 9500,
-                    "target": 95
+                    "score": { "metric": "Vmaf", "value": 9500 },
+                    "target": { "metric": "Vmaf", "value": 95 }
                   },
                   "output_size": 600,
                   "encode_duration": 5000

@@ -33,9 +33,9 @@ use serde::{Deserialize, Serialize};
 
 use crate::{
     AnalysisAttempt, AnalysisResult, CompletionEvidence, ContentKey, ConversionRun, DecodeMode,
-    DurableState, DurationMs, FailureFacts, ItemOutcome, JobPhase, Operation, PhaseSpan, RunId,
-    SearchMeasurement, ToolRevisions, TranslatedId, TranslatedObservation, TranslatedOutcome,
-    TranslatedQuality, TranslatedSource, UnixMillis, VideoCodec, VmafTarget,
+    DurableState, DurationMs, FailureFacts, ItemOutcome, JobPhase, Operation, PhaseSpan,
+    QualityTarget, RunId, SearchMeasurement, ToolRevisions, TranslatedId, TranslatedObservation,
+    TranslatedOutcome, TranslatedQuality, TranslatedSource, UnixMillis, VideoCodec,
 };
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -117,8 +117,8 @@ pub enum ObservedOutcome {
     /// [`EncodeMeasurement::Live`]'s decode mode; a queue retry is a new run
     /// and therefore a new observation.
     NotWorthwhile {
-        requested: VmafTarget,
-        floor: VmafTarget,
+        requested: QualityTarget,
+        floor: QualityTarget,
         attempts: Vec<AnalysisAttempt>,
     },
     Failed {
@@ -223,8 +223,8 @@ pub enum DecisiveKind {
     Converted,
     Remuxed,
     NotWorthwhile {
-        requested: VmafTarget,
-        floor: VmafTarget,
+        requested: QualityTarget,
+        floor: QualityTarget,
     },
 }
 
@@ -293,8 +293,8 @@ pub enum ImportedKind<'a> {
         encode_duration: Option<DurationMs>,
     },
     NotWorthwhile {
-        requested: Option<VmafTarget>,
-        floor: Option<VmafTarget>,
+        requested: Option<QualityTarget>,
+        floor: Option<QualityTarget>,
     },
 }
 
@@ -419,6 +419,20 @@ impl NativeObservation {
                 attempts,
             } => {
                 requested.validate()?;
+                floor.validate()?;
+                if floor.metric != requested.metric
+                    || attempts.iter().any(|attempt| {
+                        attempt.target.metric != requested.metric
+                            || attempt
+                                .last_measurement
+                                .as_ref()
+                                .is_some_and(|measurement| {
+                                    measurement.score.metric != requested.metric
+                                })
+                    })
+                {
+                    return Err("not-worthwhile quality evidence uses different metrics");
+                }
                 if floor > requested {
                     return Err("not-worthwhile floor exceeds the requested target");
                 }
@@ -750,8 +764,8 @@ mod tests {
     use crate::test_support::{analysis, finished_run, identity, key, live, meta};
     use crate::{
         ArtifactIdentity, ConversionRun, Crf, DurableState, FailureKind, FileRecord, ImportOrigin,
-        JobAction, OutputState, OutputTransaction, RecordKey, Replacement, SkipReason, VideoCodec,
-        VmafScore,
+        JobAction, OutputState, OutputTransaction, QualityScore, RecordKey, Replacement,
+        SkipReason, VideoCodec,
     };
 
     const FINISHED: UnixMillis = UnixMillis(1_700_000_000_000);
@@ -799,7 +813,7 @@ mod tests {
     fn not_worthwhile() -> ItemOutcome {
         ItemOutcome::NotWorthwhile {
             attempts: vec![AnalysisAttempt {
-                target: VmafTarget(95),
+                target: QualityTarget::vmaf(95),
                 last_measurement: None,
             }],
         }
@@ -914,8 +928,8 @@ mod tests {
         assert!(matches!(
             not_worthwhile,
             ObservedOutcome::NotWorthwhile {
-                requested: VmafTarget(95),
-                floor: VmafTarget(90),
+                requested: QualityTarget { value: 95, .. },
+                floor: QualityTarget { value: 90, .. },
                 ..
             }
         ));
@@ -1071,8 +1085,8 @@ mod tests {
         TranslatedOutcome::Converted {
             quality: TranslatedQuality {
                 crf: Some(Crf(30_000)),
-                score: Some(VmafScore(9_512)),
-                target: Some(VmafTarget(95)),
+                score: Some(QualityScore::vmaf(9_512)),
+                target: Some(QualityTarget::vmaf(95)),
             },
             output_size: Some(3_000),
             encode_duration: Some(DurationMs(240_000)),
@@ -1188,14 +1202,14 @@ mod tests {
         let declined = Observation::Translated(translated(
             "00000000000000a4",
             TranslatedOutcome::NotWorthwhile {
-                requested: Some(VmafTarget(95)),
+                requested: Some(QualityTarget::vmaf(95)),
                 floor: None,
             },
         ));
         assert_eq!(
             declined.imported_fact().map(|fact| fact.kind),
             Some(ImportedKind::NotWorthwhile {
-                requested: Some(VmafTarget(95)),
+                requested: Some(QualityTarget::vmaf(95)),
                 floor: None,
             })
         );
@@ -1244,7 +1258,7 @@ mod tests {
         assert_eq!(reduction.sizes.reduction_bytes(), 5_000);
         assert_eq!(
             reduction.search.map(|found| found.measurement.score),
-            Some(VmafScore(9_512))
+            Some(QualityScore::vmaf(9_512))
         );
         assert_eq!(
             matched
@@ -1416,7 +1430,7 @@ mod tests {
 
         let mut inconsistent = converted.clone();
         if let ObservedOutcome::Converted { search, .. } = &mut inconsistent.outcome {
-            search.analysis.successful_target = VmafTarget(99);
+            search.analysis.successful_target = QualityTarget::vmaf(99);
         }
         assert_eq!(
             inconsistent.validate(),
@@ -1435,7 +1449,7 @@ mod tests {
         let mut below_floor = declined.clone();
         if let ObservedOutcome::NotWorthwhile { attempts, .. } = &mut below_floor.outcome {
             for attempt in attempts.iter_mut() {
-                attempt.target = VmafTarget(80);
+                attempt.target = QualityTarget::vmaf(80);
             }
         }
         assert_eq!(
@@ -1445,7 +1459,7 @@ mod tests {
 
         let mut inverted = declined.clone();
         if let ObservedOutcome::NotWorthwhile { floor, .. } = &mut inverted.outcome {
-            *floor = VmafTarget(99);
+            *floor = QualityTarget::vmaf(99);
         }
         assert_eq!(
             inverted.validate(),

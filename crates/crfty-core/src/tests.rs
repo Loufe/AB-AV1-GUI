@@ -21,14 +21,14 @@ use crate::{
     JournalSequence, LocatedTool, LocatedTools, MediaContainer, MediaObservation, MediaTool,
     Operation, OutputDelta, OutputRecoveryAction, OutputState, OutputTarget, OutputTransaction,
     OverwriteDecision, ParkedResolution, ParkedStatus, PathBinding, PathHash, PhaseSpan,
-    ProbeFailure, ProjectionCommand, QueueAddRequest, QueueCommand, QueueItemEdit, QueueItemId,
-    QueueItemState, Replacement, Reply, RunId, SearchMeasurement, SessionAggregates,
-    SessionCommand, SessionState, Settings, SettingsCommand, SkipReason, SystemCommand, Telemetry,
-    ToolAvailability, ToolCapability, ToolLocationFailure, ToolPathSettings, ToolRevisions,
-    ToolSource, ToolVerification, ToolsCommand, UnixMillis, VideoCodec, VideoMeta, VmafScore,
-    VmafTarget, WorkerCommand, apply, compaction_due, compaction_quiescent, corruption_signature,
-    encode_record, encode_snapshot, observations, permitted_profiles, recover_output, replay,
-    resolve_parked, select_job_action,
+    ProbeFailure, ProjectionCommand, QualityScore, QualityTarget, QueueAddRequest, QueueCommand,
+    QueueItemEdit, QueueItemId, QueueItemState, Replacement, Reply, RunId, SearchMeasurement,
+    SessionAggregates, SessionCommand, SessionState, Settings, SettingsCommand, SkipReason,
+    SystemCommand, Telemetry, ToolAvailability, ToolCapability, ToolLocationFailure,
+    ToolPathSettings, ToolRevisions, ToolSource, ToolVerification, ToolsCommand, UnixMillis,
+    VideoCodec, VideoMeta, WorkerCommand, apply, compaction_due, compaction_quiescent,
+    corruption_signature, encode_record, encode_snapshot, observations, permitted_profiles,
+    recover_output, replay, resolve_parked, select_job_action,
 };
 
 fn revisions() -> ToolRevisions {
@@ -200,7 +200,7 @@ fn analysis() -> AnalysisResult {
         failed_attempts: Vec::new(),
         measurement: SearchMeasurement {
             crf: Crf(30_000),
-            score: VmafScore(9_500),
+            score: QualityScore::vmaf(9_500),
             predicted_size: 1_000,
             predicted_percent_basis_points: 5_000,
             predicted_duration_ms: 60_000,
@@ -343,8 +343,8 @@ fn base_execution_is_configured_before_claims_compose_from_it() {
     assert_eq!(state.execution, ExecutionSettings::default());
 
     let mut configured = ExecutionSettings {
-        requested_target: VmafTarget(90),
-        fallback_floor: VmafTarget(80),
+        requested_target: QualityTarget::vmaf(90),
+        fallback_floor: QualityTarget::vmaf(80),
         ..ExecutionSettings::default()
     };
     configured.profile.preset = 4;
@@ -363,12 +363,12 @@ fn base_execution_is_configured_before_claims_compose_from_it() {
     let Reply::Claimed(Some(job)) = prepared.reply else {
         panic!("expected claimed job");
     };
-    assert_eq!(job.spec.execution.requested_target, VmafTarget(90));
-    assert_eq!(job.spec.execution.fallback_floor, VmafTarget(80));
+    assert_eq!(job.spec.execution.requested_target, QualityTarget::vmaf(90));
+    assert_eq!(job.spec.execution.fallback_floor, QualityTarget::vmaf(80));
     assert_eq!(job.spec.execution.profile.preset, 4);
     let mut expected = execution();
-    expected.requested_target = VmafTarget(90);
-    expected.fallback_floor = VmafTarget(80);
+    expected.requested_target = QualityTarget::vmaf(90);
+    expected.fallback_floor = QualityTarget::vmaf(80);
     expected.profile.preset = 4;
     assert_eq!(job.spec.execution, expected);
 }
@@ -1421,7 +1421,7 @@ fn a_recorded_analysis_refreshes_its_row_after_the_scan_is_ready() {
         crate::ApplicableLevel::Analyzed {
             prediction: crate::SearchPrediction {
                 crf: Crf(30_000),
-                score: VmafScore(9_500),
+                score: QualityScore::vmaf(9_500),
                 predicted_size: 1_000,
                 predicted_percent_basis_points: 5_000,
                 predicted_duration_ms: 60_000,
@@ -2051,17 +2051,17 @@ fn analysis_selection_prefers_exact_then_lowest_qualifying_target() {
     let settings = execution();
     let mut record = FileRecord::new(media_observation("selection").metadata);
     let mut fallback = analysis();
-    fallback.successful_target = VmafTarget(93);
-    fallback.requested_target = VmafTarget(95);
+    fallback.successful_target = QualityTarget::vmaf(93);
+    fallback.requested_target = QualityTarget::vmaf(95);
     fallback.failed_attempts = vec![crate::AnalysisAttempt {
-        target: VmafTarget(95),
+        target: QualityTarget::vmaf(95),
         last_measurement: None,
     }];
     let mut exact = analysis();
-    exact.successful_target = VmafTarget(95);
+    exact.successful_target = QualityTarget::vmaf(95);
     let mut higher = analysis();
-    higher.successful_target = VmafTarget(96);
-    higher.requested_target = VmafTarget(96);
+    higher.successful_target = QualityTarget::vmaf(96);
+    higher.requested_target = QualityTarget::vmaf(96);
     record.record_analysis(fallback);
     record.record_analysis(higher);
     record.record_analysis(exact.clone());
@@ -2071,10 +2071,58 @@ fn analysis_selection_prefers_exact_then_lowest_qualifying_target() {
     );
 
     let mut lower_request = settings;
-    lower_request.requested_target = VmafTarget(94);
+    lower_request.requested_target = QualityTarget::vmaf(94);
     let selected =
         crate::policy::select_analysis(&record, &lower_request).expect("qualifying analysis");
-    assert_eq!(selected.successful_target, VmafTarget(95));
+    assert_eq!(selected.successful_target, QualityTarget::vmaf(95));
+}
+
+#[test]
+fn analysis_metric_is_explicit_in_index_and_unknown_requests_are_rejected()
+-> Result<(), Box<dyn std::error::Error>> {
+    let mut record = FileRecord::new(media_observation("metric-selection").metadata);
+    record.record_analysis(analysis());
+    let wire = serde_json::to_value(&record)?;
+    assert_eq!(
+        wire.pointer("/analyses/0/1/0/0/metric"),
+        Some(&serde_json::json!("Vmaf"))
+    );
+    let restored: FileRecord = serde_json::from_value(wire)?;
+    let mut request = serde_json::to_value(execution())?;
+    assert!(crate::policy::select_analysis(&restored, &execution()).is_some());
+    for metric in ["Xpsnr", "Ssim", ""] {
+        let Some(target) = request.get_mut("requested_target") else {
+            panic!("serialized execution carries a target");
+        };
+        *target = serde_json::json!({ "metric": metric, "value": 95 });
+        assert!(serde_json::from_value::<ExecutionSettings>(request.clone()).is_err());
+    }
+    Ok(())
+}
+
+#[test]
+fn quality_values_preserve_units_and_reject_untagged_evidence()
+-> Result<(), Box<dyn std::error::Error>> {
+    let target = QualityTarget::vmaf(95);
+    let score = QualityScore::vmaf(9_512);
+    assert_eq!(
+        serde_json::to_value(target)?,
+        serde_json::json!({ "metric": "Vmaf", "value": 95 })
+    );
+    assert_eq!(
+        serde_json::to_value(score)?,
+        serde_json::json!({ "metric": "Vmaf", "value": 9512 })
+    );
+    assert_eq!(score.normalized(), 95.12);
+    for wire in [
+        serde_json::json!(95),
+        serde_json::json!({ "value": 95 }),
+        serde_json::json!({ "metric": "Xpsnr", "value": 95 }),
+    ] {
+        assert!(serde_json::from_value::<QualityTarget>(wire.clone()).is_err());
+        assert!(serde_json::from_value::<QualityScore>(wire).is_err());
+    }
+    Ok(())
 }
 
 #[test]
@@ -4114,8 +4162,8 @@ fn verdict_freshness_is_a_full_identity_match_against_the_settled_output() {
     // Not-worthwhile is content-keyed; path state is irrelevant.
     let not_worthwhile = crate::Verdict {
         kind: crate::VerdictKind::NotWorthwhile {
-            requested: VmafTarget(95),
-            floor: VmafTarget(90),
+            requested: QualityTarget::vmaf(95),
+            floor: QualityTarget::vmaf(90),
         },
         source_run: Some(RunId(3)),
         decided_at: UnixMillis(5_000),
@@ -4582,7 +4630,7 @@ fn claim_not_worthwhile_skip_respects_the_fallback_floor() {
     );
     // A ladder reaching below the decided floor is untried ground.
     let mut deeper = execution.clone();
-    deeper.fallback_floor = VmafTarget(execution.fallback_floor.0 - 1);
+    deeper.fallback_floor = QualityTarget::vmaf(execution.fallback_floor.value - 1);
     assert_eq!(
         select_job_action(
             Some(&metadata),
@@ -6188,10 +6236,10 @@ fn parked_record(status: ParkedStatus) -> ImportedHistoryRecord {
         output_size: Some(4_000),
         encoding_time: Some(DurationMs(120_000)),
         crf: Some(Crf(30_000)),
-        vmaf: Some(VmafScore(9_512)),
-        target: Some(VmafTarget(95)),
-        requested_target: Some(VmafTarget(94)),
-        floor_target: Some(VmafTarget(91)),
+        vmaf: Some(QualityScore::vmaf(9_512)),
+        target: Some(QualityTarget::vmaf(95)),
+        requested_target: Some(QualityTarget::vmaf(94)),
+        floor_target: Some(QualityTarget::vmaf(91)),
         decided_at: UnixMillis(1_000),
     }
 }
@@ -6218,8 +6266,8 @@ fn resolve_parked_adopts_on_stamp_match_by_status() {
             output_size: Some(4_000),
             encoding_time: Some(DurationMs(120_000)),
             crf: Some(Crf(30_000)),
-            vmaf: Some(VmafScore(9_512)),
-            target: Some(VmafTarget(95)),
+            vmaf: Some(QualityScore::vmaf(9_512)),
+            target: Some(QualityTarget::vmaf(95)),
         }
     );
 
@@ -6233,8 +6281,8 @@ fn resolve_parked_adopts_on_stamp_match_by_status() {
     assert_eq!(
         verdict.kind,
         crate::VerdictKind::NotWorthwhile {
-            requested: VmafTarget(94),
-            floor: VmafTarget(91),
+            requested: QualityTarget::vmaf(94),
+            floor: QualityTarget::vmaf(91),
         }
     );
 
@@ -6370,8 +6418,8 @@ fn history_deltas_fold_park_adopt_and_retire() {
     );
     let adopted_verdict = crate::Verdict {
         kind: crate::VerdictKind::NotWorthwhile {
-            requested: VmafTarget(95),
-            floor: VmafTarget(90),
+            requested: QualityTarget::vmaf(95),
+            floor: QualityTarget::vmaf(90),
         },
         source_run: None,
         decided_at: UnixMillis(1_000),
@@ -6622,8 +6670,8 @@ fn adoption_never_overwrites_a_native_verdict() {
     );
     let native = crate::Verdict {
         kind: crate::VerdictKind::NotWorthwhile {
-            requested: VmafTarget(95),
-            floor: VmafTarget(90),
+            requested: QualityTarget::vmaf(95),
+            floor: QualityTarget::vmaf(90),
         },
         source_run: Some(RunId(6)),
         decided_at: UnixMillis(9_000),
@@ -6731,8 +6779,8 @@ fn finished_verdict_absorbs_the_measured_summary() {
             output_size: Some(4_000),
             encoding_time: Some(DurationMs(120_000)),
             crf: Some(Crf(30_000)),
-            vmaf: Some(VmafScore(9_500)),
-            target: Some(VmafTarget(95)),
+            vmaf: Some(QualityScore::vmaf(9_500)),
+            target: Some(QualityTarget::vmaf(95)),
         }
     );
 
@@ -6800,8 +6848,8 @@ fn adopted_verdicts_apply_only_by_content_identity() {
     ));
     let adopted_not_worthwhile = crate::Verdict {
         kind: crate::VerdictKind::NotWorthwhile {
-            requested: VmafTarget(95),
-            floor: VmafTarget(90),
+            requested: QualityTarget::vmaf(95),
+            floor: QualityTarget::vmaf(90),
         },
         source_run: None,
         decided_at: UnixMillis(1_000),
@@ -6895,11 +6943,11 @@ fn not_worthwhile_terminal_validates_attempt_consistency() {
     let coherent = ItemOutcome::NotWorthwhile {
         attempts: vec![
             crate::AnalysisAttempt {
-                target: VmafTarget(95),
+                target: QualityTarget::vmaf(95),
                 last_measurement: Some(analysis().measurement),
             },
             crate::AnalysisAttempt {
-                target: VmafTarget(90),
+                target: QualityTarget::vmaf(90),
                 last_measurement: None,
             },
         ],
@@ -6909,7 +6957,7 @@ fn not_worthwhile_terminal_validates_attempt_consistency() {
     // An attempt above the requested target cannot belong to this job.
     let above_requested = ItemOutcome::NotWorthwhile {
         attempts: vec![crate::AnalysisAttempt {
-            target: VmafTarget(96),
+            target: QualityTarget::vmaf(96),
             last_measurement: None,
         }],
     };

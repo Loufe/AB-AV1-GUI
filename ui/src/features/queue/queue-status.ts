@@ -10,8 +10,9 @@ import type {
   RunId,
   SkipReason,
   Telemetry,
-  VmafScore,
+  QualityScore,
 } from "@/lib/bindings";
+import { formatVmafTarget } from "@/lib/format/engine-values";
 
 /** D11 confidence ramp: values step down a muted-color ramp, no tildes. */
 export type EstimateConfidence = "exact" | "estimate" | "rough";
@@ -46,7 +47,7 @@ export interface QueueRowData {
   timeMs: DurationMs | null;
   timeConfidence: EstimateConfidence;
   crf: Crf | null;
-  vmaf: VmafScore | null;
+  vmaf: QualityScore | null;
   status: RowStatus;
 }
 
@@ -166,7 +167,7 @@ function notWorthwhileDetail(outcome: Extract<ItemOutcome, object>): string | nu
   const last = attempts[attempts.length - 1];
   if (last === undefined || last.last_measurement === null) return null;
   const savedPercent = 100 - last.last_measurement.predicted_percent_basis_points / 100;
-  return `Best attempt saved ${savedPercent.toFixed(0)}% at the VMAF ${last.target} floor`;
+  return `Best attempt saved ${savedPercent.toFixed(0)}% at the VMAF ${formatVmafTarget(last.target)} floor`;
 }
 
 /** Output column text; Analyze items produce no file (parity rule). */

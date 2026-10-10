@@ -12,8 +12,8 @@ use std::{
 
 use crfty_core::{
     AnalysisIntent, AnalysisProfile, DecodeMode, DecodePreference, DurableDelta, ExecutionSettings,
-    Operation, OutputTarget, OverwriteDecision, QueueAddRequest, QueueCommand, QueueItemId,
-    SessionCommand, VmafTarget,
+    Operation, OutputTarget, OverwriteDecision, QualityTarget, QueueAddRequest, QueueCommand,
+    QueueItemId, SessionCommand,
 };
 
 fn add_convert_with_suffix(input: &Path, suffix: &str) -> QueueCommand {
@@ -34,7 +34,7 @@ fn add_convert_with_suffix(input: &Path, suffix: &str) -> QueueCommand {
     }
 }
 
-const REAL_CONTRACT_TARGET: VmafTarget = VmafTarget(80);
+const REAL_CONTRACT_TARGET: QualityTarget = QualityTarget::vmaf(80);
 const REAL_CONTRACT_PRESET: u8 = 12;
 const REAL_CONTRACT_MAX_ENCODED_PERCENT_BASIS_POINTS: u32 = 50_000;
 const REAL_CONTRACT_SAMPLE_COUNT: u64 = 1;

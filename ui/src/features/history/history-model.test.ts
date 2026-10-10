@@ -105,7 +105,12 @@ describe("History standing vocabulary", () => {
     const statuses: HistoryStatus[] = [
       "Converted",
       "Remuxed",
-      { NotWorthwhile: { requested: 95, floor: 90 } },
+      {
+        NotWorthwhile: {
+          requested: { metric: "Vmaf", value: 95 },
+          floor: { metric: "Vmaf", value: 90 },
+        },
+      },
       "Analyzed",
       { Failed: { kind: "SearchRun", message: "anonymized failure" } },
       "Stopped",
@@ -137,9 +142,14 @@ describe("History standing vocabulary", () => {
   });
 
   it("preserves failure and not-worthwhile facts", () => {
-    expect(statusPresentation({ NotWorthwhile: { requested: 96, floor: 89 } }).detail).toContain(
-      "96 through 89",
-    );
+    expect(
+      statusPresentation({
+        NotWorthwhile: {
+          requested: { metric: "Vmaf", value: 96 },
+          floor: { metric: "Vmaf", value: 89 },
+        },
+      }).detail,
+    ).toContain("96 through 89");
     expect(
       statusPresentation({ Failed: { kind: "EncodeRun", message: "anonymized stderr" } }).detail,
     ).toBe("anonymized stderr");

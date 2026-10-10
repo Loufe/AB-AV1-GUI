@@ -265,10 +265,10 @@ fn convert_record(
         output_size: record.output_size,
         encoding_time: record.encoding_time_ms.map(crfty_core::DurationMs),
         crf: record.crf_thousandths.map(crfty_core::Crf),
-        vmaf: record.vmaf_hundredths.map(crfty_core::VmafScore),
-        target: record.target.map(crfty_core::VmafTarget),
-        requested_target: record.requested_target.map(crfty_core::VmafTarget),
-        floor_target: record.floor_target.map(crfty_core::VmafTarget),
+        vmaf: record.vmaf_hundredths.map(crfty_core::QualityScore::vmaf),
+        target: record.target.map(crfty_core::QualityTarget::vmaf),
+        requested_target: record.requested_target.map(crfty_core::QualityTarget::vmaf),
+        floor_target: record.floor_target.map(crfty_core::QualityTarget::vmaf),
         decided_at: record.decided_at_ms.map_or(now, UnixMillis),
     };
     Ok((key, parked))
@@ -376,7 +376,16 @@ mod tests {
         );
         assert_eq!(parked.video_codec, Some(VideoCodec::H264));
         assert_eq!(parked.crf, Some(crfty_core::Crf(30_000)));
-        assert_eq!(parked.vmaf, Some(crfty_core::VmafScore(9_550)));
+        assert_eq!(parked.vmaf, Some(crfty_core::QualityScore::vmaf(9_550)));
+        assert_eq!(parked.target, Some(crfty_core::QualityTarget::vmaf(95)));
+        assert_eq!(
+            parked.requested_target,
+            Some(crfty_core::QualityTarget::vmaf(95))
+        );
+        assert_eq!(
+            parked.floor_target,
+            Some(crfty_core::QualityTarget::vmaf(90))
+        );
         assert_eq!(parked.decided_at, UnixMillis(1_700_000_000_000));
         let (_, sparse) = records.get(1).expect("sparse record");
         assert_eq!(sparse.status, ParkedStatus::Scanned);

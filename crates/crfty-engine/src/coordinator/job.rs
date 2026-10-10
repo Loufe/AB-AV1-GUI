@@ -5,8 +5,8 @@ use std::time::{Duration, Instant};
 
 use crfty_core::{
     AnalysisAttempt, AnalysisResult, ClaimedJob, DecodeMode, FailureFacts, FailureKind,
-    ItemOutcome, JobPhase, OutputDelta, OutputTransaction, PERCENT_BASIS_POINTS_SCALE, RunId,
-    Telemetry, VmafTarget,
+    ItemOutcome, JobPhase, OutputDelta, OutputTransaction, PERCENT_BASIS_POINTS_SCALE,
+    QualityTarget, RunId, Telemetry,
 };
 
 use crate::{
@@ -376,7 +376,9 @@ pub(super) fn search_with_fallback(
 ) -> Result<AnalysisResult, ItemOutcome> {
     let execution = &job.spec.execution;
     let mut profile = execution.profile.clone();
-    let mut target = execution.requested_target.0;
+    let mut target = match execution.requested_target.metric {
+        crfty_core::QualityMetric::Vmaf => execution.requested_target.value,
+    };
     let mut failed_attempts = Vec::new();
     loop {
         let request = SearchRequest {
@@ -417,7 +419,7 @@ pub(super) fn search_with_fallback(
                 })?;
                 return Ok(AnalysisResult {
                     requested_target: execution.requested_target,
-                    successful_target: VmafTarget(target),
+                    successful_target: QualityTarget::vmaf(target),
                     fallback_floor: execution.fallback_floor,
                     fallback_step: execution.fallback_step,
                     failed_attempts,
@@ -431,7 +433,7 @@ pub(super) fn search_with_fallback(
                         ItemOutcome::Failed(FailureFacts::new(FailureKind::SearchRun, message))
                     })?;
                     failed_attempts.push(AnalysisAttempt {
-                        target: VmafTarget(target),
+                        target: QualityTarget::vmaf(target),
                         last_measurement: Some(measured),
                     });
                 }
@@ -450,7 +452,7 @@ pub(super) fn search_with_fallback(
                             failure.message
                         );
                         profile.decode_mode = DecodeMode::Software;
-                        target = execution.requested_target.0;
+                        target = execution.requested_target.value;
                         failed_attempts.clear();
                         continue;
                     }
@@ -478,9 +480,9 @@ pub(super) fn search_with_fallback(
                 return Err(ItemOutcome::Failed(facts));
             }
         }
-        if target <= execution.fallback_floor.0
+        if target <= execution.fallback_floor.value
             || execution.fallback_step == 0
-            || target.saturating_sub(execution.fallback_step) < execution.fallback_floor.0
+            || target.saturating_sub(execution.fallback_step) < execution.fallback_floor.value
         {
             return Err(ItemOutcome::NotWorthwhile {
                 attempts: failed_attempts,

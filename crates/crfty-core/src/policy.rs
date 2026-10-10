@@ -387,7 +387,9 @@ pub(crate) fn select_job_action(
                 // target (higher VMAF → larger file), so the verdict decides
                 // any request whose ladder stops at or above it. A lower
                 // floor is untried ground and proceeds.
-                if execution.fallback_floor >= *floor {
+                if execution.fallback_floor.metric == floor.metric
+                    && execution.fallback_floor.value >= floor.value
+                {
                     return JobAction::Skip {
                         reason: SkipReason::NotWorthwhile {
                             source_run: verdict.source_run,

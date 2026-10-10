@@ -20,8 +20,8 @@ use crfty_core::{
     DurationMs, ExecutionSettings, FailureFacts, FailureKind, FileRecord, FileSystemId, FileTimeNs,
     HistoryRow, ImportPath, ImportedHistoryRecord, ImportedProvenance, ItemOutcome, JobAction,
     JobPhase, JobSpec, MediaContainer, Operation, OutputState, OutputTarget, OutputTransaction,
-    ParkedStatus, PhaseSpan, QueueItemId, Replacement, RunId, SearchMeasurement, UnixMillis,
-    Verdict, VerdictKind, VideoCodec, VideoMeta, VmafScore, VmafTarget, history_rows,
+    ParkedStatus, PhaseSpan, QualityScore, QualityTarget, QueueItemId, Replacement, RunId,
+    SearchMeasurement, UnixMillis, Verdict, VerdictKind, VideoCodec, VideoMeta, history_rows,
 };
 use serde::Serialize;
 
@@ -79,14 +79,14 @@ fn meta(codec: VideoCodec, size_bytes: u64) -> VideoMeta {
 
 fn analysis(crf_milli: u32, score_centi: u16, target: u8) -> AnalysisResult {
     AnalysisResult {
-        requested_target: VmafTarget(95),
-        successful_target: VmafTarget(target),
-        fallback_floor: VmafTarget(90),
+        requested_target: QualityTarget::vmaf(95),
+        successful_target: QualityTarget::vmaf(target),
+        fallback_floor: QualityTarget::vmaf(90),
         fallback_step: 1,
         failed_attempts: Vec::new(),
         measurement: SearchMeasurement {
             crf: Crf(crf_milli),
-            score: VmafScore(score_centi),
+            score: QualityScore::vmaf(score_centi),
             predicted_size: 1_000_000,
             predicted_percent_basis_points: 4_200,
             predicted_duration_ms: 60_000,
@@ -183,10 +183,10 @@ fn imported(status: ParkedStatus, codec: Option<VideoCodec>) -> ImportedHistoryR
         output_size: Some(1_000_000),
         encoding_time: Some(DurationMs(88_000)),
         crf: Some(Crf(30_000)),
-        vmaf: Some(VmafScore(9_550)),
-        target: Some(VmafTarget(95)),
-        requested_target: Some(VmafTarget(94)),
-        floor_target: Some(VmafTarget(91)),
+        vmaf: Some(QualityScore::vmaf(9_550)),
+        target: Some(QualityTarget::vmaf(95)),
+        requested_target: Some(QualityTarget::vmaf(94)),
+        floor_target: Some(QualityTarget::vmaf(91)),
         decided_at: FINISHED_AT,
     }
 }
@@ -364,8 +364,8 @@ fn scenarios() -> Vec<Scenario> {
             5_000_000,
             Some(verdict(
                 VerdictKind::NotWorthwhile {
-                    requested: VmafTarget(95),
-                    floor: VmafTarget(90),
+                    requested: QualityTarget::vmaf(95),
+                    floor: QualityTarget::vmaf(90),
                 },
                 9,
             )),
@@ -463,8 +463,8 @@ fn scenarios() -> Vec<Scenario> {
     let mut orphaned = DurableState::default();
     let mut orphan_record = record(VideoCodec::H264, 4_000_000, None);
     let mut by_target = BTreeMap::new();
-    by_target.insert(VmafTarget(93), analysis(28_000, 9_350, 93));
-    by_target.insert(VmafTarget(95), analysis(25_000, 9_520, 95));
+    by_target.insert(QualityTarget::vmaf(93), analysis(28_000, 9_350, 93));
+    by_target.insert(QualityTarget::vmaf(95), analysis(25_000, 9_520, 95));
     orphan_record
         .analyses
         .insert(AnalysisProfile::production(), by_target);
@@ -482,8 +482,8 @@ fn scenarios() -> Vec<Scenario> {
     let mut portrait = FileRecord::new(portrait_meta);
     portrait.verdict = Some(verdict(
         VerdictKind::NotWorthwhile {
-            requested: VmafTarget(95),
-            floor: VmafTarget(90),
+            requested: QualityTarget::vmaf(95),
+            floor: QualityTarget::vmaf(90),
         },
         1,
     ));

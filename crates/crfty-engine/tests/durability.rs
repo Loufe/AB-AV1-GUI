@@ -17,11 +17,11 @@ use crfty_core::{
     DurableState, EphemeralDelta, ExecutionSettings, FailureFacts, FailureKind, FileSystemId,
     FileTimeNs, HistoryCommand, ItemOutcome, JobPhase, JobProgress, LocatedTool, LocatedTools,
     MediaContainer, MediaObservation, Operation, OutputDelta, OutputTarget, OverwriteDecision,
-    PathBinding, PathHash, QueueAddRequest, QueueCommand, QueueItemId, Replacement, Reply, RunId,
-    SearchMeasurement, SessionCommand, Settings, SettingsCommand, SystemCommand, Telemetry,
-    ToolAvailability, ToolRevisions, ToolSource, ToolVerification, UnixMillis, VerdictKind,
-    VideoCodec, VideoMeta, VmafScore, VmafTarget, WorkerCommand, apply, corruption_signature, fold,
-    replay,
+    PathBinding, PathHash, QualityScore, QualityTarget, QueueAddRequest, QueueCommand, QueueItemId,
+    Replacement, Reply, RunId, SearchMeasurement, SessionCommand, Settings, SettingsCommand,
+    SystemCommand, Telemetry, ToolAvailability, ToolRevisions, ToolSource, ToolVerification,
+    UnixMillis, VerdictKind, VideoCodec, VideoMeta, WorkerCommand, apply, corruption_signature,
+    fold, replay,
 };
 use crfty_engine::{
     coordinator::{
@@ -988,8 +988,8 @@ fn history_import_parks_compacts_adopts_and_reimports_as_noop() {
             assert_eq!(*output_size, Some(4_000));
             assert_eq!(*encoding_time, Some(crfty_core::DurationMs(88_000)));
             assert_eq!(*crf, Some(Crf(30_000)));
-            assert_eq!(*vmaf, Some(VmafScore(9_550)));
-            assert_eq!(*target, Some(VmafTarget(95)));
+            assert_eq!(*vmaf, Some(QualityScore::vmaf(9_550)));
+            assert_eq!(*target, Some(QualityTarget::vmaf(95)));
         }
         other => panic!("expected an adopted converted verdict, got {other:?}"),
     }
@@ -1925,7 +1925,7 @@ fn fixture_analysis(settings: &ExecutionSettings) -> AnalysisResult {
         failed_attempts: Vec::new(),
         measurement: SearchMeasurement {
             crf: Crf(30_000),
-            score: VmafScore(9_500),
+            score: QualityScore::vmaf(9_500),
             predicted_size: 1_000,
             predicted_percent_basis_points: 5_000,
             predicted_duration_ms: 60_000,

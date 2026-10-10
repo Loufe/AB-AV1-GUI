@@ -61,8 +61,8 @@ pub use failure::{DIAGNOSTIC_TAIL_MAX_BYTES, DiagnosticTail, FailureFacts, Failu
 pub use job::{
     AnalysisAttempt, AnalysisIntent, AnalysisProfile, AnalysisResult, ClaimedJob, Crf, DecodeMode,
     DecodePreference, ExecutionSettings, HardwareDecoder, JobAction, JobPhase, JobSpec, Operation,
-    OutputTarget, OverwriteDecision, ReservedJob, SearchMeasurement, ToolRevisions, VmafScore,
-    VmafTarget,
+    OutputTarget, OverwriteDecision, QualityMetric, QualityScore, QualityTarget, ReservedJob,
+    SearchMeasurement, ToolRevisions,
 };
 pub use journal::{
     COMPACTION_IDLE_MIN_JOURNAL_BYTES, CorruptionReport, CorruptionSignature, JournalEnvelope,

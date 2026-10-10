@@ -19,7 +19,7 @@ use std::{collections::BTreeMap, path::PathBuf};
 
 use serde::{Deserialize, Serialize};
 
-use crate::{Crf, DurationMs, UnixMillis, VideoCodec, VmafScore, VmafTarget};
+use crate::{Crf, DurationMs, QualityScore, QualityTarget, UnixMillis, VideoCodec};
 
 /// Where translated evidence came from. Identity is the pair of origin and
 /// record key, so a later origin cannot collide with this one.
@@ -115,8 +115,8 @@ pub enum TranslatedOutcome {
         encode_duration: Option<DurationMs>,
     },
     NotWorthwhile {
-        requested: Option<VmafTarget>,
-        floor: Option<VmafTarget>,
+        requested: Option<QualityTarget>,
+        floor: Option<QualityTarget>,
     },
 }
 
@@ -127,9 +127,9 @@ pub enum TranslatedOutcome {
 #[serde(deny_unknown_fields)]
 pub struct TranslatedQuality {
     pub crf: Option<Crf>,
-    pub score: Option<VmafScore>,
+    pub score: Option<QualityScore>,
     /// The target the result satisfied.
-    pub target: Option<VmafTarget>,
+    pub target: Option<QualityTarget>,
 }
 
 impl TranslatedObservation {
@@ -148,8 +148,13 @@ impl TranslatedObservation {
             TranslatedOutcome::Analyzed { quality }
             | TranslatedOutcome::Converted { quality, .. } => quality.validate(),
             TranslatedOutcome::NotWorthwhile { requested, floor } => {
-                requested.map_or(Ok(()), VmafTarget::validate)?;
-                floor.map_or(Ok(()), VmafTarget::validate)?;
+                requested.map_or(Ok(()), QualityTarget::validate)?;
+                floor.map_or(Ok(()), QualityTarget::validate)?;
+                if let (Some(requested), Some(floor)) = (requested, floor)
+                    && requested.metric != floor.metric
+                {
+                    return Err("not-worthwhile quality evidence uses different metrics");
+                }
                 if let (Some(requested), Some(floor)) = (requested, floor)
                     && floor > requested
                 {
@@ -163,8 +168,13 @@ impl TranslatedObservation {
 
 impl TranslatedQuality {
     fn validate(&self) -> Result<(), &'static str> {
-        self.score.map_or(Ok(()), VmafScore::validate)?;
-        self.target.map_or(Ok(()), VmafTarget::validate)
+        self.score.map_or(Ok(()), QualityScore::validate)?;
+        if let (Some(score), Some(target)) = (self.score, self.target)
+            && score.metric != target.metric
+        {
+            return Err("imported quality evidence uses different metrics");
+        }
+        self.target.map_or(Ok(()), QualityTarget::validate)
     }
 }
 
@@ -331,7 +341,7 @@ mod tests {
         high_score.outcome = TranslatedOutcome::Analyzed {
             quality: TranslatedQuality {
                 crf: None,
-                score: Some(VmafScore(10_001)),
+                score: Some(QualityScore::vmaf(10_001)),
                 target: None,
             },
         };
@@ -344,8 +354,8 @@ mod tests {
         high_target.outcome = TranslatedOutcome::Converted {
             quality: TranslatedQuality {
                 crf: None,
-                score: Some(VmafScore(10_000)),
-                target: Some(VmafTarget(101)),
+                score: Some(QualityScore::vmaf(10_000)),
+                target: Some(QualityTarget::vmaf(101)),
             },
             output_size: None,
             encode_duration: None,
@@ -360,17 +370,20 @@ mod tests {
             ..sparse.clone()
         };
         assert_eq!(declined(None, None).validate(), Ok(()));
-        assert_eq!(declined(None, Some(VmafTarget(99))).validate(), Ok(()));
         assert_eq!(
-            declined(Some(VmafTarget(95)), Some(VmafTarget(95))).validate(),
+            declined(None, Some(QualityTarget::vmaf(99))).validate(),
             Ok(())
         );
         assert_eq!(
-            declined(Some(VmafTarget(90)), Some(VmafTarget(95))).validate(),
+            declined(Some(QualityTarget::vmaf(95)), Some(QualityTarget::vmaf(95))).validate(),
+            Ok(())
+        );
+        assert_eq!(
+            declined(Some(QualityTarget::vmaf(90)), Some(QualityTarget::vmaf(95))).validate(),
             Err("not-worthwhile floor exceeds the requested target")
         );
         assert_eq!(
-            declined(Some(VmafTarget(101)), None).validate(),
+            declined(Some(QualityTarget::vmaf(101)), None).validate(),
             Err("VMAF targets must be in 0..=100")
         );
     }
@@ -379,14 +392,14 @@ mod tests {
     fn one_invalid_record_rejects_the_whole_batch_at_the_first_failure() {
         let mut invalid = converted("00000000000000a2", 30_000);
         invalid.outcome = TranslatedOutcome::NotWorthwhile {
-            requested: Some(VmafTarget(90)),
-            floor: Some(VmafTarget(95)),
+            requested: Some(QualityTarget::vmaf(90)),
+            floor: Some(QualityTarget::vmaf(95)),
         };
         let mut also_invalid = converted("00000000000000a3", 30_000);
         also_invalid.outcome = TranslatedOutcome::Analyzed {
             quality: TranslatedQuality {
                 crf: None,
-                score: Some(VmafScore(10_001)),
+                score: Some(QualityScore::vmaf(10_001)),
                 target: None,
             },
         };

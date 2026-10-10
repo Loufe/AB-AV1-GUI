@@ -3,8 +3,8 @@ use std::collections::BTreeMap;
 use serde::{Deserialize, Serialize};
 
 use crate::{
-    AnalysisProfile, AnalysisResult, ContentKey, Crf, DestructiveIdentity, DurationMs, RunId,
-    UnixMillis, VmafScore, VmafTarget,
+    AnalysisProfile, AnalysisResult, ContentKey, Crf, DestructiveIdentity, DurationMs,
+    QualityScore, QualityTarget, RunId, UnixMillis,
 };
 
 const HALF_ROTATION_DEGREES: i16 = 180;
@@ -167,8 +167,8 @@ pub enum VerdictKind {
         output_size: Option<u64>,
         encoding_time: Option<DurationMs>,
         crf: Option<Crf>,
-        vmaf: Option<VmafScore>,
-        target: Option<VmafTarget>,
+        vmaf: Option<QualityScore>,
+        target: Option<QualityTarget>,
     },
     Remuxed {
         /// Required: imports never carry remuxes, so every remux verdict
@@ -180,21 +180,21 @@ pub enum VerdictKind {
         output_size: Option<u64>,
     },
     NotWorthwhile {
-        requested: VmafTarget,
-        floor: VmafTarget,
+        requested: QualityTarget,
+        floor: QualityTarget,
     },
 }
 
-/// The profile-keyed index crosses serde as an entry list: JSON map keys must
-/// be strings, and `AnalysisProfile` is a multi-field struct.
-pub(crate) type AnalysisIndexEntries = Vec<(AnalysisProfile, BTreeMap<VmafTarget, AnalysisResult>)>;
+/// Both index levels cross serde as entry lists because profiles and tagged
+/// targets cannot be JSON object keys. The target's metric is part of reuse identity.
+pub(crate) type AnalysisIndexEntries = Vec<(AnalysisProfile, Vec<(QualityTarget, AnalysisResult)>)>;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, specta::Type)]
 pub struct FileRecord {
     pub metadata: VideoMeta,
     #[serde(with = "analysis_index")]
     #[specta(type = AnalysisIndexEntries)]
-    pub analyses: BTreeMap<AnalysisProfile, BTreeMap<VmafTarget, AnalysisResult>>,
+    pub analyses: BTreeMap<AnalysisProfile, BTreeMap<QualityTarget, AnalysisResult>>,
     pub verdict: Option<Verdict>,
     /// The deterministic imported summary retained for History/Statistics
     /// continuity. The complete re-import guard lives in
@@ -208,20 +208,24 @@ mod analysis_index {
 
     use serde::{Deserialize, Deserializer, Serializer};
 
-    use super::{AnalysisIndexEntries, AnalysisProfile, AnalysisResult, VmafTarget};
+    use super::{AnalysisIndexEntries, AnalysisProfile, AnalysisResult, QualityTarget};
 
     pub(super) fn serialize<S: Serializer>(
-        map: &BTreeMap<AnalysisProfile, BTreeMap<VmafTarget, AnalysisResult>>,
+        map: &BTreeMap<AnalysisProfile, BTreeMap<QualityTarget, AnalysisResult>>,
         serializer: S,
     ) -> Result<S::Ok, S::Error> {
-        serializer.collect_seq(map.iter())
+        serializer.collect_seq(
+            map.iter()
+                .map(|(profile, targets)| (profile, targets.iter().collect::<Vec<_>>())),
+        )
     }
 
     pub(super) fn deserialize<'de, D: Deserializer<'de>>(
         deserializer: D,
-    ) -> Result<BTreeMap<AnalysisProfile, BTreeMap<VmafTarget, AnalysisResult>>, D::Error> {
+    ) -> Result<BTreeMap<AnalysisProfile, BTreeMap<QualityTarget, AnalysisResult>>, D::Error> {
         Ok(AnalysisIndexEntries::deserialize(deserializer)?
             .into_iter()
+            .map(|(profile, targets)| (profile, targets.into_iter().collect()))
             .collect())
     }
 }
@@ -281,10 +285,10 @@ pub struct ImportedHistoryRecord {
     pub output_size: Option<u64>,
     pub encoding_time: Option<DurationMs>,
     pub crf: Option<Crf>,
-    pub vmaf: Option<VmafScore>,
-    pub target: Option<VmafTarget>,
-    pub requested_target: Option<VmafTarget>,
-    pub floor_target: Option<VmafTarget>,
+    pub vmaf: Option<QualityScore>,
+    pub target: Option<QualityTarget>,
+    pub requested_target: Option<QualityTarget>,
+    pub floor_target: Option<QualityTarget>,
     /// When the source record was decided, falling back to the import
     /// instant when the source carried no timestamp.
     pub decided_at: UnixMillis,

@@ -1647,12 +1647,16 @@ pub(crate) fn validate_terminal(
             }
             if attempts.is_empty()
                 || attempts.iter().any(|attempt| {
-                    attempt.target > run.spec.execution.requested_target
+                    attempt.target.metric != run.spec.execution.requested_target.metric
+                        || attempt.target > run.spec.execution.requested_target
                         || attempt.target < run.spec.execution.fallback_floor
                         || attempt
                             .last_measurement
                             .as_ref()
-                            .is_some_and(|measurement| measurement.validate().is_err())
+                            .is_some_and(|measurement| {
+                                measurement.score.metric != attempt.target.metric
+                                    || measurement.validate().is_err()
+                            })
                 })
             {
                 return Err("not-worthwhile attempts are inconsistent with the claimed job");

@@ -576,13 +576,28 @@ function withAnalysis(
   if (index === -1) {
     return {
       ...record,
-      analyses: [...record.analyses, [result.profile, { [result.successful_target]: result }]],
+      analyses: [...record.analyses, [result.profile, [[result.successful_target, result]]]],
     };
   }
   return {
     ...record,
     analyses: record.analyses.map((entry, position) =>
-      position === index ? [entry[0], { ...entry[1], [result.successful_target]: result }] : entry,
+      position === index
+        ? [
+            entry[0],
+            [
+              ...entry[1].filter(
+                ([target]) =>
+                  target.metric !== result.successful_target.metric ||
+                  target.value !== result.successful_target.value,
+              ),
+              [result.successful_target, result] as [
+                AnalysisResult["successful_target"],
+                AnalysisResult,
+              ],
+            ].sort(([a], [b]) => a.metric.localeCompare(b.metric) || a.value - b.value),
+          ]
+        : entry,
     ),
   };
 }

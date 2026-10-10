@@ -17,9 +17,9 @@ use std::{
 
 use crfty_core::{
     AnalysisIntent, AnalysisProfile, DecodeMode, DecodePreference, DurableDelta, EphemeralDelta,
-    ExecutionSettings, Operation, OutputTarget, OverwriteDecision, QueueAddRequest, QueueCommand,
-    QueueItemId, Reply, SessionCommand, Settings, SettingsCommand, ToolAvailability,
-    ToolLocationFailure, ToolPathSettings, ToolRevisions, ToolSource, ToolVerification, VmafTarget,
+    ExecutionSettings, Operation, OutputTarget, OverwriteDecision, QualityTarget, QueueAddRequest,
+    QueueCommand, QueueItemId, Reply, SessionCommand, Settings, SettingsCommand, ToolAvailability,
+    ToolLocationFailure, ToolPathSettings, ToolRevisions, ToolSource, ToolVerification,
 };
 use crfty_engine::{
     ab_av1::AB_AV1_REVISION,
@@ -31,7 +31,7 @@ use crfty_engine::{
 const FIXTURE_DURATION_SECONDS: &str = "2";
 const FIXTURE_SIZE: &str = "1280x720";
 const FIXTURE_FRAME_RATE: u8 = 24;
-const CONTRACT_TARGET: VmafTarget = VmafTarget(80);
+const CONTRACT_TARGET: QualityTarget = QualityTarget::vmaf(80);
 const CONTRACT_PRESET: u8 = 12;
 const CONTRACT_MAX_ENCODED_PERCENT_BASIS_POINTS: u32 = 50_000;
 /// Generous bound for two real probe encodes plus a two-second conversion on

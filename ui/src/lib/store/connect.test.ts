@@ -76,7 +76,9 @@ function statisticsPayload(): StatisticsPayload {
     total_time_ms: 300_000,
     gigabytes_per_hour: 111.76,
     reduction_percent: { average: 60, minimum: 60, maximum: 60, count: 1 },
-    vmaf: { average: 95.12, minimum: 95.12, maximum: 95.12, count: 1 },
+    quality: [
+      { metric: "Vmaf", spread: { average: 95.12, minimum: 95.12, maximum: 95.12, count: 1 } },
+    ],
     crf: { average: 24, minimum: 24, maximum: 24, count: 1 },
     reduction_bins: [0, 0, 0, 0, 0, 0, 1, 0, 0, 0],
     grew_count: 0,

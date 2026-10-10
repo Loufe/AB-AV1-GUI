@@ -6,11 +6,11 @@
     "revisions": { "ab_av1": "ab-av1 0.10.0", "ffmpeg": "ffmpeg 7.1", "encoder": "SVT-AV1 3.0.0" },
     "outcome": {
       "NotWorthwhile": {
-        "requested": 95,
-        "floor": 93,
+        "requested": { "metric": "Vmaf", "value": 95 },
+        "floor": { "metric": "Vmaf", "value": 93 },
         "attempts": [
-          { "target": 95, "last_measurement": null },
-          { "target": 92, "last_measurement": null }
+          { "target": { "metric": "Vmaf", "value": 95 }, "last_measurement": null },
+          { "target": { "metric": "Vmaf", "value": 92 }, "last_measurement": null }
         ]
       }
     },

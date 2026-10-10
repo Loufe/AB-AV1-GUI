@@ -1,7 +1,7 @@
-use crate::VmafTarget;
+use crate::QualityTarget;
 
-pub const DEFAULT_VMAF_TARGET: VmafTarget = VmafTarget(95);
-pub const MIN_VMAF_FALLBACK_TARGET: VmafTarget = VmafTarget(90);
+pub const DEFAULT_VMAF_TARGET: QualityTarget = QualityTarget::vmaf(95);
+pub const MIN_VMAF_FALLBACK_TARGET: QualityTarget = QualityTarget::vmaf(90);
 pub const VMAF_FALLBACK_STEP: u8 = 1;
 pub(crate) const DEFAULT_ENCODING_PRESET: u8 = 6;
 pub(crate) const DEFAULT_MAX_ENCODED_PERCENT_BASIS_POINTS: u32 = 8_000;

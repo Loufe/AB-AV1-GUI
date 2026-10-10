@@ -15,8 +15,8 @@ import type {
   DurationMs,
   StatisticsPayload,
   UnixMillis,
-  VmafScore,
-  VmafTarget,
+  QualityScore,
+  QualityTarget,
 } from "@/lib/bindings";
 
 import {
@@ -45,10 +45,13 @@ export function formatEngineCrf(crf: Crf | null): string {
   return formatCrf(crf / CRF_FIXED_SCALE);
 }
 
-/** Format a serialized fixed-point `VmafScore` (9,512 means VMAF 95.12). */
-export function formatEngineVmafScore(score: VmafScore | null): string {
-  if (score === null || !isNonNegativeFinite(score)) return formatVmaf(null);
-  return formatVmaf(score / VMAF_SCORE_FIXED_SCALE);
+/** VMAF scores carry hundredths of a point; the metric selects the scale. */
+export function formatEngineVmafScore(score: QualityScore | null): string {
+  if (score === null || !isNonNegativeFinite(score.value)) return formatVmaf(null);
+  switch (score.metric) {
+    case "Vmaf":
+      return formatVmaf(score.value / VMAF_SCORE_FIXED_SCALE);
+  }
 }
 
 /** Format an engine duration in milliseconds as compact human time. */
@@ -72,10 +75,13 @@ export function formatUnixMillisDate(instant: UnixMillis | null): string {
   return formatDate(instant);
 }
 
-/** `VmafTarget` is already human-scale and must not use the score scale. */
-export function formatVmafTarget(target: VmafTarget | null): string {
-  if (target === null || !isNonNegativeFinite(target)) return EM_DASH;
-  return String(target);
+/** VMAF targets carry whole points, unlike measured scores. */
+export function formatVmafTarget(target: QualityTarget | null): string {
+  if (target === null || !isNonNegativeFinite(target.value)) return EM_DASH;
+  switch (target.metric) {
+    case "Vmaf":
+      return String(target.value);
+  }
 }
 
 /** Statistics CRF spreads are already normalized; do not divide again. */

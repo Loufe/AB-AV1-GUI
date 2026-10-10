@@ -40,7 +40,7 @@ Read from source: every V2 Statistics aggregate has a wired V3 home in `Statisti
 | V2 result (`src/gui/tabs/statistics_tab.py`) | Required evidence | Stage | V3 home |
 | --- | --- | --- | --- |
 | Total files converted | converted verdicts | Terminal | `converted_files` |
-| Average, min, max VMAF | verdict-carried score | Terminal | `vmaf` spread |
+| Average, min, max VMAF | metric-tagged verdict-carried score | Terminal | `quality` spread per metric |
 | Average, min, max CRF | verdict-carried CRF | Terminal | `crf` spread |
 | Average, min, max size reduction | joined input and output sizes | Terminal | `reduction_percent` spread |
 | Size reduction histogram | joined sizes | Terminal | `reduction_bins` |
@@ -97,9 +97,9 @@ The V2 queue operation column and skip breakdown read current freshness-checked 
 
 ## Metric-tagged quality evidence
 
-**Read from source.** `VmafTarget` and `VmafScore` are bare newtypes threading the analysis map key, verdicts, `StatFact`, the statistics payload, and import. The vendored interface exposes a `min_xpsnr` argument the adapter sets to none, telemetry classifies XPSNR sample work, and a search runs under exactly one quality flag. Upstream requests for further quality metrics recur (alexheretic/ab-av1#205, alexheretic/ab-av1#331, alexheretic/ab-av1#343).
+**Read from source.** `QualityTarget` and `QualityScore` carry `QualityMetric` through the analysis map key, verdicts, `StatFact`, observations, import, and the generated bindings. Targets retain whole-point values and VMAF scores retain hundredths; Statistics returns normalized, metric-tagged spreads. The pinned interface exposes a `min_xpsnr` argument the adapter sets to none, telemetry classifies XPSNR sample work, and a search runs under exactly one quality flag.
 
-**Decided (ADR-022).** A quality metric enum, VMAF its sole initial variant, tags every durable target and score. The metric joins the analysis identity, extending the ADR-007 precedent of pinning decode mode there, so a VMAF result never answers an XPSNR request. Verdict-carried values are self-describing, statistics spreads never blend metrics, and imported V2 evidence is tagged VMAF. No XPSNR code path is wired until a consumer asks; the tag is schema insurance. Before the first journaled release the change is a refactor plus fixture regeneration; after it, a journal migration.
+**Implemented (ADR-022).** VMAF is the sole metric variant. The tagged target joins the analysis identity, extending the ADR-007 precedent of pinning decode mode there. Reuse and not-worthwhile application compare metrics, and unknown metrics cannot enter the request or evidence types. Both analysis-index levels serialize as ordered entry lists so each target retains its tag. Statistics groups scores by metric, imported V2 evidence is tagged VMAF, and the journal uses schema 20. Pre-release journals require a fresh data directory; released History upgrade policy remains as defined in the [History contract](../HISTORY.md#release-upgrades).
 
 ## The not-worthwhile row
 

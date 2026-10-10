@@ -130,10 +130,26 @@ pub enum OverwriteDecision {
 #[derive(
     Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize, specta::Type,
 )]
-pub struct VmafTarget(pub u8);
+pub enum QualityMetric {
+    Vmaf,
+}
+
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize, specta::Type,
+)]
+#[serde(deny_unknown_fields)]
+pub struct QualityTarget {
+    pub metric: QualityMetric,
+    pub value: u8,
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, specta::Type)]
-pub struct VmafScore(pub u16);
+#[serde(deny_unknown_fields)]
+pub struct QualityScore {
+    pub metric: QualityMetric,
+    /// Hundredths of a VMAF point.
+    pub value: u16,
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, specta::Type)]
 pub struct Crf(pub u32);
@@ -234,8 +250,8 @@ impl AnalysisProfile {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, specta::Type)]
 pub struct ExecutionSettings {
-    pub requested_target: VmafTarget,
-    pub fallback_floor: VmafTarget,
+    pub requested_target: QualityTarget,
+    pub fallback_floor: QualityTarget,
     pub fallback_step: u8,
     pub overwrite_existing: bool,
     pub decode_preference: DecodePreference,
@@ -279,6 +295,9 @@ impl ExecutionSettings {
     fn validate_targets(&self) -> Result<(), &'static str> {
         self.requested_target.validate()?;
         self.fallback_floor.validate()?;
+        if self.requested_target.metric != self.fallback_floor.metric {
+            return Err("quality fallback floor uses a different metric");
+        }
         if self.fallback_floor > self.requested_target {
             return Err("VMAF fallback floor exceeds the requested target");
         }
@@ -292,7 +311,7 @@ impl ExecutionSettings {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, specta::Type)]
 pub struct SearchMeasurement {
     pub crf: Crf,
-    pub score: VmafScore,
+    pub score: QualityScore,
     #[specta(type = crate::JsNumber)]
     pub predicted_size: u64,
     pub predicted_percent_basis_points: u32,
@@ -301,21 +320,50 @@ pub struct SearchMeasurement {
     pub from_cache: bool,
 }
 
-impl VmafTarget {
-    pub(crate) fn validate(self) -> Result<(), &'static str> {
-        if u16::from(self.0) > MAX_VMAF_SCORE {
-            return Err("VMAF targets must be in 0..=100");
+impl QualityTarget {
+    #[must_use]
+    pub const fn vmaf(value: u8) -> Self {
+        Self {
+            metric: QualityMetric::Vmaf,
+            value,
         }
-        Ok(())
+    }
+
+    pub(crate) fn validate(self) -> Result<(), &'static str> {
+        match self.metric {
+            QualityMetric::Vmaf if u16::from(self.value) > MAX_VMAF_SCORE => {
+                Err("VMAF targets must be in 0..=100")
+            }
+            QualityMetric::Vmaf => Ok(()),
+        }
     }
 }
 
-impl VmafScore {
-    pub(crate) fn validate(self) -> Result<(), &'static str> {
-        if self.0 > MAX_VMAF_SCORE.saturating_mul(VMAF_SCORE_FIXED_SCALE) {
-            return Err("VMAF score is outside the supported range");
+impl QualityScore {
+    #[must_use]
+    pub const fn vmaf(value: u16) -> Self {
+        Self {
+            metric: QualityMetric::Vmaf,
+            value,
         }
-        Ok(())
+    }
+
+    pub(crate) fn validate(self) -> Result<(), &'static str> {
+        match self.metric {
+            QualityMetric::Vmaf
+                if self.value > MAX_VMAF_SCORE.saturating_mul(VMAF_SCORE_FIXED_SCALE) =>
+            {
+                Err("VMAF score is outside the supported range")
+            }
+            QualityMetric::Vmaf => Ok(()),
+        }
+    }
+
+    #[must_use]
+    pub fn normalized(self) -> f64 {
+        match self.metric {
+            QualityMetric::Vmaf => f64::from(self.value) / f64::from(VMAF_SCORE_FIXED_SCALE),
+        }
     }
 }
 
@@ -327,15 +375,15 @@ impl SearchMeasurement {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, specta::Type)]
 pub struct AnalysisAttempt {
-    pub target: VmafTarget,
+    pub target: QualityTarget,
     pub last_measurement: Option<SearchMeasurement>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, specta::Type)]
 pub struct AnalysisResult {
-    pub requested_target: VmafTarget,
-    pub successful_target: VmafTarget,
-    pub fallback_floor: VmafTarget,
+    pub requested_target: QualityTarget,
+    pub successful_target: QualityTarget,
+    pub fallback_floor: QualityTarget,
     pub fallback_step: u8,
     pub failed_attempts: Vec<AnalysisAttempt>,
     pub measurement: SearchMeasurement,
@@ -349,6 +397,22 @@ impl AnalysisResult {
     /// measurement is in range.
     pub fn validate_consistent(&self) -> Result<(), &'static str> {
         self.requested_target.validate()?;
+        self.successful_target.validate()?;
+        self.fallback_floor.validate()?;
+        let metric = self.requested_target.metric;
+        if self.successful_target.metric != metric
+            || self.fallback_floor.metric != metric
+            || self.measurement.score.metric != metric
+            || self.failed_attempts.iter().any(|attempt| {
+                attempt.target.metric != metric
+                    || attempt
+                        .last_measurement
+                        .as_ref()
+                        .is_some_and(|measurement| measurement.score.metric != metric)
+            })
+        {
+            return Err("analysis quality evidence uses different metrics");
+        }
         if self.successful_target > self.requested_target
             || self.successful_target < self.fallback_floor
         {
@@ -393,6 +457,12 @@ impl AnalysisResult {
     }
 
     pub fn validate_reusable_for(&self, execution: &ExecutionSettings) -> Result<(), &'static str> {
+        if self.requested_target.metric != execution.requested_target.metric
+            || self.successful_target.metric != execution.requested_target.metric
+            || self.fallback_floor.metric != execution.fallback_floor.metric
+        {
+            return Err("analysis metric does not match the claimed job");
+        }
         if self.profile != execution.profile {
             return Err("analysis profile does not match the claimed job");
         }

@@ -6,6 +6,7 @@ import type {
   MediaContainer,
   VideoCodec,
 } from "@/lib/bindings";
+import { formatVmafTarget } from "@/lib/format/engine-values";
 
 export const HISTORY_STATUSES = [
   "Converted",
@@ -74,7 +75,7 @@ export function statusPresentation(status: HistoryStatus): {
   if ("NotWorthwhile" in status && status.NotWorthwhile !== undefined) {
     return {
       label: "Not Worthwhile",
-      detail: `No worthwhile result from VMAF ${status.NotWorthwhile.requested} through ${status.NotWorthwhile.floor}.`,
+      detail: `No worthwhile result from VMAF ${formatVmafTarget(status.NotWorthwhile.requested)} through ${formatVmafTarget(status.NotWorthwhile.floor)}.`,
     };
   }
   return { label: "Failed", detail: status.Failed.message };

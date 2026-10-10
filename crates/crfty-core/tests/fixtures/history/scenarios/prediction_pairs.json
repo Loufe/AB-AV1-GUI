@@ -23,14 +23,14 @@
             "Converted": {
               "search": {
                 "analysis": {
-                  "requested_target": 95,
-                  "successful_target": 95,
-                  "fallback_floor": 90,
+                  "requested_target": { "metric": "Vmaf", "value": 95 },
+                  "successful_target": { "metric": "Vmaf", "value": 95 },
+                  "fallback_floor": { "metric": "Vmaf", "value": 90 },
                   "fallback_step": 1,
                   "failed_attempts": [],
                   "measurement": {
                     "crf": 30000,
-                    "score": 9512,
+                    "score": { "metric": "Vmaf", "value": 9512 },
                     "predicted_size": 3100000,
                     "predicted_percent_basis_points": 3875,
                     "predicted_duration_ms": 240000,
@@ -95,14 +95,14 @@
             "Converted": {
               "search": {
                 "analysis": {
-                  "requested_target": 95,
-                  "successful_target": 95,
-                  "fallback_floor": 90,
+                  "requested_target": { "metric": "Vmaf", "value": 95 },
+                  "successful_target": { "metric": "Vmaf", "value": 95 },
+                  "fallback_floor": { "metric": "Vmaf", "value": 90 },
                   "fallback_step": 1,
                   "failed_attempts": [],
                   "measurement": {
                     "crf": 30000,
-                    "score": 9512,
+                    "score": { "metric": "Vmaf", "value": 9512 },
                     "predicted_size": 3100000,
                     "predicted_percent_basis_points": 3875,
                     "predicted_duration_ms": 240000,
@@ -167,14 +167,14 @@
             "Converted": {
               "search": {
                 "analysis": {
-                  "requested_target": 95,
-                  "successful_target": 95,
-                  "fallback_floor": 90,
+                  "requested_target": { "metric": "Vmaf", "value": 95 },
+                  "successful_target": { "metric": "Vmaf", "value": 95 },
+                  "fallback_floor": { "metric": "Vmaf", "value": 90 },
                   "fallback_step": 1,
                   "failed_attempts": [],
                   "measurement": {
                     "crf": 30000,
-                    "score": 9512,
+                    "score": { "metric": "Vmaf", "value": 9512 },
                     "predicted_size": 3100000,
                     "predicted_percent_basis_points": 3875,
                     "predicted_duration_ms": 240000,
@@ -231,8 +231,8 @@
                 "Converted": {
                   "quality": {
                     "crf": 30000,
-                    "score": 9500,
-                    "target": 95
+                    "score": { "metric": "Vmaf", "value": 9500 },
+                    "target": { "metric": "Vmaf", "value": 95 }
                   },
                   "output_size": 3000000,
                   "encode_duration": 240000
@@ -274,14 +274,14 @@
             "Converted": {
               "search": {
                 "analysis": {
-                  "requested_target": 95,
-                  "successful_target": 95,
-                  "fallback_floor": 90,
+                  "requested_target": { "metric": "Vmaf", "value": 95 },
+                  "successful_target": { "metric": "Vmaf", "value": 95 },
+                  "fallback_floor": { "metric": "Vmaf", "value": 90 },
                   "fallback_step": 1,
                   "failed_attempts": [],
                   "measurement": {
                     "crf": 31000,
-                    "score": 9512,
+                    "score": { "metric": "Vmaf", "value": 9512 },
                     "predicted_size": 3100000,
                     "predicted_percent_basis_points": 3875,
                     "predicted_duration_ms": 240000,
@@ -379,14 +379,14 @@
             "Converted": {
               "search": {
                 "analysis": {
-                  "requested_target": 95,
-                  "successful_target": 95,
-                  "fallback_floor": 90,
+                  "requested_target": { "metric": "Vmaf", "value": 95 },
+                  "successful_target": { "metric": "Vmaf", "value": 95 },
+                  "fallback_floor": { "metric": "Vmaf", "value": 90 },
                   "fallback_step": 1,
                   "failed_attempts": [],
                   "measurement": {
                     "crf": 31000,
-                    "score": 9512,
+                    "score": { "metric": "Vmaf", "value": 9512 },
                     "predicted_size": 3100000,
                     "predicted_percent_basis_points": 3875,
                     "predicted_duration_ms": 240000,
@@ -451,14 +451,14 @@
             "Converted": {
               "search": {
                 "analysis": {
-                  "requested_target": 95,
-                  "successful_target": 95,
-                  "fallback_floor": 90,
+                  "requested_target": { "metric": "Vmaf", "value": 95 },
+                  "successful_target": { "metric": "Vmaf", "value": 95 },
+                  "fallback_floor": { "metric": "Vmaf", "value": 90 },
                   "fallback_step": 1,
                   "failed_attempts": [],
                   "measurement": {
                     "crf": 29000,
-                    "score": 9512,
+                    "score": { "metric": "Vmaf", "value": 9512 },
                     "predicted_size": 3100000,
                     "predicted_percent_basis_points": 3875,
                     "predicted_duration_ms": 240000,

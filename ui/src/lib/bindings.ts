@@ -104,7 +104,7 @@ export type AnalysisActivity = "Discovering" | "Discovered" | "BasicScanning" | 
 } };
 
 export type AnalysisAttempt = {
-	target: VmafTarget,
+	target: QualityTarget,
 	last_measurement: SearchMeasurement | null,
 };
 
@@ -248,9 +248,9 @@ export type AnalysisProfile = {
 };
 
 export type AnalysisResult = {
-	requested_target: VmafTarget,
-	successful_target: VmafTarget,
-	fallback_floor: VmafTarget,
+	requested_target: QualityTarget,
+	successful_target: QualityTarget,
+	fallback_floor: QualityTarget,
 	fallback_step: number,
 	failed_attempts: AnalysisAttempt[],
 	measurement: SearchMeasurement,
@@ -452,8 +452,8 @@ export type ConversionSummary = ({ Encoded: {
 	output_size: number | null,
 	encoding_time: DurationMs | null,
 	crf: Crf | null,
-	vmaf: VmafScore | null,
-	target: VmafTarget | null,
+	vmaf: QualityScore | null,
+	target: QualityTarget | null,
 	decided_at: UnixMillis,
 	source_run: RunId | null,
 } }) & { Remuxed?: never } | ({ Remuxed: {
@@ -832,8 +832,8 @@ export type EphemeralDelta_Serialize =
 } }) & { Analysis?: never; CommandRejected?: never; SessionAggregates?: never; SessionChanged?: never; Statistics?: never; Telemetry?: never; TelemetryCleared?: never; ToolsChanged?: never; WorkerCrashed?: never };
 
 export type ExecutionSettings = {
-	requested_target: VmafTarget,
-	fallback_floor: VmafTarget,
+	requested_target: QualityTarget,
+	fallback_floor: QualityTarget,
 	fallback_step: number,
 	overwrite_existing: boolean,
 	decode_preference: DecodePreference,
@@ -869,7 +869,7 @@ export type FileRecord = FileRecord_Serialize | FileRecord_Deserialize;
 
 export type FileRecord_Deserialize = {
 	metadata: VideoMeta,
-	analyses: ([AnalysisProfile, { [key in VmafTarget]: AnalysisResult }])[],
+	analyses: ([AnalysisProfile, ([QualityTarget, AnalysisResult])[]])[],
 	verdict: Verdict | null,
 	/**
 	 *  The deterministic imported summary retained for History/Statistics
@@ -882,7 +882,7 @@ export type FileRecord_Deserialize = {
 
 export type FileRecord_Serialize = {
 	metadata: VideoMeta,
-	analyses: ([AnalysisProfile, { [key in VmafTarget]: AnalysisResult }])[],
+	analyses: ([AnalysisProfile, ([QualityTarget, AnalysisResult])[]])[],
 	verdict: Verdict | null,
 	/**
 	 *  The deterministic imported summary retained for History/Statistics
@@ -957,7 +957,7 @@ export type HistoryRow = {
 	input_size_bytes: number | null,
 	output_size_bytes: number | null,
 	encoding_time_ms: number | null,
-	vmaf: VmafScore | null,
+	vmaf: QualityScore | null,
 	crf: Crf | null,
 };
 
@@ -969,8 +969,8 @@ export type HistoryRowKey = { kind: "Content"; value: ContentKey } | { kind: "Pa
 
 /**  The current standing of one content in History terms. */
 export type HistoryStatus = "Converted" | "Remuxed" | ({ NotWorthwhile: {
-	requested: VmafTarget,
-	floor: VmafTarget,
+	requested: QualityTarget,
+	floor: QualityTarget,
 } }) & { Failed?: never } | "Analyzed" | ({ Failed: {
 	kind: FailureKind,
 	message: string,
@@ -1026,10 +1026,10 @@ export type ImportedHistoryRecord = {
 	output_size: number | null,
 	encoding_time: DurationMs | null,
 	crf: Crf | null,
-	vmaf: VmafScore | null,
-	target: VmafTarget | null,
-	requested_target: VmafTarget | null,
-	floor_target: VmafTarget | null,
+	vmaf: QualityScore | null,
+	target: QualityTarget | null,
+	requested_target: QualityTarget | null,
+	floor_target: QualityTarget | null,
 	/**
 	 *  When the source record was decided, falling back to the import
 	 *  instant when the source carried no timestamp.
@@ -1320,6 +1320,24 @@ export type ProbeFailure = ({ CouldNotRun: {
 	detail: string,
 } }) & { CouldNotRun?: never; TimedOut?: never; Unsupported?: never };
 
+export type QualityMetric = "Vmaf";
+
+export type QualityScore = {
+	metric: QualityMetric,
+	/**  Hundredths of a VMAF point. */
+	value: number,
+};
+
+export type QualitySpread = {
+	metric: QualityMetric,
+	spread: ValueSpread,
+};
+
+export type QualityTarget = {
+	metric: QualityMetric,
+	value: number,
+};
+
 export type QueueItem = {
 	id: QueueItemId,
 	input: string,
@@ -1428,7 +1446,7 @@ export type ScrubSummary = {
 
 export type SearchMeasurement = {
 	crf: Crf,
-	score: VmafScore,
+	score: QualityScore,
 	predicted_size: number,
 	predicted_percent_basis_points: number,
 	predicted_duration_ms: number,
@@ -1441,12 +1459,12 @@ export type SearchMeasurement = {
  */
 export type SearchPrediction = {
 	crf: Crf,
-	score: VmafScore,
+	score: QualityScore,
 	predicted_size: number,
 	predicted_percent_basis_points: number,
 	predicted_duration_ms: number,
-	requested_target: VmafTarget,
-	successful_target: VmafTarget,
+	requested_target: QualityTarget,
+	successful_target: QualityTarget,
 };
 
 /**
@@ -1558,7 +1576,7 @@ export type StatisticsPayload = {
 	/**  Input gigabytes processed per hour of conversion time. */
 	gigabytes_per_hour: number | null,
 	reduction_percent: ValueSpread | null,
-	vmaf: ValueSpread | null,
+	quality: QualitySpread[],
 	crf: ValueSpread | null,
 	/**
 	 *  Ten 10%-wide bins over `[0, 100)`; a reduction of exactly 100% (an
@@ -1806,8 +1824,8 @@ export type VerdictKind = ({ Converted: {
 	output_size: number | null,
 	encoding_time: DurationMs | null,
 	crf: Crf | null,
-	vmaf: VmafScore | null,
-	target: VmafTarget | null,
+	vmaf: QualityScore | null,
+	target: QualityTarget | null,
 } }) & { NotWorthwhile?: never; Remuxed?: never } | ({ Remuxed: {
 	/**
 	 *  Required: imports never carry remuxes, so every remux verdict
@@ -1817,8 +1835,8 @@ export type VerdictKind = ({ Converted: {
 	input_size: number | null,
 	output_size: number | null,
 } }) & { Converted?: never; NotWorthwhile?: never } | ({ NotWorthwhile: {
-	requested: VmafTarget,
-	floor: VmafTarget,
+	requested: QualityTarget,
+	floor: QualityTarget,
 } }) & { Converted?: never; Remuxed?: never };
 
 export type VideoCodec = "Av1" | "H264" | "Hevc" | "Vp9" | { Other: string };
@@ -1841,10 +1859,6 @@ export type VideoMeta = {
 	audio: AudioStreamMeta[],
 	subtitle_count: number,
 };
-
-export type VmafScore = number;
-
-export type VmafTarget = number;
 
 /* Tauri Specta runtime */
 async function typedError<T, E>(result: Promise<T>): Promise<{ status: "ok"; data: T } | { status: "error"; error: E }> {

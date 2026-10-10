@@ -12,8 +12,8 @@ use serde::Serialize;
 use crate::{
     AnalysisDelta, AnalysisFileScan, AnalysisIntent, AnalysisResult, AnalysisRow, AnalysisRowEntry,
     AppState, Applied, ContentKey, Crf, DurableDelta, DurationMs, EphemeralDelta,
-    ExecutionUnavailable, FileRecord, JobAction, Operation, OverwriteDecision, ParkedStatus, RunId,
-    SkipReason, UnixMillis, Verdict, VerdictKind, VideoMeta, VmafScore, VmafTarget,
+    ExecutionUnavailable, FileRecord, JobAction, Operation, OverwriteDecision, ParkedStatus,
+    QualityScore, QualityTarget, RunId, SkipReason, UnixMillis, Verdict, VerdictKind, VideoMeta,
     compose_execution, fold_analysis, select_job_action, validate_analysis_mutation,
 };
 
@@ -69,14 +69,14 @@ pub enum HistoricalLevel {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, specta::Type)]
 pub struct SearchPrediction {
     pub crf: Crf,
-    pub score: VmafScore,
+    pub score: QualityScore,
     #[specta(type = crate::JsNumber)]
     pub predicted_size: u64,
     pub predicted_percent_basis_points: u32,
     #[specta(type = crate::JsNumber)]
     pub predicted_duration_ms: u64,
-    pub requested_target: VmafTarget,
-    pub successful_target: VmafTarget,
+    pub requested_target: QualityTarget,
+    pub successful_target: QualityTarget,
 }
 
 impl SearchPrediction {
@@ -105,8 +105,8 @@ pub enum ConversionSummary {
         output_size: Option<u64>,
         encoding_time: Option<DurationMs>,
         crf: Option<Crf>,
-        vmaf: Option<VmafScore>,
-        target: Option<VmafTarget>,
+        vmaf: Option<QualityScore>,
+        target: Option<QualityTarget>,
         decided_at: UnixMillis,
         source_run: Option<RunId>,
     },
@@ -598,7 +598,7 @@ mod tests {
             failed_attempts: Vec::new(),
             measurement: crate::SearchMeasurement {
                 crf: Crf(30_000),
-                score: VmafScore(9_550),
+                score: QualityScore::vmaf(9_550),
                 predicted_size: 500,
                 predicted_percent_basis_points: 5_000,
                 predicted_duration_ms: 30_000,
@@ -631,8 +631,8 @@ mod tests {
             output_size: Some(400),
             encoding_time: Some(DurationMs(90_000)),
             crf: Some(Crf(30_000)),
-            vmaf: Some(VmafScore(9_550)),
-            target: Some(VmafTarget(95)),
+            vmaf: Some(QualityScore::vmaf(9_550)),
+            target: Some(QualityTarget::vmaf(95)),
         }
     }
 
@@ -725,7 +725,7 @@ mod tests {
             ApplicableLevel::Analyzed {
                 prediction: SearchPrediction {
                     crf: Crf(30_000),
-                    score: VmafScore(9_550),
+                    score: QualityScore::vmaf(9_550),
                     predicted_size: 500,
                     predicted_percent_basis_points: 5_000,
                     predicted_duration_ms: 30_000,
@@ -796,13 +796,15 @@ mod tests {
         let execution = composed(&state, &VideoCodec::H264);
         record_result(&mut state, &content_key, result_for(&execution));
 
-        state.execution.requested_target = VmafTarget(execution.requested_target.0 - 1);
+        state.execution.requested_target =
+            QualityTarget::vmaf(execution.requested_target.value - 1);
         assert!(matches!(
             scanned_status(&state, &content_key, &hd()).applicable,
             ApplicableLevel::Analyzed { .. }
         ));
 
-        state.execution.requested_target = VmafTarget(execution.requested_target.0 + 1);
+        state.execution.requested_target =
+            QualityTarget::vmaf(execution.requested_target.value + 1);
         assert_eq!(
             scanned_status(&state, &content_key, &hd()).applicable,
             ApplicableLevel::Scanned {
@@ -813,7 +815,7 @@ mod tests {
         let mut fallback_state = state_with(verified(&[]));
         let fallback_key = insert_record(&mut fallback_state, "fallback", hd());
         let mut fallback = result_for(&execution);
-        fallback.successful_target = VmafTarget(execution.requested_target.0 - 1);
+        fallback.successful_target = QualityTarget::vmaf(execution.requested_target.value - 1);
         record_result(&mut fallback_state, &fallback_key, fallback);
         assert!(matches!(
             scanned_status(&fallback_state, &fallback_key, &hd()).applicable,
@@ -867,8 +869,8 @@ mod tests {
                     output_size: Some(400),
                     encoding_time: Some(DurationMs(90_000)),
                     crf: Some(Crf(30_000)),
-                    vmaf: Some(VmafScore(9_550)),
-                    target: Some(VmafTarget(95)),
+                    vmaf: Some(QualityScore::vmaf(9_550)),
+                    target: Some(QualityTarget::vmaf(95)),
                     decided_at: UnixMillis(2),
                     source_run: Some(RunId(7)),
                 }
@@ -923,8 +925,8 @@ mod tests {
             &mut state,
             &content_key,
             VerdictKind::NotWorthwhile {
-                requested: VmafTarget(95),
-                floor: VmafTarget(90),
+                requested: QualityTarget::vmaf(95),
+                floor: QualityTarget::vmaf(90),
             },
         );
         let status = scanned_status(&state, &content_key, &hd());
@@ -947,7 +949,7 @@ mod tests {
 
         // A lower floor is untried ground, decided from the base execution
         // even before the tools are verified.
-        state.execution.fallback_floor = VmafTarget(85);
+        state.execution.fallback_floor = QualityTarget::vmaf(85);
         state.tools = located(ToolVerification::Pending);
         let status = scanned_status(&state, &content_key, &hd());
         assert_eq!(status.convert, RowEligibility::Eligible);
@@ -1073,8 +1075,8 @@ mod tests {
                 output_size: None,
             }),
             Some(VerdictKind::NotWorthwhile {
-                requested: VmafTarget(95),
-                floor: VmafTarget(90),
+                requested: QualityTarget::vmaf(95),
+                floor: QualityTarget::vmaf(90),
             }),
         ];
         let imports = [

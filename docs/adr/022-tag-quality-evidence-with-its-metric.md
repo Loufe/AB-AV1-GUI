@@ -7,7 +7,7 @@ date: 2026-08-20
 
 ## Context and problem statement
 
-Every durable quality value is VMAF-typed: `VmafTarget` and `VmafScore` thread the analysis map key, verdicts, `StatFact`, the statistics payload, and import. The pinned ab-av1 interface already exposes a `min_xpsnr` argument the adapter sets to none, and telemetry classifies XPSNR sample work, so a second metric sits one flag away. Upstream keeps receiving requests for more metrics (alexheretic/ab-av1#167, alexheretic/ab-av1#205, alexheretic/ab-av1#331, alexheretic/ab-av1#343). The journal is append-only and permanent, so widening bare VMAF types after the first release is a schema migration; before it, the same change is a refactor plus fixture regeneration.
+Quality targets and scores thread the analysis map key, verdicts, `StatFact`, observations, the statistics payload, and import. Their units must remain explicit in durable evidence. The pinned ab-av1 interface exposes a `min_xpsnr` argument the adapter sets to none, and telemetry classifies XPSNR sample work, so a second metric sits one flag away. The journal outlives the code that records it; a metric tag lets a later metric variant describe its units without replacing the durable quality types.
 
 ## Decision drivers
 

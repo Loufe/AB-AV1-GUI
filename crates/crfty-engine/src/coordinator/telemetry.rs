@@ -3,7 +3,7 @@
 
 use crfty_core::{
     CRF_FIXED_SCALE, Crf, JobProgress, MAX_PERCENT_BASIS_POINTS, MAX_VMAF_SCORE,
-    PERCENT_BASIS_POINTS_SCALE, SearchMeasurement, VMAF_SCORE_FIXED_SCALE, VmafScore,
+    PERCENT_BASIS_POINTS_SCALE, QualityScore, SearchMeasurement, VMAF_SCORE_FIXED_SCALE,
 };
 
 use crate::{
@@ -74,7 +74,7 @@ pub(super) fn measurement(outcome: SearchOutcome) -> Result<SearchMeasurement, S
     }
     Ok(SearchMeasurement {
         crf: Crf((outcome.crf * CRF_FIXED_SCALE as f32).round().max(0.0) as u32),
-        score: VmafScore(
+        score: QualityScore::vmaf(
             (outcome.vmaf * f32::from(VMAF_SCORE_FIXED_SCALE))
                 .round()
                 .clamp(

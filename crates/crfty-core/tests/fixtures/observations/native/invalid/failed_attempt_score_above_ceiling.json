@@ -8,16 +8,16 @@
       "Analyzed": {
         "search": {
           "analysis": {
-            "requested_target": 95,
-            "successful_target": 94,
-            "fallback_floor": 90,
+            "requested_target": { "metric": "Vmaf", "value": 95 },
+            "successful_target": { "metric": "Vmaf", "value": 94 },
+            "fallback_floor": { "metric": "Vmaf", "value": 90 },
             "fallback_step": 1,
             "failed_attempts": [
               {
-                "target": 95,
+                "target": { "metric": "Vmaf", "value": 95 },
                 "last_measurement": {
                   "crf": 20000,
-                  "score": 10001,
+                  "score": { "metric": "Vmaf", "value": 10001 },
                   "predicted_size": 4200000,
                   "predicted_percent_basis_points": 5250,
                   "predicted_duration_ms": 240000,
@@ -27,7 +27,7 @@
             ],
             "measurement": {
               "crf": 24000,
-              "score": 9412,
+              "score": { "metric": "Vmaf", "value": 9412 },
               "predicted_size": 3100000,
               "predicted_percent_basis_points": 3875,
               "predicted_duration_ms": 240000,
