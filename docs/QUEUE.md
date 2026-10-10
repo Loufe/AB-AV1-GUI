@@ -14,21 +14,23 @@ Queue membership and order survive restart through the current file journal. The
 
 The queue has a finished prefix, at most one active item, and a queued tail. Active means `Reserved`, `Claimed`, or `Running`. The worker always reserves the first queued item; finishing it extends the finished prefix. Reorder changes only the queued tail. Retry moves a finished item to the tail.
 
-A `QueueItemId` identifies the row across edits and retries. Each reservation durably allocates a fresh `ClaimId` and `RunId` from a retained high-water mark. Removing an item, releasing a reservation, compaction, and restart do not reclaim those runtime IDs. Exhaustion rejects reservation without mutating the queue. A prepared run retains its own lineage after its queue item is removed or retried.
+A `QueueItemId` identifies the row across edits and retries. The reducer allocates it when an add is accepted and retains the highest allocated ID after removal, compaction, and restart. Each reservation durably allocates a fresh `ClaimId` and `RunId` from a separate retained high-water mark. Removing an item, releasing a reservation, compaction, and restart do not reclaim those runtime IDs. Exhaustion rejects the complete add batch or reservation without mutating the queue. A prepared run retains its own lineage after its queue item is removed or retried.
 
 Worker commands carry the item, claim, and run identities. Preparation, start, analysis recording, and terminal recording validate the matching active state. Stale commands cannot finish a later retry, and an already terminal run cannot receive another outcome.
 
 ## Enqueue
 
-`AddMany` receives ordered requests with an item ID, input path, operation, analysis intent, output target, overwrite decision, and optional filesystem facts. In the current path-add bridge, the engine expands files and folders using configured extensions; the shell allocates item IDs and submits the resulting requests. Execution settings are resolved later, at preparation.
+`AddMany` receives ordered requests with an input path, operation, analysis intent, output target, overwrite decision, and optional filesystem facts. In the current path-add bridge, the engine expands files and folders using configured extensions; the shell submits the resulting requests. Callers never allocate item IDs. Execution settings are resolved later, at preparation.
 
-The reducer validates every output target and rejects the whole batch on an invalid target or an item-ID collision. Duplicate detection compares input paths against unfinished queue items and requests already accepted in the batch. A duplicate contributes `AlreadyQueued` to the summary. Finished rows do not block a new add.
+The reducer validates every output target and rejects the whole batch on an invalid target or exhausted item IDs. Paths that cannot round-trip through the JSON journal contribute `PathNotPersistable` to the summary. Duplicate detection compares input paths against unfinished queue items and requests already accepted in the batch. A duplicate contributes `AlreadyQueued` to the summary. Finished rows do not block a new add.
 
 For a path not already unfinished, the reducer invokes `evaluate_enqueue` over the supplied identity and cached content facts. [Policy's verdict and freshness rules](POLICY.md#verdicts-and-freshness) own the evaluation order, exclusions, and `Refresh` bypass; [media eligibility](POLICY.md#media-eligibility) owns resolution and container decisions. Missing facts or unreliable timestamps leave the request queueable. Analyze adds remain available even when an analysis is cached, because qualifying reuse is selected at preparation.
 
 Accepted requests append `Queued` rows in request order. Exclusions create no row and no terminal outcome. One ephemeral `QueueAddSummary` contains the added count and counts by typed `SkipReason`; the frontend renders it as neutral action feedback. A request accepted with weaker facts can still become a visible skip after preparation observes the source.
 
 Enqueue uses filesystem facts supplied by the engine and performs no media probing in core.
+
+Analysis actions enqueue selected rows or all published files from one current generation through the same path and ID rules. The engine supplies native paths, and the reducer uses committed output Settings and each scanned row's operational eligibility. Discovered files can enqueue before Basic Scan finishes. This action returns an `AnalysisQueueSummary` with typed selection, scan, and policy exclusions; it emits no `QueueAddSummary` on the stream. The [Analysis queue-action contract](ANALYSIS.md#queue-actions) owns generation checks, discovery order, identity deduplication, and exclusion details.
 
 ## Item administration and reorder
 
