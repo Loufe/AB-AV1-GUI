@@ -47,48 +47,59 @@ pub const fn parent_sync_support() -> ParentSyncSupport {
 }
 
 #[derive(Debug)]
-pub struct OutputError {
-    context: &'static str,
-    source: MediaError,
+pub enum OutputError {
+    DestinationExists,
+    Failure {
+        context: &'static str,
+        source: MediaError,
+    },
 }
 
 impl OutputError {
     fn new(context: &'static str, source: impl Into<MediaError>) -> Self {
-        Self {
+        Self::Failure {
             context,
             source: source.into(),
         }
-    }
-
-    #[must_use]
-    pub fn is_destination_exists(&self) -> bool {
-        self.context == "output destination already exists"
-            && matches!(&self.source, MediaError::Io(error) if error.kind() == io::ErrorKind::AlreadyExists)
     }
 
     /// The inspection was interrupted by cancellation rather than failing:
     /// the caller reports a stop, not a failure.
     #[must_use]
     pub fn is_cancelled(&self) -> bool {
-        self.source.is_cancelled()
+        match self {
+            Self::DestinationExists => false,
+            Self::Failure { source, .. } => source.is_cancelled(),
+        }
     }
 
     /// The failed tool run's bounded stderr tail, unscrubbed.
     #[must_use]
     pub fn diagnostic(&self) -> Option<&BoundedOutput> {
-        self.source.diagnostic()
+        match self {
+            Self::DestinationExists => None,
+            Self::Failure { source, .. } => source.diagnostic(),
+        }
     }
 }
 
 impl fmt::Display for OutputError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(formatter, "{}: {}", self.context, self.source)
+        match self {
+            Self::DestinationExists => {
+                formatter.write_str("output destination already exists: overwrite is disabled")
+            }
+            Self::Failure { context, source } => write!(formatter, "{context}: {source}"),
+        }
     }
 }
 
 impl std::error::Error for OutputError {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
-        Some(&self.source)
+        match self {
+            Self::DestinationExists => None,
+            Self::Failure { source, .. } => Some(source),
+        }
     }
 }
 
@@ -121,10 +132,7 @@ impl<I: ArtifactInspector> OutputManager<I> {
             .map_err(|error| OutputError::new("failed to inspect output destination", error))?
             .into_identity();
         if !overwrite_existing && final_path != input && final_preimage.is_some() {
-            return Err(OutputError::new(
-                "output destination already exists",
-                io::Error::new(io::ErrorKind::AlreadyExists, "overwrite is disabled"),
-            ));
+            return Err(OutputError::DestinationExists);
         }
         if replacement == Replacement::RetireOriginal
             && final_preimage.as_ref() == Some(&input_identity)

@@ -417,8 +417,8 @@ enum CompactionOutcome {
     Compacted,
     /// Nothing to do: degraded, not quiescent, or not due by size policy.
     Skipped,
-    /// A compaction was attempted and failed; the caller backs off and the
-    /// old journal generation remains authoritative.
+    /// A compaction was attempted and failed; the caller backs off. The
+    /// authoritative generation depends on whether replacement succeeded.
     Failed,
 }
 
@@ -461,7 +461,9 @@ fn maybe_compact(
     ) {
         Ok(()) => CompactionOutcome::Compacted,
         Err(error) => {
-            tracing::warn!("journal compaction failed; old journal remains authoritative: {error}");
+            tracing::warn!(
+                "journal compaction failed; will retry at a later idle barrier: {error}"
+            );
             CompactionOutcome::Failed
         }
     }
