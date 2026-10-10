@@ -26,8 +26,8 @@ use crfty_core::{
     ImportedHistoryRecord, ItemOutcome, LocatedTool, LocatedTools, MediaContainer,
     MediaObservation, Operation, OutputDelta, OutputState, OutputTarget, OutputTransaction,
     OverwriteDecision, ParkedStatus, PathBinding, PathHash, QueueAddRequest, QueueCommand,
-    QueueItemId, Replacement, Reply, RunId, SearchMeasurement, SessionCommand, SettingsCommand,
-    SystemCommand, TimestampReliability, ToolAvailability, ToolRevisions, ToolSource,
+    QueueItemId, Replacement, RunId, SearchMeasurement, SessionCommand, SettingsCommand,
+    SuccessReply, SystemCommand, TimestampReliability, ToolAvailability, ToolRevisions, ToolSource,
     ToolVerification, UnixMillis, VideoCodec, VideoMeta, VmafScore, WorkerCommand, apply,
 };
 use serde::Serialize;
@@ -59,8 +59,10 @@ impl Recorder {
         }
     }
 
-    fn apply(&mut self, command: Command) -> Reply {
-        let applied = apply(&mut self.state, command);
+    fn apply(&mut self, command: Command) -> SuccessReply {
+        let Ok(applied) = apply(&mut self.state, command) else {
+            panic!("fixture command was rejected");
+        };
         for delta in applied.ephemeral {
             if let EphemeralDelta::Analysis(delta) = delta {
                 self.deltas.push(delta);
@@ -74,13 +76,13 @@ impl Recorder {
         assert!(
             matches!(
                 reply,
-                Reply::Accepted
-                    | Reply::AnalysisStarted { .. }
-                    | Reply::AnalysisQueued(_)
-                    | Reply::BasicScan(_)
-                    | Reply::Reserved(Some(_))
-                    | Reply::Claimed(Some(_))
-                    | Reply::Imported { .. }
+                SuccessReply::Accepted
+                    | SuccessReply::AnalysisStarted { .. }
+                    | SuccessReply::AnalysisQueued(_)
+                    | SuccessReply::BasicScan(_)
+                    | SuccessReply::Reserved(Some(_))
+                    | SuccessReply::Claimed(Some(_))
+                    | SuccessReply::Imported { .. }
             ),
             "fixture command was not accepted: {reply:?}"
         );
@@ -177,7 +179,7 @@ impl Recorder {
             self.accept(Command::Session(SessionCommand::Start));
         }
         let reserved = self.apply(Command::Worker(WorkerCommand::ReserveNext));
-        let Reply::Reserved(Some(job)) = reserved else {
+        let SuccessReply::Reserved(Some(job)) = reserved else {
             panic!("fixture reservation failed: {reserved:?}");
         };
         let (claim_id, run_id) = (job.claim_id, job.run_id);
