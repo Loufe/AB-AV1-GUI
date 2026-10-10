@@ -25,22 +25,11 @@ Closing during active work prompts rather than hiding to a tray; there is no sys
 
 ## Cancellation
 
-Two signals sharing one outcome fold:
-
-- **Stop After File** sets a session flag, lets the active file finish its whole fallback/search/encode sequence, and prevents another claim.
-- **Force Stop** cancels the child process immediately and waits for termination and cleanup. Safe staging abandonment folds `Stopped`; interrupted verification after promotion preserves files and reports an output conflict under [ADR-020](../adr/020-own-output-promotion-as-a-journaled-transaction.md).
-
-Both stopping states wait for worker completion before returning to idle, including during the capability probe before the first claim. A new session cannot start while that worker is settling.
-
-The active item cannot be removed, reordered, or retyped during a run.
+The [Queue contract](../QUEUE.md#stopping-and-containment) owns shipped Stop After File, Force Stop, worker completion, and process-containment behaviour, including current cancellation limits. [ADR-018, unify job cancellation and completion](../adr/018-unify-job-cancellation-and-completion.md) selects the pending supervision replacement.
 
 ## Interrupted work
 
-A durable reservation without a prepared run returns to its original queue position at startup. Its assigned IDs remain consumed. Recovery does not start a new session or count the release as an outcome.
-
-A prepared run with no recorded terminal becomes Incomplete after output recovery, unless a settled output proves success or a conflict requires failure. Recovery waits when unsettled output needs unavailable tools. Incomplete means completion was not recorded; it does not assert a crash or user cancellation. Existing analysis facts survive, but cached analysis alone cannot prove this run completed.
-
-Only a user Force Stop can record Stopped. Both stopped and incomplete outcomes require absent or safely abandoned output. Clear completed retains incomplete and failed items for inspection; explicit retry creates a fresh run.
+The [Queue contract](../QUEUE.md#restart-and-interrupted-work) owns reservation release, prepared-run recovery, terminal classification, and retry after interruption. [ADR-020, own output promotion as a journaled transaction](../adr/020-own-output-promotion-as-a-journaled-transaction.md) owns recovery's filesystem authority.
 
 A definitive preparation rejection records its reason as an internal failure before the worker reports the fatal protocol error. Unknown durability, disconnection, or an unexpected reply does not authorize another terminal write.
 
