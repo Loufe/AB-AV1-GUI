@@ -15,8 +15,8 @@ import type {
   DurationMs,
   StatisticsPayload,
   UnixMillis,
-  VmafScore,
-  VmafTarget,
+  MetricScore,
+  QualityTarget,
 } from "@/lib/bindings";
 
 import {
@@ -45,10 +45,13 @@ export function formatEngineCrf(crf: Crf | null): string {
   return formatCrf(crf / CRF_FIXED_SCALE);
 }
 
-/** Format a serialized fixed-point `VmafScore` (9,512 means VMAF 95.12). */
-export function formatEngineVmafScore(score: VmafScore | null): string {
-  if (score === null || !isNonNegativeFinite(score)) return formatVmaf(null);
-  return formatVmaf(score / VMAF_SCORE_FIXED_SCALE);
+/** The metric selects the fixed-point scale: VMAF scores carry hundredths of a point. */
+export function formatEngineVmafScore(quality: MetricScore | null): string {
+  if (quality === null || !isNonNegativeFinite(quality.score)) return formatVmaf(null);
+  switch (quality.metric) {
+    case "Vmaf":
+      return formatVmaf(quality.score / VMAF_SCORE_FIXED_SCALE);
+  }
 }
 
 /** Format an engine duration in milliseconds as compact human time. */
@@ -72,8 +75,8 @@ export function formatUnixMillisDate(instant: UnixMillis | null): string {
   return formatDate(instant);
 }
 
-/** `VmafTarget` is already human-scale and must not use the score scale. */
-export function formatVmafTarget(target: VmafTarget | null): string {
+/** `QualityTarget` is already human-scale and must not use the score scale. */
+export function formatVmafTarget(target: QualityTarget | null): string {
   if (target === null || !isNonNegativeFinite(target)) return EM_DASH;
   return String(target);
 }

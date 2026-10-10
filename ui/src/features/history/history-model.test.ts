@@ -47,7 +47,7 @@ function historyRow(
     input_size_bytes: null,
     output_size_bytes: null,
     encoding_time_ms: null,
-    vmaf: null,
+    quality: null,
     crf: null,
     ...overrides,
   };
@@ -105,7 +105,13 @@ describe("History standing vocabulary", () => {
     const statuses: HistoryStatus[] = [
       "Converted",
       "Remuxed",
-      { NotWorthwhile: { requested: 95, floor: 90 } },
+      {
+        NotWorthwhile: {
+          metric: "Vmaf",
+          requested: 95,
+          floor: 90,
+        },
+      },
       "Analyzed",
       { Failed: { kind: "SearchRun", message: "anonymized failure" } },
       "Stopped",
@@ -137,9 +143,15 @@ describe("History standing vocabulary", () => {
   });
 
   it("preserves failure and not-worthwhile facts", () => {
-    expect(statusPresentation({ NotWorthwhile: { requested: 96, floor: 89 } }).detail).toContain(
-      "96 through 89",
-    );
+    expect(
+      statusPresentation({
+        NotWorthwhile: {
+          metric: "Vmaf",
+          requested: 96,
+          floor: 89,
+        },
+      }).detail,
+    ).toContain("96 through 89");
     expect(
       statusPresentation({ Failed: { kind: "EncodeRun", message: "anonymized stderr" } }).detail,
     ).toBe("anonymized stderr");

@@ -102,7 +102,7 @@ Import is strict and idempotent. Every record is validated before anything is pl
 
 ### Quality facts
 
-Every quality target and score carries its ADR-022 metric tag once that tag lands, native and translated alike, and each value carries its own tag. Until then the model holds bare VMAF values, and translated values are VMAF by origin.
+Each record that holds quality values names its ADR-022 metric once, native and translated alike. `QualityTarget` is a whole-point value and `QualityScore` a fixed-point value in the enclosing record's metric, with VMAF scores stored in hundredths of a point. An analysis takes its metric from its profile; verdicts and native not-worthwhile observations carry their own. V2-origin evidence is VMAF by origin. VMAF is the sole supported metric, and unknown metrics are rejected when decoding requests or stored evidence. Not-worthwhile verdicts apply only to a request in the same metric. Statistics groups scores by metric and returns a spread for each group.
 
 ### Browsing
 

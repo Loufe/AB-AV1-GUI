@@ -3,7 +3,8 @@
 
 use crfty_core::{
     CRF_FIXED_SCALE, Crf, JobProgress, MAX_PERCENT_BASIS_POINTS, MAX_VMAF_SCORE,
-    PERCENT_BASIS_POINTS_SCALE, SearchMeasurement, VMAF_SCORE_FIXED_SCALE, VmafScore,
+    PERCENT_BASIS_POINTS_SCALE, QualityMetric, QualityScore, SearchMeasurement,
+    VMAF_SCORE_FIXED_SCALE,
 };
 
 use crate::{
@@ -57,11 +58,19 @@ pub(super) fn remux_progress(telemetry: RemuxTelemetry) -> JobProgress {
     JobProgress::OutputPositionMs(telemetry.position_ms)
 }
 
-pub(super) fn measurement(outcome: SearchOutcome) -> Result<SearchMeasurement, String> {
+/// The search ran under `metric`, which selects the score the adapter
+/// reported and its fixed-point scale.
+pub(super) fn measurement(
+    outcome: SearchOutcome,
+    metric: QualityMetric,
+) -> Result<SearchMeasurement, String> {
+    let (score, maximum, scale) = match metric {
+        QualityMetric::Vmaf => (outcome.vmaf, MAX_VMAF_SCORE, VMAF_SCORE_FIXED_SCALE),
+    };
     if !outcome.crf.is_finite()
         || outcome.crf < 0.0
-        || !outcome.vmaf.is_finite()
-        || !(0.0..=f32::from(MAX_VMAF_SCORE)).contains(&outcome.vmaf)
+        || !score.is_finite()
+        || !(0.0..=f32::from(maximum)).contains(&score)
         || !outcome.predicted_percent.is_finite()
         || outcome.predicted_percent < 0.0
     {
@@ -74,13 +83,10 @@ pub(super) fn measurement(outcome: SearchOutcome) -> Result<SearchMeasurement, S
     }
     Ok(SearchMeasurement {
         crf: Crf((outcome.crf * CRF_FIXED_SCALE as f32).round().max(0.0) as u32),
-        score: VmafScore(
-            (outcome.vmaf * f32::from(VMAF_SCORE_FIXED_SCALE))
+        score: QualityScore(
+            (score * f32::from(scale))
                 .round()
-                .clamp(
-                    0.0,
-                    f32::from(VMAF_SCORE_FIXED_SCALE) * f32::from(MAX_VMAF_SCORE),
-                ) as u16,
+                .clamp(0.0, f32::from(scale) * f32::from(maximum)) as u16,
         ),
         predicted_size: outcome.predicted_size,
         predicted_percent_basis_points: scaled_percent.round() as u32,

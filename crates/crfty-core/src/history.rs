@@ -114,7 +114,7 @@ mod tests {
     use crate::{
         ContentKey, Crf, DestructiveIdentity, DurableDelta, DurableState, FileSystemId, FileTimeNs,
         ImportPath, ImportedHistoryRecord, MediaContainer, MediaObservation, ParkedStatus,
-        PathBinding, PathHash, UnixMillis, VideoCodec, VideoMeta, VmafScore, VmafTarget,
+        PathBinding, PathHash, QualityScore, QualityTarget, UnixMillis, VideoCodec, VideoMeta,
     };
 
     fn observation() -> MediaObservation {
@@ -157,10 +157,10 @@ mod tests {
             output_size: Some(4_000),
             encoding_time: None,
             crf: Some(Crf(30_000)),
-            vmaf: Some(VmafScore(9_500)),
-            target: Some(VmafTarget(95)),
-            requested_target: Some(VmafTarget(95)),
-            floor_target: Some(VmafTarget(90)),
+            vmaf: Some(QualityScore(9_500)),
+            target: Some(QualityTarget(95)),
+            requested_target: Some(QualityTarget(95)),
+            floor_target: Some(QualityTarget(90)),
             decided_at: UnixMillis(decided_at),
         }
     }

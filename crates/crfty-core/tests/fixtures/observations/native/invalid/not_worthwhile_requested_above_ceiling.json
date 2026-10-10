@@ -13,6 +13,7 @@
     "revisions": { "ab_av1": "ab-av1 0.10.0", "ffmpeg": "ffmpeg 7.1", "encoder": "SVT-AV1 3.0.0" },
     "outcome": {
       "NotWorthwhile": {
+        "metric": "Vmaf",
         "requested": 101,
         "floor": 100,
         "attempts": [

@@ -1134,8 +1134,8 @@ mod tests {
             AnalysisGenerationId, AnalysisResult, AnalysisRow, AnalysisRowEntry, AnalysisRowId,
             ContentKey, Crf, DestructiveIdentity, FileRecord, FileSystemId, FileTimeNs,
             HardwareDecoder, LocatedTool, LocatedTools, MediaContainer, MediaObservation,
-            PathBinding, PathHash, SearchMeasurement, ToolSource, ToolVerification, VideoCodec,
-            VideoMeta, VmafScore, compose_execution,
+            PathBinding, PathHash, QualityScore, SearchMeasurement, ToolSource, ToolVerification,
+            VideoCodec, VideoMeta, compose_execution,
         };
 
         let mut state = AppState {
@@ -1190,7 +1190,7 @@ mod tests {
             failed_attempts: Vec::new(),
             measurement: SearchMeasurement {
                 crf: Crf(30_000),
-                score: VmafScore(9_500),
+                score: QualityScore(9_500),
                 predicted_size: 500,
                 predicted_percent_basis_points: 5_000,
                 predicted_duration_ms: 30_000,

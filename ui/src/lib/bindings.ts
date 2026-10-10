@@ -109,7 +109,7 @@ export type AnalysisActivity = "Discovering" | "Discovered" | "BasicScanning" | 
 } };
 
 export type AnalysisAttempt = {
-	target: VmafTarget,
+	target: QualityTarget,
 	last_measurement: SearchMeasurement | null,
 };
 
@@ -238,6 +238,12 @@ export type AnalysisProfile = {
 	sample_duration_ms: number,
 	thorough: boolean,
 	/**
+	 *  Part of the analysis identity (ADR-022): every target and score in
+	 *  an analysis or execution built on this profile is in this metric, so
+	 *  a result recorded under one metric is never reused for another.
+	 */
+	metric: QualityMetric,
+	/**
 	 *  The decode mode the search actually ran with — part of the analysis
 	 *  identity (ADR-007): hardware and software decoders can
 	 *  produce different decoded frames, so their VMAF measurements are not
@@ -272,9 +278,9 @@ export type AnalysisQueueSummary = {
 };
 
 export type AnalysisResult = {
-	requested_target: VmafTarget,
-	successful_target: VmafTarget,
-	fallback_floor: VmafTarget,
+	requested_target: QualityTarget,
+	successful_target: QualityTarget,
+	fallback_floor: QualityTarget,
 	fallback_step: number,
 	failed_attempts: AnalysisAttempt[],
 	measurement: SearchMeasurement,
@@ -476,8 +482,9 @@ export type ConversionSummary = ({ Encoded: {
 	output_size: number | null,
 	encoding_time: DurationMs | null,
 	crf: Crf | null,
-	vmaf: VmafScore | null,
-	target: VmafTarget | null,
+	metric: QualityMetric,
+	score: QualityScore | null,
+	target: QualityTarget | null,
 	decided_at: UnixMillis,
 	source_run: RunId | null,
 } }) & { Remuxed?: never } | ({ Remuxed: {
@@ -860,8 +867,8 @@ export type EphemeralDelta_Serialize =
 } }) & { Analysis?: never; CommandRejected?: never; SessionAggregates?: never; SessionChanged?: never; Statistics?: never; Telemetry?: never; TelemetryCleared?: never; ToolsChanged?: never; WorkerCrashed?: never };
 
 export type ExecutionSettings = {
-	requested_target: VmafTarget,
-	fallback_floor: VmafTarget,
+	requested_target: QualityTarget,
+	fallback_floor: QualityTarget,
 	fallback_step: number,
 	overwrite_existing: boolean,
 	decode_preference: DecodePreference,
@@ -897,7 +904,7 @@ export type FileRecord = FileRecord_Serialize | FileRecord_Deserialize;
 
 export type FileRecord_Deserialize = {
 	metadata: VideoMeta,
-	analyses: ([AnalysisProfile, { [key in VmafTarget]: AnalysisResult }])[],
+	analyses: ([AnalysisProfile, { [key in QualityTarget]: AnalysisResult }])[],
 	verdict: Verdict | null,
 	/**
 	 *  The deterministic imported summary retained for History/Statistics
@@ -910,7 +917,7 @@ export type FileRecord_Deserialize = {
 
 export type FileRecord_Serialize = {
 	metadata: VideoMeta,
-	analyses: ([AnalysisProfile, { [key in VmafTarget]: AnalysisResult }])[],
+	analyses: ([AnalysisProfile, { [key in QualityTarget]: AnalysisResult }])[],
 	verdict: Verdict | null,
 	/**
 	 *  The deterministic imported summary retained for History/Statistics
@@ -985,7 +992,7 @@ export type HistoryRow = {
 	input_size_bytes: number | null,
 	output_size_bytes: number | null,
 	encoding_time_ms: number | null,
-	vmaf: VmafScore | null,
+	quality: MetricScore | null,
 	crf: Crf | null,
 };
 
@@ -997,8 +1004,9 @@ export type HistoryRowKey = { kind: "Content"; value: ContentKey } | { kind: "Pa
 
 /**  The current standing of one content in History terms. */
 export type HistoryStatus = "Converted" | "Remuxed" | ({ NotWorthwhile: {
-	requested: VmafTarget,
-	floor: VmafTarget,
+	metric: QualityMetric,
+	requested: QualityTarget,
+	floor: QualityTarget,
 } }) & { Failed?: never } | "Analyzed" | ({ Failed: {
 	kind: FailureKind,
 	message: string,
@@ -1054,10 +1062,14 @@ export type ImportedHistoryRecord = {
 	output_size: number | null,
 	encoding_time: DurationMs | null,
 	crf: Crf | null,
-	vmaf: VmafScore | null,
-	target: VmafTarget | null,
-	requested_target: VmafTarget | null,
-	floor_target: VmafTarget | null,
+	/**
+	 *  VMAF, as are the targets below: V2 measured no other metric
+	 *  (`Self::METRIC`).
+	 */
+	vmaf: QualityScore | null,
+	target: QualityTarget | null,
+	requested_target: QualityTarget | null,
+	floor_target: QualityTarget | null,
 	/**
 	 *  When the source record was decided, falling back to the import
 	 *  instant when the source carried no timestamp.
@@ -1136,6 +1148,15 @@ export type MediaObservation_Serialize = {
 };
 
 export type MediaTool = "Ffmpeg" | "Ffprobe";
+
+/**
+ *  A score read outside the record that measured it, carrying that record's
+ *  metric with it.
+ */
+export type MetricScore = {
+	metric: QualityMetric,
+	score: QualityScore,
+};
 
 export type Operation = "Analyze" | "Convert";
 
@@ -1352,6 +1373,28 @@ export type ProbeFailure = ({ CouldNotRun: {
 	detail: string,
 } }) & { CouldNotRun?: never; TimedOut?: never; Unsupported?: never };
 
+/**
+ *  The quality metric a search targets and its scores measure (ADR-022).
+ *  Bare [`QualityTarget`] and [`QualityScore`] values have units only under
+ *  the metric of the record that holds them, so each record names its metric
+ *  once: an analysis through its profile, a verdict or observation on itself.
+ */
+export type QualityMetric = "Vmaf";
+
+/**
+ *  A measured quality in the enclosing metric's fixed-point scale: VMAF
+ *  scores are hundredths of a point.
+ */
+export type QualityScore = number;
+
+export type QualitySpread = {
+	metric: QualityMetric,
+	spread: ValueSpread,
+};
+
+/**  A requested quality level in whole points of the enclosing metric. */
+export type QualityTarget = number;
+
 export type QueueItem = {
 	id: QueueItemId,
 	input: string,
@@ -1460,7 +1503,7 @@ export type ScrubSummary = {
 
 export type SearchMeasurement = {
 	crf: Crf,
-	score: VmafScore,
+	score: QualityScore,
 	predicted_size: number,
 	predicted_percent_basis_points: number,
 	predicted_duration_ms: number,
@@ -1472,13 +1515,15 @@ export type SearchMeasurement = {
  *  measured conversion summary: nothing here has happened yet.
  */
 export type SearchPrediction = {
+	/**  The metric of `score` and both targets. */
+	metric: QualityMetric,
 	crf: Crf,
-	score: VmafScore,
+	score: QualityScore,
 	predicted_size: number,
 	predicted_percent_basis_points: number,
 	predicted_duration_ms: number,
-	requested_target: VmafTarget,
-	successful_target: VmafTarget,
+	requested_target: QualityTarget,
+	successful_target: QualityTarget,
 };
 
 /**
@@ -1608,7 +1653,7 @@ export type StatisticsPayload = {
 	/**  Input gigabytes processed per hour of conversion time. */
 	gigabytes_per_hour: number | null,
 	reduction_percent: ValueSpread | null,
-	vmaf: ValueSpread | null,
+	quality: QualitySpread[],
 	crf: ValueSpread | null,
 	/**
 	 *  Ten 10%-wide bins over `[0, 100)`; a reduction of exactly 100% (an
@@ -1857,8 +1902,13 @@ export type VerdictKind = ({ Converted: {
 	output_size: number | null,
 	encoding_time: DurationMs | null,
 	crf: Crf | null,
-	vmaf: VmafScore | null,
-	target: VmafTarget | null,
+	/**
+	 *  The metric of `score` and `target`: the deciding search's, or
+	 *  VMAF for an adopted V2 record.
+	 */
+	metric: QualityMetric,
+	score: QualityScore | null,
+	target: QualityTarget | null,
 } }) & { NotWorthwhile?: never; Remuxed?: never } | ({ Remuxed: {
 	/**
 	 *  Required: imports never carry remuxes, so every remux verdict
@@ -1868,8 +1918,9 @@ export type VerdictKind = ({ Converted: {
 	input_size: number | null,
 	output_size: number | null,
 } }) & { Converted?: never; NotWorthwhile?: never } | ({ NotWorthwhile: {
-	requested: VmafTarget,
-	floor: VmafTarget,
+	metric: QualityMetric,
+	requested: QualityTarget,
+	floor: QualityTarget,
 } }) & { Converted?: never; Remuxed?: never };
 
 export type VideoCodec = "Av1" | "H264" | "Hevc" | "Vp9" | { Other: string };
@@ -1892,10 +1943,6 @@ export type VideoMeta = {
 	audio: AudioStreamMeta[],
 	subtitle_count: number,
 };
-
-export type VmafScore = number;
-
-export type VmafTarget = number;
 
 /* Tauri Specta runtime */
 async function typedError<T, E>(result: Promise<T>): Promise<{ status: "ok"; data: T } | { status: "error"; error: E }> {

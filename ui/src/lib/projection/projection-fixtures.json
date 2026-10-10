@@ -56,7 +56,8 @@
                   "output_size": null,
                   "encoding_time": null,
                   "crf": null,
-                  "vmaf": null,
+                  "metric": "Vmaf",
+                  "score": null,
                   "target": null
                 }
               },
@@ -97,6 +98,7 @@
                   "samples": null,
                   "sample_duration_ms": 20000,
                   "thorough": false,
+                  "metric": "Vmaf",
                   "decode_mode": "Software",
                   "ab_av1_revision": "",
                   "ffmpeg_revision": "",
@@ -129,6 +131,7 @@
                 "samples": null,
                 "sample_duration_ms": 20000,
                 "thorough": false,
+                "metric": "Vmaf",
                 "decode_mode": "Software",
                 "ab_av1_revision": "",
                 "ffmpeg_revision": "",
@@ -185,7 +188,10 @@
           "input_size_bytes": 10000000,
           "output_size_bytes": 4000000,
           "encoding_time_ms": 240000,
-          "vmaf": 9512,
+          "quality": {
+            "metric": "Vmaf",
+            "score": 9512
+          },
           "crf": 24000
         }
       ]
@@ -230,7 +236,8 @@
                   "output_size": null,
                   "encoding_time": null,
                   "crf": null,
-                  "vmaf": null,
+                  "metric": "Vmaf",
+                  "score": null,
                   "target": null
                 }
               },
@@ -307,6 +314,7 @@
                   "samples": null,
                   "sample_duration_ms": 20000,
                   "thorough": false,
+                  "metric": "Vmaf",
                   "decode_mode": "Software",
                   "ab_av1_revision": "",
                   "ffmpeg_revision": "",
@@ -339,6 +347,7 @@
                 "samples": null,
                 "sample_duration_ms": 20000,
                 "thorough": false,
+                "metric": "Vmaf",
                 "decode_mode": "Software",
                 "ab_av1_revision": "",
                 "ffmpeg_revision": "",
@@ -389,7 +398,10 @@
           "input_size_bytes": 8000000,
           "output_size_bytes": 3000000,
           "encoding_time_ms": 240000,
-          "vmaf": 9512,
+          "quality": {
+            "metric": "Vmaf",
+            "score": 9512
+          },
           "crf": 24000
         }
       ]
@@ -434,7 +446,8 @@
                   "output_size": null,
                   "encoding_time": null,
                   "crf": null,
-                  "vmaf": null,
+                  "metric": "Vmaf",
+                  "score": null,
                   "target": null
                 }
               },
@@ -472,7 +485,7 @@
           "input_size_bytes": 5000000,
           "output_size_bytes": null,
           "encoding_time_ms": null,
-          "vmaf": null,
+          "quality": null,
           "crf": null
         }
       ]
@@ -577,7 +590,10 @@
           "input_size_bytes": 3000000,
           "output_size_bytes": 1000000,
           "encoding_time_ms": 88000,
-          "vmaf": 9550,
+          "quality": {
+            "metric": "Vmaf",
+            "score": 9550
+          },
           "crf": 30000
         },
         {
@@ -597,7 +613,10 @@
           "input_size_bytes": 3000000,
           "output_size_bytes": 1000000,
           "encoding_time_ms": 88000,
-          "vmaf": 9550,
+          "quality": {
+            "metric": "Vmaf",
+            "score": 9550
+          },
           "crf": 30000
         },
         {
@@ -607,6 +626,7 @@
           },
           "status": {
             "NotWorthwhile": {
+              "metric": "Vmaf",
               "requested": 94,
               "floor": 91
             }
@@ -622,7 +642,165 @@
           "input_size_bytes": 3000000,
           "output_size_bytes": 1000000,
           "encoding_time_ms": 88000,
-          "vmaf": 9550,
+          "quality": {
+            "metric": "Vmaf",
+            "score": 9550
+          },
+          "crf": 30000
+        }
+      ]
+    },
+    {
+      "name": "parked_not_worthwhile_partial_ranges",
+      "state": {
+        "queue_item_id_high_water": 0,
+        "runtime_id_high_water": 0,
+        "queue": [],
+        "paths": {},
+        "records": {},
+        "outputs": {},
+        "conversion_runs": {},
+        "parked": {
+          "c:/history/floor-only.mkv": {
+            "status": "NotWorthwhile",
+            "size": 3000000,
+            "modified_ns": "1000000",
+            "video_codec": null,
+            "width": 1280,
+            "height": 720,
+            "duration_ms": 120000,
+            "output_size": 1000000,
+            "encoding_time": 88000,
+            "crf": 30000,
+            "vmaf": 9550,
+            "target": 95,
+            "requested_target": null,
+            "floor_target": 97,
+            "decided_at": 1728003600000
+          },
+          "c:/history/no-range.mkv": {
+            "status": "NotWorthwhile",
+            "size": 3000000,
+            "modified_ns": "1000000",
+            "video_codec": null,
+            "width": 1280,
+            "height": 720,
+            "duration_ms": 120000,
+            "output_size": 1000000,
+            "encoding_time": 88000,
+            "crf": 30000,
+            "vmaf": 9550,
+            "target": 95,
+            "requested_target": null,
+            "floor_target": null,
+            "decided_at": 1728003600000
+          },
+          "c:/history/requested-only.mkv": {
+            "status": "NotWorthwhile",
+            "size": 3000000,
+            "modified_ns": "1000000",
+            "video_codec": null,
+            "width": 1280,
+            "height": 720,
+            "duration_ms": 120000,
+            "output_size": 1000000,
+            "encoding_time": 88000,
+            "crf": 30000,
+            "vmaf": 9550,
+            "target": 95,
+            "requested_target": 85,
+            "floor_target": null,
+            "decided_at": 1728003600000
+          }
+        },
+        "adopted_imports": []
+      },
+      "expected_rows": [
+        {
+          "key": {
+            "kind": "Parked",
+            "value": "c:/history/floor-only.mkv"
+          },
+          "status": {
+            "NotWorthwhile": {
+              "metric": "Vmaf",
+              "requested": 97,
+              "floor": 97
+            }
+          },
+          "source_run": null,
+          "happened_at": 1728003600000,
+          "codec": null,
+          "container": null,
+          "width": 1280,
+          "height": 720,
+          "duration_ms": 120000,
+          "audio": null,
+          "input_size_bytes": 3000000,
+          "output_size_bytes": 1000000,
+          "encoding_time_ms": 88000,
+          "quality": {
+            "metric": "Vmaf",
+            "score": 9550
+          },
+          "crf": 30000
+        },
+        {
+          "key": {
+            "kind": "Parked",
+            "value": "c:/history/no-range.mkv"
+          },
+          "status": {
+            "NotWorthwhile": {
+              "metric": "Vmaf",
+              "requested": 95,
+              "floor": 90
+            }
+          },
+          "source_run": null,
+          "happened_at": 1728003600000,
+          "codec": null,
+          "container": null,
+          "width": 1280,
+          "height": 720,
+          "duration_ms": 120000,
+          "audio": null,
+          "input_size_bytes": 3000000,
+          "output_size_bytes": 1000000,
+          "encoding_time_ms": 88000,
+          "quality": {
+            "metric": "Vmaf",
+            "score": 9550
+          },
+          "crf": 30000
+        },
+        {
+          "key": {
+            "kind": "Parked",
+            "value": "c:/history/requested-only.mkv"
+          },
+          "status": {
+            "NotWorthwhile": {
+              "metric": "Vmaf",
+              "requested": 85,
+              "floor": 85
+            }
+          },
+          "source_run": null,
+          "happened_at": 1728003600000,
+          "codec": null,
+          "container": null,
+          "width": 1280,
+          "height": 720,
+          "duration_ms": 120000,
+          "audio": null,
+          "input_size_bytes": 3000000,
+          "output_size_bytes": 1000000,
+          "encoding_time_ms": 88000,
+          "quality": {
+            "metric": "Vmaf",
+            "score": 9550
+          },
           "crf": 30000
         }
       ]
@@ -667,7 +845,8 @@
                   "output_size": 1000000,
                   "encoding_time": 88000,
                   "crf": 30000,
-                  "vmaf": 9550,
+                  "metric": "Vmaf",
+                  "score": 9550,
                   "target": 95
                 }
               },
@@ -723,7 +902,10 @@
           "input_size_bytes": 3000000,
           "output_size_bytes": 1000000,
           "encoding_time_ms": 88000,
-          "vmaf": 9550,
+          "quality": {
+            "metric": "Vmaf",
+            "score": 9550
+          },
           "crf": 30000
         }
       ]
@@ -805,6 +987,7 @@
                   "samples": null,
                   "sample_duration_ms": 20000,
                   "thorough": false,
+                  "metric": "Vmaf",
                   "decode_mode": "Software",
                   "ab_av1_revision": "",
                   "ffmpeg_revision": "",
@@ -867,7 +1050,7 @@
           "input_size_bytes": 9000000,
           "output_size_bytes": 8900000,
           "encoding_time_ms": 240000,
-          "vmaf": null,
+          "quality": null,
           "crf": null
         }
       ]
@@ -907,6 +1090,7 @@
             "verdict": {
               "kind": {
                 "NotWorthwhile": {
+                  "metric": "Vmaf",
                   "requested": 95,
                   "floor": 90
                 }
@@ -948,6 +1132,7 @@
                   "samples": null,
                   "sample_duration_ms": 20000,
                   "thorough": false,
+                  "metric": "Vmaf",
                   "decode_mode": "Software",
                   "ab_av1_revision": "",
                   "ffmpeg_revision": "",
@@ -980,6 +1165,7 @@
                 "samples": null,
                 "sample_duration_ms": 20000,
                 "thorough": false,
+                "metric": "Vmaf",
                 "decode_mode": "Software",
                 "ab_av1_revision": "",
                 "ffmpeg_revision": "",
@@ -1017,6 +1203,7 @@
           },
           "status": {
             "NotWorthwhile": {
+              "metric": "Vmaf",
               "requested": 95,
               "floor": 90
             }
@@ -1037,7 +1224,7 @@
           "input_size_bytes": 5000000,
           "output_size_bytes": null,
           "encoding_time_ms": 240000,
-          "vmaf": null,
+          "quality": null,
           "crf": null
         }
       ]
@@ -1082,7 +1269,8 @@
                   "output_size": null,
                   "encoding_time": null,
                   "crf": null,
-                  "vmaf": null,
+                  "metric": "Vmaf",
+                  "score": null,
                   "target": null
                 }
               },
@@ -1177,6 +1365,7 @@
                   "samples": null,
                   "sample_duration_ms": 20000,
                   "thorough": false,
+                  "metric": "Vmaf",
                   "decode_mode": "Software",
                   "ab_av1_revision": "",
                   "ffmpeg_revision": "",
@@ -1209,6 +1398,7 @@
                 "samples": null,
                 "sample_duration_ms": 20000,
                 "thorough": false,
+                "metric": "Vmaf",
                 "decode_mode": "Software",
                 "ab_av1_revision": "",
                 "ffmpeg_revision": "",
@@ -1267,6 +1457,7 @@
                   "samples": null,
                   "sample_duration_ms": 20000,
                   "thorough": false,
+                  "metric": "Vmaf",
                   "decode_mode": "Software",
                   "ab_av1_revision": "",
                   "ffmpeg_revision": "",
@@ -1330,6 +1521,7 @@
                   "samples": null,
                   "sample_duration_ms": 20000,
                   "thorough": false,
+                  "metric": "Vmaf",
                   "decode_mode": "Software",
                   "ab_av1_revision": "",
                   "ffmpeg_revision": "",
@@ -1393,6 +1585,7 @@
                   "samples": null,
                   "sample_duration_ms": 20000,
                   "thorough": false,
+                  "metric": "Vmaf",
                   "decode_mode": "Software",
                   "ab_av1_revision": "",
                   "ffmpeg_revision": "",
@@ -1448,7 +1641,10 @@
           "input_size_bytes": 10000000,
           "output_size_bytes": 4000000,
           "encoding_time_ms": 240000,
-          "vmaf": 9512,
+          "quality": {
+            "metric": "Vmaf",
+            "score": 9512
+          },
           "crf": 24000
         },
         {
@@ -1478,7 +1674,7 @@
           "input_size_bytes": 7000000,
           "output_size_bytes": null,
           "encoding_time_ms": null,
-          "vmaf": null,
+          "quality": null,
           "crf": null
         },
         {
@@ -1503,7 +1699,7 @@
           "input_size_bytes": 6000000,
           "output_size_bytes": null,
           "encoding_time_ms": null,
-          "vmaf": null,
+          "quality": null,
           "crf": null
         }
       ]
@@ -1548,7 +1744,8 @@
                   "output_size": null,
                   "encoding_time": null,
                   "crf": null,
-                  "vmaf": null,
+                  "metric": "Vmaf",
+                  "score": null,
                   "target": null
                 }
               },
@@ -1616,6 +1813,7 @@
                   "samples": null,
                   "sample_duration_ms": 20000,
                   "thorough": false,
+                  "metric": "Vmaf",
                   "decode_mode": "Software",
                   "ab_av1_revision": "",
                   "ffmpeg_revision": "",
@@ -1648,6 +1846,7 @@
                 "samples": null,
                 "sample_duration_ms": 20000,
                 "thorough": false,
+                "metric": "Vmaf",
                 "decode_mode": "Software",
                 "ab_av1_revision": "",
                 "ffmpeg_revision": "",
@@ -1706,6 +1905,7 @@
                   "samples": null,
                   "sample_duration_ms": 20000,
                   "thorough": false,
+                  "metric": "Vmaf",
                   "decode_mode": "Software",
                   "ab_av1_revision": "",
                   "ffmpeg_revision": "",
@@ -1738,6 +1938,7 @@
                 "samples": null,
                 "sample_duration_ms": 20000,
                 "thorough": false,
+                "metric": "Vmaf",
                 "decode_mode": "Software",
                 "ab_av1_revision": "",
                 "ffmpeg_revision": "",
@@ -1788,6 +1989,7 @@
                   "samples": null,
                   "sample_duration_ms": 20000,
                   "thorough": false,
+                  "metric": "Vmaf",
                   "decode_mode": "Software",
                   "ab_av1_revision": "",
                   "ffmpeg_revision": "",
@@ -1816,6 +2018,7 @@
                       "samples": null,
                       "sample_duration_ms": 20000,
                       "thorough": false,
+                      "metric": "Vmaf",
                       "decode_mode": "Software",
                       "ab_av1_revision": "",
                       "ffmpeg_revision": "",
@@ -1845,6 +2048,7 @@
                 "samples": null,
                 "sample_duration_ms": 20000,
                 "thorough": false,
+                "metric": "Vmaf",
                 "decode_mode": "Software",
                 "ab_av1_revision": "",
                 "ffmpeg_revision": "",
@@ -1884,7 +2088,10 @@
           "input_size_bytes": 10000000,
           "output_size_bytes": 4000000,
           "encoding_time_ms": 240000,
-          "vmaf": 9512,
+          "quality": {
+            "metric": "Vmaf",
+            "score": 9512
+          },
           "crf": 24000
         },
         {
@@ -1909,7 +2116,7 @@
           "input_size_bytes": 6000000,
           "output_size_bytes": null,
           "encoding_time_ms": null,
-          "vmaf": null,
+          "quality": null,
           "crf": null
         }
       ]
@@ -1981,6 +2188,7 @@
                   "samples": null,
                   "sample_duration_ms": 20000,
                   "thorough": false,
+                  "metric": "Vmaf",
                   "decode_mode": "Software",
                   "ab_av1_revision": "",
                   "ffmpeg_revision": "",
@@ -2013,6 +2221,7 @@
                 "samples": null,
                 "sample_duration_ms": 20000,
                 "thorough": false,
+                "metric": "Vmaf",
                 "decode_mode": "Software",
                 "ab_av1_revision": "",
                 "ffmpeg_revision": "",
@@ -2063,6 +2272,7 @@
                   "samples": null,
                   "sample_duration_ms": 20000,
                   "thorough": false,
+                  "metric": "Vmaf",
                   "decode_mode": "Software",
                   "ab_av1_revision": "",
                   "ffmpeg_revision": "",
@@ -2095,6 +2305,7 @@
                 "samples": null,
                 "sample_duration_ms": 20000,
                 "thorough": false,
+                "metric": "Vmaf",
                 "decode_mode": "Software",
                 "ab_av1_revision": "",
                 "ffmpeg_revision": "",
@@ -2161,6 +2372,7 @@
                   "samples": null,
                   "sample_duration_ms": 20000,
                   "thorough": false,
+                  "metric": "Vmaf",
                   "decode_mode": "Software",
                   "ab_av1_revision": "",
                   "ffmpeg_revision": "",
@@ -2187,6 +2399,7 @@
                       "samples": null,
                       "sample_duration_ms": 20000,
                       "thorough": false,
+                      "metric": "Vmaf",
                       "decode_mode": "Software",
                       "ab_av1_revision": "",
                       "ffmpeg_revision": "",
@@ -2213,6 +2426,7 @@
                       "samples": null,
                       "sample_duration_ms": 20000,
                       "thorough": false,
+                      "metric": "Vmaf",
                       "decode_mode": "Software",
                       "ab_av1_revision": "",
                       "ffmpeg_revision": "",
@@ -2254,7 +2468,10 @@
           "input_size_bytes": 4000000,
           "output_size_bytes": null,
           "encoding_time_ms": null,
-          "vmaf": 9520,
+          "quality": {
+            "metric": "Vmaf",
+            "score": 9520
+          },
           "crf": 25000
         }
       ]
@@ -2294,6 +2511,7 @@
             "verdict": {
               "kind": {
                 "NotWorthwhile": {
+                  "metric": "Vmaf",
                   "requested": 95,
                   "floor": 90
                 }
@@ -2344,6 +2562,7 @@
           },
           "status": {
             "NotWorthwhile": {
+              "metric": "Vmaf",
               "requested": 95,
               "floor": 90
             }
@@ -2364,7 +2583,7 @@
           "input_size_bytes": 2000000,
           "output_size_bytes": null,
           "encoding_time_ms": null,
-          "vmaf": null,
+          "quality": null,
           "crf": null
         }
       ]

@@ -3,8 +3,9 @@ use std::collections::BTreeMap;
 use serde::{Deserialize, Serialize};
 
 use crate::{
-    AnalysisProfile, AnalysisResult, ContentKey, Crf, DestructiveIdentity, DurationMs, RunId,
-    UnixMillis, VmafScore, VmafTarget,
+    AnalysisProfile, AnalysisResult, ContentKey, Crf, DEFAULT_VMAF_TARGET, DestructiveIdentity,
+    DurationMs, MIN_VMAF_FALLBACK_TARGET, QualityMetric, QualityScore, QualityTarget, RunId,
+    UnixMillis,
 };
 
 const HALF_ROTATION_DEGREES: i16 = 180;
@@ -167,8 +168,11 @@ pub enum VerdictKind {
         output_size: Option<u64>,
         encoding_time: Option<DurationMs>,
         crf: Option<Crf>,
-        vmaf: Option<VmafScore>,
-        target: Option<VmafTarget>,
+        /// The metric of `score` and `target`: the deciding search's, or
+        /// VMAF for an adopted V2 record.
+        metric: QualityMetric,
+        score: Option<QualityScore>,
+        target: Option<QualityTarget>,
     },
     Remuxed {
         /// Required: imports never carry remuxes, so every remux verdict
@@ -180,21 +184,24 @@ pub enum VerdictKind {
         output_size: Option<u64>,
     },
     NotWorthwhile {
-        requested: VmafTarget,
-        floor: VmafTarget,
+        metric: QualityMetric,
+        requested: QualityTarget,
+        floor: QualityTarget,
     },
 }
 
 /// The profile-keyed index crosses serde as an entry list: JSON map keys must
-/// be strings, and `AnalysisProfile` is a multi-field struct.
-pub(crate) type AnalysisIndexEntries = Vec<(AnalysisProfile, BTreeMap<VmafTarget, AnalysisResult>)>;
+/// be strings, and `AnalysisProfile` is a multi-field struct. The profile
+/// names the metric of every target beneath it.
+pub(crate) type AnalysisIndexEntries =
+    Vec<(AnalysisProfile, BTreeMap<QualityTarget, AnalysisResult>)>;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, specta::Type)]
 pub struct FileRecord {
     pub metadata: VideoMeta,
     #[serde(with = "analysis_index")]
     #[specta(type = AnalysisIndexEntries)]
-    pub analyses: BTreeMap<AnalysisProfile, BTreeMap<VmafTarget, AnalysisResult>>,
+    pub analyses: BTreeMap<AnalysisProfile, BTreeMap<QualityTarget, AnalysisResult>>,
     pub verdict: Option<Verdict>,
     /// The deterministic imported summary retained for History/Statistics
     /// continuity. The complete re-import guard lives in
@@ -208,10 +215,10 @@ mod analysis_index {
 
     use serde::{Deserialize, Deserializer, Serializer};
 
-    use super::{AnalysisIndexEntries, AnalysisProfile, AnalysisResult, VmafTarget};
+    use super::{AnalysisIndexEntries, AnalysisProfile, AnalysisResult, QualityTarget};
 
     pub(super) fn serialize<S: Serializer>(
-        map: &BTreeMap<AnalysisProfile, BTreeMap<VmafTarget, AnalysisResult>>,
+        map: &BTreeMap<AnalysisProfile, BTreeMap<QualityTarget, AnalysisResult>>,
         serializer: S,
     ) -> Result<S::Ok, S::Error> {
         serializer.collect_seq(map.iter())
@@ -219,7 +226,7 @@ mod analysis_index {
 
     pub(super) fn deserialize<'de, D: Deserializer<'de>>(
         deserializer: D,
-    ) -> Result<BTreeMap<AnalysisProfile, BTreeMap<VmafTarget, AnalysisResult>>, D::Error> {
+    ) -> Result<BTreeMap<AnalysisProfile, BTreeMap<QualityTarget, AnalysisResult>>, D::Error> {
         Ok(AnalysisIndexEntries::deserialize(deserializer)?
             .into_iter()
             .collect())
@@ -281,13 +288,47 @@ pub struct ImportedHistoryRecord {
     pub output_size: Option<u64>,
     pub encoding_time: Option<DurationMs>,
     pub crf: Option<Crf>,
-    pub vmaf: Option<VmafScore>,
-    pub target: Option<VmafTarget>,
-    pub requested_target: Option<VmafTarget>,
-    pub floor_target: Option<VmafTarget>,
+    /// VMAF, as are the targets below: V2 measured no other metric
+    /// (`Self::METRIC`).
+    pub vmaf: Option<QualityScore>,
+    pub target: Option<QualityTarget>,
+    pub requested_target: Option<QualityTarget>,
+    pub floor_target: Option<QualityTarget>,
     /// When the source record was decided, falling back to the import
     /// instant when the source carried no timestamp.
     pub decided_at: UnixMillis,
+}
+
+impl ImportedHistoryRecord {
+    pub const METRIC: QualityMetric = crate::ImportOrigin::V2History.quality_metric();
+
+    pub fn validate(&self) -> Result<(), &'static str> {
+        self.vmaf
+            .map_or(Ok(()), |score| Self::METRIC.validate_score(score))?;
+        for target in [self.target, self.requested_target, self.floor_target]
+            .into_iter()
+            .flatten()
+        {
+            Self::METRIC.validate_target(target)?;
+        }
+        if let (Some(requested), Some(floor)) = (self.requested_target, self.floor_target) {
+            Self::METRIC.validate_range(requested, floor)?;
+        }
+        Ok(())
+    }
+
+    /// The requested target and floor a not-worthwhile record stands for.
+    /// V2 may omit either end; a missing end takes the production default,
+    /// clamped so the range stays ordered against the end that is present.
+    #[must_use]
+    pub fn not_worthwhile_range(&self) -> (QualityTarget, QualityTarget) {
+        match (self.requested_target, self.floor_target) {
+            (Some(requested), Some(floor)) => (requested, floor),
+            (Some(requested), None) => (requested, MIN_VMAF_FALLBACK_TARGET.min(requested)),
+            (None, Some(floor)) => (DEFAULT_VMAF_TARGET.max(floor), floor),
+            (None, None) => (DEFAULT_VMAF_TARGET, MIN_VMAF_FALLBACK_TARGET),
+        }
+    }
 }
 
 /// The one deterministic imported summary retained on a content record.

@@ -21,14 +21,14 @@ use crate::{
     JournalSequence, LocatedTool, LocatedTools, MediaContainer, MediaObservation, MediaTool,
     Operation, OutputDelta, OutputRecoveryAction, OutputState, OutputTarget, OutputTransaction,
     OverwriteDecision, ParkedResolution, ParkedStatus, PathBinding, PathHash, PhaseSpan,
-    ProbeFailure, ProjectionCommand, QueueAddRequest, QueueCommand, QueueItemEdit, QueueItemId,
-    QueueItemState, Replacement, RunId, SearchMeasurement, SessionAggregates, SessionCommand,
-    SessionState, Settings, SettingsCommand, SkipReason, SuccessReply, SystemCommand, Telemetry,
-    ToolAvailability, ToolCapability, ToolLocationFailure, ToolPathSettings, ToolRevisions,
-    ToolSource, ToolVerification, ToolsCommand, UnixMillis, VideoCodec, VideoMeta, VmafScore,
-    VmafTarget, WorkerCommand, compaction_due, compaction_quiescent, corruption_signature,
-    encode_record, encode_snapshot, observations, permitted_profiles, recover_output, replay,
-    resolve_parked, select_job_action,
+    ProbeFailure, ProjectionCommand, QualityMetric, QualityScore, QualityTarget, QueueAddRequest,
+    QueueCommand, QueueItemEdit, QueueItemId, QueueItemState, Replacement, RunId,
+    SearchMeasurement, SessionAggregates, SessionCommand, SessionState, Settings, SettingsCommand,
+    SkipReason, SuccessReply, SystemCommand, Telemetry, ToolAvailability, ToolCapability,
+    ToolLocationFailure, ToolPathSettings, ToolRevisions, ToolSource, ToolVerification,
+    ToolsCommand, UnixMillis, VideoCodec, VideoMeta, WorkerCommand, compaction_due,
+    compaction_quiescent, corruption_signature, encode_record, encode_snapshot, observations,
+    permitted_profiles, recover_output, replay, resolve_parked, select_job_action,
 };
 
 fn apply_ok(state: &mut AppState, command: Command) -> crate::Applied {
@@ -213,7 +213,7 @@ fn analysis() -> AnalysisResult {
         failed_attempts: Vec::new(),
         measurement: SearchMeasurement {
             crf: Crf(30_000),
-            score: VmafScore(9_500),
+            score: QualityScore(9_500),
             predicted_size: 1_000,
             predicted_percent_basis_points: 5_000,
             predicted_duration_ms: 60_000,
@@ -364,8 +364,8 @@ fn base_execution_is_configured_before_claims_compose_from_it() {
     assert_eq!(state.execution, ExecutionSettings::default());
 
     let mut configured = ExecutionSettings {
-        requested_target: VmafTarget(90),
-        fallback_floor: VmafTarget(80),
+        requested_target: QualityTarget(90),
+        fallback_floor: QualityTarget(80),
         ..ExecutionSettings::default()
     };
     configured.profile.preset = 4;
@@ -384,12 +384,12 @@ fn base_execution_is_configured_before_claims_compose_from_it() {
     let SuccessReply::Claimed(Some(job)) = prepared.reply else {
         panic!("expected claimed job");
     };
-    assert_eq!(job.spec.execution.requested_target, VmafTarget(90));
-    assert_eq!(job.spec.execution.fallback_floor, VmafTarget(80));
+    assert_eq!(job.spec.execution.requested_target, QualityTarget(90));
+    assert_eq!(job.spec.execution.fallback_floor, QualityTarget(80));
     assert_eq!(job.spec.execution.profile.preset, 4);
     let mut expected = execution();
-    expected.requested_target = VmafTarget(90);
-    expected.fallback_floor = VmafTarget(80);
+    expected.requested_target = QualityTarget(90);
+    expected.fallback_floor = QualityTarget(80);
     expected.profile.preset = 4;
     assert_eq!(job.spec.execution, expected);
 }
@@ -1009,7 +1009,8 @@ fn basic_scan_recognizes_reliable_settled_output_before_stale_source_binding() {
             output_size: Some(output.destructive.size),
             encoding_time: None,
             crf: None,
-            vmaf: None,
+            metric: QualityMetric::Vmaf,
+            score: None,
             target: None,
         },
         source_run: Some(run_id),
@@ -1233,7 +1234,7 @@ fn basic_scan_adopts_sparse_conversion_without_manufacturing_summary_fields() {
             output_size: None,
             encoding_time: None,
             crf: None,
-            vmaf: None,
+            score: None,
             target: None,
             ..
         }
@@ -1453,8 +1454,9 @@ fn a_recorded_analysis_refreshes_its_row_after_the_scan_is_ready() {
         status.applicable,
         crate::ApplicableLevel::Analyzed {
             prediction: crate::SearchPrediction {
+                metric: QualityMetric::Vmaf,
                 crf: Crf(30_000),
-                score: VmafScore(9_500),
+                score: QualityScore(9_500),
                 predicted_size: 1_000,
                 predicted_percent_basis_points: 5_000,
                 predicted_duration_ms: 60_000,
@@ -2069,17 +2071,17 @@ fn analysis_selection_prefers_exact_then_lowest_qualifying_target() {
     let settings = execution();
     let mut record = FileRecord::new(media_observation("selection").metadata);
     let mut fallback = analysis();
-    fallback.successful_target = VmafTarget(93);
-    fallback.requested_target = VmafTarget(95);
+    fallback.successful_target = QualityTarget(93);
+    fallback.requested_target = QualityTarget(95);
     fallback.failed_attempts = vec![crate::AnalysisAttempt {
-        target: VmafTarget(95),
+        target: QualityTarget(95),
         last_measurement: None,
     }];
     let mut exact = analysis();
-    exact.successful_target = VmafTarget(95);
+    exact.successful_target = QualityTarget(95);
     let mut higher = analysis();
-    higher.successful_target = VmafTarget(96);
-    higher.requested_target = VmafTarget(96);
+    higher.successful_target = QualityTarget(96);
+    higher.requested_target = QualityTarget(96);
     record.record_analysis(fallback);
     record.record_analysis(higher);
     record.record_analysis(exact.clone());
@@ -2089,10 +2091,62 @@ fn analysis_selection_prefers_exact_then_lowest_qualifying_target() {
     );
 
     let mut lower_request = settings;
-    lower_request.requested_target = VmafTarget(94);
+    lower_request.requested_target = QualityTarget(94);
     let selected =
         crate::policy::select_analysis(&record, &lower_request).expect("qualifying analysis");
-    assert_eq!(selected.successful_target, VmafTarget(95));
+    assert_eq!(selected.successful_target, QualityTarget(95));
+}
+
+#[test]
+fn analysis_metric_is_profile_identity_and_unknown_metrics_are_rejected()
+-> Result<(), Box<dyn std::error::Error>> {
+    let mut record = FileRecord::new(media_observation("metric-selection").metadata);
+    record.record_analysis(analysis());
+    let wire = serde_json::to_value(&record)?;
+    assert_eq!(
+        wire.pointer("/analyses/0/0/metric"),
+        Some(&serde_json::json!("Vmaf"))
+    );
+    let restored: FileRecord = serde_json::from_value(wire)?;
+    assert!(crate::policy::select_analysis(&restored, &execution()).is_some());
+    let mut request = serde_json::to_value(execution())?;
+    for metric in ["Xpsnr", "Ssim", ""] {
+        let Some(slot) = request.pointer_mut("/profile/metric") else {
+            panic!("serialized execution names its metric");
+        };
+        *slot = serde_json::json!(metric);
+        assert!(serde_json::from_value::<ExecutionSettings>(request.clone()).is_err());
+    }
+    Ok(())
+}
+
+#[test]
+fn quality_values_take_units_from_their_metric() -> Result<(), Box<dyn std::error::Error>> {
+    let metric = QualityMetric::Vmaf;
+    assert_eq!(
+        serde_json::to_value(QualityTarget(95))?,
+        serde_json::json!(95)
+    );
+    assert_eq!(
+        serde_json::to_value(QualityScore(9_512))?,
+        serde_json::json!(9512)
+    );
+    assert_eq!(metric.normalize(QualityScore(9_512)), 95.12);
+    assert!(metric.validate_target(QualityTarget(100)).is_ok());
+    assert!(metric.validate_target(QualityTarget(101)).is_err());
+    assert!(metric.validate_score(QualityScore(10_000)).is_ok());
+    assert!(metric.validate_score(QualityScore(10_001)).is_err());
+    assert!(
+        metric
+            .validate_range(QualityTarget(95), QualityTarget(95))
+            .is_ok()
+    );
+    assert!(
+        metric
+            .validate_range(QualityTarget(90), QualityTarget(95))
+            .is_err()
+    );
+    Ok(())
 }
 
 #[test]
@@ -4100,7 +4154,8 @@ fn decisive_outcomes_upsert_the_record_verdict() {
                 output_size: None,
                 encoding_time: None,
                 crf: None,
-                vmaf: None,
+                metric: QualityMetric::Vmaf,
+                score: None,
                 target: None,
             },
             source_run: Some(RunId(3)),
@@ -4132,6 +4187,7 @@ fn decisive_outcomes_upsert_the_record_verdict() {
         record_verdict(&skipped),
         Some(crate::Verdict {
             kind: crate::VerdictKind::NotWorthwhile {
+                metric: QualityMetric::Vmaf,
                 requested: execution().requested_target,
                 floor: execution().fallback_floor,
             },
@@ -4241,7 +4297,8 @@ fn verdict_freshness_is_a_full_identity_match_against_the_settled_output() {
             output_size: None,
             encoding_time: None,
             crf: None,
-            vmaf: None,
+            metric: QualityMetric::Vmaf,
+            score: None,
             target: None,
         },
         source_run: Some(RunId(3)),
@@ -4317,8 +4374,9 @@ fn verdict_freshness_is_a_full_identity_match_against_the_settled_output() {
     // Not-worthwhile is content-keyed; path state is irrelevant.
     let not_worthwhile = crate::Verdict {
         kind: crate::VerdictKind::NotWorthwhile {
-            requested: VmafTarget(95),
-            floor: VmafTarget(90),
+            metric: QualityMetric::Vmaf,
+            requested: QualityTarget(95),
+            floor: QualityTarget(90),
         },
         source_run: Some(RunId(3)),
         decided_at: UnixMillis(5_000),
@@ -4367,7 +4425,8 @@ fn converted_verdict(source_run: RunId) -> crate::Verdict {
             output_size: None,
             encoding_time: None,
             crf: None,
-            vmaf: None,
+            metric: QualityMetric::Vmaf,
+            score: None,
             target: None,
         },
         source_run: Some(source_run),
@@ -4379,6 +4438,7 @@ fn not_worthwhile_verdict(source_run: RunId) -> crate::Verdict {
     let execution = execution();
     crate::Verdict {
         kind: crate::VerdictKind::NotWorthwhile {
+            metric: QualityMetric::Vmaf,
             requested: execution.requested_target,
             floor: execution.fallback_floor,
         },
@@ -4785,7 +4845,7 @@ fn claim_not_worthwhile_skip_respects_the_fallback_floor() {
     );
     // A ladder reaching below the decided floor is untried ground.
     let mut deeper = execution.clone();
-    deeper.fallback_floor = VmafTarget(execution.fallback_floor.0 - 1);
+    deeper.fallback_floor = QualityTarget(execution.fallback_floor.0 - 1);
     assert_eq!(
         select_job_action(
             Some(&metadata),
@@ -6367,10 +6427,10 @@ fn parked_record(status: ParkedStatus) -> ImportedHistoryRecord {
         output_size: Some(4_000),
         encoding_time: Some(DurationMs(120_000)),
         crf: Some(Crf(30_000)),
-        vmaf: Some(VmafScore(9_512)),
-        target: Some(VmafTarget(95)),
-        requested_target: Some(VmafTarget(94)),
-        floor_target: Some(VmafTarget(91)),
+        vmaf: Some(QualityScore(9_512)),
+        target: Some(QualityTarget(95)),
+        requested_target: Some(QualityTarget(94)),
+        floor_target: Some(QualityTarget(91)),
         decided_at: UnixMillis(1_000),
     }
 }
@@ -6397,8 +6457,9 @@ fn resolve_parked_adopts_on_stamp_match_by_status() {
             output_size: Some(4_000),
             encoding_time: Some(DurationMs(120_000)),
             crf: Some(Crf(30_000)),
-            vmaf: Some(VmafScore(9_512)),
-            target: Some(VmafTarget(95)),
+            metric: QualityMetric::Vmaf,
+            score: Some(QualityScore(9_512)),
+            target: Some(QualityTarget(95)),
         }
     );
 
@@ -6412,8 +6473,9 @@ fn resolve_parked_adopts_on_stamp_match_by_status() {
     assert_eq!(
         verdict.kind,
         crate::VerdictKind::NotWorthwhile {
-            requested: VmafTarget(94),
-            floor: VmafTarget(91),
+            metric: QualityMetric::Vmaf,
+            requested: QualityTarget(94),
+            floor: QualityTarget(91),
         }
     );
 
@@ -6424,6 +6486,25 @@ fn resolve_parked_adopts_on_stamp_match_by_status() {
             ParkedResolution::Adopt { verdict: None }
         );
     }
+
+    // A missing end takes its default, clamped against the end present.
+    let mut requested_only = parked_record(ParkedStatus::NotWorthwhile);
+    requested_only.requested_target = Some(QualityTarget(85));
+    requested_only.floor_target = None;
+    let ParkedResolution::Adopt {
+        verdict: Some(verdict),
+    } = resolve_parked(&requested_only, &observation)
+    else {
+        panic!("a requested-only record adopts");
+    };
+    assert_eq!(
+        verdict.kind,
+        crate::VerdictKind::NotWorthwhile {
+            metric: QualityMetric::Vmaf,
+            requested: QualityTarget(85),
+            floor: QualityTarget(85),
+        }
+    );
 
     // Missing targets fall back to the default target constants.
     let mut bare = parked_record(ParkedStatus::NotWorthwhile);
@@ -6438,10 +6519,48 @@ fn resolve_parked_adopts_on_stamp_match_by_status() {
     assert_eq!(
         verdict.kind,
         crate::VerdictKind::NotWorthwhile {
+            metric: QualityMetric::Vmaf,
             requested: crate::DEFAULT_VMAF_TARGET,
             floor: crate::MIN_VMAF_FALLBACK_TARGET,
         }
     );
+}
+
+#[test]
+fn parked_not_worthwhile_range_stays_ordered() {
+    let mut record = parked_record(ParkedStatus::NotWorthwhile);
+    for (requested, floor, expected) in [
+        (Some(94), Some(91), (94, 91)),
+        (Some(85), None, (85, 85)),
+        (Some(97), None, (97, 90)),
+        (None, Some(97), (97, 97)),
+        (None, Some(80), (95, 80)),
+        (None, None, (95, 90)),
+    ] {
+        record.requested_target = requested.map(QualityTarget);
+        record.floor_target = floor.map(QualityTarget);
+        assert!(record.validate().is_ok());
+        assert_eq!(
+            record.not_worthwhile_range(),
+            (QualityTarget(expected.0), QualityTarget(expected.1))
+        );
+    }
+}
+
+#[test]
+fn parked_record_validation_rejects_out_of_range_quality() {
+    let valid = parked_record(ParkedStatus::Converted);
+    assert!(valid.validate().is_ok());
+    let mut inverted = valid.clone();
+    inverted.requested_target = Some(QualityTarget(90));
+    inverted.floor_target = Some(QualityTarget(95));
+    let mut score = valid.clone();
+    score.vmaf = Some(QualityScore(10_001));
+    let mut target = valid;
+    target.target = Some(QualityTarget(101));
+    for record in [inverted, score, target] {
+        assert!(record.validate().is_err());
+    }
 }
 
 #[test]
@@ -6549,8 +6668,9 @@ fn history_deltas_fold_park_adopt_and_retire() {
     );
     let adopted_verdict = crate::Verdict {
         kind: crate::VerdictKind::NotWorthwhile {
-            requested: VmafTarget(95),
-            floor: VmafTarget(90),
+            metric: QualityMetric::Vmaf,
+            requested: QualityTarget(95),
+            floor: QualityTarget(90),
         },
         source_run: None,
         decided_at: UnixMillis(1_000),
@@ -6623,6 +6743,38 @@ fn history_deltas_fold_park_adopt_and_retire() {
         &DurableDelta::ParkedRetired { import_path: key_c },
     );
     assert!(state.parked.is_empty());
+}
+
+#[test]
+fn import_rejects_the_whole_batch_when_quality_is_invalid() {
+    for invalid in [
+        ImportedHistoryRecord {
+            vmaf: Some(QualityScore(10_001)),
+            ..parked_record(ParkedStatus::Converted)
+        },
+        ImportedHistoryRecord {
+            requested_target: Some(QualityTarget(90)),
+            floor_target: Some(QualityTarget(95)),
+            ..parked_record(ParkedStatus::NotWorthwhile)
+        },
+    ] {
+        let mut state = AppState::default();
+        let before = state.clone();
+        let rejected = apply_rejected(
+            &mut state,
+            Command::History(HistoryCommand::Import {
+                records: vec![
+                    (
+                        ImportPath("/fixtures/valid.mkv".to_owned()),
+                        parked_record(ParkedStatus::Converted),
+                    ),
+                    (ImportPath("/fixtures/invalid.mkv".to_owned()), invalid),
+                ],
+            }),
+        );
+        assert!(rejected.reason.starts_with("invalid imported history:"));
+        assert_eq!(state, before);
+    }
 }
 
 #[test]
@@ -6804,8 +6956,9 @@ fn adoption_never_overwrites_a_native_verdict() {
     );
     let native = crate::Verdict {
         kind: crate::VerdictKind::NotWorthwhile {
-            requested: VmafTarget(95),
-            floor: VmafTarget(90),
+            metric: QualityMetric::Vmaf,
+            requested: QualityTarget(95),
+            floor: QualityTarget(90),
         },
         source_run: Some(RunId(6)),
         decided_at: UnixMillis(9_000),
@@ -6913,8 +7066,9 @@ fn finished_verdict_absorbs_the_measured_summary() {
             output_size: Some(4_000),
             encoding_time: Some(DurationMs(120_000)),
             crf: Some(Crf(30_000)),
-            vmaf: Some(VmafScore(9_500)),
-            target: Some(VmafTarget(95)),
+            metric: QualityMetric::Vmaf,
+            score: Some(QualityScore(9_500)),
+            target: Some(QualityTarget(95)),
         }
     );
 
@@ -6966,7 +7120,8 @@ fn adopted_verdicts_apply_only_by_content_identity() {
             output_size: Some(4_000),
             encoding_time: None,
             crf: None,
-            vmaf: None,
+            metric: QualityMetric::Vmaf,
+            score: None,
             target: None,
         },
         source_run: None,
@@ -6982,8 +7137,9 @@ fn adopted_verdicts_apply_only_by_content_identity() {
     ));
     let adopted_not_worthwhile = crate::Verdict {
         kind: crate::VerdictKind::NotWorthwhile {
-            requested: VmafTarget(95),
-            floor: VmafTarget(90),
+            metric: QualityMetric::Vmaf,
+            requested: QualityTarget(95),
+            floor: QualityTarget(90),
         },
         source_run: None,
         decided_at: UnixMillis(1_000),
@@ -7077,11 +7233,11 @@ fn not_worthwhile_terminal_validates_attempt_consistency() {
     let coherent = ItemOutcome::NotWorthwhile {
         attempts: vec![
             crate::AnalysisAttempt {
-                target: VmafTarget(95),
+                target: QualityTarget(95),
                 last_measurement: Some(analysis().measurement),
             },
             crate::AnalysisAttempt {
-                target: VmafTarget(90),
+                target: QualityTarget(90),
                 last_measurement: None,
             },
         ],
@@ -7091,7 +7247,7 @@ fn not_worthwhile_terminal_validates_attempt_consistency() {
     // An attempt above the requested target cannot belong to this job.
     let above_requested = ItemOutcome::NotWorthwhile {
         attempts: vec![crate::AnalysisAttempt {
-            target: VmafTarget(96),
+            target: QualityTarget(96),
             last_measurement: None,
         }],
     };

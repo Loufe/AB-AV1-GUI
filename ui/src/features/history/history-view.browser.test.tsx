@@ -55,7 +55,7 @@ function historyRow(
     input_size_bytes: 10_000_000,
     output_size_bytes: 4_000_000,
     encoding_time_ms: 240_000,
-    vmaf: 9_512,
+    quality: { metric: "Vmaf", score: 9_512 },
     crf: 24_000,
     ...overrides,
   };
@@ -71,7 +71,13 @@ function statusMatrix(): HistoryDisplayRow[] {
     historyRow("remuxed.mkv", "Remuxed", { happened_at: 5_000 }),
     historyRow(
       "declined.mkv",
-      { NotWorthwhile: { requested: 95, floor: 90 } },
+      {
+        NotWorthwhile: {
+          metric: "Vmaf",
+          requested: 95,
+          floor: 90,
+        },
+      },
       {
         happened_at: 4_000,
         output_size_bytes: null,
@@ -90,14 +96,14 @@ function statusMatrix(): HistoryDisplayRow[] {
       {
         happened_at: 2_000,
         output_size_bytes: null,
-        vmaf: null,
+        quality: null,
         crf: null,
       },
     ),
     historyRow("stopped.mkv", "Stopped", {
       happened_at: null,
       output_size_bytes: null,
-      vmaf: null,
+      quality: null,
       crf: null,
     }),
     historyRow("grew.mkv", "Converted", {

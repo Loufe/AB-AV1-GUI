@@ -98,6 +98,7 @@ function runningState(): DurableState_Deserialize {
     } as ConversionRun["spec"],
     analysis: {
       measurement: { crf: 24_250, score: 9_530 },
+      profile: { metric: "Vmaf" },
     } as ConversionRun["analysis"],
     output_content_key: null,
     outcome: null,

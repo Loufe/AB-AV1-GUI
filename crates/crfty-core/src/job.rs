@@ -127,13 +127,77 @@ pub enum OverwriteDecision {
     Deny,
 }
 
+/// The quality metric a search targets and its scores measure (ADR-022).
+/// Bare [`QualityTarget`] and [`QualityScore`] values have units only under
+/// the metric of the record that holds them, so each record names its metric
+/// once: an analysis through its profile, a verdict or observation on itself.
 #[derive(
     Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize, specta::Type,
 )]
-pub struct VmafTarget(pub u8);
+pub enum QualityMetric {
+    Vmaf,
+}
 
+/// A requested quality level in whole points of the enclosing metric.
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize, specta::Type,
+)]
+pub struct QualityTarget(pub u8);
+
+/// A measured quality in the enclosing metric's fixed-point scale: VMAF
+/// scores are hundredths of a point.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, specta::Type)]
-pub struct VmafScore(pub u16);
+pub struct QualityScore(pub u16);
+
+/// A score read outside the record that measured it, carrying that record's
+/// metric with it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, specta::Type)]
+pub struct MetricScore {
+    pub metric: QualityMetric,
+    pub score: QualityScore,
+}
+
+impl QualityMetric {
+    pub fn validate_target(self, target: QualityTarget) -> Result<(), &'static str> {
+        match self {
+            Self::Vmaf if u16::from(target.0) > MAX_VMAF_SCORE => {
+                Err("VMAF targets must be in 0..=100")
+            }
+            Self::Vmaf => Ok(()),
+        }
+    }
+
+    pub fn validate_score(self, score: QualityScore) -> Result<(), &'static str> {
+        match self {
+            Self::Vmaf if score.0 > MAX_VMAF_SCORE.saturating_mul(VMAF_SCORE_FIXED_SCALE) => {
+                Err("VMAF score is outside the supported range")
+            }
+            Self::Vmaf => Ok(()),
+        }
+    }
+
+    /// Whether the floor-to-requested range is valid under this metric.
+    pub fn validate_range(
+        self,
+        requested: QualityTarget,
+        floor: QualityTarget,
+    ) -> Result<(), &'static str> {
+        self.validate_target(requested)?;
+        self.validate_target(floor)?;
+        if floor > requested {
+            return Err("quality fallback floor exceeds the requested target");
+        }
+        Ok(())
+    }
+
+    /// The score on the metric's human scale.
+    #[must_use]
+    pub fn normalize(self, score: QualityScore) -> f64 {
+        match self {
+            Self::Vmaf => f64::from(score.0) / f64::from(VMAF_SCORE_FIXED_SCALE),
+        }
+    }
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, specta::Type)]
 pub struct Crf(pub u32);
@@ -147,6 +211,10 @@ pub struct AnalysisProfile {
     #[specta(type = crate::JsNumber)]
     pub sample_duration_ms: u64,
     pub thorough: bool,
+    /// Part of the analysis identity (ADR-022): every target and score in
+    /// an analysis or execution built on this profile is in this metric, so
+    /// a result recorded under one metric is never reused for another.
+    pub metric: QualityMetric,
     /// The decode mode the search actually ran with — part of the analysis
     /// identity (ADR-007): hardware and software decoders can
     /// produce different decoded frames, so their VMAF measurements are not
@@ -180,6 +248,7 @@ impl AnalysisProfile {
             samples: None,
             sample_duration_ms: DEFAULT_SAMPLE_DURATION_MS,
             thorough: false,
+            metric: QualityMetric::Vmaf,
             decode_mode: DecodeMode::Software,
             ab_av1_revision: String::new(),
             ffmpeg_revision: String::new(),
@@ -234,8 +303,8 @@ impl AnalysisProfile {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, specta::Type)]
 pub struct ExecutionSettings {
-    pub requested_target: VmafTarget,
-    pub fallback_floor: VmafTarget,
+    pub requested_target: QualityTarget,
+    pub fallback_floor: QualityTarget,
     pub fallback_step: u8,
     pub overwrite_existing: bool,
     pub decode_preference: DecodePreference,
@@ -277,13 +346,11 @@ impl ExecutionSettings {
     }
 
     fn validate_targets(&self) -> Result<(), &'static str> {
-        self.requested_target.validate()?;
-        self.fallback_floor.validate()?;
-        if self.fallback_floor > self.requested_target {
-            return Err("VMAF fallback floor exceeds the requested target");
-        }
+        self.profile
+            .metric
+            .validate_range(self.requested_target, self.fallback_floor)?;
         if self.fallback_step == 0 {
-            return Err("VMAF fallback step must be positive");
+            return Err("quality fallback step must be positive");
         }
         Ok(())
     }
@@ -292,7 +359,7 @@ impl ExecutionSettings {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, specta::Type)]
 pub struct SearchMeasurement {
     pub crf: Crf,
-    pub score: VmafScore,
+    pub score: QualityScore,
     #[specta(type = crate::JsNumber)]
     pub predicted_size: u64,
     pub predicted_percent_basis_points: u32,
@@ -301,41 +368,23 @@ pub struct SearchMeasurement {
     pub from_cache: bool,
 }
 
-impl VmafTarget {
-    pub(crate) fn validate(self) -> Result<(), &'static str> {
-        if u16::from(self.0) > MAX_VMAF_SCORE {
-            return Err("VMAF targets must be in 0..=100");
-        }
-        Ok(())
-    }
-}
-
-impl VmafScore {
-    pub(crate) fn validate(self) -> Result<(), &'static str> {
-        if self.0 > MAX_VMAF_SCORE.saturating_mul(VMAF_SCORE_FIXED_SCALE) {
-            return Err("VMAF score is outside the supported range");
-        }
-        Ok(())
-    }
-}
-
 impl SearchMeasurement {
-    pub fn validate(&self) -> Result<(), &'static str> {
-        self.score.validate()
+    pub fn validate(&self, metric: QualityMetric) -> Result<(), &'static str> {
+        metric.validate_score(self.score)
     }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, specta::Type)]
 pub struct AnalysisAttempt {
-    pub target: VmafTarget,
+    pub target: QualityTarget,
     pub last_measurement: Option<SearchMeasurement>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, specta::Type)]
 pub struct AnalysisResult {
-    pub requested_target: VmafTarget,
-    pub successful_target: VmafTarget,
-    pub fallback_floor: VmafTarget,
+    pub requested_target: QualityTarget,
+    pub successful_target: QualityTarget,
+    pub fallback_floor: QualityTarget,
     pub fallback_step: u8,
     pub failed_attempts: Vec<AnalysisAttempt>,
     pub measurement: SearchMeasurement,
@@ -348,14 +397,16 @@ impl AnalysisResult {
     /// fallback range, every failed attempt targeted above it, and the
     /// measurement is in range.
     pub fn validate_consistent(&self) -> Result<(), &'static str> {
-        self.requested_target.validate()?;
+        let metric = self.profile.metric;
+        metric.validate_range(self.requested_target, self.fallback_floor)?;
+        metric.validate_target(self.successful_target)?;
         if self.successful_target > self.requested_target
             || self.successful_target < self.fallback_floor
         {
-            return Err("successful VMAF target is outside the requested fallback range");
+            return Err("successful quality target is outside the requested fallback range");
         }
         if self.fallback_step == 0 {
-            return Err("VMAF fallback step must be positive");
+            return Err("quality fallback step must be positive");
         }
         if self
             .failed_attempts
@@ -376,9 +427,9 @@ impl AnalysisResult {
             .iter()
             .filter_map(|attempt| attempt.last_measurement.as_ref())
         {
-            measurement.validate()?;
+            measurement.validate(metric)?;
         }
-        self.measurement.validate()
+        self.measurement.validate(metric)
     }
 
     pub fn validate_for(&self, execution: &ExecutionSettings) -> Result<(), &'static str> {

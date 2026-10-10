@@ -6,7 +6,7 @@ use crate::{
     UnixMillis, fold, output::validate_output_delta,
 };
 
-pub(crate) const JOURNAL_SCHEMA_VERSION: u32 = 20;
+pub(crate) const JOURNAL_SCHEMA_VERSION: u32 = 22;
 
 /// Compaction fires at an idle writer barrier when the journal is both large
 /// in absolute terms and dominated by dead upserts. The floor keeps

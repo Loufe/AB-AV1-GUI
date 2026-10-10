@@ -404,7 +404,8 @@ function verdictKind(
         output_size,
         encoding_time: encodingDuration(phaseSpans),
         crf: analysis === null ? null : analysis.measurement.crf,
-        vmaf: analysis === null ? null : analysis.measurement.score,
+        metric: execution.profile.metric,
+        score: analysis === null ? null : analysis.measurement.score,
         target: analysis === null ? null : analysis.successful_target,
       },
     };
@@ -419,6 +420,7 @@ function verdictKind(
   if ("NotWorthwhile" in outcome && outcome.NotWorthwhile !== undefined) {
     return {
       NotWorthwhile: {
+        metric: execution.profile.metric,
         requested: execution.requested_target,
         floor: execution.fallback_floor,
       },
@@ -599,6 +601,7 @@ function profileEquals(a: AnalysisProfile, b: AnalysisProfile): boolean {
     a.samples === b.samples &&
     a.sample_duration_ms === b.sample_duration_ms &&
     a.thorough === b.thorough &&
+    a.metric === b.metric &&
     decodeModeEquals(a.decode_mode, b.decode_mode) &&
     a.ab_av1_revision === b.ab_av1_revision &&
     a.ffmpeg_revision === b.ffmpeg_revision &&

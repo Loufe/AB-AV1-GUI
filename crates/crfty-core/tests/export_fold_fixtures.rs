@@ -19,9 +19,9 @@ use crfty_core::{
     ExecutionSettings, FailureFacts, FailureKind, FileSystemId, FileTimeNs, ImportPath,
     ImportedHistoryRecord, ItemOutcome, JobAction, JobPhase, JobSpec, MediaContainer,
     MediaObservation, Operation, OutputDelta, OutputState, OutputTarget, OutputTransaction,
-    OverwriteDecision, ParkedStatus, PathBinding, PathHash, PhaseSpan, QueueItem, QueueItemId,
-    QueueItemState, Replacement, ReservedJob, RunId, SearchMeasurement, SkipReason, UnixMillis,
-    Verdict, VerdictKind, VideoCodec, VideoMeta, VmafScore, VmafTarget, fold,
+    OverwriteDecision, ParkedStatus, PathBinding, PathHash, PhaseSpan, QualityScore, QualityTarget,
+    QueueItem, QueueItemId, QueueItemState, Replacement, ReservedJob, RunId, SearchMeasurement,
+    SkipReason, UnixMillis, Verdict, VerdictKind, VideoCodec, VideoMeta, fold,
 };
 use serde::Serialize;
 
@@ -209,6 +209,7 @@ fn observed(path: &str, key: &str, duration_ms: u64) -> DurableDelta {
 
 fn profile(preset: u8) -> AnalysisProfile {
     AnalysisProfile {
+        metric: crfty_core::QualityMetric::Vmaf,
         preset,
         max_encoded_percent_basis_points: 8_000,
         samples: None,
@@ -224,7 +225,7 @@ fn profile(preset: u8) -> AnalysisProfile {
 fn measurement(crf: u32) -> SearchMeasurement {
     SearchMeasurement {
         crf: Crf(crf),
-        score: VmafScore(9_550),
+        score: QualityScore(9_550),
         predicted_size: 1_000_000,
         predicted_percent_basis_points: 4_200,
         predicted_duration_ms: 60_000,
@@ -234,9 +235,9 @@ fn measurement(crf: u32) -> SearchMeasurement {
 
 fn analysis(preset: u8, successful_target: u8) -> AnalysisResult {
     AnalysisResult {
-        requested_target: VmafTarget(95),
-        successful_target: VmafTarget(successful_target),
-        fallback_floor: VmafTarget(90),
+        requested_target: QualityTarget(95),
+        successful_target: QualityTarget(successful_target),
+        fallback_floor: QualityTarget(90),
         fallback_step: 1,
         failed_attempts: Vec::new(),
         measurement: measurement(30),
@@ -261,8 +262,8 @@ fn prepared(item: u64, claim: u64, run: u64, key: Option<&str>, action: JobActio
             intent: AnalysisIntent::ReuseIfFresh,
             output_target: OutputTarget::Replace,
             execution: ExecutionSettings {
-                requested_target: VmafTarget(95),
-                fallback_floor: VmafTarget(90),
+                requested_target: QualityTarget(95),
+                fallback_floor: QualityTarget(90),
                 fallback_step: 1,
                 overwrite_existing: false,
                 decode_preference: DecodePreference::HardwarePreferred,
@@ -353,10 +354,10 @@ fn parked_full() -> ImportedHistoryRecord {
         output_size: Some(1_000_000),
         encoding_time: Some(DurationMs(88_000)),
         crf: Some(Crf(30_000)),
-        vmaf: Some(VmafScore(9_550)),
-        target: Some(VmafTarget(95)),
-        requested_target: Some(VmafTarget(95)),
-        floor_target: Some(VmafTarget(90)),
+        vmaf: Some(QualityScore(9_550)),
+        target: Some(QualityTarget(95)),
+        requested_target: Some(QualityTarget(95)),
+        floor_target: Some(QualityTarget(90)),
         decided_at: UnixMillis(1_700_000_000_000),
     }
 }
@@ -404,8 +405,9 @@ fn adopted_verdict() -> Verdict {
             output_size: Some(1_000_000),
             encoding_time: Some(DurationMs(88_000)),
             crf: Some(Crf(30_000)),
-            vmaf: Some(VmafScore(9_550)),
-            target: Some(VmafTarget(95)),
+            metric: crfty_core::QualityMetric::Vmaf,
+            score: Some(QualityScore(9_550)),
+            target: Some(QualityTarget(95)),
         },
         source_run: None,
         decided_at: UnixMillis(1_700_000_000_000),
@@ -741,11 +743,11 @@ fn scenarios() -> Vec<Scenario> {
                 ItemOutcome::NotWorthwhile {
                     attempts: vec![
                         AnalysisAttempt {
-                            target: VmafTarget(95),
+                            target: QualityTarget(95),
                             last_measurement: Some(measurement(22)),
                         },
                         AnalysisAttempt {
-                            target: VmafTarget(90),
+                            target: QualityTarget(90),
                             last_measurement: None,
                         },
                     ],

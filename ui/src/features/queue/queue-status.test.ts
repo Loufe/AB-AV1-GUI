@@ -165,7 +165,7 @@ describe("deriveRowStatus", () => {
                 target: 90,
                 last_measurement: {
                   crf: 30,
-                  score: 89.4,
+                  score: 8_940,
                   predicted_size: 900,
                   predicted_percent_basis_points: 9700,
                   predicted_duration_ms: 1000,

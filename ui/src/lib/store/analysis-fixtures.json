@@ -391,6 +391,7 @@
                           "applicable": {
                             "Analyzed": {
                               "prediction": {
+                                "metric": "Vmaf",
                                 "crf": 31000,
                                 "score": 9530,
                                 "predicted_size": 1600000000,
@@ -462,6 +463,7 @@
                         "applicable": {
                           "Analyzed": {
                             "prediction": {
+                              "metric": "Vmaf",
                               "crf": 31000,
                               "score": 9530,
                               "predicted_size": 1600000000,
@@ -660,6 +662,7 @@
                           "applicable": {
                             "Analyzed": {
                               "prediction": {
+                                "metric": "Vmaf",
                                 "crf": 31000,
                                 "score": 9530,
                                 "predicted_size": 1600000000,
@@ -728,7 +731,8 @@
                                   "output_size": 1600000000,
                                   "encoding_time": 1000,
                                   "crf": 31000,
-                                  "vmaf": 9530,
+                                  "metric": "Vmaf",
+                                  "score": 9530,
                                   "target": 95,
                                   "decided_at": 2000,
                                   "source_run": 2
@@ -794,7 +798,8 @@
                                   "output_size": 1600000000,
                                   "encoding_time": 1000,
                                   "crf": 31000,
-                                  "vmaf": 9530,
+                                  "metric": "Vmaf",
+                                  "score": 9530,
                                   "target": 95,
                                   "decided_at": 2000,
                                   "source_run": 2
@@ -874,7 +879,8 @@
                                 "output_size": 1600000000,
                                 "encoding_time": 1000,
                                 "crf": 31000,
-                                "vmaf": 9530,
+                                "metric": "Vmaf",
+                                "score": 9530,
                                 "target": 95,
                                 "decided_at": 2000,
                                 "source_run": 2
@@ -927,7 +933,8 @@
                                 "output_size": 1600000000,
                                 "encoding_time": 1000,
                                 "crf": 31000,
-                                "vmaf": 9530,
+                                "metric": "Vmaf",
+                                "score": 9530,
                                 "target": 95,
                                 "decided_at": 2000,
                                 "source_run": 2
@@ -1106,6 +1113,7 @@
                           "applicable": {
                             "Analyzed": {
                               "prediction": {
+                                "metric": "Vmaf",
                                 "crf": 31000,
                                 "score": 9530,
                                 "predicted_size": 1600000000,
@@ -1405,6 +1413,7 @@
                           "applicable": {
                             "Analyzed": {
                               "prediction": {
+                                "metric": "Vmaf",
                                 "crf": 31000,
                                 "score": 9530,
                                 "predicted_size": 1600000000,

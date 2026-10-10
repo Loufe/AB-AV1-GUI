@@ -40,6 +40,10 @@ fn codec() -> Shape {
     variants!("Av1": Shape::Unit, "H264": Shape::Unit, "Hevc": Shape::Unit, "Vp9": Shape::Unit, "Other": Shape::Text)
 }
 
+fn metric() -> Shape {
+    variants!("Vmaf": Shape::Unit)
+}
+
 fn assessment() -> Shape {
     optional(
         variants!("Matched": Shape::Unit, "IdentityDiffers": Shape::Unit, "PropertiesChanged": Shape::Unit, "Absent": Shape::Unit, "Unassessable": Shape::Unit),
@@ -63,7 +67,7 @@ fn measurement() -> Shape {
 fn profile() -> Shape {
     object!("preset": Shape::Number, "max_encoded_percent_basis_points": Shape::Number,
         "samples": optional(Shape::Number), "sample_duration_ms": Shape::Number,
-        "thorough": Shape::Bool, "decode_mode": decode(), "ab_av1_revision": Shape::Text,
+        "thorough": Shape::Bool, "metric": metric(), "decode_mode": decode(), "ab_av1_revision": Shape::Text,
         "ffmpeg_revision": Shape::Text, "encoder_revision": Shape::Text)
 }
 
@@ -103,7 +107,7 @@ static OBSERVATION: LazyLock<Shape> = LazyLock::new(|| {
                 "Remuxed": object!("remux": object!(
                     "measurement": variants!("Live": object!("sizes": sizes()), "Recovered": object!("sizes": optional(sizes()))),
                     "output_content_key": optional(Shape::Text), "assessment": assessment())),
-                "NotWorthwhile": object!("requested": Shape::Number, "floor": Shape::Number, "attempts": Shape::Attempts),
+                "NotWorthwhile": object!("metric": metric(), "requested": Shape::Number, "floor": Shape::Number, "attempts": Shape::Attempts),
                 "Failed": object!("facts": object!("kind": variants!(
                     "SearchStart": Shape::Unit, "SearchRun": Shape::Unit, "EncodeStart": Shape::Unit,
                     "EncodeRun": Shape::Unit, "RemuxStart": Shape::Unit, "RemuxRun": Shape::Unit,

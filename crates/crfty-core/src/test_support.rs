@@ -7,8 +7,8 @@ use crate::{
     AnalysisIntent, AnalysisProfile, AnalysisResult, AudioCodec, AudioStreamMeta, ClaimId,
     CompletionEvidence, ContentKey, ConversionRun, Crf, DecodeMode, DestructiveIdentity,
     DurationMs, ExecutionSettings, FileSystemId, ItemOutcome, JobAction, JobPhase, JobSpec,
-    MediaContainer, Operation, OutputTarget, PhaseSpan, QueueItemId, RunId, SearchMeasurement,
-    UnixMillis, VideoCodec, VideoMeta, VmafScore, VmafTarget,
+    MediaContainer, Operation, OutputTarget, PhaseSpan, QualityScore, QualityTarget, QueueItemId,
+    RunId, SearchMeasurement, UnixMillis, VideoCodec, VideoMeta,
 };
 
 pub(crate) fn key(name: &str) -> ContentKey {
@@ -56,14 +56,14 @@ pub(crate) fn spec(run: u64, content_key: &ContentKey, operation: Operation) -> 
 
 pub(crate) fn analysis(crf_milli: u32, score_centi: u16) -> AnalysisResult {
     AnalysisResult {
-        requested_target: VmafTarget(95),
-        successful_target: VmafTarget(95),
-        fallback_floor: VmafTarget(90),
+        requested_target: QualityTarget(95),
+        successful_target: QualityTarget(95),
+        fallback_floor: QualityTarget(90),
         fallback_step: 1,
         failed_attempts: Vec::new(),
         measurement: SearchMeasurement {
             crf: Crf(crf_milli),
-            score: VmafScore(score_centi),
+            score: QualityScore(score_centi),
             predicted_size: 1_000,
             predicted_percent_basis_points: 5_000,
             predicted_duration_ms: 60_000,

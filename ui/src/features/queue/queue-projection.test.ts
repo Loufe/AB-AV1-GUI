@@ -46,6 +46,7 @@ function analysis(): AnalysisResult {
       samples: null,
       sample_duration_ms: 2_000,
       thorough: false,
+      metric: "Vmaf",
       decode_mode: "Software",
       ab_av1_revision: "1",
       ffmpeg_revision: "2",
@@ -131,7 +132,7 @@ describe("queueRows", () => {
       mediaDurationMs: 120_000,
       timeMs: null,
       crf: 24_250,
-      vmaf: 9_530,
+      quality: { metric: "Vmaf", score: 9_530 },
       status: { kind: "working", phase: "Preparing", percent: null },
     });
     expect(rows[1]).toMatchObject({ runId: null, streams: null, status: { kind: "queued" } });

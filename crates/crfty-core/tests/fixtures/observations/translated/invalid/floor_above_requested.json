@@ -12,5 +12,5 @@
     "outcome": { "NotWorthwhile": { "requested": 90, "floor": 95 } },
     "updated_at": 1700000300000
   },
-  "rejects_with": "not-worthwhile floor exceeds the requested target"
+  "rejects_with": "quality fallback floor exceeds the requested target"
 }
