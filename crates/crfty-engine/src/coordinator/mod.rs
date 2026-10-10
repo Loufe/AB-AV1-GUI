@@ -333,6 +333,13 @@ pub struct UserCommandSender {
 }
 
 impl UserCommandSender {
+    pub fn enqueue_analysis(
+        &self,
+        request: crfty_core::AnalysisQueueRequest,
+    ) -> Result<crfty_core::AnalysisQueueSummary, crate::analysis::AnalysisError> {
+        self.analysis.enqueue(request)
+    }
+
     pub fn begin_analysis_discovery(
         &self,
         roots: Vec<PathBuf>,
@@ -397,6 +404,7 @@ impl UserCommandSender {
             Reply::Rejected { reason } | Reply::DurabilityUnknown { reason } => Err(reason),
             Reply::Accepted
             | Reply::AnalysisStarted { .. }
+            | Reply::AnalysisQueued(_)
             | Reply::BasicScan(_)
             | Reply::Reserved(_)
             | Reply::Claimed(_) => Err("import command returned an invalid reply".to_owned()),

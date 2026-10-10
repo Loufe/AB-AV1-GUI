@@ -329,8 +329,8 @@ pub fn replay(bytes: &[u8]) -> JournalReplay {
 fn validate_durable_delta(state: &DurableState, delta: &DurableDelta) -> Result<(), &'static str> {
     match delta {
         DurableDelta::QueueAdded { item } => {
-            if state.queue.iter().any(|current| current.id == item.id) {
-                return Err("queue item id already exists");
+            if item.id != crate::QueueItemId::next_after(state.queue_item_id_high_water)? {
+                return Err("queue item id is not the next allocation");
             }
             if !matches!(item.state, QueueItemState::Queued) {
                 return Err("new queue item is not queued");

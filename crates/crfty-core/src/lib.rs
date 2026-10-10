@@ -6,6 +6,7 @@
 //! or user-interface frameworks.
 
 mod analysis;
+mod analysis_enqueue;
 mod analysis_status;
 mod constants;
 mod estimation;
@@ -45,6 +46,11 @@ pub use analysis::{
 pub(crate) use analysis::{
     AnalysisMutationError, FreshnessDecision, apply_analysis_mutation, begin_analysis_generation,
     decide_freshness, validate_analysis_mutation,
+};
+pub(crate) use analysis_enqueue::plan_analysis_enqueue;
+pub use analysis_enqueue::{
+    AnalysisQueueExclusion, AnalysisQueueFile, AnalysisQueueRequest, AnalysisQueueSelection,
+    AnalysisQueueSummary,
 };
 pub use analysis_status::{
     ANALYSIS_REFRESH_BATCH_ROWS, AnalysisRowStatus, ApplicableLevel, ConversionSummary,

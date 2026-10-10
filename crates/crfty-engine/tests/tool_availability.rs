@@ -26,10 +26,9 @@ use crfty_core::{
     ToolsCommand, UnixMillis, VmafScore, WorkerCommand, apply,
 };
 
-fn add_one(item_id: QueueItemId, input: PathBuf) -> QueueCommand {
+fn add_one(input: PathBuf) -> QueueCommand {
     QueueCommand::AddMany {
         requests: vec![QueueAddRequest {
-            item_id,
             input,
             path_hash: None,
             identity: None,
@@ -168,10 +167,7 @@ fn startup_without_tools_replays_and_serves_non_media_commands() {
     assert_eq!(
         seeder
             .commands
-            .submit(Command::Queue(add_one(
-                QueueItemId(1),
-                PathBuf::from("video.mkv"),
-            )))
+            .submit(Command::Queue(add_one(PathBuf::from("video.mkv"))))
             .expect("seed add reply"),
         Reply::Accepted
     );
@@ -219,7 +215,7 @@ fn startup_without_tools_replays_and_serves_non_media_commands() {
     assert_eq!(
         engine
             .commands
-            .submit_queue(add_one(QueueItemId(2), PathBuf::from("another.mkv")))
+            .submit_queue(add_one(PathBuf::from("another.mkv")))
             .expect("tool-free add reply"),
         Reply::Accepted
     );
@@ -285,7 +281,7 @@ fn startup_recovery_without_ffprobe_defers_output_settlement() {
     let mut state = AppState::default();
     let mut durable = Vec::new();
     for command in [
-        Command::Queue(add_one(QueueItemId(1), input.clone())),
+        Command::Queue(add_one(input.clone())),
         Command::System(crfty_core::SystemCommand::ToolsDiscovered {
             availability: fixture_available(),
         }),
@@ -652,7 +648,7 @@ fn session_start_probes_located_tools_and_records_their_revisions() {
     assert_eq!(
         engine
             .commands
-            .submit_queue(add_one(QueueItemId(1), input))
+            .submit_queue(add_one(input))
             .expect("add reply"),
         Reply::Accepted
     );
@@ -722,7 +718,7 @@ fn incapable_tools_fail_verification_and_never_reserve_an_item() {
     assert_eq!(
         engine
             .commands
-            .submit_queue(add_one(QueueItemId(1), input))
+            .submit_queue(add_one(input))
             .expect("add reply"),
         Reply::Accepted
     );

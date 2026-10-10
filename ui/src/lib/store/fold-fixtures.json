@@ -4,6 +4,7 @@
     {
       "name": "queue_added",
       "initial": {
+        "queue_item_id_high_water": 0,
         "runtime_id_high_water": 0,
         "queue": [],
         "paths": {},
@@ -42,6 +43,7 @@
         }
       ],
       "expected": {
+        "queue_item_id_high_water": 2,
         "runtime_id_high_water": 0,
         "queue": [
           {
@@ -74,6 +76,7 @@
     {
       "name": "reservation_released_preserves_position_and_settings",
       "initial": {
+        "queue_item_id_high_water": 3,
         "runtime_id_high_water": 100,
         "queue": [
           {
@@ -130,6 +133,7 @@
         }
       ],
       "expected": {
+        "queue_item_id_high_water": 3,
         "runtime_id_high_water": 100,
         "queue": [
           {
@@ -175,6 +179,7 @@
     {
       "name": "prepared_run_incomplete",
       "initial": {
+        "queue_item_id_high_water": 1,
         "runtime_id_high_water": 100,
         "queue": [
           {
@@ -254,6 +259,7 @@
         }
       ],
       "expected": {
+        "queue_item_id_high_water": 1,
         "runtime_id_high_water": 100,
         "queue": [
           {
@@ -321,6 +327,7 @@
     {
       "name": "queue_added_overwrite_decisions",
       "initial": {
+        "queue_item_id_high_water": 0,
         "runtime_id_high_water": 0,
         "queue": [],
         "paths": {},
@@ -359,6 +366,7 @@
         }
       ],
       "expected": {
+        "queue_item_id_high_water": 2,
         "runtime_id_high_water": 0,
         "queue": [
           {
@@ -391,6 +399,7 @@
     {
       "name": "queue_items_removed",
       "initial": {
+        "queue_item_id_high_water": 3,
         "runtime_id_high_water": 0,
         "queue": [
           {
@@ -439,6 +448,7 @@
         }
       ],
       "expected": {
+        "queue_item_id_high_water": 3,
         "runtime_id_high_water": 0,
         "queue": [
           {
@@ -462,6 +472,7 @@
     {
       "name": "queue_items_removed_missing",
       "initial": {
+        "queue_item_id_high_water": 1,
         "runtime_id_high_water": 0,
         "queue": [
           {
@@ -491,6 +502,7 @@
         }
       ],
       "expected": {
+        "queue_item_id_high_water": 1,
         "runtime_id_high_water": 0,
         "queue": [
           {
@@ -514,6 +526,7 @@
     {
       "name": "queue_reordered_pending",
       "initial": {
+        "queue_item_id_high_water": 3,
         "runtime_id_high_water": 0,
         "queue": [
           {
@@ -563,6 +576,7 @@
         }
       ],
       "expected": {
+        "queue_item_id_high_water": 3,
         "runtime_id_high_water": 0,
         "queue": [
           {
@@ -604,6 +618,7 @@
     {
       "name": "queue_retried_resolves_and_moves_to_end",
       "initial": {
+        "queue_item_id_high_water": 3,
         "runtime_id_high_water": 0,
         "queue": [
           {
@@ -659,6 +674,7 @@
         }
       ],
       "expected": {
+        "queue_item_id_high_water": 3,
         "runtime_id_high_water": 0,
         "queue": [
           {
@@ -704,6 +720,7 @@
     {
       "name": "queue_retried_missing_item",
       "initial": {
+        "queue_item_id_high_water": 1,
         "runtime_id_high_water": 0,
         "queue": [
           {
@@ -739,6 +756,7 @@
         }
       ],
       "expected": {
+        "queue_item_id_high_water": 1,
         "runtime_id_high_water": 0,
         "queue": [
           {
@@ -762,6 +780,7 @@
     {
       "name": "queue_edited_rewrites_the_job_tuple",
       "initial": {
+        "queue_item_id_high_water": 2,
         "runtime_id_high_water": 0,
         "queue": [
           {
@@ -806,6 +825,7 @@
         }
       ],
       "expected": {
+        "queue_item_id_high_water": 2,
         "runtime_id_high_water": 0,
         "queue": [
           {
@@ -842,6 +862,7 @@
     {
       "name": "queue_edited_missing_item",
       "initial": {
+        "queue_item_id_high_water": 1,
         "runtime_id_high_water": 0,
         "queue": [
           {
@@ -877,6 +898,7 @@
         }
       ],
       "expected": {
+        "queue_item_id_high_water": 1,
         "runtime_id_high_water": 0,
         "queue": [
           {
@@ -900,6 +922,7 @@
     {
       "name": "media_observed_new",
       "initial": {
+        "queue_item_id_high_water": 0,
         "runtime_id_high_water": 0,
         "queue": [],
         "paths": {},
@@ -956,6 +979,7 @@
         }
       ],
       "expected": {
+        "queue_item_id_high_water": 0,
         "runtime_id_high_water": 0,
         "queue": [],
         "paths": {
@@ -1013,6 +1037,7 @@
     {
       "name": "media_observed_update_and_alias",
       "initial": {
+        "queue_item_id_high_water": 0,
         "runtime_id_high_water": 0,
         "queue": [],
         "paths": {
@@ -1113,6 +1138,7 @@
         }
       ],
       "expected": {
+        "queue_item_id_high_water": 0,
         "runtime_id_high_water": 0,
         "queue": [],
         "paths": {
@@ -1183,6 +1209,7 @@
     {
       "name": "item_reserved_then_running",
       "initial": {
+        "queue_item_id_high_water": 1,
         "runtime_id_high_water": 0,
         "queue": [
           {
@@ -1226,6 +1253,7 @@
         }
       ],
       "expected": {
+        "queue_item_id_high_water": 1,
         "runtime_id_high_water": 100,
         "queue": [
           {
@@ -1254,6 +1282,7 @@
     {
       "name": "item_prepared_inserts_run",
       "initial": {
+        "queue_item_id_high_water": 1,
         "runtime_id_high_water": 0,
         "queue": [
           {
@@ -1313,6 +1342,7 @@
         }
       ],
       "expected": {
+        "queue_item_id_high_water": 1,
         "runtime_id_high_water": 0,
         "queue": [
           {
@@ -1383,6 +1413,7 @@
     {
       "name": "item_prepared_with_selected_analysis",
       "initial": {
+        "queue_item_id_high_water": 1,
         "runtime_id_high_water": 0,
         "queue": [
           {
@@ -1474,6 +1505,7 @@
         }
       ],
       "expected": {
+        "queue_item_id_high_water": 1,
         "runtime_id_high_water": 0,
         "queue": [
           {
@@ -1601,6 +1633,7 @@
     {
       "name": "analysis_recorded_updates_run_and_record",
       "initial": {
+        "queue_item_id_high_water": 1,
         "runtime_id_high_water": 0,
         "queue": [
           {
@@ -1752,6 +1785,7 @@
         }
       ],
       "expected": {
+        "queue_item_id_high_water": 1,
         "runtime_id_high_water": 0,
         "queue": [
           {
@@ -1940,6 +1974,7 @@
     {
       "name": "analysis_recorded_unknown_run",
       "initial": {
+        "queue_item_id_high_water": 0,
         "runtime_id_high_water": 0,
         "queue": [],
         "paths": {},
@@ -1983,6 +2018,7 @@
         }
       ],
       "expected": {
+        "queue_item_id_high_water": 0,
         "runtime_id_high_water": 0,
         "queue": [],
         "paths": {},
@@ -1996,6 +2032,7 @@
     {
       "name": "analysis_recorded_second_profile_and_target",
       "initial": {
+        "queue_item_id_high_water": 2,
         "runtime_id_high_water": 0,
         "queue": [
           {
@@ -2307,6 +2344,7 @@
         }
       ],
       "expected": {
+        "queue_item_id_high_water": 2,
         "runtime_id_high_water": 0,
         "queue": [
           {
@@ -2649,6 +2687,7 @@
     {
       "name": "item_finished_analyzed",
       "initial": {
+        "queue_item_id_high_water": 1,
         "runtime_id_high_water": 100,
         "queue": [
           {
@@ -2737,6 +2776,7 @@
         }
       ],
       "expected": {
+        "queue_item_id_high_water": 1,
         "runtime_id_high_water": 100,
         "queue": [
           {
@@ -2813,6 +2853,7 @@
     {
       "name": "item_finished_converted_committed",
       "initial": {
+        "queue_item_id_high_water": 1,
         "runtime_id_high_water": 100,
         "queue": [
           {
@@ -2996,6 +3037,7 @@
         }
       ],
       "expected": {
+        "queue_item_id_high_water": 1,
         "runtime_id_high_water": 100,
         "queue": [
           {
@@ -3189,6 +3231,7 @@
     {
       "name": "item_finished_remuxed_retired",
       "initial": {
+        "queue_item_id_high_water": 1,
         "runtime_id_high_water": 100,
         "queue": [
           {
@@ -3371,6 +3414,7 @@
         }
       ],
       "expected": {
+        "queue_item_id_high_water": 1,
         "runtime_id_high_water": 100,
         "queue": [
           {
@@ -3558,6 +3602,7 @@
     {
       "name": "item_finished_converted_without_commit",
       "initial": {
+        "queue_item_id_high_water": 1,
         "runtime_id_high_water": 100,
         "queue": [
           {
@@ -3741,6 +3786,7 @@
         }
       ],
       "expected": {
+        "queue_item_id_high_water": 1,
         "runtime_id_high_water": 100,
         "queue": [
           {
@@ -3920,6 +3966,7 @@
     {
       "name": "item_finished_converted_recovered_at_startup",
       "initial": {
+        "queue_item_id_high_water": 1,
         "runtime_id_high_water": 100,
         "queue": [
           {
@@ -4097,6 +4144,7 @@
         }
       ],
       "expected": {
+        "queue_item_id_high_water": 1,
         "runtime_id_high_water": 100,
         "queue": [
           {
@@ -4278,6 +4326,7 @@
     {
       "name": "item_finished_failed",
       "initial": {
+        "queue_item_id_high_water": 1,
         "runtime_id_high_water": 100,
         "queue": [
           {
@@ -4423,6 +4472,7 @@
         }
       ],
       "expected": {
+        "queue_item_id_high_water": 1,
         "runtime_id_high_water": 100,
         "queue": [
           {
@@ -4562,6 +4612,7 @@
     {
       "name": "item_finished_not_worthwhile",
       "initial": {
+        "queue_item_id_high_water": 1,
         "runtime_id_high_water": 100,
         "queue": [
           {
@@ -4721,6 +4772,7 @@
         }
       ],
       "expected": {
+        "queue_item_id_high_water": 1,
         "runtime_id_high_water": 100,
         "queue": [
           {
@@ -4897,6 +4949,7 @@
     {
       "name": "item_finished_skipped_low_resolution",
       "initial": {
+        "queue_item_id_high_water": 1,
         "runtime_id_high_water": 100,
         "queue": [
           {
@@ -5045,6 +5098,7 @@
         }
       ],
       "expected": {
+        "queue_item_id_high_water": 1,
         "runtime_id_high_water": 100,
         "queue": [
           {
@@ -5190,6 +5244,7 @@
     {
       "name": "item_finished_stopped",
       "initial": {
+        "queue_item_id_high_water": 1,
         "runtime_id_high_water": 100,
         "queue": [
           {
@@ -5329,6 +5384,7 @@
         }
       ],
       "expected": {
+        "queue_item_id_high_water": 1,
         "runtime_id_high_water": 100,
         "queue": [
           {
@@ -5456,6 +5512,7 @@
     {
       "name": "output_retire_intent_requires_commit",
       "initial": {
+        "queue_item_id_high_water": 1,
         "runtime_id_high_water": 100,
         "queue": [
           {
@@ -5603,6 +5660,7 @@
         }
       ],
       "expected": {
+        "queue_item_id_high_water": 1,
         "runtime_id_high_water": 100,
         "queue": [
           {
@@ -5744,6 +5802,7 @@
     {
       "name": "output_retired_requires_intent",
       "initial": {
+        "queue_item_id_high_water": 1,
         "runtime_id_high_water": 100,
         "queue": [
           {
@@ -5907,6 +5966,7 @@
         }
       ],
       "expected": {
+        "queue_item_id_high_water": 1,
         "runtime_id_high_water": 100,
         "queue": [
           {
@@ -6064,6 +6124,7 @@
     {
       "name": "output_staging_created",
       "initial": {
+        "queue_item_id_high_water": 1,
         "runtime_id_high_water": 100,
         "queue": [
           {
@@ -6221,6 +6282,7 @@
         }
       ],
       "expected": {
+        "queue_item_id_high_water": 1,
         "runtime_id_high_water": 100,
         "queue": [
           {
@@ -6375,6 +6437,7 @@
     {
       "name": "output_restaged",
       "initial": {
+        "queue_item_id_high_water": 1,
         "runtime_id_high_water": 100,
         "queue": [
           {
@@ -6545,6 +6608,7 @@
         }
       ],
       "expected": {
+        "queue_item_id_high_water": 1,
         "runtime_id_high_water": 100,
         "queue": [
           {
@@ -6699,6 +6763,7 @@
     {
       "name": "output_abandoned",
       "initial": {
+        "queue_item_id_high_water": 1,
         "runtime_id_high_water": 100,
         "queue": [
           {
@@ -6863,6 +6928,7 @@
         }
       ],
       "expected": {
+        "queue_item_id_high_water": 1,
         "runtime_id_high_water": 100,
         "queue": [
           {
@@ -7004,6 +7070,7 @@
     {
       "name": "output_conflict",
       "initial": {
+        "queue_item_id_high_water": 1,
         "runtime_id_high_water": 100,
         "queue": [
           {
@@ -7153,6 +7220,7 @@
         }
       ],
       "expected": {
+        "queue_item_id_high_water": 1,
         "runtime_id_high_water": 100,
         "queue": [
           {
@@ -7299,6 +7367,7 @@
     {
       "name": "output_ready_unknown_run",
       "initial": {
+        "queue_item_id_high_water": 0,
         "runtime_id_high_water": 0,
         "queue": [],
         "paths": {},
@@ -7331,6 +7400,7 @@
         }
       ],
       "expected": {
+        "queue_item_id_high_water": 0,
         "runtime_id_high_water": 0,
         "queue": [],
         "paths": {},
@@ -7344,6 +7414,7 @@
     {
       "name": "history_imported",
       "initial": {
+        "queue_item_id_high_water": 0,
         "runtime_id_high_water": 0,
         "queue": [],
         "paths": {},
@@ -7402,6 +7473,7 @@
         }
       ],
       "expected": {
+        "queue_item_id_high_water": 0,
         "runtime_id_high_water": 0,
         "queue": [],
         "paths": {},
@@ -7450,6 +7522,7 @@
     {
       "name": "parked_adopted_with_verdict",
       "initial": {
+        "queue_item_id_high_water": 0,
         "runtime_id_high_water": 0,
         "queue": [],
         "paths": {
@@ -7579,6 +7652,7 @@
         }
       ],
       "expected": {
+        "queue_item_id_high_water": 0,
         "runtime_id_high_water": 0,
         "queue": [],
         "paths": {
@@ -7689,6 +7763,7 @@
     {
       "name": "parked_adopted_provenance_only",
       "initial": {
+        "queue_item_id_high_water": 0,
         "runtime_id_high_water": 0,
         "queue": [],
         "paths": {
@@ -7804,6 +7879,7 @@
         }
       ],
       "expected": {
+        "queue_item_id_high_water": 0,
         "runtime_id_high_water": 0,
         "queue": [],
         "paths": {
@@ -7900,6 +7976,7 @@
     {
       "name": "multiple_paths_adopt_one_content",
       "initial": {
+        "queue_item_id_high_water": 0,
         "runtime_id_high_water": 0,
         "queue": [],
         "paths": {
@@ -8053,6 +8130,7 @@
         }
       ],
       "expected": {
+        "queue_item_id_high_water": 0,
         "runtime_id_high_water": 0,
         "queue": [],
         "paths": {
@@ -8146,6 +8224,7 @@
     {
       "name": "parked_adopted_missing_record",
       "initial": {
+        "queue_item_id_high_water": 0,
         "runtime_id_high_water": 0,
         "queue": [],
         "paths": {},
@@ -8231,6 +8310,7 @@
         }
       ],
       "expected": {
+        "queue_item_id_high_water": 0,
         "runtime_id_high_water": 0,
         "queue": [],
         "paths": {},
@@ -8264,6 +8344,7 @@
     {
       "name": "parked_retired",
       "initial": {
+        "queue_item_id_high_water": 0,
         "runtime_id_high_water": 0,
         "queue": [],
         "paths": {},
@@ -8316,6 +8397,7 @@
         }
       ],
       "expected": {
+        "queue_item_id_high_water": 0,
         "runtime_id_high_water": 0,
         "queue": [],
         "paths": {},
@@ -8347,6 +8429,7 @@
     {
       "name": "item_finished_converted_with_analysis_summary",
       "initial": {
+        "queue_item_id_high_water": 1,
         "runtime_id_high_water": 100,
         "queue": [
           {
@@ -8597,6 +8680,7 @@
         }
       ],
       "expected": {
+        "queue_item_id_high_water": 1,
         "runtime_id_high_water": 100,
         "queue": [
           {

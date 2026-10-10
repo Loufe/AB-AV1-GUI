@@ -77,6 +77,7 @@ impl Recorder {
                 reply,
                 Reply::Accepted
                     | Reply::AnalysisStarted { .. }
+                    | Reply::AnalysisQueued(_)
                     | Reply::BasicScan(_)
                     | Reply::Reserved(Some(_))
                     | Reply::Claimed(Some(_))
@@ -163,7 +164,6 @@ impl Recorder {
     ) -> (ClaimId, RunId) {
         self.accept(Command::Queue(QueueCommand::AddMany {
             requests: vec![QueueAddRequest {
-                item_id: QueueItemId(item),
                 input: PathBuf::from(format!("/videos/{item}.mkv")),
                 path_hash: None,
                 identity: None,
