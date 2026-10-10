@@ -193,6 +193,10 @@ pub enum AnalysisDelta {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum AnalysisCommand {
+    Enqueue {
+        request: crate::AnalysisQueueRequest,
+        files: Vec<crate::AnalysisQueueFile>,
+    },
     Begin {
         roots: Vec<AnalysisDisplayText>,
     },

@@ -160,6 +160,17 @@ fn analysis_basic_scan(
     bridge.begin_analysis_basic_scan(generation)
 }
 
+/// Enqueue rows of the named standing generation. The typed summary is the
+/// only add summary; this action emits no `QueueAddSummary` on the stream.
+#[tauri::command]
+#[specta::specta]
+fn analysis_enqueue(
+    bridge: State<'_, Bridge>,
+    request: crfty_core::AnalysisQueueRequest,
+) -> Result<crfty_core::AnalysisQueueSummary, CommandError> {
+    bridge.enqueue_analysis(request)
+}
+
 #[tauri::command]
 #[specta::specta]
 fn queue_remove_many(
@@ -347,6 +358,7 @@ pub fn specta_builder() -> Builder<tauri::Wry> {
             subscribe,
             analysis_discover,
             analysis_basic_scan,
+            analysis_enqueue,
             analysis_cancel,
             queue_add_paths,
             queue_remove_many,
