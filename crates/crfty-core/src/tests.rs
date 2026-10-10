@@ -5194,7 +5194,7 @@ fn retry_flows_through_the_next_reservation_and_replays() {
     let mut state = AppState::default();
     let mut bytes = Vec::new();
     let mut sequence = 0;
-    for (id, input) in [(1, "first.mkv"), (2, "second.mkv")] {
+    for input in ["first.mkv", "second.mkv"] {
         let added = apply_and_journal(&mut state, &mut bytes, &mut sequence, add_command(input));
         assert_eq!(added.reply, SuccessReply::Accepted);
     }
