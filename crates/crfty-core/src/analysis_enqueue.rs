@@ -192,9 +192,36 @@ mod tests {
         AnalysisActivity, AnalysisCommand, AnalysisDisplayText, AnalysisGeneration, AnalysisRow,
         AnalysisRowStatus, AnalysisScanFailure, AnalysisSnapshot, ApplicableLevel, Command,
         ContentKey, EphemeralDelta, HistoricalLevel, JournalSequence, QueueCommand, QueueItemId,
-        Reply, ReuseStanding, SettingsCommand, UnixMillis, VideoCodec, apply, encode_record,
-        encode_snapshot, replay,
+        Rejection, ReuseStanding, SettingsCommand, SuccessReply, UnixMillis, VideoCodec,
+        encode_record, encode_snapshot, replay,
     };
+
+    fn apply_ok(state: &mut AppState, command: Command) -> crate::Applied {
+        match crate::apply(state, command) {
+            Ok(applied) => applied,
+            Err(rejection) => panic!("command unexpectedly rejected: {}", rejection.reason),
+        }
+    }
+
+    fn enqueue_rejected(
+        state: &mut AppState,
+        selection: AnalysisQueueSelection,
+        files: Vec<AnalysisQueueFile>,
+    ) -> Rejection {
+        let before = state.clone();
+        let result = crate::apply(
+            state,
+            Command::Analysis(AnalysisCommand::Enqueue {
+                request: request(selection, Operation::Convert),
+                files,
+            }),
+        );
+        assert_eq!(*state, before);
+        match result {
+            Err(rejection) => rejection,
+            Ok(applied) => panic!("command unexpectedly accepted: {:?}", applied.reply),
+        }
+    }
 
     fn file(id: u64) -> AnalysisQueueFile {
         AnalysisQueueFile {
@@ -284,7 +311,7 @@ mod tests {
         selection: AnalysisQueueSelection,
         files: Vec<AnalysisQueueFile>,
     ) -> crate::Applied {
-        apply(
+        apply_ok(
             state,
             Command::Analysis(AnalysisCommand::Enqueue {
                 request: request(selection, Operation::Convert),
@@ -309,7 +336,7 @@ mod tests {
             let applied = enqueue(&mut state, selection, Vec::new());
             assert_eq!(
                 applied.reply,
-                Reply::AnalysisQueued(AnalysisQueueSummary::default())
+                SuccessReply::AnalysisQueued(AnalysisQueueSummary::default())
             );
             assert!(applied.durable.is_empty());
             assert_eq!(state.durable.queue_item_id_high_water, 0);
@@ -327,7 +354,7 @@ mod tests {
         let applied = enqueue(&mut state, AnalysisQueueSelection::AllFiles, files);
         assert_eq!(
             applied.reply,
-            Reply::AnalysisQueued(AnalysisQueueSummary {
+            SuccessReply::AnalysisQueued(AnalysisQueueSummary {
                 added: 2,
                 excluded: Vec::new()
             })
@@ -398,7 +425,7 @@ mod tests {
         );
         assert_eq!(
             applied.reply,
-            Reply::AnalysisQueued(AnalysisQueueSummary {
+            SuccessReply::AnalysisQueued(AnalysisQueueSummary {
                 added: 2,
                 excluded: vec![(AnalysisQueueExclusion::DuplicateIdentity, 2)],
             })
@@ -446,7 +473,7 @@ mod tests {
         );
         assert_eq!(
             applied.reply,
-            Reply::AnalysisQueued(AnalysisQueueSummary {
+            SuccessReply::AnalysisQueued(AnalysisQueueSummary {
                 added: 0,
                 excluded: vec![
                     (AnalysisQueueExclusion::Folder, 1),
@@ -475,7 +502,7 @@ mod tests {
                     1,
                     scanned("history", historical, RowEligibility::Eligible),
                 )]);
-                let applied = apply(
+                let applied = apply_ok(
                     &mut state,
                     Command::Analysis(AnalysisCommand::Enqueue {
                         request: request(AnalysisQueueSelection::AllFiles, operation),
@@ -484,7 +511,7 @@ mod tests {
                 );
                 assert_eq!(
                     applied.reply,
-                    Reply::AnalysisQueued(AnalysisQueueSummary {
+                    SuccessReply::AnalysisQueued(AnalysisQueueSummary {
                         added: 1,
                         excluded: Vec::new()
                     })
@@ -501,19 +528,19 @@ mod tests {
     fn stale_unknown_and_superseded_actions_do_not_mutate_the_queue() {
         let mut state = state(vec![row(1, AnalysisFileScan::Discovered)]);
         let before = state.durable.clone();
-        let unknown = enqueue(
+        let unknown = enqueue_rejected(
             &mut state,
             AnalysisQueueSelection::Selected {
                 row_ids: vec![AnalysisRowId(9)],
             },
             vec![file(1)],
         );
-        assert!(matches!(unknown.reply, Reply::Rejected { .. }));
+        assert_eq!(unknown.reason, "queue action names an unknown Analysis row");
         let captured = Command::Analysis(AnalysisCommand::Enqueue {
             request: request(AnalysisQueueSelection::AllFiles, Operation::Analyze),
             files: vec![file(1)],
         });
-        apply(
+        apply_ok(
             &mut state,
             Command::Analysis(AnalysisCommand::Begin {
                 roots: vec![AnalysisDisplayText {
@@ -522,14 +549,15 @@ mod tests {
                 }],
             }),
         );
-        let stale = apply(&mut state, captured);
+        let before_action = state.clone();
+        let stale = crate::apply(&mut state, captured);
+        assert_eq!(state, before_action);
         assert_eq!(
-            stale.reply,
-            Reply::Rejected {
+            stale,
+            Err(Rejection {
                 reason: "queue action names a stale Analysis generation".to_owned()
-            }
+            })
         );
-        assert!(stale.durable.is_empty());
         assert_eq!(state.durable, before);
     }
 
@@ -545,14 +573,14 @@ mod tests {
             if let Some(current) = &mut state.analysis.current {
                 current.activity = activity;
             }
-            let applied = enqueue(&mut state, AnalysisQueueSelection::AllFiles, vec![file(1)]);
+            let rejection =
+                enqueue_rejected(&mut state, AnalysisQueueSelection::AllFiles, vec![file(1)]);
             assert_eq!(
-                applied.reply,
-                Reply::Rejected {
+                rejection,
+                Rejection {
                     reason: "queue action names an inactive Analysis generation".to_owned()
                 }
             );
-            assert!(applied.durable.is_empty());
         }
     }
 
@@ -562,11 +590,11 @@ mod tests {
         let mut settings = state.settings.clone();
         settings.output.default_mode = DefaultOutputMode::SeparateFolder;
         settings.output.separate_folder = Some(PathBuf::from("output"));
-        let changed = apply(
+        let changed = apply_ok(
             &mut state,
             Command::Settings(SettingsCommand::Set { settings }),
         );
-        assert_eq!(changed.reply, Reply::Accepted);
+        assert_eq!(changed.reply, SuccessReply::Accepted);
         enqueue(&mut state, AnalysisQueueSelection::AllFiles, vec![file(1)]);
         assert_eq!(
             state.durable.queue.first().map(|item| &item.output_target),
@@ -582,7 +610,7 @@ mod tests {
     {
         let mut state = state(vec![row(1, AnalysisFileScan::Discovered)]);
         let added = enqueue(&mut state, AnalysisQueueSelection::AllFiles, vec![file(1)]);
-        let removed = apply(&mut state, Command::Queue(QueueCommand::Clear));
+        let removed = apply_ok(&mut state, Command::Queue(QueueCommand::Clear));
         let mut bytes = encode_record(&crate::JournalEnvelope {
             sequence: JournalSequence(0),
             deltas: added.durable,
@@ -602,7 +630,7 @@ mod tests {
             state.durable.queue.first().map(|item| item.id),
             Some(QueueItemId(2))
         );
-        assert!(matches!(next.reply, Reply::AnalysisQueued(_)));
+        assert!(matches!(next.reply, SuccessReply::AnalysisQueued(_)));
         Ok(())
     }
 
@@ -614,23 +642,16 @@ mod tests {
         ]);
         state.durable.queue_item_id_high_water = crate::DurableState::MAX_RUNTIME_ID - 1;
         let before = state.durable.clone();
-        let applied = enqueue(
+        let rejection = enqueue_rejected(
             &mut state,
             AnalysisQueueSelection::AllFiles,
             vec![file(1), file(2)],
         );
         assert_eq!(
-            applied.reply,
-            Reply::Rejected {
+            rejection,
+            Rejection {
                 reason: "queue item id space is exhausted".to_owned()
             }
-        );
-        assert!(applied.durable.is_empty());
-        assert!(
-            !applied
-                .ephemeral
-                .iter()
-                .any(|delta| matches!(delta, EphemeralDelta::QueueAddSummary { .. }))
         );
         assert_eq!(state.durable, before);
     }
@@ -640,7 +661,7 @@ mod tests {
     -> Result<(), Box<dyn std::error::Error>> {
         let mut state = state(vec![row(1, AnalysisFileScan::Discovered)]);
         let added = enqueue(&mut state, AnalysisQueueSelection::AllFiles, vec![file(1)]);
-        apply(&mut state, Command::Queue(QueueCommand::Clear));
+        apply_ok(&mut state, Command::Queue(QueueCommand::Clear));
         let Some(crate::DurableDelta::QueueAdded { item }) = added.durable.first() else {
             return Err("expected an added item".into());
         };
@@ -679,7 +700,7 @@ mod tests {
         let applied = enqueue(&mut state, AnalysisQueueSelection::AllFiles, vec![native]);
         assert_eq!(
             applied.reply,
-            Reply::AnalysisQueued(AnalysisQueueSummary {
+            SuccessReply::AnalysisQueued(AnalysisQueueSummary {
                 added: 0,
                 excluded: vec![(
                     AnalysisQueueExclusion::Policy {
@@ -706,7 +727,7 @@ mod tests {
         );
         assert_eq!(
             applied.reply,
-            Reply::AnalysisQueued(AnalysisQueueSummary {
+            SuccessReply::AnalysisQueued(AnalysisQueueSummary {
                 added: 2,
                 excluded: vec![(AnalysisQueueExclusion::DuplicateIdentity, 1)],
             })
@@ -737,7 +758,7 @@ mod tests {
         );
         assert_eq!(
             applied.reply,
-            Reply::AnalysisQueued(AnalysisQueueSummary {
+            SuccessReply::AnalysisQueued(AnalysisQueueSummary {
                 added: 0,
                 excluded: vec![(AnalysisQueueExclusion::ScanFailed, 2)],
             })
@@ -752,7 +773,7 @@ mod tests {
         let applied = enqueue(&mut state, AnalysisQueueSelection::AllFiles, vec![file(2)]);
         assert_eq!(
             applied.reply,
-            Reply::AnalysisQueued(AnalysisQueueSummary {
+            SuccessReply::AnalysisQueued(AnalysisQueueSummary {
                 added: 1,
                 excluded: Vec::new(),
             })
@@ -764,10 +785,10 @@ mod tests {
         let mut state = state(Vec::new());
         state.settings.output.default_mode = DefaultOutputMode::SeparateFolder;
         state.settings.output.separate_folder = None;
-        let applied = enqueue(&mut state, AnalysisQueueSelection::AllFiles, Vec::new());
+        let rejection = enqueue_rejected(&mut state, AnalysisQueueSelection::AllFiles, Vec::new());
         assert_eq!(
-            applied.reply,
-            Reply::Rejected {
+            rejection,
+            Rejection {
                 reason: "default separate output folder is required".to_owned()
             }
         );
@@ -777,7 +798,7 @@ mod tests {
     fn the_typed_reply_is_the_only_summary() {
         let mut state = state(vec![row(1, AnalysisFileScan::Discovered)]);
         let applied = enqueue(&mut state, AnalysisQueueSelection::AllFiles, vec![file(1)]);
-        assert!(matches!(applied.reply, Reply::AnalysisQueued(_)));
+        assert!(matches!(applied.reply, SuccessReply::AnalysisQueued(_)));
         assert!(
             !applied
                 .ephemeral

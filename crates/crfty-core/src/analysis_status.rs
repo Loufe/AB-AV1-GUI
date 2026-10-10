@@ -1143,7 +1143,7 @@ mod tests {
             config: Vec::new(),
             ephemeral: Vec::new(),
             effects: Vec::new(),
-            reply: crate::Reply::Accepted,
+            reply: crate::SuccessReply::Accepted,
         };
         assert_eq!(
             refresh_scope(&state, &applied, false),

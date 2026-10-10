@@ -1324,8 +1324,9 @@ fn restart_after_fsynced_terminal_folds_to_finished_snapshot() {
             }),
         }),
     ] {
-        let applied = apply(&mut state, command);
-        assert!(!matches!(applied.reply, Reply::Rejected { .. }));
+        let Ok(applied) = apply(&mut state, command) else {
+            panic!("fixture command was rejected");
+        };
         durable.extend(applied.durable);
     }
     let (mut writer, _replay) = JournalWriter::open(&journal_path).expect("journal writer");
@@ -1558,8 +1559,9 @@ fn journal_active_output_run(
     let mut state = AppState::default();
     let mut durable = Vec::new();
     for command in commands {
-        let applied = apply(&mut state, command);
-        assert!(!matches!(applied.reply, Reply::Rejected { .. }));
+        let Ok(applied) = apply(&mut state, command) else {
+            panic!("fixture command was rejected");
+        };
         durable.extend(applied.durable);
     }
     let (mut writer, _replay) = JournalWriter::open(journal_path).expect("journal writer");
@@ -1878,12 +1880,9 @@ fn settled_success_journal(
         )));
     }
     for command in commands {
-        let applied = apply(&mut state, command);
-        assert!(
-            !matches!(applied.reply, Reply::Rejected { .. }),
-            "fixture command rejected: {:?}",
-            applied.reply
-        );
+        let Ok(applied) = apply(&mut state, command) else {
+            panic!("fixture command was rejected");
+        };
         durable.extend(applied.durable);
     }
     assert!(
