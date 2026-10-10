@@ -268,7 +268,7 @@ pub fn replay(bytes: &[u8]) -> JournalReplay {
                     corruption = Some("snapshot record after journal head".to_owned());
                     break;
                 }
-                if let Err(reason) = snapshot.state.validate_runtime_ids() {
+                if let Err(reason) = validate_snapshot(&snapshot.state) {
                     corruption = Some(reason.to_owned());
                     break;
                 }
@@ -324,6 +324,19 @@ pub fn replay(bytes: &[u8]) -> JournalReplay {
         ignored_torn_tail,
         valid_prefix_len: offset,
     }
+}
+
+fn validate_snapshot(state: &DurableState) -> Result<(), &'static str> {
+    state.validate_runtime_ids()?;
+    for imported in state.parked.values().chain(
+        state
+            .records
+            .values()
+            .filter_map(|record| record.imported.as_ref().map(|imported| &imported.record)),
+    ) {
+        imported.validate()?;
+    }
+    Ok(())
 }
 
 fn validate_durable_delta(state: &DurableState, delta: &DurableDelta) -> Result<(), &'static str> {
@@ -530,7 +543,8 @@ fn validate_durable_delta(state: &DurableState, delta: &DurableDelta) -> Result<
                 return Err("history import batch is empty");
             }
             let mut batch = std::collections::BTreeSet::new();
-            for (import_path, _) in records {
+            for (import_path, record) in records {
+                record.validate()?;
                 if import_path.0.is_empty() {
                     return Err("history import key is empty");
                 }
@@ -548,6 +562,7 @@ fn validate_durable_delta(state: &DurableState, delta: &DurableDelta) -> Result<
             imported,
             ..
         } => {
+            imported.validate()?;
             let Some(parked) = state.parked.get(import_path) else {
                 return Err("adoption references a record that is not parked");
             };

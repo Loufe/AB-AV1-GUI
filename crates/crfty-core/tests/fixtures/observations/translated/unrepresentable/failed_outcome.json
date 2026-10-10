@@ -4,7 +4,7 @@
   "source": { "codec": null, "width": null, "height": null, "duration_ms": null, "size_bytes": null },
   "outcome": {
     "Failed": {
-      "facts": { "kind": "EncodeRun", "message": "encode failed", "diagnostic": "" }
+      "kind": "EncodeRun"
     }
   },
   "updated_at": 1700000000000

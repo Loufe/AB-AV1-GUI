@@ -6745,9 +6745,8 @@ fn history_deltas_fold_park_adopt_and_retire() {
     assert!(state.parked.is_empty());
 }
 
-#[test]
-fn import_rejects_the_whole_batch_when_quality_is_invalid() {
-    for invalid in [
+fn imports_with_invalid_quality() -> [ImportedHistoryRecord; 2] {
+    [
         ImportedHistoryRecord {
             vmaf: Some(QualityScore(10_001)),
             ..parked_record(ParkedStatus::Converted)
@@ -6757,24 +6756,153 @@ fn import_rejects_the_whole_batch_when_quality_is_invalid() {
             floor_target: Some(QualityTarget(95)),
             ..parked_record(ParkedStatus::NotWorthwhile)
         },
-    ] {
+    ]
+}
+
+#[test]
+fn import_quality_agrees_at_live_batch_and_replay_boundaries()
+-> Result<(), Box<dyn std::error::Error>> {
+    for (record, accepted) in imports_with_invalid_quality()
+        .into_iter()
+        .map(|record| (record, false))
+        .chain(std::iter::once((
+            parked_record(ParkedStatus::Converted),
+            true,
+        )))
+    {
+        let records = vec![(ImportPath("/fixtures/import.mkv".to_owned()), record)];
         let mut state = AppState::default();
         let before = state.clone();
+        let live = crate::apply(
+            &mut state,
+            Command::History(HistoryCommand::Import {
+                records: records.clone(),
+            }),
+        );
+        let delta = DurableDelta::HistoryImported { records };
+        let batch = crate::apply_durable_batch(&before.durable, std::slice::from_ref(&delta));
+        let bytes = encode_record(&JournalEnvelope {
+            sequence: JournalSequence(0),
+            deltas: vec![delta.clone()],
+        })?;
+        let restored = replay(&bytes);
+        assert_eq!(live.is_ok(), accepted);
+        assert_eq!(batch.is_ok(), accepted);
+        assert_eq!(restored.corruption.is_none(), accepted);
+        if accepted {
+            let applied = live.map_err(|rejection| rejection.reason)?;
+            assert_eq!(
+                applied.reply,
+                SuccessReply::Imported {
+                    parked: 1,
+                    skipped: 0,
+                }
+            );
+            assert_eq!(applied.durable, vec![delta]);
+            let batch = batch?;
+            assert_eq!(batch.state, state.durable);
+            assert!(batch.recordings.is_empty());
+            assert_eq!(restored.state, state.durable);
+            assert_eq!(restored.next_sequence, JournalSequence(1));
+        } else {
+            assert_eq!(state, before);
+            assert_eq!(restored.state, before.durable);
+            assert_eq!(restored.next_sequence, JournalSequence(0));
+            assert_eq!(restored.valid_prefix_len, 0);
+        }
+    }
+    Ok(())
+}
+
+#[test]
+fn import_quality_rejects_the_whole_batch_when_a_record_is_invalid()
+-> Result<(), Box<dyn std::error::Error>> {
+    for invalid in imports_with_invalid_quality() {
+        let mut state = AppState::default();
+        apply_ok(
+            &mut state,
+            Command::History(HistoryCommand::Import {
+                records: vec![(
+                    ImportPath("/fixtures/existing.mkv".to_owned()),
+                    parked_record(ParkedStatus::Converted),
+                )],
+            }),
+        );
+        let before = state.clone();
+        let records = vec![
+            (
+                ImportPath("/fixtures/valid.mkv".to_owned()),
+                parked_record(ParkedStatus::Converted),
+            ),
+            (ImportPath("/fixtures/invalid.mkv".to_owned()), invalid),
+        ];
         let rejected = apply_rejected(
             &mut state,
             Command::History(HistoryCommand::Import {
-                records: vec![
-                    (
-                        ImportPath("/fixtures/valid.mkv".to_owned()),
-                        parked_record(ParkedStatus::Converted),
-                    ),
-                    (ImportPath("/fixtures/invalid.mkv".to_owned()), invalid),
-                ],
+                records: records.clone(),
             }),
         );
         assert!(rejected.reason.starts_with("invalid imported history:"));
         assert_eq!(state, before);
+        let delta = DurableDelta::HistoryImported { records };
+        assert!(crate::apply_durable_batch(&before.durable, std::slice::from_ref(&delta)).is_err());
+        let mut bytes =
+            encode_snapshot("test", UnixMillis(0), JournalSequence(7), &before.durable)?;
+        let valid_prefix_len = bytes.len();
+        bytes.extend(encode_record(&JournalEnvelope {
+            sequence: JournalSequence(7),
+            deltas: vec![delta],
+        })?);
+        let restored = replay(&bytes);
+        assert!(restored.corruption.is_some());
+        assert_eq!(restored.state, before.durable);
+        assert_eq!(restored.next_sequence, JournalSequence(7));
+        assert_eq!(restored.valid_prefix_len, valid_prefix_len);
     }
+    Ok(())
+}
+
+#[test]
+fn import_quality_is_validated_in_parked_and_adopted_snapshots() -> Result<(), serde_json::Error> {
+    for (record, accepted) in imports_with_invalid_quality()
+        .into_iter()
+        .map(|record| (record, false))
+        .chain(std::iter::once((
+            parked_record(ParkedStatus::Converted),
+            true,
+        )))
+    {
+        for adopted in [false, true] {
+            let mut state = crate::DurableState::default();
+            let import_path = ImportPath("/fixtures/import.mkv".to_owned());
+            if adopted {
+                let observation = media_observation("snapshot-import");
+                let mut content = FileRecord::new(observation.metadata);
+                content.imported = Some(ImportedProvenance {
+                    import_path: import_path.clone(),
+                    record: record.clone(),
+                });
+                state
+                    .records
+                    .insert(observation.binding.content_key, content);
+                state.adopted_imports.insert(import_path);
+            } else {
+                state.parked.insert(import_path, record.clone());
+            }
+            let bytes = encode_snapshot("test", UnixMillis(0), JournalSequence(7), &state)?;
+            let restored = replay(&bytes);
+            assert_eq!(restored.corruption.is_none(), accepted);
+            if accepted {
+                assert_eq!(restored.state, state);
+                assert_eq!(restored.next_sequence, JournalSequence(7));
+            } else {
+                assert_eq!(restored.state, crate::DurableState::default());
+                assert_eq!(restored.next_sequence, JournalSequence(0));
+                assert_eq!(restored.valid_prefix_len, 0);
+            }
+        }
+    }
+    Ok(())
 }
 
 #[test]

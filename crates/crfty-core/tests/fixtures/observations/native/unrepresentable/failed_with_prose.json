@@ -1,0 +1,19 @@
+{
+  "run_id": 1,
+  "operation": "Convert",
+  "source": null,
+  "revisions": {
+    "ab_av1": "synthetic-ab-av1",
+    "ffmpeg": "synthetic-ffmpeg",
+    "encoder": "synthetic-encoder"
+  },
+  "outcome": {
+    "Failed": {
+      "kind": "EncodeRun",
+      "message": "ffmpeg -i /synthetic/private-video.mkv",
+      "diagnostic": "cleanup failed: /synthetic/private-video.mkv.part"
+    }
+  },
+  "started_at": null,
+  "finished_at": 1700000000000
+}

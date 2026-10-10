@@ -2,7 +2,7 @@
 
 History is the durable record of what conversion work actually happened, and the evidence that Statistics and estimates are computed from.
 
-This document states the rules that are settled. Sections describing the shipped core are verified against it. The logical model is decided and specified by executable scenarios, but no storage holds it yet, and the storage engine behind it is not decided here.
+This document states the settled History contract and distinguishes it from production delivery. The application uses a file journal and derives its current History and Statistics projections from durable state. Feature-gated rusqlite and Turso candidates persist the logical model and run its executable scenarios. The selected replacement is one database holding operational log rows and History tables; the engine, final physical schema, and recovery protocol remain open in [History storage](design/history-storage.md).
 
 The [source-continuity contract](design/source-continuity.md) defines required alpha changes to evidence eligibility and retained artifacts. The shipped model does not yet classify source mutation across search and conversion. Its completion sizes and fallback projections must not be read as proof that the source stayed unchanged during processing.
 
@@ -10,7 +10,7 @@ The [source-continuity contract](design/source-continuity.md) defines required a
 
 A History entry describes work that reached a terminal outcome: a conversion, a remux, a not-worthwhile judgment, a completed analysis, or a failed, stopped, or incomplete run. Content that was only scanned has nothing to report and gets no entry. A skipped run decided nothing and gets no entry either; its reason belongs to the queue item that was skipped.
 
-Nothing is stored under the name History. History rows and Statistics are context-free projections of durable state, recomputed on request with no clock, no filesystem, and no cache, per ADR-015, project imported history separately.
+In production, History rows and Statistics are context-free projections of durable state, recomputed with no clock, filesystem, or cache, per ADR-015, project imported history separately. The frontend derives History rows from its durable snapshot; requested Statistics arrive through the stream. The storage candidates instead persist immutable observations and serve bounded reads independently of production IPC.
 
 Facts flow one way. The analysis level a file stands at, the analysis it may reuse, and its eligibility for the queue are all decided from current freshness-checked evidence about the file on disk, never from History:
 
@@ -20,11 +20,11 @@ Facts flow one way. The analysis level a file stands at, the analysis it may reu
 
 Estimation is the one sanctioned consumer in the other direction: completed phase spans and settled sizes feed the cohorts behind size and time predictions. It reads History and never writes to it; its model, evidence seam, and open questions are in `docs/design/estimation.md`.
 
-One seam does run from historical records into current state, and it is deliberately narrow. An imported record adopts onto a content record only when a fresh observation confirms the file at its recorded path. Confirmation requires either matching size and modification time or the replace-mode case where the file at that path is already the AV1 output. Adoption is the one-time route for V2 history and is governed by ADR-015; a record that no longer describes the file retires and decides nothing. ADR-025 removes this seam once History stores translated observations, as the [logical model](#logical-model) describes.
+One seam does run from historical records into current state, and it is deliberately narrow. An imported record adopts onto a content record only when a fresh observation confirms the file at its recorded path. Confirmation requires either matching size and modification time or the replace-mode case where the file at that path is already the AV1 output. Adoption is the production route for V2 history and is governed by ADR-015; a record that no longer describes the file retires and decides nothing. The selected production replacement removes this seam and stores translated observations under ADR-025, as the [logical model](#logical-model) describes.
 
 ## One immutable observation per terminal run or imported record
 
-The unit of History is the observation, fixed by ADR-024 and implemented as `crfty_core::Observation`. A native observation describes one run that reached a terminal outcome and is identified by its run identifier, which is never reused. A translated observation describes one imported V2 record and is identified by its origin record key (ADR-025). A native observation names at most one source by content key. Once recorded, no observation changes: a retry, a changed source, or a later success on the same file is a new native observation. Today native observations are derived from the run and output ledgers on request. The stored unit, once History has its own storage, is `Observation`: either a native or a translated observation.
+The unit of History is the observation, fixed by ADR-024 and implemented as `crfty_core::Observation`. A native observation describes one run that reached a terminal outcome and is identified by its run identifier, which is never reused. A translated observation describes one imported V2 record and is identified by its origin record key (ADR-025). A native observation names at most one source by content key. Once recorded, no observation changes: a retry, a changed source, or a later success on the same file is a new native observation. Core derives native observations from the run and output ledgers and captures them at reportable terminals. The candidate stores persist `Observation`, either native or translated; production still projects its ledgers and parked imports.
 
 Each outcome carries only the evidence it can honestly hold. Everything below is typed, and a shape outside this table does not deserialize. The table describes native observations; translated observations are sparser and are described under the logical model.
 
@@ -34,10 +34,12 @@ Each outcome carries only the evidence it can honestly hold. Everything below is
 | Converted | Search evidence and encode evidence; a live encode carries both sizes and its decode mode | Encode duration, recovered sizes, output content key, assessments |
 | Remuxed | Remux evidence; a live remux carries both sizes | Recovered sizes, output content key, assessment |
 | Not worthwhile | Requested target, floor, and at least one fallback attempt | Each attempt's last measurement |
-| Failed | Failure kind, message, and bounded diagnostic | |
+| Failed | Typed failure kind, including whether panic cleanup failed | |
 | Stopped, Incomplete | Nothing beyond the run facts | |
 
 Every native observation also carries its operation, the toolchain revisions of its execution profile, and, when the source was identified, the source's content key and media facts. Start and finish instants are optional, and an unknown instant stays unknown rather than being filled in from another clock.
+
+`ObservedOutcome::Failed` retains only `FailureKind`. Free-form failure messages and process diagnostics remain operational `FailureFacts` for contextual inspection and never become immutable History evidence. Unknown process prose may contain readable paths that a replacement scrub cannot prove it removed. The closed failure kind is path-safe regardless of path-recording policy; scrub only needs to delete the separate path rows.
 
 Preparation freezes the source key and media facts together on the run. Later scans and content-record updates cannot change them. Start and finish instants preserve wall-clock readings exactly, including a finish reading earlier than the start after a clock adjustment. Elapsed durations come from monotonic phase measurements, never subtraction of those instants.
 
@@ -64,7 +66,7 @@ Source assessment uses the classes of the [source-continuity contract](design/so
 
 ## Logical model
 
-The logical model fixes what History stores and how it is read, independently of any storage engine. Hand-maintained scenarios with expected results specify it in `crates/crfty-core/tests/fixtures/history/scenarios/`, and the storage workload that selects an engine runs those scenarios (`docs/design/history-storage-workload.md`). Until History has storage, the shipped projections and the parked import path described elsewhere in this document remain in force.
+The logical model fixes what History stores and how it is read, independently of any storage engine. Hand-maintained scenarios with expected results specify it in `crates/crfty-core/tests/fixtures/history/scenarios/`. Both feature-gated candidates run those scenarios through the [storage workload](design/history-storage-workload.md). Production integration must still prove driver publication, Settings ordering, startup recovery, and released History migrations. The shipped projections and parked import path remain in force until that database boundary is integrated.
 
 ### Release upgrades
 
@@ -92,7 +94,7 @@ The History revision increases once for each commit that changes what a query ca
 
 ### Atomic terminal recording
 
-A run's terminal transition and its observation, path row, sequence, and revision form one durable commit. Every reportable terminal transition has exactly one native observation committed with it, and no native observation exists without one, across any restart. Core validates and folds each durable batch in delta order, capturing each observation and its separate path row immediately after its terminal transition. Later deltas cannot change the captured facts. The selected boundary stores the operational delta batch and History facts in one database transaction, retaining operational fold and replay (ADR-004). The current engine still uses the file journal until the database replacement is proven and implemented. Scans, skips, and reservation-only failures produce no observation.
+A run's terminal transition and its observation, path row, sequence, and revision form one durable commit. Every reportable terminal transition has exactly one native observation committed with it, and no native observation exists without one, across any restart. Core validates and folds each durable batch in delta order, capturing each observation and its separate path row immediately after its terminal transition. Later deltas cannot change the captured facts. Candidate transactions persist the operational delta batch and those History facts together, retaining operational fold and replay (ADR-004). Process-abort fixtures verify this candidate boundary before and after commit. The production driver still writes the file journal; it needs the selected database boundary and startup-recovery proof before independently stored History can claim this guarantee. Scans, skips, and reservation-only failures produce no observation.
 
 ### Translated observations
 
@@ -106,7 +108,7 @@ Each record that holds quality values names its ADR-022 metric once, native and 
 
 ### Browsing
 
-History is read through bounded pages and detail lookups, never as a complete dataset. A page request names an order key, ascending or descending direction, an optional outcome filter, an optional search string, an optional cursor, and a limit.
+The decided browse contract uses bounded pages and detail lookups. Both storage candidates implement it; production still exposes the older complete durable snapshot and lacks the History request API. A page request names an order key, ascending or descending direction, an optional outcome filter, an optional search string, an optional cursor, and a limit.
 
 | Order key | Value |
 | --- | --- |
@@ -155,7 +157,7 @@ An unknown size is absent, not zero. Absence and zero are different claims, and 
 
 A History record stripped of readable paths remains linkable. The identities that survive are pseudonyms rather than erasures: a content key is a BLAKE2b digest over sampled file bytes plus the media header. Two different path hashes exist. V3's operational path hash is a BLAKE2b digest over the canonicalized path. A translated observation's record key is V2's path hash, an unsalted 64-bit BLAKE2b digest over V2's normalized path. That record key is the observation's identity, so it survives scrub. Anyone holding the same file recomputes its content key exactly, and anyone holding a list of candidate paths can recompute either path hash and match it.
 
-Exports and disclosures must say so plainly. A bundle without readable paths is described as pseudonymous, never as anonymous and never as de-identified. Its technical facts, exact tool revisions and resolutions and durations and sizes and timings, are ordinary one at a time and can be distinctive in combination, so the linkability a bundle admits belongs in its own disclosure rather than in a footnote elsewhere.
+Exports and disclosures must say so plainly. A bundle without readable paths is described as pseudonymous, never as anonymous and never as de-identified. Its technical facts, reported tool revisions and resolutions and durations and sizes and timings, are ordinary one at a time and can be distinctive in combination, so the linkability a bundle admits belongs in its own disclosure rather than in a footnote elsewhere.
 
 ## Scrub is a logical transform, not erasure
 
@@ -163,8 +165,8 @@ Scrubbing removes readable path data from the current records and leaves everyth
 
 Scrubbing is idempotent. Scrubbing an already-scrubbed store changes nothing, and a scrubbed store is a valid store rather than a degraded one.
 
-Scrubbing is not erasure, and must never be described to users as if it were. State persists through an append-only journal (ADR-004, persist state in an append-only journal) compacted by atomic replacement with a snapshot head line (ADR-009, compact the journal into a snapshot head line). Nothing below the application is asked to forget bytes it already wrote, including the filesystem and any underlying backup, snapshot, or replica. A scrub changes the records the application serves from that point forward. It offers no physical-erasure guarantee.
+Scrubbing is not erasure, and must never be described to users as if it were. Production state persists through the file journal, compacted by atomic replacement with a snapshot head line (ADR-009). Candidate History scrub deletes path rows in a database transaction. Neither mechanism asks the filesystem or any underlying backup, snapshot, or replica to forget bytes already written. A scrub changes the records the application serves from that point forward. It offers no physical-erasure guarantee.
 
 Log scrubbing is a different mechanism under a different contract (ADR-014, scrub paths inside the log sink) and is not governed by this rule.
 
-The `privacy.anonymize_history` setting is persisted and exposed in the Settings view, but no engine or core code reads it: today it toggles nothing. Wiring it to the transform described above is outstanding work, and the setting must not be presented to users as protection it does not yet provide.
+The `privacy.anonymize_history` setting is persisted, but production recording and import do not enforce it. The candidate writer has an explicit path-recording policy and a logical scrub operation; connecting those operations to Settings and the production command surface remains required. Until recording and import enforce the setting, its control must be disabled and explicitly unavailable.

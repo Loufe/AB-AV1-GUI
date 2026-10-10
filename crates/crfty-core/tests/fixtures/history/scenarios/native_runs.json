@@ -159,11 +159,7 @@
           },
           "outcome": {
             "Failed": {
-              "facts": {
-                "kind": "EncodeRun",
-                "message": "encode failed",
-                "diagnostic": "exit status 1"
-              }
+              "kind": "EncodeRun"
             }
           },
           "started_at": null,
@@ -320,11 +316,7 @@
           },
           "outcome": {
             "Failed": {
-              "facts": {
-                "kind": "EncodeRun",
-                "message": "encode failed",
-                "diagnostic": "exit status 1"
-              }
+              "kind": "EncodeRun"
             }
           },
           "started_at": null,

@@ -4,10 +4,12 @@ use super::{
     mapping, number,
 };
 
+const HISTORY_SCHEMA_VERSION: i64 = 2;
+
 pub(super) fn initialize(database: &mut Database) -> Result<()> {
     let version = database.query("PRAGMA user_version", &[])?;
     match version.first().and_then(|row| row.first()) {
-        Some(Value::Integer(1)) => return Ok(()),
+        Some(Value::Integer(version)) if *version == HISTORY_SCHEMA_VERSION => return Ok(()),
         Some(Value::Integer(0)) => {}
         _ => return Err(StoreError("unsupported History schema".to_owned())),
     }
@@ -81,7 +83,7 @@ pub(super) fn initialize(database: &mut Database) -> Result<()> {
             super::database::Value::Blob(number::unsigned(0)),
         ],
     )?;
-    database.batch("PRAGMA user_version=1")?;
+    database.batch(&format!("PRAGMA user_version={HISTORY_SCHEMA_VERSION}"))?;
     transaction.commit()
 }
 
