@@ -45,7 +45,7 @@ tracing = { version = "0.1.44", default-features = false, features = ["std"] }
 tracing-subscriber = { version = "0.3.23", default-features = false, features = ["fmt", "registry", "std"] }
 
 [target.'cfg(windows)'.dependencies]
-file-id = { version = "0.2.3", git = "https://github.com/Loufe/notify.git", rev = "33e1f19264da0aacdf46acaeddaee083e7b5137d" }
+file-id = { version = "0.2.3", git = "https://github.com/notify-rs/notify.git", rev = "33e1f19264da0aacdf46acaeddaee083e7b5137d" }
 windows-sys = { version = "0.61.2", features = ["Win32_Storage_FileSystem"] }
 
 [lints]
