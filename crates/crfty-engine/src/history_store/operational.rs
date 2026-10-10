@@ -170,6 +170,7 @@ fn load(database: &Database) -> Result<OperationalState> {
     let bytes = match read_records(database) {
         Ok(bytes) => bytes,
         Err(error) => {
+            tracing::error!(error = %error, "could not replay History operational rows");
             return Ok(OperationalState::Unavailable {
                 reason: error.to_string(),
                 runtime_high_water: high_water,
