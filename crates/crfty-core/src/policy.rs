@@ -42,6 +42,9 @@ pub enum SkipReason {
     /// Add-summary only: the path is already queued and not finished. Never a
     /// terminal outcome.
     AlreadyQueued,
+    /// Add-summary only: a queue path cannot round trip through the journal.
+    /// Never a terminal outcome.
+    PathNotPersistable,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

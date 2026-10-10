@@ -12,14 +12,13 @@ use std::{
 
 use crfty_core::{
     AnalysisIntent, AnalysisProfile, DecodeMode, DecodePreference, DurableDelta, ExecutionSettings,
-    Operation, OutputTarget, OverwriteDecision, QueueAddRequest, QueueCommand, QueueItemId,
-    SessionCommand, VmafTarget,
+    Operation, OutputTarget, OverwriteDecision, QueueAddRequest, QueueCommand, SessionCommand,
+    VmafTarget,
 };
 
 fn add_convert_with_suffix(input: &Path, suffix: &str) -> QueueCommand {
     QueueCommand::AddMany {
         requests: vec![QueueAddRequest {
-            item_id: QueueItemId(1),
             input: input.to_path_buf(),
             path_hash: None,
             identity: None,

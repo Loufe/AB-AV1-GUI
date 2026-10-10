@@ -118,7 +118,6 @@ pub struct QueueItemEdit {
 /// surfaces at claim time, where content identity is authoritative.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct QueueAddRequest {
-    pub item_id: QueueItemId,
     pub input: PathBuf,
     pub path_hash: Option<PathHash>,
     pub identity: Option<crate::DestructiveIdentity>,
@@ -127,6 +126,26 @@ pub struct QueueAddRequest {
     pub intent: AnalysisIntent,
     pub output_target: OutputTarget,
     pub overwrite: OverwriteDecision,
+}
+
+impl QueueAddRequest {
+    /// The JSON journal stores paths as strings, so a non-Unicode path
+    /// cannot round trip (ADR-017).
+    fn persistable(&self) -> bool {
+        let target = match &self.output_target {
+            OutputTarget::Replace | OutputTarget::Suffix { .. } => true,
+            OutputTarget::SeparateFolder {
+                directory,
+                source_root,
+            } => {
+                directory.to_str().is_some()
+                    && source_root
+                        .as_ref()
+                        .is_none_or(|root| root.to_str().is_some())
+            }
+        };
+        target && self.input.to_str().is_some()
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -306,6 +325,7 @@ pub enum Effect {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum SuccessReply {
+    AnalysisQueued(crate::AnalysisQueueSummary),
     Accepted,
     AnalysisStarted {
         generation: crate::AnalysisGenerationId,
@@ -321,6 +341,7 @@ pub enum SuccessReply {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Reply {
+    AnalysisQueued(crate::AnalysisQueueSummary),
     Accepted,
     AnalysisStarted {
         generation: crate::AnalysisGenerationId,
@@ -343,6 +364,7 @@ pub enum Reply {
 impl From<SuccessReply> for Reply {
     fn from(reply: SuccessReply) -> Self {
         match reply {
+            SuccessReply::AnalysisQueued(summary) => Self::AnalysisQueued(summary),
             SuccessReply::Accepted => Self::Accepted,
             SuccessReply::AnalysisStarted { generation } => Self::AnalysisStarted { generation },
             SuccessReply::BasicScan(disposition) => Self::BasicScan(disposition),
@@ -529,6 +551,27 @@ fn apply_analysis_command(
     command: AnalysisCommand,
 ) -> Result<Applied, Rejection> {
     match command {
+        AnalysisCommand::Enqueue { request, files } => {
+            let mut plan = match crate::plan_analysis_enqueue(state, request, files) {
+                Ok(plan) => plan,
+                Err(reason) => return rejected(reason),
+            };
+            let adds = match plan_queue_adds(state, plan.requests) {
+                Ok(adds) => adds,
+                Err(reason) => return rejected(reason),
+            };
+            plan.summary.added = adds.added();
+            for (reason, count) in adds.skipped {
+                plan.summary
+                    .exclude_many(crate::AnalysisQueueExclusion::Policy { reason }, count);
+            }
+            let mut applied = Applied::accepted();
+            for item in adds.accepted {
+                applied.durable.push(DurableDelta::QueueAdded { item });
+            }
+            applied.reply = SuccessReply::AnalysisQueued(plan.summary);
+            Ok(applied)
+        }
         AnalysisCommand::InspectFile {
             generation,
             row_id,
@@ -618,7 +661,9 @@ fn apply_analysis_state_command(
                 rows: vec![row],
             }
         }
-        AnalysisCommand::InspectFile { .. } | AnalysisCommand::ObserveFile { .. } => {
+        AnalysisCommand::Enqueue { .. }
+        | AnalysisCommand::InspectFile { .. }
+        | AnalysisCommand::ObserveFile { .. } => {
             return rejected("Analysis scan command reached the state-only path");
         }
     };
@@ -1008,68 +1053,19 @@ fn apply_settings(state: &AppState, command: SettingsCommand) -> Result<Applied,
 fn apply_queue(state: &AppState, command: QueueCommand) -> Result<Applied, Rejection> {
     match command {
         QueueCommand::AddMany { requests } => {
-            let mut accepted: Vec<QueueItem> = Vec::new();
-            let mut skipped: Vec<(SkipReason, u32)> = Vec::new();
-            for request in requests {
-                if let Err(reason) = request.output_target.validate() {
-                    return rejected(reason);
-                }
-                // Item ids are caller-allocated and unique by contract; a
-                // collision is a wiring bug that rejects the whole batch.
-                if state
-                    .durable
-                    .queue
-                    .iter()
-                    .any(|item| item.id == request.item_id)
-                    || accepted.iter().any(|item| item.id == request.item_id)
-                {
-                    return rejected("queue item id already exists");
-                }
-                // One item per path: a path re-add is only meaningful once
-                // the standing item is finished. Changing an item's
-                // operation is Edit's job, not a second add's.
-                let already_queued = state
-                    .durable
-                    .queue
-                    .iter()
-                    .filter(|item| !matches!(item.state, QueueItemState::Finished(_)))
-                    .chain(accepted.iter())
-                    .any(|item| item.input == request.input);
-                let skip = if already_queued {
-                    Some(SkipReason::AlreadyQueued)
-                } else {
-                    request.path_hash.as_ref().and_then(|path_hash| {
-                        evaluate_enqueue(
-                            &state.durable,
-                            path_hash,
-                            request.identity.as_ref(),
-                            request.timestamp_reliability,
-                            request.operation,
-                            request.intent,
-                        )
-                    })
-                };
-                match skip {
-                    Some(reason) => count_skip(&mut skipped, reason),
-                    None => accepted.push(QueueItem {
-                        id: request.item_id,
-                        input: request.input,
-                        operation: request.operation,
-                        intent: request.intent,
-                        output_target: request.output_target,
-                        overwrite: request.overwrite,
-                        state: QueueItemState::Queued,
-                    }),
-                }
-            }
+            let adds = match plan_queue_adds(state, requests) {
+                Ok(adds) => adds,
+                Err(reason) => return rejected(reason),
+            };
             let mut applied = Applied::accepted();
-            let added = u32::try_from(accepted.len()).unwrap_or(u32::MAX);
-            for item in accepted {
+            let added = adds.added();
+            for item in adds.accepted {
                 applied.durable.push(DurableDelta::QueueAdded { item });
             }
-            applied
-                .ephemeral
-                .push(EphemeralDelta::QueueAddSummary { added, skipped });
+            applied.ephemeral.push(EphemeralDelta::QueueAddSummary {
+                added,
+                skipped: adds.skipped,
+            });
             Ok(applied)
         }
         QueueCommand::RemoveMany { item_ids } => {
@@ -1238,6 +1234,76 @@ fn apply_queue(state: &AppState, command: QueueCommand) -> Result<Applied, Rejec
             Ok(applied)
         }
     }
+}
+
+struct QueueAdds {
+    accepted: Vec<QueueItem>,
+    skipped: Vec<(SkipReason, u32)>,
+}
+
+impl QueueAdds {
+    fn added(&self) -> u32 {
+        u32::try_from(self.accepted.len()).unwrap_or(u32::MAX)
+    }
+}
+
+/// Allocates ids only for accepted requests; any batch-wide rejection,
+/// including id exhaustion, consumes none.
+fn plan_queue_adds(
+    state: &AppState,
+    requests: Vec<QueueAddRequest>,
+) -> Result<QueueAdds, &'static str> {
+    // One item per path: a path re-add is only meaningful once the standing
+    // item is finished. Changing an item's operation is Edit's job, not a
+    // second add's.
+    let mut queued: BTreeSet<PathBuf> = state
+        .durable
+        .queue
+        .iter()
+        .filter(|item| !matches!(item.state, QueueItemState::Finished(_)))
+        .map(|item| item.input.clone())
+        .collect();
+    let mut adds = QueueAdds {
+        accepted: Vec::new(),
+        skipped: Vec::new(),
+    };
+    let mut next_id = state.durable.queue_item_id_high_water;
+    for request in requests {
+        request.output_target.validate()?;
+        let skip = if !request.persistable() {
+            Some(SkipReason::PathNotPersistable)
+        } else if queued.contains(&request.input) {
+            Some(SkipReason::AlreadyQueued)
+        } else {
+            request.path_hash.as_ref().and_then(|path_hash| {
+                evaluate_enqueue(
+                    &state.durable,
+                    path_hash,
+                    request.identity.as_ref(),
+                    request.timestamp_reliability,
+                    request.operation,
+                    request.intent,
+                )
+            })
+        };
+        if let Some(reason) = skip {
+            count_skip(&mut adds.skipped, reason);
+            continue;
+        }
+        let id = QueueItemId::next_after(next_id)?;
+        next_id = id.0;
+        queued.insert(request.input.clone());
+        adds.accepted.push(QueueItem {
+            id,
+            input: request.input,
+            operation: request.operation,
+            intent: request.intent,
+            output_target: request.output_target,
+            overwrite: request.overwrite,
+            state: QueueItemState::Queued,
+        });
+    }
+    Ok(adds)
 }
 
 fn count_skip(skipped: &mut Vec<(SkipReason, u32)>, reason: SkipReason) {
@@ -1732,7 +1798,9 @@ pub(crate) fn validate_terminal(
                     return Err("output-exists skip is incompatible with the run state");
                 }
             }
-            crate::SkipReason::AlreadyConverted { .. } | crate::SkipReason::AlreadyQueued => {
+            crate::SkipReason::AlreadyConverted { .. }
+            | crate::SkipReason::AlreadyQueued
+            | crate::SkipReason::PathNotPersistable => {
                 return Err("enqueue-time skip reasons are never terminal outcomes");
             }
         },
