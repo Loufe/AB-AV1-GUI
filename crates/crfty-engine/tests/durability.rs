@@ -28,9 +28,9 @@ use crfty_engine::{
         EngineConfig, EngineRuntime, FixedTools, PUBLIC_EVENT_CHANNEL_CAPACITY, ToolsConfig,
     },
     driver::{DriverEvent, DriverHandle, DriverStartError},
-    journal::JournalWriter,
+    journal::{JournalError, JournalWriter},
     media::MediaError,
-    output::{ArtifactInspector, FixtureByteInspector, OutputManager},
+    output::{ArtifactInspector, FixtureByteInspector, OutputError, OutputManager},
     process_supervisor::BoundedOutput,
     tools::MediaTools,
 };
@@ -353,6 +353,67 @@ fn failed_compaction_leaves_old_journal_authoritative_and_writer_usable() {
     let replayed = replay(&fs::read(&path).expect("journal bytes"));
     assert!(replayed.corruption.is_none());
     assert_eq!(replayed.state.queue.len(), 2);
+}
+
+#[test]
+fn replacement_and_reopen_failures_preserve_both_causes_and_refuse_append()
+-> Result<(), Box<dyn std::error::Error>> {
+    use std::error::Error;
+
+    let directory = TestDirectory::new("compaction-reopen-failure");
+    let path = directory.path().join("state.jsonl");
+    let saved = directory.path().join("saved.jsonl");
+    let (mut writer, _) = JournalWriter::open(&path)?;
+    let delta = queue_added(QueueItemId(1));
+    let mut state = DurableState::default();
+    fold(&mut state, &delta);
+    writer.append_batch(&[delta])?;
+    let before = fs::read(&path)?;
+    let before_len = writer.journal_bytes();
+    fs::rename(&path, &saved)?;
+    fs::create_dir(&path)?;
+
+    let error = writer
+        .compact(&state, "fixture", UnixMillis(1_000))
+        .err()
+        .ok_or("compaction unexpectedly replaced a directory")?;
+    let JournalError::CompactionRecovery {
+        replacement,
+        reopen,
+    } = &error
+    else {
+        return Err(format!("both compaction causes were not retained: {error}").into());
+    };
+    let diagnostic = error.to_string();
+    assert!(diagnostic.contains(&format!(
+        "failed to replace journal with snapshot: {replacement}"
+    )));
+    assert!(diagnostic.contains(&format!(
+        "failed to reopen journal after failed compaction: {reopen}"
+    )));
+    assert!(
+        error
+            .source()
+            .and_then(|source| source.downcast_ref::<std::io::Error>())
+            .is_some_and(|source| std::ptr::eq(source, replacement))
+    );
+    assert_eq!(fs::read(&saved)?, before);
+    assert_eq!(writer.journal_bytes(), before_len);
+    assert!(path.is_dir());
+
+    let append = writer
+        .append_batch(&[queue_added(QueueItemId(2))])
+        .err()
+        .ok_or("writer appended without a recovered handle")?;
+    assert!(matches!(append, JournalError::Io { source, .. }
+        if source.kind() == std::io::ErrorKind::NotConnected));
+    assert_eq!(fs::read(&saved)?, before);
+    drop(writer);
+    let (_, recovered) = JournalWriter::open(&saved)?;
+    assert!(recovered.corruption.is_none());
+    assert_eq!(recovered.state, state);
+    assert_eq!(recovered.next_sequence.0, 1);
+    Ok(())
 }
 
 #[test]
@@ -2135,9 +2196,67 @@ fn output_preparation_enforces_overwrite_policy_before_staging() {
             false,
         )
         .expect_err("overwrite-disabled planning must fail");
-    assert!(error.is_destination_exists());
+    assert!(matches!(error, OutputError::DestinationExists));
     assert_eq!(fs::read(&final_path).expect("existing output"), b"existing");
     assert!(!directory.path().join(".output.crfty-30.part.mkv").exists());
+}
+
+#[test]
+fn a_staging_collision_is_a_failure_and_preserves_the_existing_file()
+-> Result<(), Box<dyn std::error::Error>> {
+    let directory = TestDirectory::new("staging-collision");
+    let input = directory.path().join("input.mkv");
+    let destination = directory.path().join("output.mkv");
+    fs::write(&input, b"original")?;
+    let manager = OutputManager::new(FixtureByteInspector);
+    let transaction = manager.plan(
+        RunId(30),
+        &input,
+        &destination,
+        Replacement::KeepOriginal,
+        false,
+    )?;
+    fs::write(&transaction.staging, b"unrelated staging")?;
+
+    let error = manager
+        .create_staging(&transaction)
+        .err()
+        .ok_or("staging collision unexpectedly succeeded")?;
+    assert!(
+        matches!(error, OutputError::Failure { source: MediaError::Io(source), .. }
+        if source.kind() == std::io::ErrorKind::AlreadyExists)
+    );
+    assert_eq!(fs::read(&transaction.staging)?, b"unrelated staging");
+    assert_eq!(fs::read(&input)?, b"original");
+    assert!(!destination.exists());
+    Ok(())
+}
+
+#[test]
+fn inspection_failure_takes_precedence_over_an_existing_destination()
+-> Result<(), Box<dyn std::error::Error>> {
+    let directory = TestDirectory::new("output-inspection-failure");
+    let input = directory.path().join("missing.mkv");
+    let destination = directory.path().join("output.mkv");
+    fs::write(&destination, b"existing output")?;
+    let manager = OutputManager::new(FixtureByteInspector);
+
+    let error = manager
+        .plan(
+            RunId(30),
+            &input,
+            &destination,
+            Replacement::KeepOriginal,
+            false,
+        )
+        .err()
+        .ok_or("missing input unexpectedly succeeded")?;
+    assert!(
+        matches!(error, OutputError::Failure { source: MediaError::Io(source), .. }
+        if source.kind() == std::io::ErrorKind::NotFound)
+    );
+    assert_eq!(fs::read(&destination)?, b"existing output");
+    Ok(())
 }
 
 #[test]
