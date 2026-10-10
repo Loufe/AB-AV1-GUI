@@ -14,7 +14,7 @@ use std::{
 
 use crfty_core::{
     AnalysisIntent, AnalysisProfile, DurableDelta, EphemeralDelta, ExecutionSettings, ItemOutcome,
-    Operation, OutputTarget, OverwriteDecision, QueueAddRequest, QueueCommand, QueueItemId, Reply,
+    Operation, OutputTarget, OverwriteDecision, QueueAddRequest, QueueCommand, Reply,
     SessionCommand, SessionState, ToolRevisions, ToolSource, VideoCodec,
 };
 use crfty_engine::{
@@ -172,7 +172,7 @@ fn force_stop_reaches_a_hung_claim_time_probe() {
     assert_eq!(
         engine
             .commands
-            .submit_queue(add_one(QueueItemId(1), &input))
+            .submit_queue(add_one(&input))
             .expect("queue add reply"),
         Reply::Accepted
     );
@@ -224,7 +224,7 @@ fn force_stop_reaches_a_hung_output_verification_probe() {
     assert_eq!(
         engine
             .commands
-            .submit_queue(add_one(QueueItemId(1), &input))
+            .submit_queue(add_one(&input))
             .expect("queue add reply"),
         Reply::Accepted
     );
@@ -282,10 +282,9 @@ fn force_stop_reaches_a_hung_output_verification_probe() {
     engine.shutdown().expect("engine shutdown");
 }
 
-fn add_one(item_id: QueueItemId, input: &Path) -> QueueCommand {
+fn add_one(input: &Path) -> QueueCommand {
     QueueCommand::AddMany {
         requests: vec![QueueAddRequest {
-            item_id,
             input: input.to_path_buf(),
             path_hash: None,
             identity: None,
@@ -443,7 +442,7 @@ fn finalization_cancellation_preserves_the_correct_files_across_restart() {
         let DriverEvent::Snapshot(mut snapshot) = engine.events.recv().expect("snapshot") else {
             panic!("snapshot");
         };
-        let mut request = add_one(QueueItemId(1), &input);
+        let mut request = add_one(&input);
         if let QueueCommand::AddMany { requests } = &mut request {
             for request in requests {
                 if replace {
@@ -573,10 +572,7 @@ fn shutdown_recovery_releases_reservations_and_marks_prepared_work_incomplete() 
         let engine = EngineRuntime::start(configuration.clone()).expect("engine");
         let _snapshot = engine.events.recv().expect("snapshot");
         assert_eq!(
-            engine
-                .commands
-                .submit_queue(add_one(QueueItemId(1), &input))
-                .expect("add"),
+            engine.commands.submit_queue(add_one(&input)).expect("add"),
             Reply::Accepted
         );
         assert_eq!(
