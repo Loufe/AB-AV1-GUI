@@ -8,6 +8,7 @@ mod basic_scan;
 mod discovery;
 mod runtime;
 
+pub(crate) use self::runtime::AnalysisGenerationRegistry;
 pub(crate) use self::runtime::AnalysisRuntime;
 
 use std::{
@@ -27,6 +28,8 @@ pub enum AnalysisError {
     ShuttingDown,
     Submit(SubmitError),
     Rejected(String),
+    /// The driver may have persisted part of the command before stopping.
+    DurabilityUnknown(String),
     UnexpectedReply,
 }
 
@@ -39,7 +42,7 @@ impl fmt::Display for AnalysisError {
             Self::MissingTools => formatter.write_str("ffprobe is unavailable"),
             Self::ShuttingDown => formatter.write_str("Analysis runtime is shutting down"),
             Self::Submit(error) => write!(formatter, "failed to submit Analysis command: {error}"),
-            Self::Rejected(reason) => formatter.write_str(reason),
+            Self::Rejected(reason) | Self::DurabilityUnknown(reason) => formatter.write_str(reason),
             Self::UnexpectedReply => {
                 formatter.write_str("driver returned an unexpected Analysis reply")
             }

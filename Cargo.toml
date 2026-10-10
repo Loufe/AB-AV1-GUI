@@ -29,3 +29,8 @@ indexing_slicing = "deny"
 todo = "deny"
 unimplemented = "deny"
 unwrap_used = "deny"
+
+# Full debuginfo made per-worktree target directories grow past 19 GB.
+# Line tables keep file:line backtraces.
+[profile.dev]
+debug = "line-tables-only"

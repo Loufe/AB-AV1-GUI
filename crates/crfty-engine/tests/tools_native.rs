@@ -18,8 +18,8 @@ use std::{
 use crfty_core::{
     AnalysisIntent, AnalysisProfile, DecodeMode, DecodePreference, DurableDelta, EphemeralDelta,
     ExecutionSettings, Operation, OutputTarget, OverwriteDecision, QueueAddRequest, QueueCommand,
-    QueueItemId, Reply, SessionCommand, Settings, SettingsCommand, ToolAvailability,
-    ToolLocationFailure, ToolPathSettings, ToolRevisions, ToolSource, ToolVerification, VmafTarget,
+    Reply, SessionCommand, Settings, SettingsCommand, ToolAvailability, ToolLocationFailure,
+    ToolPathSettings, ToolRevisions, ToolSource, ToolVerification, VmafTarget,
 };
 use crfty_engine::{
     ab_av1::AB_AV1_REVISION,
@@ -113,7 +113,6 @@ fn configured_tools_are_probed_and_execute_from_a_spaces_and_unicode_directory()
             .commands
             .submit_queue(QueueCommand::AddMany {
                 requests: vec![QueueAddRequest {
-                    item_id: QueueItemId(1),
                     input: input.clone(),
                     path_hash: None,
                     identity: None,
