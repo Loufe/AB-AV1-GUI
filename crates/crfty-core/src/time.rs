@@ -8,6 +8,7 @@ use serde::{Deserialize, Serialize};
 
 /// A wall-clock instant in milliseconds since the Unix epoch. Stamped by the
 /// engine (core has no clock) and delivered inside command payloads.
+/// Readings may move backward; elapsed durations use a monotonic clock.
 #[derive(
     Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize, specta::Type,
 )]

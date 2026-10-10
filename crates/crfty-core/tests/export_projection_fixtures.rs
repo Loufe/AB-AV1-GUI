@@ -102,7 +102,10 @@ fn spec(run: u64, content_key: &ContentKey) -> JobSpec {
         claim_id: ClaimId(run),
         run_id: RunId(run),
         input: PathBuf::from(format!("videos/input-{run}.mkv")),
-        content_key: Some(content_key.clone()),
+        source: Some(crfty_core::SourceFacts::from_media(
+            content_key.clone(),
+            &meta(VideoCodec::Hevc, 8_000),
+        )),
         operation: Operation::Convert,
         intent: AnalysisIntent::ReuseIfFresh,
         output_target: OutputTarget::Replace,

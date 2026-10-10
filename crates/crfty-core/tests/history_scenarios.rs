@@ -43,8 +43,9 @@ use std::{
 };
 
 use crfty_core::{
-    ImportCandidate, ImportReport, NativeObservation, Observation, ObservationId, ObservationPaths,
-    ObservedOutcome, TranslatedId, TranslatedObservation, TranslatedOutcome, plan_import,
+    HistoryBrowseFacts, HistoryOutcome as OutcomeClass, ImportCandidate, ImportReport,
+    NativeObservation, Observation, ObservationId, ObservationPaths, TranslatedId,
+    TranslatedObservation, plan_import,
 };
 use serde::{Deserialize, Serialize};
 
@@ -54,7 +55,6 @@ const SCENARIOS: &str = concat!(
 );
 const MAX_LIMIT: usize = 200;
 const MAX_PAIRS_LIMIT: usize = 500;
-const CHANGE_SCALE: i128 = 10_000;
 
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -157,17 +157,6 @@ enum Direction {
     Descending,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Deserialize)]
-enum OutcomeClass {
-    Converted,
-    Remuxed,
-    NotWorthwhile,
-    Analyzed,
-    Failed,
-    Stopped,
-    Incomplete,
-}
-
 const DEFAULT_OUTCOMES: [OutcomeClass; 4] = [
     OutcomeClass::Converted,
     OutcomeClass::Remuxed,
@@ -248,19 +237,15 @@ impl Store {
 
     fn position(&self, entry: &Entry, order: Order) -> Position {
         let number = |value: Option<u64>| value.map(|value| SortValue::Number(i128::from(value)));
+        let facts = HistoryBrowseFacts::of(&entry.observation);
         let value = match order {
             Order::Date => number(entry.observation.dated_at().map(|at| at.0)),
             Order::File => self.file_name(entry.seq).map(SortValue::Text),
-            Order::Before => number(before(&entry.observation)),
-            Order::After => number(after(&entry.observation)),
-            Order::Change => measured_pair(&entry.observation)
-                .filter(|(before, _)| *before > 0)
-                .map(|(before, after)| {
-                    let (before, after) = (i128::from(before), i128::from(after));
-                    SortValue::Number((before - after) * CHANGE_SCALE / before)
-                }),
-            Order::Quality => number(quality(&entry.observation)),
-            Order::Took => number(took(&entry.observation)),
+            Order::Before => number(facts.before),
+            Order::After => number(facts.after),
+            Order::Change => facts.change.map(SortValue::Number),
+            Order::Quality => number(facts.quality),
+            Order::Took => number(facts.took),
             Order::Recorded => number(Some(entry.seq)),
         };
         Position {
@@ -275,7 +260,7 @@ impl Store {
         outcomes: &BTreeSet<OutcomeClass>,
         search: Option<&str>,
     ) -> bool {
-        outcomes.contains(&class(&entry.observation))
+        outcomes.contains(&OutcomeClass::of(&entry.observation))
             && search.is_none_or(|needle| {
                 self.file_name(entry.seq)
                     .is_some_and(|name| name.contains(&needle.to_ascii_lowercase()))
@@ -296,111 +281,6 @@ fn compare(left: &Position, right: &Position, direction: Direction) -> Ordering 
         (None, None) => Ordering::Equal,
     };
     by_value.then(right.seq.cmp(&left.seq))
-}
-
-/// Both sizes of a produced output as one measured pair: native measured
-/// sizes, or a translated record's source and output size when it held
-/// both.
-fn measured_pair(observation: &Observation) -> Option<(u64, u64)> {
-    match observation {
-        Observation::Native(native) => match &native.outcome {
-            ObservedOutcome::Converted { encode, .. } => encode.measurement.sizes(),
-            ObservedOutcome::Remuxed { remux } => remux.measurement.sizes(),
-            ObservedOutcome::Analyzed { .. }
-            | ObservedOutcome::NotWorthwhile { .. }
-            | ObservedOutcome::Failed { .. }
-            | ObservedOutcome::Stopped
-            | ObservedOutcome::Incomplete => None,
-        }
-        .map(|sizes| (sizes.input, sizes.output)),
-        Observation::Translated(translated) => match &translated.outcome {
-            TranslatedOutcome::Converted { output_size, .. } => {
-                translated.source.size_bytes.zip(*output_size)
-            }
-            TranslatedOutcome::Analyzed { .. } | TranslatedOutcome::NotWorthwhile { .. } => None,
-        },
-    }
-}
-
-fn before(observation: &Observation) -> Option<u64> {
-    let inspected = match observation {
-        Observation::Native(native) => native.source.as_ref().map(|source| source.size_bytes),
-        Observation::Translated(translated) => translated.source.size_bytes,
-    };
-    measured_pair(observation)
-        .map(|(before, _)| before)
-        .or(inspected)
-}
-
-fn after(observation: &Observation) -> Option<u64> {
-    match observation {
-        Observation::Native(_) => measured_pair(observation).map(|(_, after)| after),
-        Observation::Translated(translated) => match &translated.outcome {
-            TranslatedOutcome::Converted { output_size, .. } => *output_size,
-            TranslatedOutcome::Analyzed { .. } | TranslatedOutcome::NotWorthwhile { .. } => None,
-        },
-    }
-}
-
-fn quality(observation: &Observation) -> Option<u64> {
-    match observation {
-        Observation::Native(native) => match &native.outcome {
-            ObservedOutcome::Analyzed { search } | ObservedOutcome::Converted { search, .. } => {
-                Some(search.analysis.measurement.crf.0)
-            }
-            ObservedOutcome::Remuxed { .. }
-            | ObservedOutcome::NotWorthwhile { .. }
-            | ObservedOutcome::Failed { .. }
-            | ObservedOutcome::Stopped
-            | ObservedOutcome::Incomplete => None,
-        },
-        Observation::Translated(translated) => match &translated.outcome {
-            TranslatedOutcome::Analyzed { quality }
-            | TranslatedOutcome::Converted { quality, .. } => quality.crf.map(|crf| crf.0),
-            TranslatedOutcome::NotWorthwhile { .. } => None,
-        },
-    }
-    .map(u64::from)
-}
-
-fn took(observation: &Observation) -> Option<u64> {
-    match observation {
-        Observation::Native(native) => match &native.outcome {
-            ObservedOutcome::Converted { encode, .. } => encode.duration,
-            ObservedOutcome::Analyzed { .. }
-            | ObservedOutcome::Remuxed { .. }
-            | ObservedOutcome::NotWorthwhile { .. }
-            | ObservedOutcome::Failed { .. }
-            | ObservedOutcome::Stopped
-            | ObservedOutcome::Incomplete => None,
-        },
-        Observation::Translated(translated) => match &translated.outcome {
-            TranslatedOutcome::Converted {
-                encode_duration, ..
-            } => *encode_duration,
-            TranslatedOutcome::Analyzed { .. } | TranslatedOutcome::NotWorthwhile { .. } => None,
-        },
-    }
-    .map(|duration| duration.0)
-}
-
-fn class(observation: &Observation) -> OutcomeClass {
-    match observation {
-        Observation::Native(native) => match &native.outcome {
-            ObservedOutcome::Analyzed { .. } => OutcomeClass::Analyzed,
-            ObservedOutcome::Converted { .. } => OutcomeClass::Converted,
-            ObservedOutcome::Remuxed { .. } => OutcomeClass::Remuxed,
-            ObservedOutcome::NotWorthwhile { .. } => OutcomeClass::NotWorthwhile,
-            ObservedOutcome::Failed { .. } => OutcomeClass::Failed,
-            ObservedOutcome::Stopped => OutcomeClass::Stopped,
-            ObservedOutcome::Incomplete => OutcomeClass::Incomplete,
-        },
-        Observation::Translated(translated) => match &translated.outcome {
-            TranslatedOutcome::Analyzed { .. } => OutcomeClass::Analyzed,
-            TranslatedOutcome::Converted { .. } => OutcomeClass::Converted,
-            TranslatedOutcome::NotWorthwhile { .. } => OutcomeClass::NotWorthwhile,
-        },
-    }
 }
 
 struct PageQuery<'a> {

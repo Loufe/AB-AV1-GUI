@@ -55,6 +55,9 @@ allow = [
 confidence-threshold = 0.93
 
 [bans]
+# The storage comparison uses Turso's rewritten engine, not its legacy
+# SQLite-based libSQL client. Keeping both would compare different engines.
+deny = [{ name = "libsql", reason = "History candidates are rusqlite and the Turso engine" }]
 multiple-versions = "warn"
 wildcards = "deny"
 allow-wildcard-paths = true

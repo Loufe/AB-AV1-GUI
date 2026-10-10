@@ -110,7 +110,7 @@ export function queueRows(state: DurableState_Deserialize): QueueRowData[] {
     const latest = latestRuns.get(item.id);
     const run =
       stateRunId === null ? latest : { id: stateRunId, run: state.conversion_runs[stateRunId] };
-    const contentKey = run?.run?.spec.content_key;
+    const contentKey = run?.run?.spec.source?.content_key;
     const metadata =
       contentKey === null || contentKey === undefined
         ? null

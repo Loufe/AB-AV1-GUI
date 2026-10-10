@@ -1109,7 +1109,11 @@ export type JobSpec = {
 	claim_id: ClaimId,
 	run_id: RunId,
 	input: string,
-	content_key: ContentKey | null,
+	/**
+	 *  Preparation binds media facts to their key so later scans cannot
+	 *  replace the source evidence of this run.
+	 */
+	source: SourceFacts | null,
 	operation: Operation,
 	intent: AnalysisIntent,
 	output_target: OutputTarget,
@@ -1607,6 +1611,19 @@ export type SkipReason = ({ LowResolution: {
 "PathNotPersistable";
 
 /**
+ *  The source as identified by content, with the media facts cohorts are
+ *  built from. Width and height are post-rotation.
+ */
+export type SourceFacts = {
+	content_key: ContentKey,
+	codec: VideoCodec,
+	width: number,
+	height: number,
+	duration_ms: number,
+	size_bytes: number,
+};
+
+/**
  *  The exhaustive Statistics answer. Conversion output-size reduction, VMAF,
  *  CRF, and time aggregates cover converted verdicts only; remux facts are
  *  counted and summed separately and never blend into conversion aggregates.
@@ -1833,6 +1850,7 @@ export type ToolVerification = "Pending" | ({ Verified: {
 /**
  *  A wall-clock instant in milliseconds since the Unix epoch. Stamped by the
  *  engine (core has no clock) and delivered inside command payloads.
+ *  Readings may move backward; elapsed durations use a monotonic clock.
  */
 export type UnixMillis = number;
 
@@ -1852,7 +1870,7 @@ export type ValueSpread = {
  *  verdicts); Stopped, Skipped, and Failed decide nothing.
  * 
  *  Lineage is derived, never stored: the runs that concern this content are
- *  `conversion_runs` filtered by `spec.content_key`, ordered by the monotonic
+ *  `conversion_runs` filtered by the prepared source key, ordered by the monotonic
  *  `RunId`. `source_run` links the verdict into that chain.
  */
 export type Verdict = {

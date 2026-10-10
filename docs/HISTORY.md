@@ -24,7 +24,7 @@ One seam does run from historical records into current state, and it is delibera
 
 ## One immutable observation per terminal run or imported record
 
-The unit of History is the observation, fixed by ADR-024 and implemented as `crfty_core::Observation`. A native observation describes one run that reached a terminal outcome and is identified by its run identifier, which is never reused. A translated observation describes one imported V2 record and is identified by its origin record key (ADR-025). A native observation names at most one source by content key. Once recorded, no observation changes: a retry, a changed source, or a later success on the same file is a new native observation. Today native observations are derived from the run, record, and output ledgers on request. The stored unit, once History has its own storage, is `Observation`: either a native or a translated observation.
+The unit of History is the observation, fixed by ADR-024 and implemented as `crfty_core::Observation`. A native observation describes one run that reached a terminal outcome and is identified by its run identifier, which is never reused. A translated observation describes one imported V2 record and is identified by its origin record key (ADR-025). A native observation names at most one source by content key. Once recorded, no observation changes: a retry, a changed source, or a later success on the same file is a new native observation. Today native observations are derived from the run and output ledgers on request. The stored unit, once History has its own storage, is `Observation`: either a native or a translated observation.
 
 Each outcome carries only the evidence it can honestly hold. Everything below is typed, and a shape outside this table does not deserialize. The table describes native observations; translated observations are sparser and are described under the logical model.
 
@@ -38,6 +38,8 @@ Each outcome carries only the evidence it can honestly hold. Everything below is
 | Stopped, Incomplete | Nothing beyond the run facts | |
 
 Every native observation also carries its operation, the toolchain revisions of its execution profile, and, when the source was identified, the source's content key and media facts. Start and finish instants are optional, and an unknown instant stays unknown rather than being filled in from another clock.
+
+Preparation freezes the source key and media facts together on the run. Later scans and content-record updates cannot change them. Start and finish instants preserve wall-clock readings exactly, including a finish reading earlier than the start after a clock adjustment. Elapsed durations come from monotonic phase measurements, never subtraction of those instants.
 
 Three different things are called attempts, and the contract keeps them apart. Quality-target fallback attempts belong to one run's search: the analysis lists the targets that failed, and a not-worthwhile outcome lists every attempt. The hardware-to-software decode retry belongs to the encode: the live measurement records the decode mode the encode actually ran with, which the search profile may not match. A queue retry mints a new run and therefore a new native observation; lineage is derived from the content key and run order and never stored.
 
@@ -90,7 +92,7 @@ The History revision increases once for each commit that changes what a query ca
 
 ### Atomic terminal recording
 
-A run's terminal transition and its observation, path row, sequence, and revision form one durable commit. Every durable terminal transition has exactly one native observation committed with it, and no native observation exists without one, across any restart. The selected boundary stores the operational delta batch and History facts in one database transaction, retaining operational fold and replay (ADR-004). The current engine still uses the file journal until the database replacement is proven and implemented. Scans, skips, and reservation-only failures produce no observation.
+A run's terminal transition and its observation, path row, sequence, and revision form one durable commit. Every reportable terminal transition has exactly one native observation committed with it, and no native observation exists without one, across any restart. Core validates and folds each durable batch in delta order, capturing each observation and its separate path row immediately after its terminal transition. Later deltas cannot change the captured facts. The selected boundary stores the operational delta batch and History facts in one database transaction, retaining operational fold and replay (ADR-004). The current engine still uses the file journal until the database replacement is proven and implemented. Scans, skips, and reservation-only failures produce no observation.
 
 ### Translated observations
 

@@ -217,8 +217,7 @@ impl EstimationModel {
             }
             let Some(record) = run
                 .spec
-                .content_key
-                .as_ref()
+                .content_key()
                 .and_then(|content_key| state.records.get(content_key))
             else {
                 continue;
@@ -315,7 +314,10 @@ mod tests {
             claim_id: ClaimId(run),
             run_id: RunId(run),
             input: PathBuf::from(format!("input-{run}.mkv")),
-            content_key: Some(content_key.clone()),
+            source: Some(crate::SourceFacts::from_media(
+                content_key.clone(),
+                &meta(VideoCodec::Hevc, 1920, 1080, 600_000),
+            )),
             operation,
             intent: crate::AnalysisIntent::ReuseIfFresh,
             output_target: OutputTarget::Suffix {

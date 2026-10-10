@@ -12,7 +12,7 @@ The alpha policy rejects ordinary success when required source evidence changes 
 
 ## Shipped gaps
 
-The prepared `JobSpec` retains a content key but no immutable source filesystem observation. The coordinator records a search result before output planning, which inspects the source again without comparing it with the evidence that justified the search. A later source can therefore become the transaction baseline while the run still names the earlier content.
+The prepared `JobSpec` retains the source key and frozen media facts but no source filesystem observation. The coordinator records a search result before output planning, which inspects the source again without comparing it with the evidence that justified the search. A later source can therefore become the transaction baseline while the run still names the earlier content.
 
 The coherent observation selected below closes split-object identity assembly in preparation, sampling, and the existing ADR-020 destructive guards. It does not yet provide the source phase gates. Stable Rust exposes no Windows file index or change time from an open handle: [`MetadataExt::file_index`][rust-by-handle] and [`MetadataExt::change_time`][rust-change-time] are nightly-only, so the file ID query uses a pinned, narrow fork of the [file-id crate][file-id] with a safe handle-based entry point. ADR-019 records the fork and its exit condition.
 

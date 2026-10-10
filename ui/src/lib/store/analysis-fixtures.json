@@ -729,7 +729,7 @@
                                 "Encoded": {
                                   "input_size": 4000000000,
                                   "output_size": 1600000000,
-                                  "encoding_time": null,
+                                  "encoding_time": 1000,
                                   "crf": 31000,
                                   "metric": "Vmaf",
                                   "score": 9530,
@@ -796,7 +796,7 @@
                                 "Encoded": {
                                   "input_size": 4000000000,
                                   "output_size": 1600000000,
-                                  "encoding_time": null,
+                                  "encoding_time": 1000,
                                   "crf": 31000,
                                   "metric": "Vmaf",
                                   "score": 9530,
@@ -877,7 +877,7 @@
                               "Encoded": {
                                 "input_size": 4000000000,
                                 "output_size": 1600000000,
-                                "encoding_time": null,
+                                "encoding_time": 1000,
                                 "crf": 31000,
                                 "metric": "Vmaf",
                                 "score": 9530,
@@ -931,7 +931,7 @@
                               "Encoded": {
                                 "input_size": 4000000000,
                                 "output_size": 1600000000,
-                                "encoding_time": null,
+                                "encoding_time": 1000,
                                 "crf": 31000,
                                 "metric": "Vmaf",
                                 "score": 9530,
