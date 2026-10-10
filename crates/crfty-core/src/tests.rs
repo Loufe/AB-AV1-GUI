@@ -22,14 +22,28 @@ use crate::{
     Operation, OutputDelta, OutputRecoveryAction, OutputState, OutputTarget, OutputTransaction,
     OverwriteDecision, ParkedResolution, ParkedStatus, PathBinding, PathHash, PhaseSpan,
     ProbeFailure, ProjectionCommand, QueueAddRequest, QueueCommand, QueueItemEdit, QueueItemId,
-    QueueItemState, Replacement, Reply, RunId, SearchMeasurement, SessionAggregates,
-    SessionCommand, SessionState, Settings, SettingsCommand, SkipReason, SystemCommand, Telemetry,
+    QueueItemState, Replacement, RunId, SearchMeasurement, SessionAggregates, SessionCommand,
+    SessionState, Settings, SettingsCommand, SkipReason, SuccessReply, SystemCommand, Telemetry,
     ToolAvailability, ToolCapability, ToolLocationFailure, ToolPathSettings, ToolRevisions,
     ToolSource, ToolVerification, ToolsCommand, UnixMillis, VideoCodec, VideoMeta, VmafScore,
-    VmafTarget, WorkerCommand, apply, compaction_due, compaction_quiescent, corruption_signature,
+    VmafTarget, WorkerCommand, compaction_due, compaction_quiescent, corruption_signature,
     encode_record, encode_snapshot, observations, permitted_profiles, recover_output, replay,
     resolve_parked, select_job_action,
 };
+
+fn apply_ok(state: &mut AppState, command: Command) -> crate::Applied {
+    match crate::apply(state, command) {
+        Ok(applied) => applied,
+        Err(rejection) => panic!("command unexpectedly rejected: {}", rejection.reason),
+    }
+}
+
+fn apply_rejected(state: &mut AppState, command: Command) -> crate::Rejection {
+    match crate::apply(state, command) {
+        Err(rejection) => rejection,
+        Ok(applied) => panic!("command unexpectedly accepted: {:?}", applied.reply),
+    }
+}
 
 fn revisions() -> ToolRevisions {
     ToolRevisions {
@@ -85,7 +99,7 @@ fn analysis_commands_allocate_generations_and_reject_late_same_generation_work()
         text: name.to_owned(),
         lossy: false,
     };
-    let started = apply(
+    let started = apply_ok(
         &mut state,
         Command::Analysis(AnalysisCommand::Begin {
             roots: vec![root("first")],
@@ -93,7 +107,7 @@ fn analysis_commands_allocate_generations_and_reject_late_same_generation_work()
     );
     assert_eq!(
         started.reply,
-        Reply::AnalysisStarted {
+        SuccessReply::AnalysisStarted {
             generation: AnalysisGenerationId(1),
         }
     );
@@ -106,14 +120,14 @@ fn analysis_commands_allocate_generations_and_reject_late_same_generation_work()
         display_name: root("movie.mkv"),
         display_path: root("first/movie.mkv"),
     };
-    let inserted = apply(
+    let inserted = apply_ok(
         &mut state,
         Command::Analysis(AnalysisCommand::UpsertRows {
             generation: AnalysisGenerationId(1),
             rows: vec![row.clone()],
         }),
     );
-    assert_eq!(inserted.reply, Reply::Accepted);
+    assert_eq!(inserted.reply, SuccessReply::Accepted);
     assert_eq!(
         state
             .analysis
@@ -125,7 +139,7 @@ fn analysis_commands_allocate_generations_and_reject_late_same_generation_work()
         1
     );
     assert_eq!(
-        apply(
+        apply_ok(
             &mut state,
             Command::Analysis(AnalysisCommand::SetActivity {
                 generation: AnalysisGenerationId(1),
@@ -133,10 +147,10 @@ fn analysis_commands_allocate_generations_and_reject_late_same_generation_work()
             }),
         )
         .reply,
-        Reply::Accepted
+        SuccessReply::Accepted
     );
 
-    let late = apply(
+    let _late = apply_rejected(
         &mut state,
         Command::Analysis(AnalysisCommand::UpsertRows {
             generation: AnalysisGenerationId(1),
@@ -146,9 +160,8 @@ fn analysis_commands_allocate_generations_and_reject_late_same_generation_work()
             }],
         }),
     );
-    assert!(matches!(late.reply, Reply::Rejected { .. }));
 
-    let next = apply(
+    let next = apply_ok(
         &mut state,
         Command::Analysis(AnalysisCommand::Begin {
             roots: vec![root("second")],
@@ -156,18 +169,18 @@ fn analysis_commands_allocate_generations_and_reject_late_same_generation_work()
     );
     assert_eq!(
         next.reply,
-        Reply::AnalysisStarted {
+        SuccessReply::AnalysisStarted {
             generation: AnalysisGenerationId(2),
         }
     );
-    let stale_completion = apply(
+    let _stale_completion = apply_rejected(
         &mut state,
         Command::Analysis(AnalysisCommand::SetActivity {
             generation: AnalysisGenerationId(1),
             activity: AnalysisActivity::Ready,
         }),
     );
-    assert!(matches!(stale_completion.reply, Reply::Rejected { .. }));
+
     assert_eq!(
         state
             .analysis
@@ -242,13 +255,13 @@ fn settings_change_is_typed_config_state_with_a_write_effect() {
     let mut settings = state.settings.clone();
     settings.output.overwrite_existing = true;
     settings.hardware_decode = false;
-    let applied = apply(
+    let applied = apply_ok(
         &mut state,
         Command::Settings(SettingsCommand::Set {
             settings: settings.clone(),
         }),
     );
-    assert_eq!(applied.reply, Reply::Accepted);
+    assert_eq!(applied.reply, SuccessReply::Accepted);
     assert_eq!(applied.config.len(), 1);
     assert_eq!(
         applied.effects,
@@ -259,7 +272,7 @@ fn settings_change_is_typed_config_state_with_a_write_effect() {
     assert_eq!(state.settings, settings);
 
     let current = state.settings.clone();
-    let unchanged = apply(
+    let unchanged = apply_ok(
         &mut state,
         Command::Settings(SettingsCommand::Set { settings: current }),
     );
@@ -283,14 +296,14 @@ fn settings_control_job_overwrite_and_hardware_decode_policy() {
         let mut state = AppState::default();
         state.settings.output.overwrite_existing = true;
         state.settings.hardware_decode = hardware_decode;
-        let _added = apply(&mut state, add_command("video.mkv"));
+        let _added = apply_ok(&mut state, add_command("video.mkv"));
         let _started = start_session_with_tools(
             &mut state,
             located_with_decoders(&[crate::HardwareDecoder::H264Qsv]),
         );
         let prepared =
             reserve_and_prepare_observed(&mut state, Some(media_observation("decode-content")));
-        let Reply::Claimed(Some(job)) = prepared.reply else {
+        let SuccessReply::Claimed(Some(job)) = prepared.reply else {
             panic!("expected claimed job");
         };
         assert!(job.spec.execution.overwrite_existing);
@@ -303,7 +316,7 @@ fn settings_control_job_overwrite_and_hardware_decode_policy() {
 #[test]
 fn preparation_requires_verified_tools() {
     let mut state = AppState::default();
-    let _added = apply(&mut state, add_command("video.mkv"));
+    let _added = apply_ok(&mut state, add_command("video.mkv"));
     let _started = start_session_with_tools(
         &mut state,
         ToolAvailability::Located {
@@ -311,12 +324,21 @@ fn preparation_requires_verified_tools() {
             verification: ToolVerification::Pending,
         },
     );
-    let prepared = reserve_and_prepare(&mut state);
-    assert!(matches!(
-        &prepared.reply,
-        Reply::Rejected { reason } if reason.contains("not been verified")
-    ));
-    assert!(prepared.durable.is_empty());
+    let reserved = apply_ok(&mut state, Command::Worker(WorkerCommand::ReserveNext));
+    let SuccessReply::Reserved(Some(job)) = reserved.reply else {
+        panic!("expected a reservation");
+    };
+    let prepared = apply_rejected(
+        &mut state,
+        Command::Worker(WorkerCommand::PrepareReserved {
+            item_id: job.item_id,
+            claim_id: job.claim_id,
+            run_id: job.run_id,
+            observation: None,
+            import_paths: Vec::new(),
+        }),
+    );
+    assert!(prepared.reason.contains("not been verified"));
 }
 
 #[test]
@@ -326,20 +348,19 @@ fn base_execution_is_configured_before_claims_compose_from_it() {
         fallback_step: 0,
         ..ExecutionSettings::default()
     };
-    let rejected = apply(
+    let _rejected = apply_rejected(
         &mut state,
         Command::System(SystemCommand::ConfigureExecution { base: invalid }),
     );
-    assert!(matches!(rejected.reply, Reply::Rejected { .. }));
 
     // A base already naming tool facts would let two sources disagree.
     let mut claim_time = ExecutionSettings::default();
     claim_time.profile.ffmpeg_revision = "stale".to_owned();
-    let rejected = apply(
+    let _rejected = apply_rejected(
         &mut state,
         Command::System(SystemCommand::ConfigureExecution { base: claim_time }),
     );
-    assert!(matches!(rejected.reply, Reply::Rejected { .. }));
+
     assert_eq!(state.execution, ExecutionSettings::default());
 
     let mut configured = ExecutionSettings {
@@ -348,19 +369,19 @@ fn base_execution_is_configured_before_claims_compose_from_it() {
         ..ExecutionSettings::default()
     };
     configured.profile.preset = 4;
-    let accepted = apply(
+    let accepted = apply_ok(
         &mut state,
         Command::System(SystemCommand::ConfigureExecution {
             base: configured.clone(),
         }),
     );
-    assert_eq!(accepted.reply, Reply::Accepted);
+    assert_eq!(accepted.reply, SuccessReply::Accepted);
     assert_eq!(state.execution, configured);
 
-    let _added = apply(&mut state, add_command("video.mkv"));
+    let _added = apply_ok(&mut state, add_command("video.mkv"));
     let _started = start_session(&mut state);
     let prepared = reserve_and_prepare(&mut state);
-    let Reply::Claimed(Some(job)) = prepared.reply else {
+    let SuccessReply::Claimed(Some(job)) = prepared.reply else {
         panic!("expected claimed job");
     };
     assert_eq!(job.spec.execution.requested_target, VmafTarget(90));
@@ -376,44 +397,42 @@ fn base_execution_is_configured_before_claims_compose_from_it() {
 #[test]
 fn session_start_requires_located_tools_and_discovery_is_idempotent() {
     let mut state = AppState::default();
-    let _added = apply(&mut state, add_command("video.mkv"));
-    let blocked = apply(&mut state, Command::Session(SessionCommand::Start));
-    let Reply::Rejected { reason } = blocked.reply else {
-        panic!("expected fail-closed session start");
-    };
+    let _added = apply_ok(&mut state, add_command("video.mkv"));
+    let blocked = apply_rejected(&mut state, Command::Session(SessionCommand::Start));
+    let reason = blocked.reason;
     assert!(
         reason.starts_with("media tools are unavailable"),
         "{reason}"
     );
     assert_eq!(state.session, SessionState::Idle);
 
-    let discovered = apply(
+    let discovered = apply_ok(
         &mut state,
         Command::System(SystemCommand::ToolsDiscovered {
             availability: located(),
         }),
     );
-    assert_eq!(discovered.reply, Reply::Accepted);
+    assert_eq!(discovered.reply, SuccessReply::Accepted);
     assert_eq!(
         discovered.ephemeral,
         vec![EphemeralDelta::ToolsChanged(located())]
     );
     assert_eq!(state.tools, located());
 
-    let unchanged = apply(
+    let unchanged = apply_ok(
         &mut state,
         Command::System(SystemCommand::ToolsDiscovered {
             availability: located(),
         }),
     );
-    assert_eq!(unchanged.reply, Reply::Accepted);
+    assert_eq!(unchanged.reply, SuccessReply::Accepted);
     assert!(unchanged.ephemeral.is_empty());
 
-    let started = apply(&mut state, Command::Session(SessionCommand::Start));
-    assert_eq!(started.reply, Reply::Accepted);
+    let started = apply_ok(&mut state, Command::Session(SessionCommand::Start));
+    assert_eq!(started.reply, SuccessReply::Accepted);
     assert_eq!(state.session, SessionState::Running);
 
-    let missing = apply(
+    let missing = apply_ok(
         &mut state,
         Command::System(SystemCommand::ToolsDiscovered {
             availability: ToolAvailability::Missing {
@@ -423,7 +442,7 @@ fn session_start_requires_located_tools_and_discovery_is_idempotent() {
             },
         }),
     );
-    assert_eq!(missing.reply, Reply::Accepted);
+    assert_eq!(missing.reply, SuccessReply::Accepted);
     assert!(matches!(state.tools, ToolAvailability::Missing { .. }));
 }
 
@@ -437,18 +456,18 @@ fn start_session_with_tools(
     state: &mut AppState,
     availability: ToolAvailability,
 ) -> crate::Applied {
-    let discovered = apply(
+    let discovered = apply_ok(
         state,
         Command::System(SystemCommand::ToolsDiscovered { availability }),
     );
-    assert_eq!(discovered.reply, Reply::Accepted);
-    apply(state, Command::Session(SessionCommand::Start))
+    assert_eq!(discovered.reply, SuccessReply::Accepted);
+    apply_ok(state, Command::Session(SessionCommand::Start))
 }
 
 #[test]
 fn a_tool_probe_result_applies_only_to_the_tools_it_was_taken_on() {
     let mut state = AppState::default();
-    let _located = apply(
+    let _located = apply_ok(
         &mut state,
         Command::System(SystemCommand::ToolsDiscovered {
             availability: ToolAvailability::Located {
@@ -458,7 +477,7 @@ fn a_tool_probe_result_applies_only_to_the_tools_it_was_taken_on() {
         }),
     );
 
-    let verified = apply(
+    let verified = apply_ok(
         &mut state,
         Command::System(SystemCommand::ToolsProbed {
             tools: located_tools(),
@@ -468,7 +487,7 @@ fn a_tool_probe_result_applies_only_to_the_tools_it_was_taken_on() {
             },
         }),
     );
-    assert_eq!(verified.reply, Reply::Accepted);
+    assert_eq!(verified.reply, SuccessReply::Accepted);
     assert_eq!(
         verified.ephemeral,
         vec![EphemeralDelta::ToolsChanged(located())]
@@ -482,7 +501,7 @@ fn a_tool_probe_result_applies_only_to_the_tools_it_was_taken_on() {
         },
         ..located_tools()
     };
-    let _rediscovered = apply(
+    let _rediscovered = apply_ok(
         &mut state,
         Command::System(SystemCommand::ToolsDiscovered {
             availability: ToolAvailability::Located {
@@ -491,7 +510,7 @@ fn a_tool_probe_result_applies_only_to_the_tools_it_was_taken_on() {
             },
         }),
     );
-    let stale = apply(
+    let stale = apply_ok(
         &mut state,
         Command::System(SystemCommand::ToolsProbed {
             tools: located_tools(),
@@ -500,7 +519,7 @@ fn a_tool_probe_result_applies_only_to_the_tools_it_was_taken_on() {
             }),
         }),
     );
-    assert_eq!(stale.reply, Reply::Accepted);
+    assert_eq!(stale.reply, SuccessReply::Accepted);
     assert!(stale.ephemeral.is_empty());
     assert_eq!(
         state.tools,
@@ -511,7 +530,7 @@ fn a_tool_probe_result_applies_only_to_the_tools_it_was_taken_on() {
     );
 
     // Nothing located: a probe result has no tools to attach to.
-    let _missing = apply(
+    let _missing = apply_ok(
         &mut state,
         Command::System(SystemCommand::ToolsDiscovered {
             availability: ToolAvailability::Missing {
@@ -521,7 +540,7 @@ fn a_tool_probe_result_applies_only_to_the_tools_it_was_taken_on() {
             },
         }),
     );
-    let orphaned = apply(
+    let orphaned = apply_ok(
         &mut state,
         Command::System(SystemCommand::ToolsProbed {
             tools: located_tools(),
@@ -535,8 +554,8 @@ fn a_tool_probe_result_applies_only_to_the_tools_it_was_taken_on() {
 #[test]
 fn a_failed_verification_still_lets_a_session_start_so_the_worker_re_probes() {
     let mut state = AppState::default();
-    let _added = apply(&mut state, add_command("video.mkv"));
-    let _located = apply(
+    let _added = apply_ok(&mut state, add_command("video.mkv"));
+    let _located = apply_ok(
         &mut state,
         Command::System(SystemCommand::ToolsDiscovered {
             availability: ToolAvailability::Located {
@@ -548,8 +567,8 @@ fn a_failed_verification_still_lets_a_session_start_so_the_worker_re_probes() {
             },
         }),
     );
-    let started = apply(&mut state, Command::Session(SessionCommand::Start));
-    assert_eq!(started.reply, Reply::Accepted);
+    let started = apply_ok(&mut state, Command::Session(SessionCommand::Start));
+    assert_eq!(started.reply, SuccessReply::Accepted);
     assert_eq!(started.effects, vec![Effect::StartWorker]);
 }
 
@@ -557,7 +576,7 @@ fn a_failed_verification_still_lets_a_session_start_so_the_worker_re_probes() {
 fn rejection_reasons_for_missing_tools_never_carry_paths() {
     let mut state = AppState::default();
     let secret = "/home/someone/private/ffmpeg";
-    let _missing = apply(
+    let _missing = apply_ok(
         &mut state,
         Command::System(SystemCommand::ToolsDiscovered {
             availability: ToolAvailability::Missing {
@@ -574,10 +593,8 @@ fn rejection_reasons_for_missing_tools_never_carry_paths() {
             },
         }),
     );
-    let blocked = apply(&mut state, Command::Session(SessionCommand::Start));
-    let Reply::Rejected { reason } = blocked.reply else {
-        panic!("expected a fail-closed session start");
-    };
+    let blocked = apply_rejected(&mut state, Command::Session(SessionCommand::Start));
+    let reason = blocked.reason;
     assert!(!reason.contains(secret), "{reason}");
     assert!(reason.contains("configured ffmpeg path"), "{reason}");
     assert!(reason.contains("ffprobe environment override"), "{reason}");
@@ -604,8 +621,8 @@ fn rejection_reasons_for_missing_tools_never_carry_paths() {
 #[test]
 fn rediscover_and_changed_tool_paths_ask_the_engine_to_discover() {
     let mut state = AppState::default();
-    let rediscover = apply(&mut state, Command::Tools(ToolsCommand::Rediscover));
-    assert_eq!(rediscover.reply, Reply::Accepted);
+    let rediscover = apply_ok(&mut state, Command::Tools(ToolsCommand::Rediscover));
+    assert_eq!(rediscover.reply, SuccessReply::Accepted);
     assert_eq!(
         rediscover.effects,
         vec![Effect::DiscoverTools {
@@ -620,13 +637,13 @@ fn rediscover_and_changed_tool_paths_ask_the_engine_to_discover() {
     } else {
         "/opt/ffmpeg/bin/ffmpeg"
     }));
-    let changed = apply(
+    let changed = apply_ok(
         &mut state,
         Command::Settings(SettingsCommand::Set {
             settings: settings.clone(),
         }),
     );
-    assert_eq!(changed.reply, Reply::Accepted);
+    assert_eq!(changed.reply, SuccessReply::Accepted);
     assert_eq!(
         changed.effects,
         vec![
@@ -641,7 +658,7 @@ fn rediscover_and_changed_tool_paths_ask_the_engine_to_discover() {
 
     // Same tool paths again: settings are rewritten, discovery is not rerun.
     settings.hardware_decode = false;
-    let unrelated = apply(
+    let unrelated = apply_ok(
         &mut state,
         Command::Settings(SettingsCommand::Set {
             settings: settings.clone(),
@@ -652,17 +669,14 @@ fn rediscover_and_changed_tool_paths_ask_the_engine_to_discover() {
     // A configured path that is not absolute is refused before any effect.
     let mut relative = Settings::default();
     relative.tools.ffprobe = Some(PathBuf::from("bin/ffprobe"));
-    let refused = apply(
+    let refused = apply_rejected(
         &mut state,
         Command::Settings(SettingsCommand::Set { settings: relative }),
     );
     assert_eq!(
-        refused.reply,
-        Reply::Rejected {
-            reason: "configured ffprobe path must be absolute".to_owned(),
-        }
+        refused.reason,
+        "configured ffprobe path must be absolute".to_owned()
     );
-    assert!(refused.effects.is_empty());
 }
 
 fn add_command(input: impl Into<PathBuf>) -> Command {
@@ -684,6 +698,24 @@ fn add_request(input: impl Into<PathBuf>) -> QueueAddRequest {
         output_target: OutputTarget::Replace,
         overwrite: OverwriteDecision::FollowSettings,
     }
+}
+
+#[test]
+fn rejection_after_a_valid_queue_request_preserves_all_application_state() {
+    let mut state = basic_scan_state();
+    let before = state.clone();
+    let mut invalid = add_request("second.mkv");
+    invalid.output_target = OutputTarget::Suffix {
+        suffix: String::new(),
+    };
+    let rejection = apply_rejected(
+        &mut state,
+        Command::Queue(QueueCommand::AddMany {
+            requests: vec![add_request("first.mkv"), invalid],
+        }),
+    );
+    assert_eq!(rejection.reason, "output suffix cannot be empty");
+    assert_eq!(state, before);
 }
 
 fn identity(name: &str, size: u64) -> ArtifactIdentity {
@@ -849,17 +881,17 @@ fn basic_scan_state() -> AppState {
         lossy: false,
     };
     assert!(matches!(
-        apply(
+        apply_ok(
             &mut state,
             Command::Analysis(AnalysisCommand::Begin {
                 roots: vec![display("root")],
             }),
         )
         .reply,
-        Reply::AnalysisStarted { .. }
+        SuccessReply::AnalysisStarted { .. }
     ));
     assert_eq!(
-        apply(
+        apply_ok(
             &mut state,
             Command::Analysis(AnalysisCommand::UpsertRows {
                 generation: AnalysisGenerationId(1),
@@ -875,10 +907,10 @@ fn basic_scan_state() -> AppState {
             }),
         )
         .reply,
-        Reply::Accepted
+        SuccessReply::Accepted
     );
     assert_eq!(
-        apply(
+        apply_ok(
             &mut state,
             Command::Analysis(AnalysisCommand::SetActivity {
                 generation: AnalysisGenerationId(1),
@@ -886,17 +918,17 @@ fn basic_scan_state() -> AppState {
             }),
         )
         .reply,
-        Reply::Accepted
+        SuccessReply::Accepted
     );
     assert_eq!(
-        apply(
+        apply_ok(
             &mut state,
             Command::Analysis(AnalysisCommand::BeginBasicScan {
                 generation: AnalysisGenerationId(1),
             }),
         )
         .reply,
-        Reply::Accepted
+        SuccessReply::Accepted
     );
     state
 }
@@ -911,7 +943,7 @@ fn basic_scan_cache_hit_has_no_durable_write_and_stale_work_is_rejected() {
             observation: Box::new(observation.clone()),
         },
     );
-    let applied = apply(
+    let applied = apply_ok(
         &mut state,
         Command::Analysis(AnalysisCommand::InspectFile {
             generation: AnalysisGenerationId(1),
@@ -924,7 +956,7 @@ fn basic_scan_cache_hit_has_no_durable_write_and_stale_work_is_rejected() {
     );
     assert_eq!(
         applied.reply,
-        Reply::BasicScan(BasicScanDisposition::Complete)
+        SuccessReply::BasicScan(BasicScanDisposition::Complete)
     );
     assert!(applied.durable.is_empty());
     assert!(matches!(
@@ -939,7 +971,7 @@ fn basic_scan_cache_hit_has_no_durable_write_and_stale_work_is_rejected() {
         }) if content_key == &ContentKey("cached".to_owned())
     ));
 
-    let stale = apply(
+    let _stale = apply_rejected(
         &mut state,
         Command::Analysis(AnalysisCommand::InspectFile {
             generation: AnalysisGenerationId(2),
@@ -950,7 +982,6 @@ fn basic_scan_cache_hit_has_no_durable_write_and_stale_work_is_rejected() {
             import_paths: Vec::new(),
         }),
     );
-    assert!(matches!(stale.reply, Reply::Rejected { .. }));
 }
 
 #[test]
@@ -1019,7 +1050,7 @@ fn basic_scan_recognizes_reliable_settled_output_before_stale_source_binding() {
     };
     state.durable.outputs.insert(run_id, settled);
 
-    let applied = apply(
+    let applied = apply_ok(
         &mut state,
         Command::Analysis(AnalysisCommand::InspectFile {
             generation: AnalysisGenerationId(1),
@@ -1032,7 +1063,7 @@ fn basic_scan_recognizes_reliable_settled_output_before_stale_source_binding() {
     );
     assert_eq!(
         applied.reply,
-        Reply::BasicScan(BasicScanDisposition::Complete)
+        SuccessReply::BasicScan(BasicScanDisposition::Complete)
     );
     assert!(applied.durable.is_empty());
     assert!(matches!(
@@ -1070,7 +1101,7 @@ fn basic_scan_recognizes_reliable_settled_output_before_stale_source_binding() {
         metadata: output_metadata,
     };
     assert_eq!(
-        apply(
+        apply_ok(
             &mut state,
             Command::Analysis(AnalysisCommand::ObserveFile {
                 generation: AnalysisGenerationId(1),
@@ -1080,7 +1111,7 @@ fn basic_scan_recognizes_reliable_settled_output_before_stale_source_binding() {
             }),
         )
         .reply,
-        Reply::BasicScan(BasicScanDisposition::Complete)
+        SuccessReply::BasicScan(BasicScanDisposition::Complete)
     );
     let source_record = state
         .durable
@@ -1123,7 +1154,7 @@ fn basic_scan_observation_adopts_import_after_media_write() {
         .parked
         .insert(import_path.clone(), parked.clone());
 
-    let applied = apply(
+    let applied = apply_ok(
         &mut state,
         Command::Analysis(AnalysisCommand::ObserveFile {
             generation: AnalysisGenerationId(1),
@@ -1134,7 +1165,7 @@ fn basic_scan_observation_adopts_import_after_media_write() {
     );
     assert_eq!(
         applied.reply,
-        Reply::BasicScan(BasicScanDisposition::Complete)
+        SuccessReply::BasicScan(BasicScanDisposition::Complete)
     );
     assert!(matches!(
         applied.durable.as_slice(),
@@ -1178,7 +1209,7 @@ fn basic_scan_adopts_sparse_conversion_without_manufacturing_summary_fields() {
     state.durable.parked.insert(import_path.clone(), parked);
 
     assert_eq!(
-        apply(
+        apply_ok(
             &mut state,
             Command::Analysis(AnalysisCommand::ObserveFile {
                 generation: AnalysisGenerationId(1),
@@ -1188,7 +1219,7 @@ fn basic_scan_adopts_sparse_conversion_without_manufacturing_summary_fields() {
             }),
         )
         .reply,
-        Reply::BasicScan(BasicScanDisposition::Complete)
+        SuccessReply::BasicScan(BasicScanDisposition::Complete)
     );
     let verdict = state
         .durable
@@ -1214,7 +1245,7 @@ fn basic_scan_refresh_failure_keeps_the_previous_success() {
     let mut state = basic_scan_state();
     let observation = media_observation("stable");
     assert_eq!(
-        apply(
+        apply_ok(
             &mut state,
             Command::Analysis(AnalysisCommand::ObserveFile {
                 generation: AnalysisGenerationId(1),
@@ -1224,9 +1255,9 @@ fn basic_scan_refresh_failure_keeps_the_previous_success() {
             }),
         )
         .reply,
-        Reply::BasicScan(BasicScanDisposition::Complete)
+        SuccessReply::BasicScan(BasicScanDisposition::Complete)
     );
-    let failed = apply(
+    let failed = apply_ok(
         &mut state,
         Command::Analysis(AnalysisCommand::FailFile {
             generation: AnalysisGenerationId(1),
@@ -1234,7 +1265,7 @@ fn basic_scan_refresh_failure_keeps_the_previous_success() {
             failure: AnalysisScanFailure::ChangedDuringSampling,
         }),
     );
-    assert_eq!(failed.reply, Reply::Accepted);
+    assert_eq!(failed.reply, SuccessReply::Accepted);
     assert!(matches!(
         state
             .analysis
@@ -1285,7 +1316,7 @@ fn observe_row(
     row_id: u64,
     observation: &MediaObservation,
 ) -> crate::Applied {
-    let applied = apply(
+    let applied = apply_ok(
         state,
         Command::Analysis(AnalysisCommand::ObserveFile {
             generation: AnalysisGenerationId(1),
@@ -1296,7 +1327,7 @@ fn observe_row(
     );
     assert_eq!(
         applied.reply,
-        Reply::BasicScan(BasicScanDisposition::Complete)
+        SuccessReply::BasicScan(BasicScanDisposition::Complete)
     );
     applied
 }
@@ -1324,7 +1355,7 @@ fn scanned_rows_refresh_when_the_toolchain_is_verified() {
         Some(crate::RowEligibility::Eligible)
     );
 
-    let probed = apply(
+    let probed = apply_ok(
         &mut state,
         Command::System(SystemCommand::ToolsProbed {
             tools: located_tools(),
@@ -1350,7 +1381,7 @@ fn scanned_rows_refresh_when_the_toolchain_is_verified() {
 
     // Verification that changes nothing about the rows publishes no rows.
     let unchanged = state.tools.clone();
-    let repeated = apply(
+    let repeated = apply_ok(
         &mut state,
         Command::System(SystemCommand::ToolsDiscovered {
             availability: unchanged,
@@ -1366,17 +1397,17 @@ fn a_recorded_analysis_refreshes_its_row_after_the_scan_is_ready() {
     let observation = media_observation("content");
     observe_row(&mut state, 1, &observation);
     assert_eq!(
-        apply(
+        apply_ok(
             &mut state,
             Command::Analysis(AnalysisCommand::FinishBasicScan {
                 generation: AnalysisGenerationId(1),
             }),
         )
         .reply,
-        Reply::Accepted
+        SuccessReply::Accepted
     );
 
-    let _added = apply(
+    let _added = apply_ok(
         &mut state,
         Command::Queue(QueueCommand::AddMany {
             requests: vec![QueueAddRequest {
@@ -1387,10 +1418,10 @@ fn a_recorded_analysis_refreshes_its_row_after_the_scan_is_ready() {
     );
     let _started = start_session(&mut state);
     let prepared = reserve_and_prepare_observed(&mut state, Some(observation));
-    assert!(matches!(prepared.reply, Reply::Claimed(Some(_))));
+    assert!(matches!(prepared.reply, SuccessReply::Claimed(Some(_))));
     assert!(analysis_rows_in(&prepared).is_empty());
     assert_eq!(
-        apply(
+        apply_ok(
             &mut state,
             Command::Worker(WorkerCommand::Started {
                 item_id: QueueItemId(1),
@@ -1400,10 +1431,10 @@ fn a_recorded_analysis_refreshes_its_row_after_the_scan_is_ready() {
             }),
         )
         .reply,
-        Reply::Accepted
+        SuccessReply::Accepted
     );
 
-    let recorded = apply(
+    let recorded = apply_ok(
         &mut state,
         Command::Worker(WorkerCommand::RecordAnalysis {
             item_id: QueueItemId(1),
@@ -1412,7 +1443,7 @@ fn a_recorded_analysis_refreshes_its_row_after_the_scan_is_ready() {
             result: Box::new(analysis()),
         }),
     );
-    assert_eq!(recorded.reply, Reply::Accepted);
+    assert_eq!(recorded.reply, SuccessReply::Accepted);
     assert!(matches!(
         recorded.ephemeral.as_slice(),
         [EphemeralDelta::Analysis(crate::AnalysisDelta::RowsUpserted { rows, .. })] if rows.len() == 1
@@ -1435,7 +1466,7 @@ fn a_recorded_analysis_refreshes_its_row_after_the_scan_is_ready() {
     assert_eq!(status.historical, crate::HistoricalLevel::Analyzed);
 
     // The terminal outcome touches the same content but changes no status.
-    let finished = apply(
+    let finished = apply_ok(
         &mut state,
         Command::Worker(WorkerCommand::Terminal {
             item_id: QueueItemId(1),
@@ -1447,7 +1478,7 @@ fn a_recorded_analysis_refreshes_its_row_after_the_scan_is_ready() {
             final_telemetry: None,
         }),
     );
-    assert_eq!(finished.reply, Reply::Accepted);
+    assert_eq!(finished.reply, SuccessReply::Accepted);
     assert!(analysis_rows_in(&finished).is_empty());
 }
 
@@ -1464,7 +1495,7 @@ fn an_adopted_verdict_is_published_in_the_row_it_arrives_with() {
     parked.floor_target = Some(state.execution.fallback_floor);
     state.durable.parked.insert(import_path.clone(), parked);
 
-    let applied = apply(
+    let applied = apply_ok(
         &mut state,
         Command::Analysis(AnalysisCommand::ObserveFile {
             generation: AnalysisGenerationId(1),
@@ -1531,7 +1562,7 @@ fn base_execution_and_hardware_decode_changes_refresh_every_row() {
 
     // Hardware decode is on and probed, so the composed profile decodes in
     // hardware: preset alone does not make the software result reusable.
-    let configured = apply(
+    let configured = apply_ok(
         &mut state,
         Command::System(SystemCommand::ConfigureExecution {
             base: ExecutionSettings {
@@ -1543,7 +1574,7 @@ fn base_execution_and_hardware_decode_changes_refresh_every_row() {
             },
         }),
     );
-    assert_eq!(configured.reply, Reply::Accepted);
+    assert_eq!(configured.reply, SuccessReply::Accepted);
     assert!(matches!(
         analysis_rows_in(&configured).as_slice(),
         [rows] if rows.len() == 1
@@ -1557,11 +1588,11 @@ fn base_execution_and_hardware_decode_changes_refresh_every_row() {
 
     let mut settings = state.settings.clone();
     settings.hardware_decode = false;
-    let changed = apply(
+    let changed = apply_ok(
         &mut state,
         Command::Settings(SettingsCommand::Set { settings }),
     );
-    assert_eq!(changed.reply, Reply::Accepted);
+    assert_eq!(changed.reply, SuccessReply::Accepted);
     assert!(matches!(
         analysis_rows_in(&changed).as_slice(),
         [rows] if rows.len() == 1
@@ -1604,7 +1635,7 @@ fn whole_generation_refreshes_are_batched_and_skip_ended_generations() {
         })
         .collect();
     assert_eq!(
-        apply(
+        apply_ok(
             &mut state,
             Command::Analysis(AnalysisCommand::UpsertRows {
                 generation: AnalysisGenerationId(1),
@@ -1612,10 +1643,10 @@ fn whole_generation_refreshes_are_batched_and_skip_ended_generations() {
             }),
         )
         .reply,
-        Reply::Accepted
+        SuccessReply::Accepted
     );
 
-    let missing = apply(
+    let missing = apply_ok(
         &mut state,
         Command::System(SystemCommand::ToolsDiscovered {
             availability: ToolAvailability::Missing {
@@ -1638,7 +1669,7 @@ fn whole_generation_refreshes_are_batched_and_skip_ended_generations() {
     );
 
     assert_eq!(
-        apply(
+        apply_ok(
             &mut state,
             Command::Analysis(AnalysisCommand::SetActivity {
                 generation: AnalysisGenerationId(1),
@@ -1646,9 +1677,9 @@ fn whole_generation_refreshes_are_batched_and_skip_ended_generations() {
             }),
         )
         .reply,
-        Reply::Accepted
+        SuccessReply::Accepted
     );
-    let relocated = apply(
+    let relocated = apply_ok(
         &mut state,
         Command::System(SystemCommand::ToolsDiscovered {
             availability: located(),
@@ -1693,13 +1724,13 @@ fn moved_or_duplicated_paths_join_the_probable_content_record_after_observation(
 #[expect(clippy::expect_used, reason = "test assertion")]
 fn reducer_enforces_session_claim_and_terminal_ordering() {
     let mut state = AppState::default();
-    let add = apply(&mut state, add_command("video.mkv"));
-    assert_eq!(add.reply, Reply::Accepted);
+    let add = apply_ok(&mut state, add_command("video.mkv"));
+    assert_eq!(add.reply, SuccessReply::Accepted);
     let start = start_session(&mut state);
     assert_eq!(start.effects, vec![Effect::StartWorker]);
     let claim = reserve_and_prepare(&mut state);
-    assert!(matches!(claim.reply, Reply::Claimed(Some(_))));
-    let stale = apply(
+    assert!(matches!(claim.reply, SuccessReply::Claimed(Some(_))));
+    let _stale = apply_rejected(
         &mut state,
         Command::Worker(WorkerCommand::Started {
             item_id: QueueItemId(1),
@@ -1708,12 +1739,12 @@ fn reducer_enforces_session_claim_and_terminal_ordering() {
             at: UnixMillis(1_000),
         }),
     );
-    assert!(matches!(stale.reply, Reply::Rejected { .. }));
+
     assert!(matches!(
         state.durable.queue.first().expect("queue item").state,
         QueueItemState::Claimed { .. }
     ));
-    let terminal = apply(
+    let terminal = apply_ok(
         &mut state,
         Command::Worker(WorkerCommand::Terminal {
             item_id: QueueItemId(1),
@@ -1732,10 +1763,10 @@ fn reducer_enforces_session_claim_and_terminal_ordering() {
             }),
         }),
     );
-    assert_eq!(terminal.reply, Reply::Accepted);
+    assert_eq!(terminal.reply, SuccessReply::Accepted);
     assert_eq!(state.session, SessionState::Running);
-    let finished = apply(&mut state, Command::Worker(WorkerCommand::Finished));
-    assert_eq!(finished.reply, Reply::Accepted);
+    let finished = apply_ok(&mut state, Command::Worker(WorkerCommand::Finished));
+    assert_eq!(finished.reply, SuccessReply::Accepted);
     assert_eq!(state.session, SessionState::Idle);
     assert!(!state.telemetry.contains_key(&RunId(2)));
 }
@@ -1743,31 +1774,30 @@ fn reducer_enforces_session_claim_and_terminal_ordering() {
 #[test]
 fn reservation_is_atomic_and_uses_current_queue_order() {
     let mut state = AppState::default();
-    let _first = apply(&mut state, add_command("first.mkv"));
-    let _second = apply(&mut state, add_command("second.mkv"));
-    let moved = apply(&mut state, reorder_pending_command(&[2, 1]));
-    assert_eq!(moved.reply, Reply::Accepted);
+    let _first = apply_ok(&mut state, add_command("first.mkv"));
+    let _second = apply_ok(&mut state, add_command("second.mkv"));
+    let moved = apply_ok(&mut state, reorder_pending_command(&[2, 1]));
+    assert_eq!(moved.reply, SuccessReply::Accepted);
     let _started = start_session(&mut state);
-    let reserved = apply(&mut state, Command::Worker(WorkerCommand::ReserveNext));
-    let Reply::Reserved(Some(job)) = reserved.reply else {
+    let reserved = apply_ok(&mut state, Command::Worker(WorkerCommand::ReserveNext));
+    let SuccessReply::Reserved(Some(job)) = reserved.reply else {
         panic!("expected an atomic reservation");
     };
     assert_eq!(job.item_id, QueueItemId(2));
 
-    let competing = apply(&mut state, Command::Worker(WorkerCommand::ReserveNext));
-    assert!(matches!(competing.reply, Reply::Rejected { .. }));
+    let _competing = apply_rejected(&mut state, Command::Worker(WorkerCommand::ReserveNext));
 }
 
 #[test]
 fn durable_analysis_is_selected_for_the_same_content_and_profile() {
     let mut state = AppState::default();
-    let _added = apply(&mut state, add_command("first.mkv"));
+    let _added = apply_ok(&mut state, add_command("first.mkv"));
     let _started = start_session(&mut state);
-    let reserved = apply(&mut state, Command::Worker(WorkerCommand::ReserveNext));
-    assert!(matches!(reserved.reply, Reply::Reserved(Some(_))));
+    let reserved = apply_ok(&mut state, Command::Worker(WorkerCommand::ReserveNext));
+    assert!(matches!(reserved.reply, SuccessReply::Reserved(Some(_))));
     let mut moved_observation = media_observation("same-content");
     moved_observation.path_hash = PathHash("moved-path".to_owned());
-    let prepared = apply(
+    let prepared = apply_ok(
         &mut state,
         Command::Worker(WorkerCommand::PrepareReserved {
             item_id: QueueItemId(1),
@@ -1777,8 +1807,8 @@ fn durable_analysis_is_selected_for_the_same_content_and_profile() {
             import_paths: Vec::new(),
         }),
     );
-    assert!(matches!(prepared.reply, Reply::Claimed(Some(_))));
-    let recorded = apply(
+    assert!(matches!(prepared.reply, SuccessReply::Claimed(Some(_))));
+    let recorded = apply_ok(
         &mut state,
         Command::Worker(WorkerCommand::RecordAnalysis {
             item_id: QueueItemId(1),
@@ -1787,8 +1817,8 @@ fn durable_analysis_is_selected_for_the_same_content_and_profile() {
             result: Box::new(analysis()),
         }),
     );
-    assert_eq!(recorded.reply, Reply::Accepted);
-    let failed = apply(
+    assert_eq!(recorded.reply, SuccessReply::Accepted);
+    let failed = apply_ok(
         &mut state,
         Command::Worker(WorkerCommand::Terminal {
             item_id: QueueItemId(1),
@@ -1803,11 +1833,11 @@ fn durable_analysis_is_selected_for_the_same_content_and_profile() {
             final_telemetry: None,
         }),
     );
-    assert_eq!(failed.reply, Reply::Accepted);
-    let _second = apply(&mut state, add_command("moved.mkv"));
-    let reserved = apply(&mut state, Command::Worker(WorkerCommand::ReserveNext));
-    assert!(matches!(reserved.reply, Reply::Reserved(Some(_))));
-    let prepared = apply(
+    assert_eq!(failed.reply, SuccessReply::Accepted);
+    let _second = apply_ok(&mut state, add_command("moved.mkv"));
+    let reserved = apply_ok(&mut state, Command::Worker(WorkerCommand::ReserveNext));
+    assert!(matches!(reserved.reply, SuccessReply::Reserved(Some(_))));
+    let prepared = apply_ok(
         &mut state,
         Command::Worker(WorkerCommand::PrepareReserved {
             item_id: QueueItemId(2),
@@ -1817,7 +1847,7 @@ fn durable_analysis_is_selected_for_the_same_content_and_profile() {
             import_paths: Vec::new(),
         }),
     );
-    let Reply::Claimed(Some(job)) = prepared.reply else {
+    let SuccessReply::Claimed(Some(job)) = prepared.reply else {
         panic!("expected prepared reused job");
     };
     assert_eq!(job.spec.action.selected_analysis(), Some(&analysis()));
@@ -1827,14 +1857,14 @@ fn durable_analysis_is_selected_for_the_same_content_and_profile() {
 fn reorder_fixture() -> AppState {
     let mut state = AppState::default();
     for id in 1..=5 {
-        let added = apply(&mut state, add_command(format!("video-{id}.mkv")));
-        assert_eq!(added.reply, Reply::Accepted);
+        let added = apply_ok(&mut state, add_command(format!("video-{id}.mkv")));
+        assert_eq!(added.reply, SuccessReply::Accepted);
     }
     let start = start_session(&mut state);
-    assert_eq!(start.reply, Reply::Accepted);
+    assert_eq!(start.reply, SuccessReply::Accepted);
     let first = reserve_and_prepare(&mut state);
-    assert!(matches!(first.reply, Reply::Claimed(Some(_))));
-    let finished = apply(
+    assert!(matches!(first.reply, SuccessReply::Claimed(Some(_))));
+    let finished = apply_ok(
         &mut state,
         Command::Worker(WorkerCommand::Terminal {
             item_id: QueueItemId(1),
@@ -1846,9 +1876,9 @@ fn reorder_fixture() -> AppState {
             final_telemetry: None,
         }),
     );
-    assert_eq!(finished.reply, Reply::Accepted);
+    assert_eq!(finished.reply, SuccessReply::Accepted);
     let second = reserve_and_prepare(&mut state);
-    assert!(matches!(second.reply, Reply::Claimed(Some(_))));
+    assert!(matches!(second.reply, SuccessReply::Claimed(Some(_))));
     assert_queue_shape(&state, &[1, 2, 3, 4, 5]);
     state
 }
@@ -1884,8 +1914,8 @@ fn reorder_pending_command(pending_order: &[u64]) -> Command {
 #[test]
 fn whole_pending_order_reorders_atomically_around_the_frozen_prefix() {
     let mut state = reorder_fixture();
-    let applied = apply(&mut state, reorder_pending_command(&[5, 3, 4]));
-    assert_eq!(applied.reply, Reply::Accepted);
+    let applied = apply_ok(&mut state, reorder_pending_command(&[5, 3, 4]));
+    assert_eq!(applied.reply, SuccessReply::Accepted);
     assert_eq!(
         applied.durable,
         vec![DurableDelta::QueueReordered {
@@ -1894,8 +1924,8 @@ fn whole_pending_order_reorders_atomically_around_the_frozen_prefix() {
     );
     assert_queue_shape(&state, &[1, 2, 5, 3, 4]);
 
-    let identity = apply(&mut state, reorder_pending_command(&[5, 3, 4]));
-    assert_eq!(identity.reply, Reply::Accepted);
+    let identity = apply_ok(&mut state, reorder_pending_command(&[5, 3, 4]));
+    assert_eq!(identity.reply, SuccessReply::Accepted);
     assert!(identity.durable.is_empty());
     assert_queue_shape(&state, &[1, 2, 5, 3, 4]);
 }
@@ -1927,15 +1957,9 @@ fn whole_pending_order_rejects_every_non_permutation_without_mutation() {
     ];
     for (name, order, reason) in cases {
         let mut state = reorder_fixture();
-        let applied = apply(&mut state, reorder_pending_command(order));
-        assert_eq!(
-            applied.reply,
-            Reply::Rejected {
-                reason: reason.to_owned(),
-            },
-            "{name}",
-        );
-        assert!(applied.durable.is_empty(), "{name}");
+        let applied = apply_rejected(&mut state, reorder_pending_command(order));
+        assert_eq!(applied.reason, reason.to_owned(), "{name}");
+
         assert_queue_shape(&state, &[1, 2, 3, 4, 5]);
     }
 }
@@ -1944,17 +1968,15 @@ fn whole_pending_order_rejects_every_non_permutation_without_mutation() {
 fn whole_pending_order_rejects_a_submission_made_stale_by_a_queue_edit() {
     let mut state = reorder_fixture();
     let stale_order = [5, 4, 3];
-    let added = apply(&mut state, add_command("video-6.mkv"));
-    assert_eq!(added.reply, Reply::Accepted);
+    let added = apply_ok(&mut state, add_command("video-6.mkv"));
+    assert_eq!(added.reply, SuccessReply::Accepted);
 
-    let applied = apply(&mut state, reorder_pending_command(&stale_order));
+    let applied = apply_rejected(&mut state, reorder_pending_command(&stale_order));
     assert_eq!(
-        applied.reply,
-        Reply::Rejected {
-            reason: "pending order omits a queued item".to_owned(),
-        },
+        applied.reason,
+        "pending order omits a queued item".to_owned()
     );
-    assert!(applied.durable.is_empty());
+
     assert_queue_shape(&state, &[1, 2, 3, 4, 5, 6]);
 }
 
@@ -1962,14 +1984,14 @@ fn whole_pending_order_rejects_a_submission_made_stale_by_a_queue_edit() {
 fn reorder_of_the_only_pending_item_above_active_is_a_no_op() {
     let mut state = AppState::default();
     for id in 1..=3 {
-        let added = apply(&mut state, add_command(format!("video-{id}.mkv")));
-        assert_eq!(added.reply, Reply::Accepted);
+        let added = apply_ok(&mut state, add_command(format!("video-{id}.mkv")));
+        assert_eq!(added.reply, SuccessReply::Accepted);
     }
     let start = start_session(&mut state);
-    assert_eq!(start.reply, Reply::Accepted);
+    assert_eq!(start.reply, SuccessReply::Accepted);
     let first = reserve_and_prepare(&mut state);
-    assert!(matches!(first.reply, Reply::Claimed(Some(_))));
-    let finished = apply(
+    assert!(matches!(first.reply, SuccessReply::Claimed(Some(_))));
+    let finished = apply_ok(
         &mut state,
         Command::Worker(WorkerCommand::Terminal {
             item_id: QueueItemId(1),
@@ -1981,12 +2003,12 @@ fn reorder_of_the_only_pending_item_above_active_is_a_no_op() {
             final_telemetry: None,
         }),
     );
-    assert_eq!(finished.reply, Reply::Accepted);
+    assert_eq!(finished.reply, SuccessReply::Accepted);
     let second = reserve_and_prepare(&mut state);
-    assert!(matches!(second.reply, Reply::Claimed(Some(_))));
+    assert!(matches!(second.reply, SuccessReply::Claimed(Some(_))));
 
-    let applied = apply(&mut state, reorder_pending_command(&[3]));
-    assert_eq!(applied.reply, Reply::Accepted);
+    let applied = apply_ok(&mut state, reorder_pending_command(&[3]));
+    assert_eq!(applied.reply, SuccessReply::Accepted);
     assert!(applied.durable.is_empty());
     assert_queue_shape(&state, &[1, 2, 3]);
 }
@@ -2151,13 +2173,13 @@ fn media_record_and_analysis_checkpoint_replay_as_one_state() {
 #[test]
 fn stop_after_current_does_not_kill_but_force_stop_does() {
     let mut state = active_state();
-    let graceful = apply(
+    let graceful = apply_ok(
         &mut state,
         Command::Session(SessionCommand::StopAfterCurrent),
     );
     assert!(graceful.effects.is_empty());
     assert_eq!(state.session, SessionState::StopAfterCurrent);
-    let forced = apply(&mut state, Command::Session(SessionCommand::ForceStop));
+    let forced = apply_ok(&mut state, Command::Session(SessionCommand::ForceStop));
     assert_eq!(
         forced.effects,
         vec![Effect::KillActiveRun {
@@ -2171,14 +2193,14 @@ fn terminal_is_rejected_until_output_ledger_is_settled() {
     let mut state = active_state();
     let mut started = transaction(OutputState::Started, Replacement::KeepOriginal);
     started.run_id = RunId(2);
-    let output = apply(
+    let output = apply_ok(
         &mut state,
         Command::Worker(WorkerCommand::Output(OutputDelta::OutputStarted {
             transaction: Box::new(started),
         })),
     );
-    assert_eq!(output.reply, Reply::Accepted);
-    let terminal = apply(
+    assert_eq!(output.reply, SuccessReply::Accepted);
+    let _terminal = apply_rejected(
         &mut state,
         Command::Worker(WorkerCommand::Terminal {
             item_id: QueueItemId(1),
@@ -2190,13 +2212,12 @@ fn terminal_is_rejected_until_output_ledger_is_settled() {
             final_telemetry: None,
         }),
     );
-    assert!(matches!(terminal.reply, Reply::Rejected { .. }));
 }
 
 #[test]
 fn converted_requires_a_successfully_committed_output() {
     let mut state = active_state();
-    let without_output = apply(
+    let _without_output = apply_rejected(
         &mut state,
         Command::Worker(WorkerCommand::Terminal {
             item_id: QueueItemId(1),
@@ -2208,22 +2229,21 @@ fn converted_requires_a_successfully_committed_output() {
             final_telemetry: None,
         }),
     );
-    assert!(matches!(without_output.reply, Reply::Rejected { .. }));
 
     let mut started = transaction(OutputState::Started, Replacement::KeepOriginal);
     started.run_id = RunId(2);
     assert_eq!(
-        apply(
+        apply_ok(
             &mut state,
             Command::Worker(WorkerCommand::Output(OutputDelta::OutputStarted {
                 transaction: Box::new(started),
             })),
         )
         .reply,
-        Reply::Accepted
+        SuccessReply::Accepted
     );
     assert_eq!(
-        apply(
+        apply_ok(
             &mut state,
             Command::Worker(WorkerCommand::Output(OutputDelta::Conflict {
                 run_id: RunId(2),
@@ -2232,9 +2252,9 @@ fn converted_requires_a_successfully_committed_output() {
             })),
         )
         .reply,
-        Reply::Accepted
+        SuccessReply::Accepted
     );
-    let conflicted = apply(
+    let _conflicted = apply_rejected(
         &mut state,
         Command::Worker(WorkerCommand::Terminal {
             item_id: QueueItemId(1),
@@ -2246,20 +2266,19 @@ fn converted_requires_a_successfully_committed_output() {
             final_telemetry: None,
         }),
     );
-    assert!(matches!(conflicted.reply, Reply::Rejected { .. }));
 }
 
 #[test]
 #[expect(clippy::expect_used, reason = "test assertion")]
 fn remuxed_requires_a_remux_action_and_committed_output() {
     let mut state = AppState::default();
-    let _added = apply(&mut state, add_command("video.mp4"));
+    let _added = apply_ok(&mut state, add_command("video.mp4"));
     let _started = start_session(&mut state);
-    let _reserved = apply(&mut state, Command::Worker(WorkerCommand::ReserveNext));
+    let _reserved = apply_ok(&mut state, Command::Worker(WorkerCommand::ReserveNext));
     let mut observation = media_observation("remux-content");
     observation.metadata.codec = VideoCodec::Av1;
     observation.metadata.container = MediaContainer::Other("mov,mp4".to_owned());
-    let prepared = apply(
+    let prepared = apply_ok(
         &mut state,
         Command::Worker(WorkerCommand::PrepareReserved {
             item_id: QueueItemId(1),
@@ -2269,8 +2288,8 @@ fn remuxed_requires_a_remux_action_and_committed_output() {
             import_paths: Vec::new(),
         }),
     );
-    assert!(matches!(prepared.reply, Reply::Claimed(Some(_))));
-    let running = apply(
+    assert!(matches!(prepared.reply, SuccessReply::Claimed(Some(_))));
+    let running = apply_ok(
         &mut state,
         Command::Worker(WorkerCommand::Started {
             item_id: QueueItemId(1),
@@ -2279,7 +2298,7 @@ fn remuxed_requires_a_remux_action_and_committed_output() {
             at: UnixMillis(1_000),
         }),
     );
-    assert_eq!(running.reply, Reply::Accepted);
+    assert_eq!(running.reply, SuccessReply::Accepted);
     let run = state
         .durable
         .conversion_runs
@@ -2337,10 +2356,10 @@ fn successful_outcomes_require_a_started_run_and_matching_evidence() {
     // Claimed but never Started: a live success is impossible from this state,
     // and recovery derives Stopped for it — Converted must be rejected.
     let mut state = AppState::default();
-    let _added = apply(&mut state, add_command("video.mkv"));
+    let _added = apply_ok(&mut state, add_command("video.mkv"));
     let _started = start_session(&mut state);
     let _claimed = reserve_and_prepare(&mut state);
-    let _analysis = apply(
+    let _analysis = apply_ok(
         &mut state,
         Command::Worker(WorkerCommand::RecordAnalysis {
             item_id: QueueItemId(1),
@@ -2418,7 +2437,7 @@ fn run_facts_fold_start_finish_instants_and_phase_spans() {
             duration: DurationMs(65_000),
         },
     ];
-    let terminal = apply(
+    let terminal = apply_ok(
         &mut state,
         Command::Worker(WorkerCommand::Terminal {
             item_id: QueueItemId(1),
@@ -2430,7 +2449,7 @@ fn run_facts_fold_start_finish_instants_and_phase_spans() {
             final_telemetry: None,
         }),
     );
-    assert_eq!(terminal.reply, Reply::Accepted);
+    assert_eq!(terminal.reply, SuccessReply::Accepted);
     let run = state
         .durable
         .conversion_runs
@@ -2446,14 +2465,14 @@ fn checked_batch_preserves_prepared_facts_across_clock_changes_and_batch_partiti
 -> Result<(), Box<dyn std::error::Error>> {
     let mut app = AppState::default();
     assert_eq!(
-        apply(&mut app, add_command(QueueItemId(1), "synthetic.mkv")).reply,
-        Reply::Accepted
+        apply_ok(&mut app, add_command("synthetic.mkv")).reply,
+        SuccessReply::Accepted
     );
     start_session(&mut app);
     let original = media_observation("synthetic-content");
     assert!(matches!(
         reserve_and_prepare_observed(&mut app, Some(original.clone())).reply,
-        Reply::Claimed(Some(_))
+        SuccessReply::Claimed(Some(_))
     ));
     let before = app.durable.clone();
     let mut rotated = original.clone();
@@ -2535,17 +2554,17 @@ fn checked_batch_rejects_inconsistent_preparation_and_discards_partial_recording
 -> Result<(), Box<dyn std::error::Error>> {
     let mut app = AppState::default();
     assert_eq!(
-        apply(&mut app, add_command(QueueItemId(1), "synthetic.mkv")).reply,
-        Reply::Accepted
+        apply_ok(&mut app, add_command("synthetic.mkv")).reply,
+        SuccessReply::Accepted
     );
     start_session(&mut app);
     assert!(matches!(
-        apply(&mut app, Command::Worker(WorkerCommand::ReserveNext)).reply,
-        Reply::Reserved(Some(_))
+        apply_ok(&mut app, Command::Worker(WorkerCommand::ReserveNext)).reply,
+        SuccessReply::Reserved(Some(_))
     ));
     let reserved = app.durable.clone();
     let observation = media_observation("synthetic-content");
-    let prepared = apply(
+    let prepared = apply_ok(
         &mut app,
         Command::Worker(WorkerCommand::PrepareReserved {
             item_id: QueueItemId(1),
@@ -2555,7 +2574,7 @@ fn checked_batch_rejects_inconsistent_preparation_and_discards_partial_recording
             import_paths: Vec::new(),
         }),
     );
-    assert!(matches!(prepared.reply, Reply::Claimed(Some(_))));
+    assert!(matches!(prepared.reply, SuccessReply::Claimed(Some(_))));
     let mut malformed = prepared.durable;
     let Some(DurableDelta::ItemPrepared { spec }) = malformed.last_mut() else {
         return Err("missing preparation".into());
@@ -2584,13 +2603,13 @@ fn checked_batch_excludes_skips_and_reservation_only_terminals()
 -> Result<(), Box<dyn std::error::Error>> {
     let mut app = AppState::default();
     assert_eq!(
-        apply(&mut app, add_command(QueueItemId(1), "synthetic.mkv")).reply,
-        Reply::Accepted
+        apply_ok(&mut app, add_command("synthetic.mkv")).reply,
+        SuccessReply::Accepted
     );
     start_session(&mut app);
     assert!(matches!(
-        apply(&mut app, Command::Worker(WorkerCommand::ReserveNext)).reply,
-        Reply::Reserved(Some(_))
+        apply_ok(&mut app, Command::Worker(WorkerCommand::ReserveNext)).reply,
+        SuccessReply::Reserved(Some(_))
     ));
     let terminal = DurableDelta::ItemFinished {
         item_id: QueueItemId(1),
@@ -2696,11 +2715,11 @@ fn session_aggregates_absorb_counts_every_outcome_and_live_evidence() {
 #[test]
 fn session_start_zeroes_the_aggregates_for_the_new_run() {
     let mut state = AppState::default();
-    let _added = apply(&mut state, add_command("video.mkv"));
+    let _added = apply_ok(&mut state, add_command("video.mkv"));
     // Leftover totals from a previous session are display state, not history.
     state.aggregates.completed = 5;
     let started = start_session(&mut state);
-    assert_eq!(started.reply, Reply::Accepted);
+    assert_eq!(started.reply, SuccessReply::Accepted);
     assert_eq!(
         started.ephemeral,
         vec![
@@ -2714,7 +2733,7 @@ fn session_start_zeroes_the_aggregates_for_the_new_run() {
 #[test]
 fn terminal_and_abandonment_emit_the_updated_aggregates() {
     let mut state = active_state();
-    let terminal = apply(
+    let terminal = apply_ok(
         &mut state,
         Command::Worker(WorkerCommand::Terminal {
             item_id: QueueItemId(1),
@@ -2729,7 +2748,7 @@ fn terminal_and_abandonment_emit_the_updated_aggregates() {
             final_telemetry: None,
         }),
     );
-    assert_eq!(terminal.reply, Reply::Accepted);
+    assert_eq!(terminal.reply, SuccessReply::Accepted);
     let expected = SessionAggregates {
         failed: 1,
         encode_duration_ms: 1_500,
@@ -2743,11 +2762,11 @@ fn terminal_and_abandonment_emit_the_updated_aggregates() {
 
     // An abandoned reservation finishes as Stopped and counts as one.
     let mut state = AppState::default();
-    let _added = apply(&mut state, add_command("video.mkv"));
+    let _added = apply_ok(&mut state, add_command("video.mkv"));
     let _started = start_session(&mut state);
-    let _reserved = apply(&mut state, Command::Worker(WorkerCommand::ReserveNext));
-    let _stopping = apply(&mut state, Command::Session(SessionCommand::ForceStop));
-    let stopped = apply(
+    let _reserved = apply_ok(&mut state, Command::Worker(WorkerCommand::ReserveNext));
+    let _stopping = apply_ok(&mut state, Command::Session(SessionCommand::ForceStop));
+    let stopped = apply_ok(
         &mut state,
         Command::Worker(WorkerCommand::AbandonReservation {
             disposition: crate::ReservationDisposition::Stopped,
@@ -2757,7 +2776,7 @@ fn terminal_and_abandonment_emit_the_updated_aggregates() {
             at: UnixMillis(1_000),
         }),
     );
-    assert_eq!(stopped.reply, Reply::Accepted);
+    assert_eq!(stopped.reply, SuccessReply::Accepted);
     let expected = SessionAggregates {
         stopped: 1,
         ..SessionAggregates::default()
@@ -2773,10 +2792,10 @@ fn terminal_and_abandonment_emit_the_updated_aggregates() {
 #[expect(clippy::expect_used, reason = "test assertion")]
 fn failed_terminal_invariants_check_conflict_state_and_diagnostic_bound() {
     let mut state = AppState::default();
-    let _added = apply(&mut state, add_command("video.mkv"));
+    let _added = apply_ok(&mut state, add_command("video.mkv"));
     let _started = start_session(&mut state);
-    let _reserved = apply(&mut state, Command::Worker(WorkerCommand::ReserveNext));
-    let prepared = apply(
+    let _reserved = apply_ok(&mut state, Command::Worker(WorkerCommand::ReserveNext));
+    let prepared = apply_ok(
         &mut state,
         Command::Worker(WorkerCommand::PrepareReserved {
             item_id: QueueItemId(1),
@@ -2786,7 +2805,7 @@ fn failed_terminal_invariants_check_conflict_state_and_diagnostic_bound() {
             import_paths: Vec::new(),
         }),
     );
-    assert!(matches!(prepared.reply, Reply::Claimed(Some(_))));
+    assert!(matches!(prepared.reply, SuccessReply::Claimed(Some(_))));
     let run = state
         .durable
         .conversion_runs
@@ -2830,11 +2849,11 @@ fn failed_terminal_invariants_check_conflict_state_and_diagnostic_bound() {
 fn reserved_item_can_be_durably_stopped_before_preparation() {
     let mut state = AppState::default();
     let mut durable = Vec::new();
-    durable.extend(apply(&mut state, add_command("video.mkv")).durable);
+    durable.extend(apply_ok(&mut state, add_command("video.mkv")).durable);
     let _started = start_session(&mut state);
-    durable.extend(apply(&mut state, Command::Worker(WorkerCommand::ReserveNext)).durable);
-    let _stopping = apply(&mut state, Command::Session(SessionCommand::ForceStop));
-    let stopped = apply(
+    durable.extend(apply_ok(&mut state, Command::Worker(WorkerCommand::ReserveNext)).durable);
+    let _stopping = apply_ok(&mut state, Command::Session(SessionCommand::ForceStop));
+    let stopped = apply_ok(
         &mut state,
         Command::Worker(WorkerCommand::AbandonReservation {
             disposition: crate::ReservationDisposition::Stopped,
@@ -2844,7 +2863,7 @@ fn reserved_item_can_be_durably_stopped_before_preparation() {
             at: UnixMillis(1_000),
         }),
     );
-    assert_eq!(stopped.reply, Reply::Accepted);
+    assert_eq!(stopped.reply, SuccessReply::Accepted);
     durable.extend(stopped.durable);
     assert!(matches!(
         state.durable.queue.first().expect("queue item").state,
@@ -2870,7 +2889,7 @@ fn assert_live_and_replay_agree(
     accepted: bool,
 ) -> Result<(), serde_json::Error> {
     let before = state.clone();
-    let applied = apply(state, command);
+    let applied = crate::apply(state, command);
     let mut bytes = encode_snapshot("test", UnixMillis(0), JournalSequence(0), &before.durable)?;
     bytes.extend(encode_record(&JournalEnvelope {
         sequence: JournalSequence(0),
@@ -2879,7 +2898,10 @@ fn assert_live_and_replay_agree(
     let restored = replay(&bytes);
     assert_eq!(restored.corruption.is_none(), accepted);
     if accepted {
-        assert_eq!(applied.reply, Reply::Accepted);
+        let Ok(applied) = applied else {
+            panic!("valid transition was rejected");
+        };
+        assert_eq!(applied.reply, SuccessReply::Accepted);
         assert_eq!(applied.durable.len(), 1);
         assert_eq!(restored.state, state.durable);
         assert_eq!(
@@ -2888,10 +2910,7 @@ fn assert_live_and_replay_agree(
             "the observation view agrees across live and replayed state"
         );
     } else {
-        assert!(matches!(applied.reply, Reply::Rejected { .. }));
-        assert!(applied.durable.is_empty());
-        assert!(applied.config.is_empty());
-        assert!(applied.effects.is_empty());
+        assert!(applied.is_err());
         assert_eq!(*state, before);
         assert_eq!(restored.state, before.durable);
     }
@@ -2964,7 +2983,7 @@ fn assert_output_started_at_live_and_replay_boundaries(
 }
 
 fn fail_active_run(state: &mut AppState) {
-    let failed = apply(
+    let failed = apply_ok(
         state,
         Command::Worker(WorkerCommand::Terminal {
             item_id: QueueItemId(1),
@@ -2979,17 +2998,17 @@ fn fail_active_run(state: &mut AppState) {
             final_telemetry: None,
         }),
     );
-    assert_eq!(failed.reply, Reply::Accepted);
+    assert_eq!(failed.reply, SuccessReply::Accepted);
 }
 
 #[test]
 fn analysis_requires_the_same_active_claim_in_live_state_and_replay()
 -> Result<(), serde_json::Error> {
     let mut state = AppState::default();
-    apply(&mut state, add_command("video.mkv"));
+    apply_ok(&mut state, add_command("video.mkv"));
     start_session(&mut state);
-    let reserved = apply(&mut state, Command::Worker(WorkerCommand::ReserveNext));
-    assert!(matches!(reserved.reply, Reply::Reserved(Some(_))));
+    let reserved = apply_ok(&mut state, Command::Worker(WorkerCommand::ReserveNext));
+    assert!(matches!(reserved.reply, SuccessReply::Reserved(Some(_))));
     assert_analysis_at_live_and_replay_boundaries(
         &mut state,
         QueueItemId(1),
@@ -2997,7 +3016,7 @@ fn analysis_requires_the_same_active_claim_in_live_state_and_replay()
         RunId(2),
         false,
     )?;
-    let prepared = apply(
+    let prepared = apply_ok(
         &mut state,
         Command::Worker(WorkerCommand::PrepareReserved {
             item_id: QueueItemId(1),
@@ -3007,7 +3026,7 @@ fn analysis_requires_the_same_active_claim_in_live_state_and_replay()
             import_paths: Vec::new(),
         }),
     );
-    assert!(matches!(prepared.reply, Reply::Claimed(Some(_))));
+    assert!(matches!(prepared.reply, SuccessReply::Claimed(Some(_))));
     assert_analysis_at_live_and_replay_boundaries(
         &mut state,
         QueueItemId(1),
@@ -3019,7 +3038,7 @@ fn analysis_requires_the_same_active_claim_in_live_state_and_replay()
     // disagrees with that run's spec has no replay counterpart.
     for (item, claim) in [(99, 1), (1, 99)] {
         let before = state.clone();
-        let mismatched = apply(
+        let _mismatched = apply_rejected(
             &mut state,
             Command::Worker(WorkerCommand::RecordAnalysis {
                 item_id: QueueItemId(item),
@@ -3028,7 +3047,7 @@ fn analysis_requires_the_same_active_claim_in_live_state_and_replay()
                 result: Box::new(analysis()),
             }),
         );
-        assert!(matches!(mismatched.reply, Reply::Rejected { .. }));
+
         assert_eq!(state, before);
     }
     assert_analysis_at_live_and_replay_boundaries(
@@ -3051,10 +3070,10 @@ fn analysis_requires_the_same_active_claim_in_live_state_and_replay()
 #[test]
 fn finished_run_rejects_analysis_in_live_state_and_replay() -> Result<(), serde_json::Error> {
     let mut state = AppState::default();
-    apply(&mut state, add_command("video.mkv"));
+    apply_ok(&mut state, add_command("video.mkv"));
     start_session(&mut state);
     let claimed = reserve_and_prepare(&mut state);
-    assert!(matches!(claimed.reply, Reply::Claimed(Some(_))));
+    assert!(matches!(claimed.reply, SuccessReply::Claimed(Some(_))));
     assert_started_at_live_and_replay_boundaries(
         &mut state,
         QueueItemId(1),
@@ -3087,7 +3106,7 @@ fn output_requires_an_active_run_in_live_state_and_replay() -> Result<(), serde_
 fn started_requires_the_same_prepared_claim_in_live_state_and_replay()
 -> Result<(), serde_json::Error> {
     let mut state = AppState::default();
-    apply(&mut state, add_command("video.mkv"));
+    apply_ok(&mut state, add_command("video.mkv"));
     start_session(&mut state);
     assert_started_at_live_and_replay_boundaries(
         &mut state,
@@ -3096,8 +3115,8 @@ fn started_requires_the_same_prepared_claim_in_live_state_and_replay()
         RunId(2),
         false,
     )?;
-    let reserved = apply(&mut state, Command::Worker(WorkerCommand::ReserveNext));
-    assert!(matches!(reserved.reply, Reply::Reserved(Some(_))));
+    let reserved = apply_ok(&mut state, Command::Worker(WorkerCommand::ReserveNext));
+    assert!(matches!(reserved.reply, SuccessReply::Reserved(Some(_))));
     assert_started_at_live_and_replay_boundaries(
         &mut state,
         QueueItemId(1),
@@ -3105,7 +3124,7 @@ fn started_requires_the_same_prepared_claim_in_live_state_and_replay()
         RunId(2),
         false,
     )?;
-    let prepared = apply(
+    let prepared = apply_ok(
         &mut state,
         Command::Worker(WorkerCommand::PrepareReserved {
             item_id: QueueItemId(1),
@@ -3115,7 +3134,7 @@ fn started_requires_the_same_prepared_claim_in_live_state_and_replay()
             import_paths: Vec::new(),
         }),
     );
-    assert!(matches!(prepared.reply, Reply::Claimed(Some(_))));
+    assert!(matches!(prepared.reply, SuccessReply::Claimed(Some(_))));
     for (item, claim, run) in [(99, 1, 2), (1, 99, 2), (1, 1, 99)] {
         assert_started_at_live_and_replay_boundaries(
             &mut state,
@@ -3145,77 +3164,73 @@ fn started_requires_the_same_prepared_claim_in_live_state_and_replay()
 #[test]
 fn output_ledger_rejects_skipped_and_mismatched_transitions() {
     let mut state = active_state();
-    let skipped = apply(
+    let _skipped = apply_rejected(
         &mut state,
         Command::Worker(WorkerCommand::Output(OutputDelta::OutputCommitted {
             run_id: RunId(2),
             final_identity: identity("encoded", 8),
         })),
     );
-    assert!(matches!(skipped.reply, Reply::Rejected { .. }));
 
     let mut started = transaction(OutputState::Started, Replacement::KeepOriginal);
     started.run_id = RunId(2);
-    let accepted = apply(
+    let accepted = apply_ok(
         &mut state,
         Command::Worker(WorkerCommand::Output(OutputDelta::OutputStarted {
             transaction: Box::new(started),
         })),
     );
-    assert_eq!(accepted.reply, Reply::Accepted);
-    let ready_without_staging = apply(
+    assert_eq!(accepted.reply, SuccessReply::Accepted);
+    let _ready_without_staging = apply_rejected(
         &mut state,
         Command::Worker(WorkerCommand::Output(OutputDelta::OutputReady {
             run_id: RunId(2),
             staging_identity: identity("staging", 8),
         })),
     );
-    assert!(matches!(
-        ready_without_staging.reply,
-        Reply::Rejected { .. }
-    ));
-    let staging_created = apply(
+
+    let staging_created = apply_ok(
         &mut state,
         Command::Worker(WorkerCommand::Output(OutputDelta::StagingCreated {
             run_id: RunId(2),
             initial: destructive("staging", 0),
         })),
     );
-    assert_eq!(staging_created.reply, Reply::Accepted);
+    assert_eq!(staging_created.reply, SuccessReply::Accepted);
     // A repeated StagingCreated is legal: it is the encode retry's restage
     // (the pin moves to the recreated staging artifact).
-    let repeated_staging = apply(
+    let repeated_staging = apply_ok(
         &mut state,
         Command::Worker(WorkerCommand::Output(OutputDelta::StagingCreated {
             run_id: RunId(2),
             initial: destructive("staging", 0),
         })),
     );
-    assert_eq!(repeated_staging.reply, Reply::Accepted);
-    let empty_ready = apply(
+    assert_eq!(repeated_staging.reply, SuccessReply::Accepted);
+    let _empty_ready = apply_rejected(
         &mut state,
         Command::Worker(WorkerCommand::Output(OutputDelta::OutputReady {
             run_id: RunId(2),
             staging_identity: identity("staging", 0),
         })),
     );
-    assert!(matches!(empty_ready.reply, Reply::Rejected { .. }));
-    let foreign_ready = apply(
+
+    let _foreign_ready = apply_rejected(
         &mut state,
         Command::Worker(WorkerCommand::Output(OutputDelta::OutputReady {
             run_id: RunId(2),
             staging_identity: identity("other", 8),
         })),
     );
-    assert!(matches!(foreign_ready.reply, Reply::Rejected { .. }));
-    let ready = apply(
+
+    let ready = apply_ok(
         &mut state,
         Command::Worker(WorkerCommand::Output(OutputDelta::OutputReady {
             run_id: RunId(2),
             staging_identity: identity("staging", 8),
         })),
     );
-    assert_eq!(ready.reply, Reply::Accepted);
+    assert_eq!(ready.reply, SuccessReply::Accepted);
 }
 
 #[test]
@@ -3284,16 +3299,13 @@ fn journal_degrades_on_nonfinal_corruption() {
 #[test]
 fn acknowledge_corruption_never_applies_through_the_reducer() {
     let mut state = AppState::default();
-    let applied = apply(
+    let _applied = apply_rejected(
         &mut state,
         Command::System(SystemCommand::AcknowledgeCorruption {
             signature: corruption_signature(b"unreadable"),
         }),
     );
-    assert!(matches!(applied.reply, Reply::Rejected { .. }));
-    assert!(applied.durable.is_empty());
-    assert!(applied.config.is_empty());
-    assert!(applied.effects.is_empty());
+
     assert_eq!(state, AppState::default());
 }
 
@@ -3887,7 +3899,7 @@ proptest! {
         let mut live = AppState::default();
         let mut emitted = Vec::new();
         for (index, remove) in operations.into_iter().enumerate() {
-            let added = apply(
+            let added = apply_ok(
                 &mut live,
                 add_command(PathBuf::from(format!("video-{index}.mkv"))),
             );
@@ -3897,13 +3909,13 @@ proptest! {
             };
             emitted.extend(added.durable);
             if remove {
-                let removed = apply(
+                let removed = apply_ok(
                     &mut live,
                     Command::Queue(QueueCommand::RemoveMany {
                         item_ids: vec![item_id],
                     }),
                 );
-                prop_assert_eq!(removed.reply, Reply::Accepted);
+                prop_assert_eq!(removed.reply, SuccessReply::Accepted);
                 emitted.extend(removed.durable);
             }
         }
@@ -3923,10 +3935,10 @@ proptest! {
 
 fn active_state() -> AppState {
     let mut state = AppState::default();
-    let _added = apply(&mut state, add_command("video.mkv"));
+    let _added = apply_ok(&mut state, add_command("video.mkv"));
     let _started = start_session(&mut state);
     let _claimed = reserve_and_prepare(&mut state);
-    let _running = apply(
+    let _running = apply_ok(
         &mut state,
         Command::Worker(WorkerCommand::Started {
             item_id: QueueItemId(1),
@@ -3935,7 +3947,7 @@ fn active_state() -> AppState {
             at: UnixMillis(1_000),
         }),
     );
-    let _analysis = apply(
+    let _analysis = apply_ok(
         &mut state,
         Command::Worker(WorkerCommand::RecordAnalysis {
             item_id: QueueItemId(1),
@@ -3955,11 +3967,11 @@ fn reserve_and_prepare_observed(
     state: &mut AppState,
     observation: Option<MediaObservation>,
 ) -> crate::Applied {
-    let reserved = apply(state, Command::Worker(WorkerCommand::ReserveNext));
-    let Reply::Reserved(Some(job)) = reserved.reply else {
+    let reserved = apply_ok(state, Command::Worker(WorkerCommand::ReserveNext));
+    let SuccessReply::Reserved(Some(job)) = reserved.reply else {
         return reserved;
     };
-    apply(
+    apply_ok(
         state,
         Command::Worker(WorkerCommand::PrepareReserved {
             item_id: job.item_id,
@@ -3978,7 +3990,7 @@ fn apply_and_journal(
     sequence: &mut u64,
     command: Command,
 ) -> crate::Applied {
-    let applied = apply(state, command);
+    let applied = apply_ok(state, command);
     if !applied.durable.is_empty() {
         let envelope = JournalEnvelope {
             sequence: JournalSequence(*sequence),
@@ -4865,8 +4877,8 @@ fn add_many_judges_each_request_and_reports_one_summary() {
             },
         ],
     });
-    let applied = apply(&mut state, batch);
-    assert_eq!(applied.reply, Reply::Accepted);
+    let applied = apply_ok(&mut state, batch);
+    assert_eq!(applied.reply, SuccessReply::Accepted);
     let added_ids: Vec<QueueItemId> = state.durable.queue.iter().map(|item| item.id).collect();
     assert_eq!(added_ids, vec![QueueItemId(1), QueueItemId(2)]);
     assert_eq!(
@@ -4900,7 +4912,7 @@ fn add_many_skips_paths_the_journal_cannot_store() {
         std::ffi::OsString::from_wide(&[0xd800])
     };
     let mut state = AppState::default();
-    let applied = apply(
+    let applied = apply_ok(
         &mut state,
         Command::Queue(QueueCommand::AddMany {
             requests: vec![
@@ -4916,7 +4928,7 @@ fn add_many_skips_paths_the_journal_cannot_store() {
             ],
         }),
     );
-    assert_eq!(applied.reply, Reply::Accepted);
+    assert_eq!(applied.reply, SuccessReply::Accepted);
     assert_eq!(
         applied.ephemeral,
         vec![EphemeralDelta::QueueAddSummary {
@@ -4939,11 +4951,11 @@ fn add_many_skips_paths_the_journal_cannot_store() {
 #[expect(clippy::expect_used, reason = "test assertion")]
 fn add_many_skips_a_queued_path_until_it_finishes() {
     let mut state = AppState::default();
-    let first = apply(&mut state, add_command("video.mkv"));
-    assert_eq!(first.reply, Reply::Accepted);
+    let first = apply_ok(&mut state, add_command("video.mkv"));
+    assert_eq!(first.reply, SuccessReply::Accepted);
     // The path is pending: a re-add counts into the summary and adds nothing.
-    let readd = apply(&mut state, add_command("video.mkv"));
-    assert_eq!(readd.reply, Reply::Accepted);
+    let readd = apply_ok(&mut state, add_command("video.mkv"));
+    assert_eq!(readd.reply, SuccessReply::Accepted);
     assert!(readd.durable.is_empty());
     assert_eq!(
         readd.ephemeral,
@@ -4955,7 +4967,7 @@ fn add_many_skips_a_queued_path_until_it_finishes() {
     // Once the standing item is finished, the same path enqueues again.
     state.durable.queue.first_mut().expect("queued item").state =
         QueueItemState::Finished(ItemOutcome::Stopped);
-    let after_finish = apply(&mut state, add_command("video.mkv"));
+    let after_finish = apply_ok(&mut state, add_command("video.mkv"));
     assert_eq!(after_finish.durable.len(), 1);
     assert_eq!(state.durable.queue.len(), 2);
 }
@@ -4963,8 +4975,8 @@ fn add_many_skips_a_queued_path_until_it_finishes() {
 #[test]
 fn add_many_allocates_ids_only_for_accepted_requests() {
     let mut state = AppState::default();
-    let _first = apply(&mut state, add_command("one.mkv"));
-    let applied = apply(
+    let _first = apply_ok(&mut state, add_command("one.mkv"));
+    let applied = apply_ok(
         &mut state,
         Command::Queue(QueueCommand::AddMany {
             requests: vec![
@@ -4975,7 +4987,7 @@ fn add_many_allocates_ids_only_for_accepted_requests() {
             ],
         }),
     );
-    assert_eq!(applied.reply, Reply::Accepted);
+    assert_eq!(applied.reply, SuccessReply::Accepted);
     assert_eq!(
         state
             .durable
@@ -4992,8 +5004,8 @@ fn add_many_allocates_ids_only_for_accepted_requests() {
 fn add_many_is_allowed_while_a_session_runs() {
     let mut state = active_state();
     assert_eq!(state.session, SessionState::Running);
-    let applied = apply(&mut state, add_command("late.mkv"));
-    assert_eq!(applied.reply, Reply::Accepted);
+    let applied = apply_ok(&mut state, add_command("late.mkv"));
+    assert_eq!(applied.reply, SuccessReply::Accepted);
     assert_eq!(applied.durable.len(), 1);
 }
 
@@ -5008,7 +5020,7 @@ fn prepare_resolves_overwrite_from_the_item_not_the_settings() {
     for (decision, settings_overwrite, expected) in cases {
         let mut state = AppState::default();
         state.settings.output.overwrite_existing = settings_overwrite;
-        let added = apply(
+        let added = apply_ok(
             &mut state,
             Command::Queue(QueueCommand::AddMany {
                 requests: vec![QueueAddRequest {
@@ -5017,10 +5029,10 @@ fn prepare_resolves_overwrite_from_the_item_not_the_settings() {
                 }],
             }),
         );
-        assert_eq!(added.reply, Reply::Accepted);
+        assert_eq!(added.reply, SuccessReply::Accepted);
         let _started = start_session(&mut state);
         let claimed = reserve_and_prepare(&mut state);
-        let Reply::Claimed(Some(job)) = claimed.reply else {
+        let SuccessReply::Claimed(Some(job)) = claimed.reply else {
             panic!("expected a claim for {decision:?}");
         };
         assert_eq!(
@@ -5038,8 +5050,8 @@ fn prepare_resolves_overwrite_from_the_item_not_the_settings() {
 fn admin_fixture(third: QueueItemState, session: SessionState) -> AppState {
     let mut state = AppState::default();
     for id in 1..=5 {
-        let added = apply(&mut state, add_command(format!("clip-{id}.mkv")));
-        assert_eq!(added.reply, Reply::Accepted);
+        let added = apply_ok(&mut state, add_command(format!("clip-{id}.mkv")));
+        assert_eq!(added.reply, SuccessReply::Accepted);
     }
     state
         .durable
@@ -5076,14 +5088,14 @@ fn claimed_state() -> QueueItemState {
 #[test]
 fn remove_many_is_one_canonical_transition_and_preserves_retained_order() {
     let mut state = admin_fixture(claimed_state(), SessionState::Running);
-    let applied = apply(
+    let applied = apply_ok(
         &mut state,
         Command::Queue(QueueCommand::RemoveMany {
             // Input is deliberately not in queue order.
             item_ids: vec![QueueItemId(5), QueueItemId(2), QueueItemId(4)],
         }),
     );
-    assert_eq!(applied.reply, Reply::Accepted);
+    assert_eq!(applied.reply, SuccessReply::Accepted);
     assert_eq!(
         applied.durable,
         vec![DurableDelta::QueueItemsRemoved {
@@ -5115,15 +5127,11 @@ fn remove_many_rejects_empty_duplicate_unknown_or_active_sets_atomically() {
         ] {
             let mut state = admin_fixture(active.clone(), SessionState::Running);
             let before = state.durable.clone();
-            let applied = apply(
+            let _applied = apply_rejected(
                 &mut state,
                 Command::Queue(QueueCommand::RemoveMany { item_ids }),
             );
-            assert!(
-                matches!(applied.reply, Reply::Rejected { .. }),
-                "{active:?}"
-            );
-            assert!(applied.durable.is_empty());
+
             assert_eq!(state.durable, before);
         }
     }
@@ -5137,12 +5145,8 @@ fn clear_is_refused_while_a_session_is_active() {
         SessionState::ForceStopping,
     ] {
         let mut state = admin_fixture(claimed_state(), session.clone());
-        let applied = apply(&mut state, Command::Queue(QueueCommand::Clear));
-        assert!(
-            matches!(applied.reply, Reply::Rejected { .. }),
-            "{session:?}"
-        );
-        assert!(applied.durable.is_empty());
+        let _applied = apply_rejected(&mut state, Command::Queue(QueueCommand::Clear));
+
         assert_eq!(state.durable.queue.len(), 5, "{session:?}");
     }
 }
@@ -5151,8 +5155,8 @@ fn clear_is_refused_while_a_session_is_active() {
 fn clear_removes_pending_and_finished_items_but_never_an_active_one() {
     // A crash-recovered claim can outlive its session; clear leaves it alone.
     let mut state = admin_fixture(claimed_state(), SessionState::Idle);
-    let applied = apply(&mut state, Command::Queue(QueueCommand::Clear));
-    assert_eq!(applied.reply, Reply::Accepted);
+    let applied = apply_ok(&mut state, Command::Queue(QueueCommand::Clear));
+    assert_eq!(applied.reply, SuccessReply::Accepted);
     assert_eq!(applied.durable.len(), 1);
     assert_eq!(
         applied.durable,
@@ -5168,12 +5172,12 @@ fn clear_removes_pending_and_finished_items_but_never_an_active_one() {
     assert_eq!(queue_order(&state), vec![3]);
     // A settled queue clears to empty, and an empty clear is an accepted no-op.
     let mut state = admin_fixture(QueueItemState::Queued, SessionState::Idle);
-    let applied = apply(&mut state, Command::Queue(QueueCommand::Clear));
-    assert_eq!(applied.reply, Reply::Accepted);
+    let applied = apply_ok(&mut state, Command::Queue(QueueCommand::Clear));
+    assert_eq!(applied.reply, SuccessReply::Accepted);
     assert_eq!(applied.durable.len(), 1);
     assert!(state.durable.queue.is_empty());
-    let empty = apply(&mut state, Command::Queue(QueueCommand::Clear));
-    assert_eq!(empty.reply, Reply::Accepted);
+    let empty = apply_ok(&mut state, Command::Queue(QueueCommand::Clear));
+    assert_eq!(empty.reply, SuccessReply::Accepted);
     assert!(empty.durable.is_empty());
 }
 
@@ -5186,8 +5190,8 @@ fn clear_completed_keeps_failed_items_and_runs_in_any_session_state() {
         SessionState::ForceStopping,
     ] {
         let mut state = admin_fixture(claimed_state(), session.clone());
-        let applied = apply(&mut state, Command::Queue(QueueCommand::ClearCompleted));
-        assert_eq!(applied.reply, Reply::Accepted, "{session:?}");
+        let applied = apply_ok(&mut state, Command::Queue(QueueCommand::ClearCompleted));
+        assert_eq!(applied.reply, SuccessReply::Accepted, "{session:?}");
         assert_eq!(
             applied.durable,
             vec![DurableDelta::QueueItemsRemoved {
@@ -5218,8 +5222,8 @@ fn clear_completed_removes_every_terminal_outcome_except_failed() {
     let mut state = AppState::default();
     for (index, outcome) in outcomes.into_iter().enumerate() {
         let id = u64::try_from(index).expect("small index") + 1;
-        let added = apply(&mut state, add_command(format!("clip-{id}.mkv")));
-        assert_eq!(added.reply, Reply::Accepted);
+        let added = apply_ok(&mut state, add_command(format!("clip-{id}.mkv")));
+        assert_eq!(added.reply, SuccessReply::Accepted);
         state
             .durable
             .queue
@@ -5227,8 +5231,8 @@ fn clear_completed_removes_every_terminal_outcome_except_failed() {
             .expect("newly added queue item")
             .state = QueueItemState::Finished(outcome);
     }
-    let applied = apply(&mut state, Command::Queue(QueueCommand::ClearCompleted));
-    assert_eq!(applied.reply, Reply::Accepted);
+    let applied = apply_ok(&mut state, Command::Queue(QueueCommand::ClearCompleted));
+    assert_eq!(applied.reply, SuccessReply::Accepted);
     assert_eq!(applied.durable.len(), 1);
     assert_eq!(
         applied.durable,
@@ -5249,14 +5253,14 @@ fn retry_requeues_a_finished_item_to_the_end_in_any_session_state() {
         SessionState::ForceStopping,
     ] {
         let mut state = admin_fixture(claimed_state(), session.clone());
-        let applied = apply(
+        let applied = apply_ok(
             &mut state,
             Command::Queue(QueueCommand::Retry {
                 item_id: QueueItemId(1),
                 patch: None,
             }),
         );
-        assert_eq!(applied.reply, Reply::Accepted, "{session:?}");
+        assert_eq!(applied.reply, SuccessReply::Accepted, "{session:?}");
         assert_eq!(
             applied.durable,
             vec![DurableDelta::QueueRetried {
@@ -5282,7 +5286,7 @@ fn patched_retry_resolves_every_field_and_requeues_in_one_transition() {
         (Operation::Analyze, AnalysisIntent::Refresh),
     ] {
         let mut state = admin_fixture(claimed_state(), SessionState::Idle);
-        let applied = apply(
+        let applied = apply_ok(
             &mut state,
             Command::Queue(QueueCommand::Retry {
                 item_id: QueueItemId(1),
@@ -5296,7 +5300,7 @@ fn patched_retry_resolves_every_field_and_requeues_in_one_transition() {
                 }),
             }),
         );
-        assert_eq!(applied.reply, Reply::Accepted);
+        assert_eq!(applied.reply, SuccessReply::Accepted);
         assert_eq!(
             applied.durable,
             vec![DurableDelta::QueueRetried {
@@ -5326,30 +5330,26 @@ fn patched_retry_is_idle_only_even_for_an_identity_patch() {
     ] {
         let mut state = admin_fixture(claimed_state(), session.clone());
         let before = state.durable.clone();
-        let applied = apply(
+        let _applied = apply_rejected(
             &mut state,
             Command::Queue(QueueCommand::Retry {
                 item_id: QueueItemId(1),
                 patch: Some(QueueItemEdit::default()),
             }),
         );
-        assert!(
-            matches!(applied.reply, Reply::Rejected { .. }),
-            "{session:?}"
-        );
-        assert!(applied.durable.is_empty());
+
         assert_eq!(state.durable, before);
     }
 
     let mut idle = admin_fixture(claimed_state(), SessionState::Idle);
-    let identity = apply(
+    let identity = apply_ok(
         &mut idle,
         Command::Queue(QueueCommand::Retry {
             item_id: QueueItemId(1),
             patch: Some(QueueItemEdit::default()),
         }),
     );
-    assert_eq!(identity.reply, Reply::Accepted);
+    assert_eq!(identity.reply, SuccessReply::Accepted);
     assert_eq!(identity.durable.len(), 1);
     assert_queue_shape(&idle, &[2, 3, 4, 5, 1]);
 }
@@ -5371,18 +5371,13 @@ fn retry_is_refused_for_missing_active_or_pending_items() {
         let mut state = admin_fixture(active.clone(), SessionState::Running);
         // Item 3 is active, item 4 is queued, item 9 does not exist.
         for target in [QueueItemId(3), QueueItemId(4), QueueItemId(9)] {
-            let applied = apply(
+            let _applied = apply_rejected(
                 &mut state,
                 Command::Queue(QueueCommand::Retry {
                     item_id: target,
                     patch: None,
                 }),
             );
-            assert!(
-                matches!(applied.reply, Reply::Rejected { .. }),
-                "{active:?} -> {target:?}"
-            );
-            assert!(applied.durable.is_empty());
         }
         assert_queue_shape(&state, &[1, 2, 3, 4, 5]);
     }
@@ -5395,17 +5390,17 @@ fn retry_flows_through_the_next_reservation_and_replays() {
     let mut sequence = 0;
     for input in ["first.mkv", "second.mkv"] {
         let added = apply_and_journal(&mut state, &mut bytes, &mut sequence, add_command(input));
-        assert_eq!(added.reply, Reply::Accepted);
+        assert_eq!(added.reply, SuccessReply::Accepted);
     }
     let started = start_session(&mut state);
-    assert_eq!(started.reply, Reply::Accepted);
+    assert_eq!(started.reply, SuccessReply::Accepted);
     let reserved = apply_and_journal(
         &mut state,
         &mut bytes,
         &mut sequence,
         Command::Worker(WorkerCommand::ReserveNext),
     );
-    assert!(matches!(reserved.reply, Reply::Reserved(Some(_))));
+    assert!(matches!(reserved.reply, SuccessReply::Reserved(Some(_))));
     let prepared = apply_and_journal(
         &mut state,
         &mut bytes,
@@ -5418,7 +5413,7 @@ fn retry_flows_through_the_next_reservation_and_replays() {
             import_paths: Vec::new(),
         }),
     );
-    assert!(matches!(prepared.reply, Reply::Claimed(Some(_))));
+    assert!(matches!(prepared.reply, SuccessReply::Claimed(Some(_))));
     let failed = apply_and_journal(
         &mut state,
         &mut bytes,
@@ -5433,7 +5428,7 @@ fn retry_flows_through_the_next_reservation_and_replays() {
             final_telemetry: None,
         }),
     );
-    assert_eq!(failed.reply, Reply::Accepted);
+    assert_eq!(failed.reply, SuccessReply::Accepted);
     // Retry sends the failure behind the remaining pending item.
     let retried = apply_and_journal(
         &mut state,
@@ -5444,7 +5439,7 @@ fn retry_flows_through_the_next_reservation_and_replays() {
             patch: None,
         }),
     );
-    assert_eq!(retried.reply, Reply::Accepted);
+    assert_eq!(retried.reply, SuccessReply::Accepted);
     assert_queue_shape(&state, &[2, 1]);
     // The next reservation claims item 2 — the retried item waits its turn —
     // and the old run's lineage still records the failure.
@@ -5454,7 +5449,7 @@ fn retry_flows_through_the_next_reservation_and_replays() {
         &mut sequence,
         Command::Worker(WorkerCommand::ReserveNext),
     );
-    let Reply::Reserved(Some(job)) = next.reply else {
+    let SuccessReply::Reserved(Some(job)) = next.reply else {
         panic!("expected a reservation for item 2");
     };
     assert_eq!(job.item_id, QueueItemId(2));
@@ -5482,7 +5477,7 @@ fn edit_resolves_partial_patches_against_the_current_tuple() {
         &mut sequence,
         add_command("video.mkv"),
     );
-    assert_eq!(added.reply, Reply::Accepted);
+    assert_eq!(added.reply, SuccessReply::Accepted);
     let applied = apply_and_journal(
         &mut state,
         &mut bytes,
@@ -5496,7 +5491,7 @@ fn edit_resolves_partial_patches_against_the_current_tuple() {
             },
         }),
     );
-    assert_eq!(applied.reply, Reply::Accepted);
+    assert_eq!(applied.reply, SuccessReply::Accepted);
     // The journaled delta carries the resolved tuple: patched fields plus the
     // item's unchanged intent and output target.
     assert_eq!(
@@ -5529,7 +5524,7 @@ fn edit_resolves_partial_patches_against_the_current_tuple() {
                 patch,
             }),
         );
-        assert_eq!(noop.reply, Reply::Accepted);
+        assert_eq!(noop.reply, SuccessReply::Accepted);
         assert!(noop.durable.is_empty());
     }
     let replayed = replay(&bytes);
@@ -5547,7 +5542,7 @@ fn edit_is_idle_only_and_targets_queued_items() {
         SessionState::ForceStopping,
     ] {
         let mut state = admin_fixture(claimed_state(), session.clone());
-        let applied = apply(
+        let _applied = apply_rejected(
             &mut state,
             Command::Queue(QueueCommand::Edit {
                 item_id: QueueItemId(4),
@@ -5557,17 +5552,12 @@ fn edit_is_idle_only_and_targets_queued_items() {
                 },
             }),
         );
-        assert!(
-            matches!(applied.reply, Reply::Rejected { .. }),
-            "{session:?}"
-        );
-        assert!(applied.durable.is_empty());
     }
     // Item gate while idle: finished, crash-recovered active, and missing
     // items all refuse.
     let mut state = admin_fixture(claimed_state(), SessionState::Idle);
     for target in [QueueItemId(1), QueueItemId(3), QueueItemId(9)] {
-        let applied = apply(
+        let _applied = apply_rejected(
             &mut state,
             Command::Queue(QueueCommand::Edit {
                 item_id: target,
@@ -5577,11 +5567,6 @@ fn edit_is_idle_only_and_targets_queued_items() {
                 },
             }),
         );
-        assert!(
-            matches!(applied.reply, Reply::Rejected { .. }),
-            "{target:?}"
-        );
-        assert!(applied.durable.is_empty());
     }
     assert_queue_shape(&state, &[1, 2, 3, 4, 5]);
 }
@@ -5606,18 +5591,18 @@ fn queue_targets_are_validated_before_add_edit_and_patched_retry() {
         let mut request = add_request("video.mkv");
         request.output_target = target.clone();
         let mut state = AppState::default();
-        let added = apply(
+        let _added = apply_rejected(
             &mut state,
             Command::Queue(QueueCommand::AddMany {
                 requests: vec![request],
             }),
         );
-        assert!(matches!(added.reply, Reply::Rejected { .. }), "{target:?}");
+
         assert!(state.durable.queue.is_empty());
 
-        let accepted = apply(&mut state, add_command("video.mkv"));
-        assert_eq!(accepted.reply, Reply::Accepted);
-        let edited = apply(
+        let accepted = apply_ok(&mut state, add_command("video.mkv"));
+        assert_eq!(accepted.reply, SuccessReply::Accepted);
+        let _edited = apply_rejected(
             &mut state,
             Command::Queue(QueueCommand::Edit {
                 item_id: QueueItemId(1),
@@ -5627,8 +5612,7 @@ fn queue_targets_are_validated_before_add_edit_and_patched_retry() {
                 },
             }),
         );
-        assert!(matches!(edited.reply, Reply::Rejected { .. }), "{target:?}");
-        assert!(edited.durable.is_empty());
+
         assert_eq!(
             state
                 .durable
@@ -5640,7 +5624,7 @@ fn queue_targets_are_validated_before_add_edit_and_patched_retry() {
         );
 
         let mut retry_state = admin_fixture(claimed_state(), SessionState::Idle);
-        let retried = apply(
+        let _retried = apply_rejected(
             &mut retry_state,
             Command::Queue(QueueCommand::Retry {
                 item_id: QueueItemId(1),
@@ -5650,11 +5634,7 @@ fn queue_targets_are_validated_before_add_edit_and_patched_retry() {
                 }),
             }),
         );
-        assert!(
-            matches!(retried.reply, Reply::Rejected { .. }),
-            "{target:?}"
-        );
-        assert!(retried.durable.is_empty());
+
         assert!(matches!(
             retry_state
                 .durable
@@ -5672,12 +5652,12 @@ fn queue_targets_are_validated_before_add_edit_and_patched_retry() {
 fn retry_and_remove_many_survive_compacted_snapshot() {
     let mut state = AppState::default();
     for id in 1..=3 {
-        let added = apply(&mut state, add_command(format!("clip-{id}.mkv")));
-        assert_eq!(added.reply, Reply::Accepted);
+        let added = apply_ok(&mut state, add_command(format!("clip-{id}.mkv")));
+        assert_eq!(added.reply, SuccessReply::Accepted);
     }
     state.durable.queue.first_mut().expect("queued item").state =
         QueueItemState::Finished(ItemOutcome::Stopped);
-    let retried = apply(
+    let retried = apply_ok(
         &mut state,
         Command::Queue(QueueCommand::Retry {
             item_id: QueueItemId(1),
@@ -5688,14 +5668,14 @@ fn retry_and_remove_many_survive_compacted_snapshot() {
             }),
         }),
     );
-    assert_eq!(retried.reply, Reply::Accepted);
-    let removed = apply(
+    assert_eq!(retried.reply, SuccessReply::Accepted);
+    let removed = apply_ok(
         &mut state,
         Command::Queue(QueueCommand::RemoveMany {
             item_ids: vec![QueueItemId(2)],
         }),
     );
-    assert_eq!(removed.reply, Reply::Accepted);
+    assert_eq!(removed.reply, SuccessReply::Accepted);
 
     let compacted = encode_snapshot(
         "1.2.3",
@@ -5953,7 +5933,7 @@ fn refresh_intent_forces_a_new_search_over_a_qualifying_cached_analysis() {
             import_paths: Vec::new(),
         }),
     );
-    let Reply::Claimed(Some(job)) = prepared.reply else {
+    let SuccessReply::Claimed(Some(job)) = prepared.reply else {
         panic!("expected refreshed claim");
     };
     assert_eq!(job.spec.intent, AnalysisIntent::Refresh);
@@ -6019,7 +5999,7 @@ fn software_fallback_analysis_is_permitted_under_a_hardware_spec() {
             import_paths: Vec::new(),
         }),
     );
-    let Reply::Claimed(Some(job)) = prepared.reply else {
+    let SuccessReply::Claimed(Some(job)) = prepared.reply else {
         panic!("expected hardware-prepared claim");
     };
     assert_eq!(
@@ -6030,7 +6010,7 @@ fn software_fallback_analysis_is_permitted_under_a_hardware_spec() {
     let mut wrong = analysis();
     wrong.profile = hardware.profile.clone();
     wrong.profile.preset = wrong.profile.preset.saturating_add(1);
-    let rejected = apply(
+    let _rejected = apply_rejected(
         &mut state,
         Command::Worker(WorkerCommand::RecordAnalysis {
             item_id: QueueItemId(1),
@@ -6039,7 +6019,7 @@ fn software_fallback_analysis_is_permitted_under_a_hardware_spec() {
             result: Box::new(wrong),
         }),
     );
-    assert!(matches!(rejected.reply, Reply::Rejected { .. }));
+
     let mut fallback = analysis();
     fallback.profile = fallback_profile;
     let recorded = apply_and_journal(
@@ -6053,14 +6033,14 @@ fn software_fallback_analysis_is_permitted_under_a_hardware_spec() {
             result: Box::new(fallback),
         }),
     );
-    assert_eq!(recorded.reply, Reply::Accepted);
+    assert_eq!(recorded.reply, SuccessReply::Accepted);
     let replayed = replay(&bytes);
     assert!(replayed.corruption.is_none());
     assert_eq!(replayed.state, state.durable);
 
     // The ladder is one-directional: a software-prepared run never records a
     // hardware result.
-    let _finished = apply(
+    let _finished = apply_ok(
         &mut state,
         Command::Worker(WorkerCommand::Terminal {
             item_id: QueueItemId(1),
@@ -6072,11 +6052,11 @@ fn software_fallback_analysis_is_permitted_under_a_hardware_spec() {
             final_telemetry: None,
         }),
     );
-    let _added = apply(&mut state, add_command("again.mkv"));
+    let _added = apply_ok(&mut state, add_command("again.mkv"));
     let _claimed = reserve_and_prepare(&mut state);
     let mut hardware_result = analysis();
     hardware_result.profile.decode_mode = DecodeMode::Hardware(crate::HardwareDecoder::H264Cuvid);
-    let rejected = apply(
+    let _rejected = apply_rejected(
         &mut state,
         Command::Worker(WorkerCommand::RecordAnalysis {
             item_id: QueueItemId(4),
@@ -6085,19 +6065,12 @@ fn software_fallback_analysis_is_permitted_under_a_hardware_spec() {
             result: Box::new(hardware_result),
         }),
     );
-    assert!(matches!(rejected.reply, Reply::Rejected { .. }));
-    assert!(matches!(
-        rejected.ephemeral.as_slice(),
-        [EphemeralDelta::CommandRejected { .. }]
-    ));
 }
 
 #[test]
-fn worker_rejections_pair_the_reply_with_a_command_rejected_delta() {
-    // Every rejection surfaces both ways: the worker's `Reply` and a
-    // `CommandRejected` ephemeral for the stream.
+fn worker_rejections_preserve_the_reason() {
     let mut state = AppState::default();
-    let _added = apply(&mut state, add_command("video.mkv"));
+    let _added = apply_ok(&mut state, add_command("video.mkv"));
     let _started = start_session(&mut state);
     let _claimed = reserve_and_prepare(&mut state);
     let record = |run_id| {
@@ -6108,23 +6081,14 @@ fn worker_rejections_pair_the_reply_with_a_command_rejected_delta() {
             result: Box::new(analysis()),
         })
     };
-    let recorded = apply(&mut state, record(RunId(2)));
-    assert_eq!(recorded.reply, Reply::Accepted);
+    let recorded = apply_ok(&mut state, record(RunId(2)));
+    assert_eq!(recorded.reply, SuccessReply::Accepted);
 
-    let duplicate = apply(&mut state, record(RunId(2)));
+    let duplicate = apply_rejected(&mut state, record(RunId(2)));
     let reason = "analysis is already recorded".to_owned();
-    assert_eq!(
-        duplicate.reply,
-        Reply::Rejected {
-            reason: reason.clone(),
-        }
-    );
-    assert_eq!(
-        duplicate.ephemeral,
-        vec![EphemeralDelta::CommandRejected { reason }]
-    );
+    assert_eq!(duplicate.reason, reason.clone());
 
-    let terminal = apply(
+    let terminal = apply_rejected(
         &mut state,
         Command::Worker(WorkerCommand::Terminal {
             item_id: QueueItemId(1),
@@ -6137,16 +6101,7 @@ fn worker_rejections_pair_the_reply_with_a_command_rejected_delta() {
         }),
     );
     let reason = "analyzed outcome is incompatible with the run state".to_owned();
-    assert_eq!(
-        terminal.reply,
-        Reply::Rejected {
-            reason: reason.clone(),
-        }
-    );
-    assert_eq!(
-        terminal.ephemeral,
-        vec![EphemeralDelta::CommandRejected { reason }]
-    );
+    assert_eq!(terminal.reason, reason.clone());
 }
 
 #[test]
@@ -6205,8 +6160,7 @@ fn restage_moves_the_staging_pin_and_is_refused_after_abandonment() {
             result: Box::new(analysis()),
         }),
     ] {
-        let applied = apply_and_journal(&mut state, &mut bytes, &mut sequence, command);
-        assert!(!matches!(applied.reply, Reply::Rejected { .. }));
+        let _applied = apply_and_journal(&mut state, &mut bytes, &mut sequence, command);
     }
     let mut started = transaction(OutputState::Started, Replacement::KeepOriginal);
     started.run_id = RunId(2);
@@ -6228,14 +6182,14 @@ fn restage_moves_the_staging_pin_and_is_refused_after_abandonment() {
         })),
     );
     // The ready pin holds: an artifact on a different file id is rejected.
-    let stale = apply(
+    let _stale = apply_rejected(
         &mut state,
         Command::Worker(WorkerCommand::Output(OutputDelta::OutputReady {
             run_id: RunId(2),
             staging_identity: identity("wrong", 5),
         })),
     );
-    assert!(matches!(stale.reply, Reply::Rejected { .. }));
+
     // The encode retry's restage: a repeated StagingCreated moves the pin to
     // the recreated staging artifact.
     let restaged = apply_and_journal(
@@ -6247,7 +6201,7 @@ fn restage_moves_the_staging_pin_and_is_refused_after_abandonment() {
             initial: destructive("fresh", 0),
         })),
     );
-    assert_eq!(restaged.reply, Reply::Accepted);
+    assert_eq!(restaged.reply, SuccessReply::Accepted);
     assert_eq!(
         state
             .durable
@@ -6272,7 +6226,7 @@ fn restage_moves_the_staging_pin_and_is_refused_after_abandonment() {
             },
         })),
     );
-    assert_eq!(ready.reply, Reply::Accepted);
+    assert_eq!(ready.reply, SuccessReply::Accepted);
     let replayed = replay(&bytes);
     assert!(replayed.corruption.is_none());
     assert_eq!(replayed.state, state.durable);
@@ -6296,20 +6250,19 @@ fn restage_moves_the_staging_pin_and_is_refused_after_abandonment() {
         },
         OutputDelta::Abandoned { run_id: RunId(2) },
     ] {
-        let applied = apply(
+        let applied = apply_ok(
             &mut abandoned_state,
             Command::Worker(WorkerCommand::Output(delta)),
         );
-        assert_eq!(applied.reply, Reply::Accepted);
+        assert_eq!(applied.reply, SuccessReply::Accepted);
     }
-    let refused = apply(
+    let _refused = apply_rejected(
         &mut abandoned_state,
         Command::Worker(WorkerCommand::Output(OutputDelta::StagingCreated {
             run_id: RunId(2),
             initial: destructive("fresh", 0),
         })),
     );
-    assert!(matches!(refused.reply, Reply::Rejected { .. }));
 }
 
 #[test]
@@ -6349,13 +6302,13 @@ fn file_record_round_trips_through_json() {
 #[test]
 fn statistics_request_answers_on_the_stream_without_touching_state() {
     let mut state = AppState::default();
-    let applied = apply(
+    let applied = apply_ok(
         &mut state,
         Command::Projection(ProjectionCommand::RequestStatistics {
             utc_offset_minutes: 60,
         }),
     );
-    assert_eq!(applied.reply, Reply::Accepted);
+    assert_eq!(applied.reply, SuccessReply::Accepted);
     assert!(applied.durable.is_empty());
     assert!(applied.config.is_empty());
     assert!(applied.effects.is_empty());
@@ -6371,20 +6324,13 @@ fn statistics_request_answers_on_the_stream_without_touching_state() {
 fn statistics_request_rejects_an_implausible_offset() {
     let mut state = AppState::default();
     for offset in [i32::MIN, -1_441, 1_441, i32::MAX] {
-        let applied = apply(
+        let _applied = apply_rejected(
             &mut state,
             Command::Projection(ProjectionCommand::RequestStatistics {
                 utc_offset_minutes: offset,
             }),
         );
-        assert!(matches!(applied.reply, Reply::Rejected { .. }));
-        assert!(matches!(
-            applied.ephemeral.as_slice(),
-            [EphemeralDelta::CommandRejected { .. }]
-        ));
-        assert!(applied.durable.is_empty());
-        assert!(applied.config.is_empty());
-        assert!(applied.effects.is_empty());
+
         assert_eq!(state, AppState::default());
     }
 }
@@ -6393,13 +6339,13 @@ fn statistics_request_rejects_an_implausible_offset() {
 fn statistics_request_accepts_offsets_at_the_validation_boundaries() {
     let mut state = AppState::default();
     for offset in [-1_440, 0, 1_440] {
-        let applied = apply(
+        let applied = apply_ok(
             &mut state,
             Command::Projection(ProjectionCommand::RequestStatistics {
                 utc_offset_minutes: offset,
             }),
         );
-        assert_eq!(applied.reply, Reply::Accepted);
+        assert_eq!(applied.reply, SuccessReply::Accepted);
         let [EphemeralDelta::Statistics(payload)] = applied.ephemeral.as_slice() else {
             panic!("expected exactly one statistics delta");
         };
@@ -6690,7 +6636,7 @@ fn import_parks_fresh_records_and_skips_known_keys() {
         // A duplicate inside one batch is skipped, not double-parked.
         (key_a.clone(), parked_record(ParkedStatus::Scanned)),
     ];
-    let imported = apply(
+    let imported = apply_ok(
         &mut state,
         Command::History(HistoryCommand::Import {
             records: batch.clone(),
@@ -6698,7 +6644,7 @@ fn import_parks_fresh_records_and_skips_known_keys() {
     );
     assert_eq!(
         imported.reply,
-        Reply::Imported {
+        SuccessReply::Imported {
             parked: 2,
             skipped: 1
         }
@@ -6707,13 +6653,13 @@ fn import_parks_fresh_records_and_skips_known_keys() {
     assert_eq!(state.durable.parked.len(), 2);
 
     // A full re-import is a counted no-op with no durable write.
-    let again = apply(
+    let again = apply_ok(
         &mut state,
         Command::History(HistoryCommand::Import { records: batch }),
     );
     assert_eq!(
         again.reply,
-        Reply::Imported {
+        SuccessReply::Imported {
             parked: 0,
             skipped: 3
         }
@@ -6737,7 +6683,7 @@ fn import_parks_fresh_records_and_skips_known_keys() {
             verdict: None,
         },
     );
-    let after_adoption = apply(
+    let after_adoption = apply_ok(
         &mut state,
         Command::History(HistoryCommand::Import {
             records: vec![(key_a, parked_record(ParkedStatus::Converted))],
@@ -6745,7 +6691,7 @@ fn import_parks_fresh_records_and_skips_known_keys() {
     );
     assert_eq!(
         after_adoption.reply,
-        Reply::Imported {
+        SuccessReply::Imported {
             parked: 0,
             skipped: 1
         }
@@ -6761,7 +6707,7 @@ fn prepare_resolves_parked_records_after_the_observation() {
     let stale = ImportPath("c:/videos/stale.mkv".to_owned());
     let mut stale_record = parked_record(ParkedStatus::Scanned);
     stale_record.size = Some(99_999);
-    let imported = apply(
+    let imported = apply_ok(
         &mut state,
         Command::History(HistoryCommand::Import {
             records: vec![
@@ -6771,14 +6717,17 @@ fn prepare_resolves_parked_records_after_the_observation() {
             ],
         }),
     );
-    assert!(matches!(imported.reply, Reply::Imported { parked: 3, .. }));
+    assert!(matches!(
+        imported.reply,
+        SuccessReply::Imported { parked: 3, .. }
+    ));
 
-    apply(&mut state, add_command("video.mkv"));
+    apply_ok(&mut state, add_command("video.mkv"));
     start_session(&mut state);
-    let reserved = apply(&mut state, Command::Worker(WorkerCommand::ReserveNext));
-    assert!(matches!(reserved.reply, Reply::Reserved(Some(_))));
+    let reserved = apply_ok(&mut state, Command::Worker(WorkerCommand::ReserveNext));
+    assert!(matches!(reserved.reply, SuccessReply::Reserved(Some(_))));
     let observation = media_observation("adopt-content");
-    let prepared = apply(
+    let prepared = apply_ok(
         &mut state,
         Command::Worker(WorkerCommand::PrepareReserved {
             item_id: QueueItemId(1),
@@ -6788,7 +6737,7 @@ fn prepare_resolves_parked_records_after_the_observation() {
             import_paths: vec![weaker_match.clone(), stale.clone(), matching.clone()],
         }),
     );
-    assert!(matches!(prepared.reply, Reply::Claimed(Some(_))));
+    assert!(matches!(prepared.reply, SuccessReply::Claimed(Some(_))));
     // The observation folds before any adoption delta.
     let observed_at = prepared
         .durable
@@ -6839,7 +6788,7 @@ fn prepare_resolves_parked_records_after_the_observation() {
 fn adoption_never_overwrites_a_native_verdict() {
     let mut state = AppState::default();
     let key = ImportPath("c:/videos/native.mkv".to_owned());
-    apply(
+    apply_ok(
         &mut state,
         Command::History(HistoryCommand::Import {
             records: vec![(key.clone(), parked_record(ParkedStatus::Converted))],
@@ -6868,10 +6817,10 @@ fn adoption_never_overwrites_a_native_verdict() {
         .expect("content record")
         .verdict = Some(native.clone());
 
-    apply(&mut state, add_command("video.mkv"));
+    apply_ok(&mut state, add_command("video.mkv"));
     start_session(&mut state);
-    apply(&mut state, Command::Worker(WorkerCommand::ReserveNext));
-    let prepared = apply(
+    apply_ok(&mut state, Command::Worker(WorkerCommand::ReserveNext));
+    let prepared = apply_ok(
         &mut state,
         Command::Worker(WorkerCommand::PrepareReserved {
             item_id: QueueItemId(1),
@@ -6881,7 +6830,7 @@ fn adoption_never_overwrites_a_native_verdict() {
             import_paths: vec![key.clone()],
         }),
     );
-    assert!(matches!(prepared.reply, Reply::Claimed(Some(_))));
+    assert!(matches!(prepared.reply, SuccessReply::Claimed(Some(_))));
     let record = state
         .durable
         .records
@@ -7051,13 +7000,13 @@ fn adopted_verdicts_apply_only_by_content_identity() {
 #[expect(clippy::expect_used, reason = "test assertion")]
 fn new_reservation_cannot_reuse_a_prepared_run_identity() {
     let mut state = AppState::default();
-    let _first = apply(&mut state, add_command("first.mkv"));
-    let _second = apply(&mut state, add_command("second.mkv"));
+    let _first = apply_ok(&mut state, add_command("first.mkv"));
+    let _second = apply_ok(&mut state, add_command("second.mkv"));
     let _started = start_session(&mut state);
     // Prepare then finish the first item so RunId(2) keeps a conversion run
     // that outlives its reservation.
     let _prepared = reserve_and_prepare(&mut state);
-    let finished = apply(
+    let finished = apply_ok(
         &mut state,
         Command::Worker(WorkerCommand::Terminal {
             item_id: QueueItemId(1),
@@ -7069,16 +7018,16 @@ fn new_reservation_cannot_reuse_a_prepared_run_identity() {
             final_telemetry: None,
         }),
     );
-    assert_eq!(finished.reply, Reply::Accepted);
+    assert_eq!(finished.reply, SuccessReply::Accepted);
     assert!(state.durable.conversion_runs.contains_key(&RunId(2)));
 
-    let reserved = apply(&mut state, Command::Worker(WorkerCommand::ReserveNext));
-    let Reply::Reserved(Some(job)) = reserved.reply else {
+    let reserved = apply_ok(&mut state, Command::Worker(WorkerCommand::ReserveNext));
+    let SuccessReply::Reserved(Some(job)) = reserved.reply else {
         panic!("expected second reservation");
     };
     assert_eq!((job.claim_id, job.run_id), (ClaimId(3), RunId(4)));
 
-    let abandoned = apply(
+    let _abandoned = apply_rejected(
         &mut state,
         Command::Worker(WorkerCommand::AbandonReservation {
             disposition: crate::ReservationDisposition::Stopped,
@@ -7088,7 +7037,7 @@ fn new_reservation_cannot_reuse_a_prepared_run_identity() {
             at: UnixMillis(2_000),
         }),
     );
-    assert!(matches!(abandoned.reply, Reply::Rejected { .. }));
+
     assert!(matches!(
         state
             .durable
@@ -7112,7 +7061,7 @@ fn expect_conflict(action: OutputRecoveryAction, detail: &str) {
 #[expect(clippy::expect_used, reason = "test assertion")]
 fn not_worthwhile_terminal_validates_attempt_consistency() {
     let mut state = AppState::default();
-    let _added = apply(&mut state, add_command("video.mkv"));
+    let _added = apply_ok(&mut state, add_command("video.mkv"));
     let _started = start_session(&mut state);
     let _prepared = reserve_and_prepare(&mut state);
     let run = state
@@ -7159,7 +7108,7 @@ fn not_worthwhile_terminal_validates_attempt_consistency() {
 #[expect(clippy::expect_used, reason = "test assertion")]
 fn output_exists_skip_terminal_requires_producing_run_without_output() {
     let mut state = AppState::default();
-    let _added = apply(&mut state, add_command("video.mkv"));
+    let _added = apply_ok(&mut state, add_command("video.mkv"));
     let _started = start_session(&mut state);
     let _prepared = reserve_and_prepare(&mut state);
     let run = state
@@ -7497,8 +7446,8 @@ fn ready_abandonment_checks_identity_at_live_and_replay_boundaries() {
             })
             .expect("record"),
         );
-        let applied = apply(&mut state, Command::Worker(WorkerCommand::Output(delta)));
-        assert_eq!(applied.reply == Reply::Accepted, expected);
+        let applied = crate::apply(&mut state, Command::Worker(WorkerCommand::Output(delta)));
+        assert_eq!(applied.is_ok(), expected);
         let recovered = replay(&bytes);
         assert_eq!(recovered.corruption.is_none(), expected);
         if expected {
@@ -7545,17 +7494,17 @@ fn force_stop_without_a_reserved_run_still_cancels_session_work() {
         session: SessionState::Running,
         ..AppState::default()
     };
-    let stopped = apply(&mut state, Command::Session(SessionCommand::ForceStop));
-    assert_eq!(stopped.reply, Reply::Accepted);
+    let stopped = apply_ok(&mut state, Command::Session(SessionCommand::ForceStop));
+    assert_eq!(stopped.reply, SuccessReply::Accepted);
     assert_eq!(
         stopped.effects,
         vec![Effect::KillActiveRun { run_id: None }]
     );
     assert_eq!(state.session, SessionState::ForceStopping);
-    let restart = apply(&mut state, Command::Session(SessionCommand::Start));
-    assert!(matches!(restart.reply, Reply::Rejected { .. }));
-    let finished = apply(&mut state, Command::Worker(WorkerCommand::Finished));
-    assert_eq!(finished.reply, Reply::Accepted);
+    let _restart = apply_rejected(&mut state, Command::Session(SessionCommand::Start));
+
+    let finished = apply_ok(&mut state, Command::Worker(WorkerCommand::Finished));
+    assert_eq!(finished.reply, SuccessReply::Accepted);
     assert_eq!(state.session, SessionState::Idle);
 }
 
@@ -7565,17 +7514,17 @@ fn graceful_stop_before_a_run_waits_for_worker_completion() {
         session: SessionState::Running,
         ..AppState::default()
     };
-    let stopped = apply(
+    let stopped = apply_ok(
         &mut state,
         Command::Session(SessionCommand::StopAfterCurrent),
     );
-    assert_eq!(stopped.reply, Reply::Accepted);
+    assert_eq!(stopped.reply, SuccessReply::Accepted);
     assert!(stopped.effects.is_empty());
     assert_eq!(state.session, SessionState::StopAfterCurrent);
-    let restart = apply(&mut state, Command::Session(SessionCommand::Start));
-    assert!(matches!(restart.reply, Reply::Rejected { .. }));
-    let finished = apply(&mut state, Command::Worker(WorkerCommand::Finished));
-    assert_eq!(finished.reply, Reply::Accepted);
+    let _restart = apply_rejected(&mut state, Command::Session(SessionCommand::Start));
+
+    let finished = apply_ok(&mut state, Command::Worker(WorkerCommand::Finished));
+    assert_eq!(finished.reply, SuccessReply::Accepted);
     assert_eq!(state.session, SessionState::Idle);
 }
 #[test]
@@ -7597,11 +7546,11 @@ fn reservation_identity_survives_removal_restart_and_compaction() {
         &mut sequence,
         Command::Worker(WorkerCommand::ReserveNext),
     );
-    let Reply::Reserved(Some(job)) = reserved.reply else {
+    let SuccessReply::Reserved(Some(job)) = reserved.reply else {
         panic!("expected reservation");
     };
     assert_eq!((job.claim_id, job.run_id), (ClaimId(1), RunId(2)));
-    let _stopping = apply(&mut state, Command::Session(SessionCommand::ForceStop));
+    let _stopping = apply_ok(&mut state, Command::Session(SessionCommand::ForceStop));
     let stopped = apply_and_journal(
         &mut state,
         &mut bytes,
@@ -7614,7 +7563,7 @@ fn reservation_identity_survives_removal_restart_and_compaction() {
             at: UnixMillis(1),
         }),
     );
-    assert_eq!(stopped.reply, Reply::Accepted);
+    assert_eq!(stopped.reply, SuccessReply::Accepted);
     let removed = apply_and_journal(
         &mut state,
         &mut bytes,
@@ -7623,7 +7572,7 @@ fn reservation_identity_survives_removal_restart_and_compaction() {
             item_ids: vec![job.item_id],
         }),
     );
-    assert_eq!(removed.reply, Reply::Accepted);
+    assert_eq!(removed.reply, SuccessReply::Accepted);
     assert!(state.durable.queue.is_empty());
     assert!(state.durable.conversion_runs.is_empty());
     let compacted = encode_snapshot(
@@ -7641,10 +7590,10 @@ fn reservation_identity_survives_removal_restart_and_compaction() {
             durable: replayed.state,
             ..AppState::default()
         };
-        apply(&mut restarted, add_command("second.mkv"));
+        apply_ok(&mut restarted, add_command("second.mkv"));
         start_session(&mut restarted);
-        let next = apply(&mut restarted, Command::Worker(WorkerCommand::ReserveNext));
-        let Reply::Reserved(Some(job)) = next.reply else {
+        let next = apply_ok(&mut restarted, Command::Worker(WorkerCommand::ReserveNext));
+        let SuccessReply::Reserved(Some(job)) = next.reply else {
             panic!("expected next reservation");
         };
         assert_eq!((job.claim_id, job.run_id), (ClaimId(3), RunId(4)));
@@ -7661,22 +7610,21 @@ fn runtime_identity_exhaustion_is_atomic_and_does_not_consume_empty_reservations
         let mut state = AppState::default();
         state.durable.runtime_id_high_water = mark;
         start_session(&mut state);
-        let empty = apply(&mut state, Command::Worker(WorkerCommand::ReserveNext));
-        assert_eq!(empty.reply, Reply::Reserved(None));
+        let empty = apply_ok(&mut state, Command::Worker(WorkerCommand::ReserveNext));
+        assert_eq!(empty.reply, SuccessReply::Reserved(None));
         assert!(empty.durable.is_empty());
-        apply(&mut state, add_command("video.mkv"));
+        apply_ok(&mut state, add_command("video.mkv"));
         let before = state.durable.clone();
-        let exhausted = apply(&mut state, Command::Worker(WorkerCommand::ReserveNext));
-        assert!(matches!(exhausted.reply, Reply::Rejected { .. }));
-        assert!(exhausted.durable.is_empty());
+        let _exhausted = apply_rejected(&mut state, Command::Worker(WorkerCommand::ReserveNext));
+
         assert_eq!(state.durable, before);
     }
     let mut state = AppState::default();
     state.durable.runtime_id_high_water = crate::DurableState::MAX_RUNTIME_ID - 3;
-    apply(&mut state, add_command("video.mkv"));
+    apply_ok(&mut state, add_command("video.mkv"));
     start_session(&mut state);
-    let last = apply(&mut state, Command::Worker(WorkerCommand::ReserveNext));
-    let Reply::Reserved(Some(job)) = last.reply else {
+    let last = apply_ok(&mut state, Command::Worker(WorkerCommand::ReserveNext));
+    let SuccessReply::Reserved(Some(job)) = last.reply else {
         panic!("expected final safe pair");
     };
     assert_eq!(job.run_id.0, crate::DurableState::MAX_RUNTIME_ID - 1);
@@ -7686,11 +7634,11 @@ fn runtime_identity_exhaustion_is_atomic_and_does_not_consume_empty_reservations
 #[expect(clippy::expect_used, reason = "fixture serialization")]
 fn replay_rejects_nonsequential_runtime_pairs_atomically() {
     let mut state = AppState::default();
-    apply(&mut state, add_command("video.mkv"));
+    apply_ok(&mut state, add_command("video.mkv"));
     start_session(&mut state);
     let initial = state.durable.clone();
-    let reserved = apply(&mut state, Command::Worker(WorkerCommand::ReserveNext));
-    let Reply::Reserved(Some(job)) = reserved.reply else {
+    let reserved = apply_ok(&mut state, Command::Worker(WorkerCommand::ReserveNext));
+    let SuccessReply::Reserved(Some(job)) = reserved.reply else {
         panic!("expected reservation");
     };
     for (claim, run) in [(0, 0), (2, 1), (3, 4), (1, 1), (u64::MAX - 1, u64::MAX)] {
@@ -7740,7 +7688,7 @@ fn snapshot_rejects_a_mark_below_retained_ids_or_above_wire_precision() {
 #[expect(clippy::expect_used, reason = "fixture serialization")]
 fn snapshot_rejects_queue_ids_outside_the_mark_or_repeated() {
     let mut state = active_state();
-    let _second = apply(&mut state, add_command("second.mkv"));
+    let _second = apply_ok(&mut state, add_command("second.mkv"));
     let valid = state.durable;
     assert_eq!(valid.queue_item_id_high_water, 2);
     assert!(!valid.conversion_runs.is_empty());
@@ -7808,7 +7756,7 @@ fn reservation_release_preserves_order_and_replays_without_an_outcome() {
         &mut sequence,
         Command::Worker(WorkerCommand::ReserveNext),
     );
-    let Reply::Reserved(Some(job)) = reserved.reply else {
+    let SuccessReply::Reserved(Some(job)) = reserved.reply else {
         panic!("expected reservation")
     };
     let before = state.durable.queue.clone();
@@ -7819,7 +7767,7 @@ fn reservation_release_preserves_order_and_replays_without_an_outcome() {
         run_id: job.run_id,
     });
     let released = apply_and_journal(&mut state, &mut bytes, &mut sequence, release.clone());
-    assert_eq!(released.reply, Reply::Accepted);
+    assert_eq!(released.reply, SuccessReply::Accepted);
     assert!(released.ephemeral.is_empty());
     assert_eq!(state.aggregates, SessionAggregates::default());
     assert_eq!(
@@ -7839,10 +7787,7 @@ fn reservation_release_preserves_order_and_replays_without_an_outcome() {
     let restored = replay(&bytes);
     assert!(restored.corruption.is_none());
     assert_eq!(restored.state, state.durable);
-    assert!(matches!(
-        apply(&mut state, release.clone()).reply,
-        Reply::Rejected { .. }
-    ));
+    let _rejection = apply_rejected(&mut state, release.clone());
     assert_eq!(state.durable.runtime_id_high_water, 2);
     let compacted = encode_snapshot(
         "test",
@@ -7856,16 +7801,13 @@ fn reservation_release_preserves_order_and_replays_without_an_outcome() {
         ..AppState::default()
     };
     let _started = start_session(&mut restarted);
-    let next = apply(&mut restarted, Command::Worker(WorkerCommand::ReserveNext));
-    let Reply::Reserved(Some(next)) = next.reply else {
+    let next = apply_ok(&mut restarted, Command::Worker(WorkerCommand::ReserveNext));
+    let SuccessReply::Reserved(Some(next)) = next.reply else {
         panic!("fresh reservation expected")
     };
     assert_eq!((next.claim_id, next.run_id), (ClaimId(3), RunId(4)));
     restarted.session = SessionState::Idle;
-    assert!(matches!(
-        apply(&mut restarted, release).reply,
-        Reply::Rejected { .. }
-    ));
+    let _rejection = apply_rejected(&mut restarted, release);
 }
 
 #[test]
@@ -7887,10 +7829,10 @@ fn reservation_failure_records_reason_and_replays_without_a_prepared_run() {
         &mut sequence,
         Command::Worker(WorkerCommand::ReserveNext),
     );
-    let Reply::Reserved(Some(job)) = reserved.reply else {
+    let SuccessReply::Reserved(Some(job)) = reserved.reply else {
         panic!("expected reservation")
     };
-    let stop = apply(
+    let _stop = apply_rejected(
         &mut state,
         Command::Worker(WorkerCommand::AbandonReservation {
             item_id: job.item_id,
@@ -7900,7 +7842,7 @@ fn reservation_failure_records_reason_and_replays_without_a_prepared_run() {
             disposition: crate::ReservationDisposition::Stopped,
         }),
     );
-    assert!(matches!(stop.reply, Reply::Rejected { .. }));
+
     let facts = FailureFacts::new(
         FailureKind::Internal,
         "preparation rejected invalid execution settings",
@@ -7917,7 +7859,7 @@ fn reservation_failure_records_reason_and_replays_without_a_prepared_run() {
             disposition: crate::ReservationDisposition::Failed(facts.clone()),
         }),
     );
-    assert_eq!(failed.reply, Reply::Accepted);
+    assert_eq!(failed.reply, SuccessReply::Accepted);
     assert_eq!(
         state.durable.queue.first().expect("item").state,
         QueueItemState::Finished(ItemOutcome::Failed(facts))
@@ -7941,7 +7883,7 @@ fn incomplete_is_retained_and_retry_preserves_its_previous_run() {
         .next()
         .expect("run")
         .clone();
-    let stopped = apply(
+    let _stopped = apply_rejected(
         &mut state,
         Command::Worker(WorkerCommand::Terminal {
             item_id: run.spec.item_id,
@@ -7953,8 +7895,8 @@ fn incomplete_is_retained_and_retry_preserves_its_previous_run() {
             final_telemetry: None,
         }),
     );
-    assert!(matches!(stopped.reply, Reply::Rejected { .. }));
-    let incomplete = apply(
+
+    let incomplete = apply_ok(
         &mut state,
         Command::Worker(WorkerCommand::Terminal {
             item_id: run.spec.item_id,
@@ -7966,19 +7908,19 @@ fn incomplete_is_retained_and_retry_preserves_its_previous_run() {
             final_telemetry: None,
         }),
     );
-    assert_eq!(incomplete.reply, Reply::Accepted);
+    assert_eq!(incomplete.reply, SuccessReply::Accepted);
     assert_eq!(state.aggregates.incomplete, 1);
-    let _finished = apply(&mut state, Command::Worker(WorkerCommand::Finished));
-    let clear = apply(&mut state, Command::Queue(QueueCommand::ClearCompleted));
+    let _finished = apply_ok(&mut state, Command::Worker(WorkerCommand::Finished));
+    let clear = apply_ok(&mut state, Command::Queue(QueueCommand::ClearCompleted));
     assert!(clear.durable.is_empty());
-    let retry = apply(
+    let retry = apply_ok(
         &mut state,
         Command::Queue(QueueCommand::Retry {
             item_id: run.spec.item_id,
             patch: None,
         }),
     );
-    assert_eq!(retry.reply, Reply::Accepted);
+    assert_eq!(retry.reply, SuccessReply::Accepted);
     assert_eq!(
         state.durable.queue.first().expect("item").state,
         QueueItemState::Queued
@@ -8059,26 +8001,17 @@ fn release_rejects_prepared_or_output_bearing_reservations() {
         run_id: RunId(2),
     });
     state.session = SessionState::Idle;
-    assert!(matches!(
-        apply(&mut state, release.clone()).reply,
-        Reply::Rejected { .. }
-    ));
+    let _rejection = apply_rejected(&mut state, release.clone());
     if let Some(item) = state.durable.queue.first_mut() {
         item.state = QueueItemState::Reserved {
             claim_id: ClaimId(1),
             run_id: RunId(2),
         };
     }
-    assert!(matches!(
-        apply(&mut state, release.clone()).reply,
-        Reply::Rejected { .. }
-    ));
+    let _rejection = apply_rejected(&mut state, release.clone());
     state.durable.conversion_runs.clear();
     let mut output = transaction(OutputState::Started, Replacement::KeepOriginal);
     output.run_id = RunId(2);
     state.durable.outputs.insert(RunId(2), output);
-    assert!(matches!(
-        apply(&mut state, release).reply,
-        Reply::Rejected { .. }
-    ));
+    let _rejection = apply_rejected(&mut state, release);
 }

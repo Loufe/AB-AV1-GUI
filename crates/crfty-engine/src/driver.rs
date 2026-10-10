@@ -8,10 +8,10 @@ use std::{
 };
 
 use crfty_core::{
-    AppSnapshot, AppState, COMPACTION_IDLE_MIN_JOURNAL_BYTES, Command, ConfigDelta,
-    CorruptionReport, CorruptionSignature, DurableDelta, DurableState, Effect, EphemeralDelta,
-    QueueItemState, Reply, RunId, Settings, SystemCommand, Telemetry, apply, compaction_due,
-    compaction_quiescent,
+    AnalysisSnapshot, AppSnapshot, AppState, Applied, COMPACTION_IDLE_MIN_JOURNAL_BYTES, Command,
+    ConfigDelta, CorruptionReport, CorruptionSignature, DurableDelta, DurableState, Effect,
+    EphemeralDelta, QueueItemState, Rejection, Reply, RunId, Settings, SuccessReply, SystemCommand,
+    Telemetry, apply, compaction_due, compaction_quiescent,
 };
 
 use crate::{
@@ -506,6 +506,10 @@ fn process_batch(
     effect_sink: Option<&mpsc::Sender<Effect>>,
 ) -> BatchOutcome {
     let settings_before = state.settings.clone();
+    let analysis_before = batch
+        .iter()
+        .any(|envelope| matches!(envelope.command, DriverCommand::Core(Command::Settings(_))))
+        .then(|| state.analysis.clone());
     let mut durable = Vec::new();
     let mut applied_batch = Vec::with_capacity(batch.len());
     let mut recovered = false;
@@ -513,7 +517,7 @@ fn process_batch(
         let command = match envelope.command.into_core() {
             Ok(command) => command,
             Err(reason) => {
-                applied_batch.push((envelope.reply, rejected_applied(reason.to_owned())));
+                applied_batch.push((envelope.reply, Err(Rejection::new(reason))));
                 continue;
             }
         };
@@ -522,7 +526,8 @@ fn process_batch(
         // verify the signature and rewrite the journal.
         if let Command::System(SystemCommand::AcknowledgeCorruption { signature }) = &command {
             let applied = acknowledge_corruption(signature, degraded, writer, &state.durable);
-            recovered = recovered || matches!(applied.reply, Reply::Accepted);
+            recovered = recovered
+                || matches!(&applied, Ok(applied) if applied.reply == SuccessReply::Accepted);
             applied_batch.push((envelope.reply, applied));
             continue;
         }
@@ -532,12 +537,14 @@ fn process_batch(
             if matches!(command, Command::System(_)) {
                 apply(state, command)
             } else {
-                rejected_applied(report.reason.clone())
+                Err(Rejection::new(report.reason.clone()))
             }
         } else {
             apply(state, command)
         };
-        durable.extend(applied.durable.iter().cloned());
+        if let Ok(applied) = &applied {
+            durable.extend(applied.durable.iter().cloned());
+        }
         applied_batch.push((envelope.reply, applied));
     }
 
@@ -558,7 +565,13 @@ fn process_batch(
     let imported_history = durable
         .iter()
         .any(|delta| matches!(delta, DurableDelta::HistoryImported { .. }));
-    persist_settings(state, config, &settings_before, &mut applied_batch);
+    persist_settings(
+        state,
+        config,
+        &settings_before,
+        analysis_before,
+        &mut applied_batch,
+    );
     let should_stop = emit_batch(durability, applied_batch, state, events, effect_sink);
     // Sent after the batch's own events so a rejection issued while still
     // degraded is never observed after the recovery notice.
@@ -580,44 +593,26 @@ fn acknowledge_corruption(
     degraded: &mut Option<CorruptionReport>,
     writer: &mut impl JournalSink,
     durable: &DurableState,
-) -> crfty_core::Applied {
+) -> Result<Applied, Rejection> {
     let Some(report) = degraded.as_ref() else {
-        return rejected_applied("journal is not degraded; nothing to acknowledge".to_owned());
+        return Err(Rejection::new(
+            "journal is not degraded; nothing to acknowledge",
+        ));
     };
     if report.signature != *signature {
-        return rejected_applied(
-            "corruption signature does not match the journal on disk".to_owned(),
-        );
+        return Err(Rejection::new(
+            "corruption signature does not match the journal on disk",
+        ));
     }
     match writer.recover(durable) {
         Ok(()) => {
             *degraded = None;
-            crfty_core::Applied {
-                durable: Vec::new(),
-                config: Vec::new(),
-                ephemeral: Vec::new(),
-                effects: Vec::new(),
-                reply: Reply::Accepted,
-            }
+            Ok(Applied::accepted())
         }
         Err(error) => {
             tracing::error!("journal recovery failed; corrupt journal left in place: {error}");
-            rejected_applied(format!("journal recovery failed: {error}"))
+            Err(Rejection::new(format!("journal recovery failed: {error}")))
         }
-    }
-}
-
-/// Mirrors the reducer's rejection convention: the caller's `Reply` and a
-/// `CommandRejected` ephemeral on the stream, in lockstep.
-fn rejected_applied(reason: String) -> crfty_core::Applied {
-    crfty_core::Applied {
-        durable: Vec::new(),
-        config: Vec::new(),
-        ephemeral: vec![EphemeralDelta::CommandRejected {
-            reason: reason.clone(),
-        }],
-        effects: Vec::new(),
-        reply: Reply::Rejected { reason },
     }
 }
 
@@ -639,7 +634,8 @@ fn persist_settings(
     state: &mut AppState,
     config: &mut impl ConfigSink,
     settings_before: &Settings,
-    applied_batch: &mut [(mpsc::SyncSender<Reply>, crfty_core::Applied)],
+    analysis_before: Option<AnalysisSnapshot>,
+    applied_batch: &mut [(mpsc::SyncSender<Reply>, Result<Applied, Rejection>)],
 ) {
     let final_write =
         applied_batch
@@ -647,6 +643,7 @@ fn persist_settings(
             .enumerate()
             .rev()
             .find_map(|(index, (_reply, applied))| {
+                let applied = applied.as_ref().ok()?;
                 let settings = applied
                     .effects
                     .iter()
@@ -669,7 +666,10 @@ fn persist_settings(
             settings: final_settings,
         });
     let mut final_change = final_change;
-    for (_reply, applied) in applied_batch.iter_mut() {
+    for (_reply, outcome) in applied_batch.iter_mut() {
+        let Ok(applied) = outcome else {
+            continue;
+        };
         let wrote_settings = applied
             .effects
             .iter()
@@ -684,24 +684,24 @@ fn persist_settings(
         if let Err(reason) = &write_result {
             // The settings stay as they were, so effects derived from the
             // rejected values (tool rediscovery) must not run either.
-            applied.effects.clear();
-            applied.ephemeral.push(EphemeralDelta::CommandRejected {
-                reason: reason.clone(),
-            });
-            applied.reply = Reply::Rejected {
-                reason: reason.clone(),
-            };
+            *outcome = Err(Rejection::new(reason.clone()));
         }
     }
     match write_result {
         Ok(()) => {
             if let Some(delta) = final_change.take()
-                && let Some((_reply, applied)) = applied_batch.get_mut(final_write_index)
+                && let Some((_reply, Ok(applied))) = applied_batch.get_mut(final_write_index)
             {
                 applied.config.push(delta);
             }
         }
-        Err(_) => state.settings = settings_before.clone(),
+        Err(reason) => {
+            tracing::error!("settings persistence failed; restoring committed settings: {reason}");
+            state.settings = settings_before.clone();
+            if let Some(analysis) = analysis_before {
+                state.analysis = analysis;
+            }
+        }
     }
 }
 
@@ -734,13 +734,20 @@ impl JournalSink for JournalWriter {
 /// so nothing observable can outrun durability.
 fn emit_batch(
     durability: Option<DurabilityToken>,
-    applied_batch: Vec<(mpsc::SyncSender<Reply>, crfty_core::Applied)>,
+    applied_batch: Vec<(mpsc::SyncSender<Reply>, Result<Applied, Rejection>)>,
     state: &AppState,
     events: &mpsc::Sender<DriverEvent>,
     effect_sink: Option<&mpsc::Sender<Effect>>,
 ) -> bool {
     let mut effects = Vec::new();
-    for (reply, applied) in applied_batch {
+    for (reply, outcome) in applied_batch {
+        let applied = match outcome {
+            Ok(applied) => applied,
+            Err(rejection) => {
+                emit_rejection(reply, rejection, events);
+                continue;
+            }
+        };
         for delta in applied.config {
             let _result = events.send(DriverEvent::Config(delta));
         }
@@ -761,7 +768,7 @@ fn emit_batch(
             let _result = events.send(DriverEvent::Ephemeral(delta));
         }
         effects.extend(applied.effects);
-        let _result = reply.send(applied.reply);
+        let _result = reply.send(applied.reply.into());
     }
     let effects = reconcile_effects(effects, state);
     let mut should_stop = effects.contains(&Effect::StopDriver);
@@ -782,6 +789,17 @@ fn emit_batch(
         }
     }
     should_stop
+}
+
+fn emit_rejection(
+    reply: mpsc::SyncSender<Reply>,
+    rejection: Rejection,
+    events: &mpsc::Sender<DriverEvent>,
+) {
+    let _result = events.send(DriverEvent::Ephemeral(EphemeralDelta::CommandRejected {
+        reason: rejection.reason.clone(),
+    }));
+    let _result = reply.send(rejection.into());
 }
 
 fn emit_durable(
@@ -822,15 +840,20 @@ fn reconcile_effects(effects: Vec<Effect>, state: &AppState) -> Vec<Effect> {
 }
 
 fn fail_batch(
-    applied_batch: Vec<(mpsc::SyncSender<Reply>, crfty_core::Applied)>,
+    applied_batch: Vec<(mpsc::SyncSender<Reply>, Result<Applied, Rejection>)>,
     events: &mpsc::Sender<DriverEvent>,
     error: JournalError,
 ) {
     let message = format!("durable driver failure: {error}");
-    for (reply, _applied) in applied_batch {
-        let _result = reply.send(Reply::DurabilityUnknown {
-            reason: message.clone(),
-        });
+    for (reply, outcome) in applied_batch {
+        match outcome {
+            Ok(_) => {
+                let _result = reply.send(Reply::DurabilityUnknown {
+                    reason: message.clone(),
+                });
+            }
+            Err(rejection) => emit_rejection(reply, rejection, events),
+        }
     }
     let _result = events.send(DriverEvent::Fatal { message });
 }
@@ -873,8 +896,8 @@ mod tests {
         AnalysisDelta, AnalysisIntent, AnalysisSnapshot, ClaimId, Command, ConfigDelta,
         DurableDelta, Effect, EphemeralDelta, ItemOutcome, JobPhase, JobProgress, Operation,
         OutputTarget, OverwriteDecision, QueueAddRequest, QueueCommand, QueueItemId, Reply, RunId,
-        SessionCommand, SessionState, Settings, SettingsCommand, SystemCommand, Telemetry,
-        ToolAvailability, ToolRevisions, UnixMillis, WorkerCommand, apply,
+        SessionCommand, SessionState, Settings, SettingsCommand, SuccessReply, SystemCommand,
+        Telemetry, ToolAvailability, ToolRevisions, UnixMillis, WorkerCommand, apply,
     };
 
     fn add_command(input: &str) -> Command {
@@ -977,7 +1000,9 @@ mod tests {
     #[expect(clippy::expect_used, reason = "test assertion")]
     fn standing_analysis_publishes_after_durable_facts_from_the_same_command() {
         let mut state = AppState::default();
-        let mut applied = apply(&mut state, add_command("video.mkv"));
+        let Ok(mut applied) = apply(&mut state, add_command("video.mkv")) else {
+            panic!("queue fixture rejected");
+        };
         applied
             .ephemeral
             .push(EphemeralDelta::Analysis(AnalysisDelta::Reset {
@@ -988,7 +1013,7 @@ mod tests {
 
         assert!(!emit_batch(
             Some(DurabilityToken::new()),
-            vec![(reply_tx, applied)],
+            vec![(reply_tx, Ok(applied))],
             &state,
             &event_tx,
             None,
@@ -1044,8 +1069,7 @@ mod tests {
                 import_paths: Vec::new(),
             }),
         ] {
-            let applied = apply(&mut state, command);
-            assert!(!matches!(applied.reply, Reply::Rejected { .. }));
+            assert!(apply(&mut state, command).is_ok());
         }
 
         let (reply_tx, reply_rx) = mpsc::sync_channel(1);
@@ -1102,6 +1126,309 @@ mod tests {
     struct RecordingConfig {
         writes: Vec<Settings>,
         failure: Option<String>,
+    }
+
+    fn state_with_reusable_analysis() -> Result<AppState, String> {
+        use crfty_core::{
+            AnalysisActivity, AnalysisCommand, AnalysisDisplayText, AnalysisFileScan,
+            AnalysisGenerationId, AnalysisResult, AnalysisRow, AnalysisRowEntry, AnalysisRowId,
+            ContentKey, Crf, DestructiveIdentity, FileRecord, FileSystemId, FileTimeNs,
+            HardwareDecoder, LocatedTool, LocatedTools, MediaContainer, MediaObservation,
+            PathBinding, PathHash, SearchMeasurement, ToolSource, ToolVerification, VideoCodec,
+            VideoMeta, VmafScore, compose_execution,
+        };
+
+        let mut state = AppState {
+            tools: ToolAvailability::Located {
+                tools: LocatedTools {
+                    ffmpeg: LocatedTool {
+                        source: ToolSource::SearchPath,
+                        path: PathBuf::from("fixture-ffmpeg"),
+                    },
+                    ffprobe: LocatedTool {
+                        source: ToolSource::SearchPath,
+                        path: PathBuf::from("fixture-ffprobe"),
+                    },
+                },
+                verification: ToolVerification::Verified {
+                    revisions: ToolRevisions {
+                        ab_av1: "fixture".into(),
+                        ffmpeg: "fixture".into(),
+                        encoder: "fixture".into(),
+                    },
+                    hardware_decoders: [HardwareDecoder::H264Cuvid].into_iter().collect(),
+                },
+            },
+            ..AppState::default()
+        };
+        let metadata = VideoMeta {
+            codec: VideoCodec::H264,
+            container: MediaContainer::Matroska,
+            width: 1_280,
+            height: 720,
+            rotation_degrees: 0,
+            duration_ms: 60_000,
+            size_bytes: 1_000,
+            audio: Vec::new(),
+            subtitle_count: 0,
+        };
+        let execution = compose_execution(
+            &state.execution,
+            &state.tools,
+            &state.settings,
+            OverwriteDecision::FollowSettings,
+            Some(&metadata.codec),
+        )
+        .map_err(|reason| reason.summary().to_owned())?;
+        let key = ContentKey("fixture".into());
+        let mut record = FileRecord::new(metadata.clone());
+        let result = AnalysisResult {
+            requested_target: execution.requested_target,
+            successful_target: execution.requested_target,
+            fallback_floor: execution.fallback_floor,
+            fallback_step: execution.fallback_step,
+            failed_attempts: Vec::new(),
+            measurement: SearchMeasurement {
+                crf: Crf(30_000),
+                score: VmafScore(9_500),
+                predicted_size: 500,
+                predicted_percent_basis_points: 5_000,
+                predicted_duration_ms: 30_000,
+                from_cache: false,
+            },
+            profile: execution.profile,
+        };
+        record.analyses = std::collections::BTreeMap::from([(
+            result.profile.clone(),
+            std::collections::BTreeMap::from([(result.successful_target, result)]),
+        )]);
+        state.durable.records.insert(key.clone(), record);
+        let display = |text: &str| AnalysisDisplayText {
+            text: text.into(),
+            lossy: false,
+        };
+        for command in [
+            AnalysisCommand::Begin {
+                roots: vec![display("fixture")],
+            },
+            AnalysisCommand::UpsertRows {
+                generation: AnalysisGenerationId(1),
+                rows: vec![AnalysisRow {
+                    id: AnalysisRowId(1),
+                    parent: None,
+                    display_name: display("video.mkv"),
+                    display_path: display("fixture/video.mkv"),
+                    entry: AnalysisRowEntry::File {
+                        scan: AnalysisFileScan::Discovered,
+                    },
+                }],
+            },
+            AnalysisCommand::SetActivity {
+                generation: AnalysisGenerationId(1),
+                activity: AnalysisActivity::Discovered,
+            },
+            AnalysisCommand::BeginBasicScan {
+                generation: AnalysisGenerationId(1),
+            },
+            AnalysisCommand::ObserveFile {
+                generation: AnalysisGenerationId(1),
+                row_id: AnalysisRowId(1),
+                observation: Box::new(MediaObservation {
+                    path_hash: PathHash("fixture-path".into()),
+                    binding: PathBinding {
+                        content_key: key,
+                        identity: DestructiveIdentity {
+                            file_id: FileSystemId::Unix {
+                                device: 1,
+                                inode: 1,
+                            },
+                            size: 1_000,
+                            modified_ns: Some(FileTimeNs(1)),
+                        },
+                    },
+                    metadata,
+                }),
+                import_paths: Vec::new(),
+            },
+        ] {
+            apply(&mut state, Command::Analysis(command)).map_err(|rejection| rejection.reason)?;
+        }
+        Ok(state)
+    }
+
+    #[test]
+    fn failed_settings_batch_restores_analysis_and_discards_provisional_work()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let directory = tempfile::tempdir()?;
+        let mut state = state_with_reusable_analysis()?;
+        let before = state.clone();
+        let mut changed = state.settings.clone();
+        changed.hardware_decode = false;
+        changed.tools.ffmpeg = Some(directory.path().join("fixture-ffmpeg"));
+        let mut provisional = state.clone();
+        let applied = apply(
+            &mut provisional,
+            Command::Settings(SettingsCommand::Set {
+                settings: changed.clone(),
+            }),
+        )
+        .map_err(|rejection| rejection.reason)?;
+        assert_ne!(provisional.analysis, before.analysis);
+        assert!(
+            applied
+                .ephemeral
+                .iter()
+                .any(|delta| matches!(delta, EphemeralDelta::Analysis(_)))
+        );
+        assert!(
+            applied
+                .effects
+                .iter()
+                .any(|effect| matches!(effect, Effect::DiscoverTools { .. }))
+        );
+
+        let mut final_settings = changed.clone();
+        final_settings.output.overwrite_existing = true;
+        let (first_tx, first_rx) = mpsc::sync_channel(1);
+        let (last_tx, last_rx) = mpsc::sync_channel(1);
+        let (event_tx, event_rx) = mpsc::channel();
+        let (effect_tx, effect_rx) = mpsc::channel();
+        let mut config = RecordingConfig {
+            writes: Vec::new(),
+            failure: Some("config sync failed".into()),
+        };
+        let outcome = process_batch(
+            &mut state,
+            &mut NoopJournal,
+            &mut config,
+            &mut None,
+            vec![
+                Envelope {
+                    command: Command::Settings(SettingsCommand::Set { settings: changed }).into(),
+                    reply: first_tx,
+                },
+                Envelope {
+                    command: Command::Settings(SettingsCommand::Set {
+                        settings: final_settings.clone(),
+                    })
+                    .into(),
+                    reply: last_tx,
+                },
+            ],
+            &event_tx,
+            Some(&effect_tx),
+        );
+        assert!(!outcome.should_stop);
+        assert_eq!(state, before);
+        assert_eq!(config.writes, [final_settings]);
+        let reason = "config sync failed".to_owned();
+        for reply in [first_rx, last_rx] {
+            assert_eq!(
+                reply.recv()?,
+                Reply::Rejected {
+                    reason: reason.clone()
+                }
+            );
+        }
+        assert_eq!(
+            event_rx.try_iter().collect::<Vec<_>>(),
+            vec![
+                DriverEvent::Ephemeral(EphemeralDelta::CommandRejected {
+                    reason: reason.clone()
+                }),
+                DriverEvent::Ephemeral(EphemeralDelta::CommandRejected { reason }),
+            ]
+        );
+        assert!(effect_rx.try_recv().is_err());
+        Ok(())
+    }
+
+    fn check_mixed_batch(
+        journal: &mut impl JournalSink,
+        persistence_fails: bool,
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        let (first_tx, first_rx) = mpsc::sync_channel(1);
+        let (rejected_tx, rejected_rx) = mpsc::sync_channel(1);
+        let (last_tx, last_rx) = mpsc::sync_channel(1);
+        let (event_tx, event_rx) = mpsc::channel();
+        let (effect_tx, effect_rx) = mpsc::channel();
+        let mut state = AppState::default();
+        let outcome = process_batch(
+            &mut state,
+            journal,
+            &mut AcceptingConfig,
+            &mut None,
+            vec![
+                Envelope {
+                    command: add_command("first.mkv").into(),
+                    reply: first_tx,
+                },
+                Envelope {
+                    command: Command::Queue(QueueCommand::RemoveMany {
+                        item_ids: vec![QueueItemId(9)],
+                    })
+                    .into(),
+                    reply: rejected_tx,
+                },
+                Envelope {
+                    command: add_command("second.mkv").into(),
+                    reply: last_tx,
+                },
+            ],
+            &event_tx,
+            Some(&effect_tx),
+        );
+        assert_eq!(outcome.should_stop, persistence_fails);
+        for reply in [first_rx, last_rx] {
+            let reply = reply.recv()?;
+            if persistence_fails {
+                assert!(matches!(reply, Reply::DurabilityUnknown { .. }));
+            } else {
+                assert_eq!(reply, Reply::Accepted);
+            }
+        }
+        let reason = "queue item does not exist".to_owned();
+        assert_eq!(
+            rejected_rx.recv()?,
+            Reply::Rejected {
+                reason: reason.clone()
+            }
+        );
+        let events: Vec<_> = event_rx.try_iter().collect();
+        assert_eq!(events.iter().filter(|event| matches!(event,
+            DriverEvent::Ephemeral(EphemeralDelta::CommandRejected { reason: actual }) if *actual == reason)).count(), 1);
+        let order: Vec<_> = events
+            .iter()
+            .map(|event| match event {
+                DriverEvent::Ephemeral(EphemeralDelta::QueueAddSummary { .. }) => "summary",
+                DriverEvent::Durable(DurableDelta::QueueAdded { .. }) => "durable",
+                DriverEvent::Ephemeral(EphemeralDelta::CommandRejected { .. }) => "rejected",
+                DriverEvent::Fatal { .. } => "fatal",
+                _ => "unexpected",
+            })
+            .collect();
+        if persistence_fails {
+            assert_eq!(order, ["rejected", "fatal"]);
+        } else {
+            assert_eq!(
+                order,
+                ["summary", "durable", "rejected", "summary", "durable"]
+            );
+        }
+        assert!(effect_rx.try_recv().is_err());
+        Ok(())
+    }
+
+    #[test]
+    fn mixed_batch_preserves_rejection_order_beside_committed_commands()
+    -> Result<(), Box<dyn std::error::Error>> {
+        check_mixed_batch(&mut NoopJournal, false)
+    }
+
+    #[test]
+    fn journal_failure_preserves_an_already_decided_rejection()
+    -> Result<(), Box<dyn std::error::Error>> {
+        check_mixed_batch(&mut FailingJournal, true)
     }
 
     impl ConfigSink for RecordingConfig {
@@ -1288,8 +1615,10 @@ mod tests {
     }
 
     fn add_item(state: &mut AppState, id: u64) -> Vec<DurableDelta> {
-        let applied = apply(state, add_command(&format!("video-{id}.mkv")));
-        assert_eq!(applied.reply, Reply::Accepted);
+        let Ok(applied) = apply(state, add_command(&format!("video-{id}.mkv"))) else {
+            panic!("queue fixture rejected");
+        };
+        assert_eq!(applied.reply, SuccessReply::Accepted);
         applied.durable
     }
 
@@ -1562,7 +1891,8 @@ mod tests {
                     lossy: false,
                 }],
             }),
-        );
+        )
+        .map_err(|rejection| rejection.reason)?;
         let mut registry = registry.lock().map_err(|_| "registry poisoned")?;
         let id = registry
             .insert(
@@ -1599,11 +1929,13 @@ mod tests {
                     display_path: display,
                 }],
             }),
-        );
-        let applied = apply(&mut state, command.into_core()?);
+        )
+        .map_err(|rejection| rejection.reason)?;
+        let applied =
+            apply(&mut state, command.into_core()?).map_err(|rejection| rejection.reason)?;
         assert_eq!(
             applied.reply,
-            Reply::AnalysisQueued(AnalysisQueueSummary {
+            SuccessReply::AnalysisQueued(AnalysisQueueSummary {
                 added: 1,
                 excluded: Vec::new()
             })

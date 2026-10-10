@@ -28,7 +28,7 @@ The application coordinates UI commands, scans, long-running conversions, durabl
 
 Chosen option: **One synchronous driver plus a pure reducer**, because it eliminates lock ordering and makes mutation, persistence, and notification a single ordered flow.
 
-Commands enter through a bounded lossless channel. High-rate telemetry uses a separate coalescing path. The reducer performs no I/O or clock access and returns deltas, effects, and replies for the driver to interpret.
+Commands enter through a bounded lossless channel. High-rate telemetry uses a separate coalescing path. The reducer performs no I/O or clock access and returns either applied deltas, effects, and a success reply or a reason-only rejection. A rejection has no place to retain changes or work, and an applied command cannot carry a rejection reply. The driver emits the caller's rejection and one stream notice from that single reason. Settings writes form separate batches so a failed write can discard all provisional changes and restore both committed settings and Analysis rows before publication.
 
 Claim and run IDs are allocated together by the reducer when it reserves a queue item. The reservation advances a durable high-water mark; finishing, retrying, removing, or compacting work never lowers it. IDs stay within the JavaScript safe integer range because the frontend receives them as numbers. Exhaustion rejects another reservation without preventing startup or inspection. Replay requires the next pair, and snapshot loading checks the mark against retained identities. This guarantee covers the continuing store; restoring an older backup also restores its allocation history.
 

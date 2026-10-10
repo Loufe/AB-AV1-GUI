@@ -102,8 +102,8 @@ pub use projection::{HistoryRow, history_rows};
 pub(crate) use projection::{StatisticsPayload, collect_stat_facts, statistics};
 pub use reducer::{
     Applied, Command, Effect, EphemeralDelta, HistoryCommand, ProjectionCommand, QueueAddRequest,
-    QueueCommand, QueueItemEdit, Reply, ReservationDisposition, SessionCommand, SettingsCommand,
-    SystemCommand, ToolsCommand, WorkerCommand, apply,
+    QueueCommand, QueueItemEdit, Rejection, Reply, ReservationDisposition, SessionCommand,
+    SettingsCommand, SuccessReply, SystemCommand, ToolsCommand, WorkerCommand, apply,
 };
 pub use settings::{DefaultOutputMode, Settings, ToolPathSettings, VideoExtension};
 pub use state::{
