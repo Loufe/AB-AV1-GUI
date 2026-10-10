@@ -116,7 +116,7 @@ pub(super) fn begin_output(
         job.spec.execution.overwrite_existing,
     ) {
         Ok(transaction) => transaction,
-        Err(error) if error.is_destination_exists() => {
+        Err(OutputError::DestinationExists) => {
             terminal(
                 commands,
                 job,

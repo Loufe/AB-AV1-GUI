@@ -22,14 +22,20 @@ const PERSIST_ATTEMPTS: u32 = 5;
 const PERSIST_BACKOFF: Duration = Duration::from_millis(20);
 
 #[derive(Debug)]
-pub struct JournalError {
-    context: &'static str,
-    source: io::Error,
+pub enum JournalError {
+    Io {
+        context: &'static str,
+        source: io::Error,
+    },
+    CompactionRecovery {
+        replacement: io::Error,
+        reopen: io::Error,
+    },
 }
 
 impl JournalError {
     fn new(context: &'static str, source: io::Error) -> Self {
-        Self { context, source }
+        Self::Io { context, source }
     }
 
     #[cfg(test)]
@@ -40,13 +46,25 @@ impl JournalError {
 
 impl fmt::Display for JournalError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(formatter, "{}: {}", self.context, self.source)
+        match self {
+            Self::Io { context, source } => write!(formatter, "{context}: {source}"),
+            Self::CompactionRecovery {
+                replacement,
+                reopen,
+            } => write!(
+                formatter,
+                "failed to replace journal with snapshot: {replacement}; failed to reopen journal after failed compaction: {reopen}"
+            ),
+        }
     }
 }
 
 impl std::error::Error for JournalError {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
-        Some(&self.source)
+        match self {
+            Self::Io { source, .. } => Some(source),
+            Self::CompactionRecovery { replacement, .. } => Some(replacement),
+        }
     }
 }
 
@@ -192,10 +210,9 @@ impl JournalWriter {
     /// the first record after the snapshot carries the same sequence the next
     /// append would have carried before compaction.
     ///
-    /// On any failure the old generation stays authoritative: the temp file is
-    /// discarded, the original journal is untouched (or reopened), and the
-    /// error is returned for logging so the driver retries at a later idle
-    /// barrier instead of going fatal.
+    /// Failed replacement leaves the previous generation authoritative. Its
+    /// handle is reopened before another append; if that also fails, both
+    /// causes survive and the writer refuses further appends without a handle.
     pub fn compact(
         &mut self,
         state: &DurableState,
@@ -223,17 +240,7 @@ impl JournalWriter {
         // old generation's handle must close before the atomic swap.
         self.file = None;
         if let Err(error) = persist_with_retry(temporary, &self.path) {
-            // The replace never happened, so the old journal is still intact;
-            // reacquire its handle and report the failure for a later retry.
-            self.file = open_append(&self.path)
-                .map_err(|reopen| {
-                    JournalError::new("failed to reopen journal after failed compaction", reopen)
-                })
-                .map(Some)?;
-            return Err(JournalError::new(
-                "failed to replace journal with snapshot",
-                error,
-            ));
+            return Err(self.reopen_after_failed_compaction(error));
         }
         sync_parent(&self.path)
             .map_err(|error| JournalError::new("failed to synchronize journal directory", error))?;
@@ -243,6 +250,21 @@ impl JournalWriter {
         );
         self.bytes_len = u64::try_from(encoded.len()).unwrap_or(u64::MAX);
         Ok(())
+    }
+
+    fn reopen_after_failed_compaction(&mut self, replacement: io::Error) -> JournalError {
+        // The failed replacement left the previous generation authoritative;
+        // another append is possible only after its handle is restored.
+        match open_append(&self.path) {
+            Ok(file) => {
+                self.file = Some(file);
+                JournalError::new("failed to replace journal with snapshot", replacement)
+            }
+            Err(reopen) => JournalError::CompactionRecovery {
+                replacement,
+                reopen,
+            },
+        }
     }
 
     /// Recover from acknowledged corruption: archive the corrupt journal to a
@@ -327,5 +349,68 @@ fn persist_with_retry(mut temporary: NamedTempFile, path: &Path) -> Result<(), i
             }
             Err(error) => return Err(error.error),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::{error::Error, fs, io, path::PathBuf};
+
+    use crfty_core::{
+        AnalysisIntent, DurableDelta, Operation, OutputTarget, OverwriteDecision, QueueItem,
+        QueueItemId, QueueItemState, replay,
+    };
+
+    use super::{JournalError, JournalWriter};
+
+    fn queued(id: u64) -> DurableDelta {
+        DurableDelta::QueueAdded {
+            item: QueueItem {
+                id: QueueItemId(id),
+                input: PathBuf::from(format!("fixture-{id}.mkv")),
+                operation: Operation::Convert,
+                intent: AnalysisIntent::ReuseIfFresh,
+                output_target: OutputTarget::Replace,
+                overwrite: OverwriteDecision::FollowSettings,
+                state: QueueItemState::Queued,
+            },
+        }
+    }
+
+    #[test]
+    fn successful_reopen_after_failed_replacement_preserves_the_writer()
+    -> Result<(), Box<dyn Error>> {
+        let directory = tempfile::tempdir()?;
+        let path = directory.path().join("journal.jsonl");
+        let (mut writer, _) = JournalWriter::open(&path)?;
+        writer.append_batch(&[queued(1)])?;
+        let before = fs::read(&path)?;
+        let before_len = writer.journal_bytes();
+        let before_sequence = writer.next_sequence;
+        writer.file = None;
+
+        let error = writer.reopen_after_failed_compaction(io::Error::new(
+            io::ErrorKind::PermissionDenied,
+            "replacement rejected",
+        ));
+
+        assert!(matches!(&error, JournalError::Io { source, .. }
+            if source.kind() == io::ErrorKind::PermissionDenied));
+        assert_eq!(
+            error.source().map(ToString::to_string),
+            Some("replacement rejected".to_owned())
+        );
+        assert_eq!(fs::read(&path)?, before);
+        assert_eq!(writer.journal_bytes(), before_len);
+        assert_eq!(writer.next_sequence, before_sequence);
+        writer.append_batch(&[queued(2)])?;
+        drop(writer);
+
+        let (_, restarted) = JournalWriter::open(&path)?;
+        assert!(restarted.corruption.is_none());
+        assert_eq!(restarted.state.queue.len(), 2);
+        assert_eq!(restarted.next_sequence.0, 2);
+        assert_eq!(replay(&before).state.queue.len(), 1);
+        Ok(())
     }
 }
