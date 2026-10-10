@@ -32,7 +32,6 @@ pub enum AnalysisQueueExclusion {
     Folder,
     DuplicateIdentity,
     ScanFailed,
-    UnsupportedPath,
     Policy { reason: SkipReason },
 }
 
@@ -83,6 +82,20 @@ pub(crate) fn plan_analysis_enqueue(
     if !current.activity.is_live() {
         return Err("queue action names an inactive Analysis generation");
     }
+    let output = &state.settings.output;
+    let output_template = match output.default_mode {
+        DefaultOutputMode::Replace => OutputTarget::Replace,
+        DefaultOutputMode::Suffix => OutputTarget::Suffix {
+            suffix: output.suffix.clone(),
+        },
+        DefaultOutputMode::SeparateFolder => OutputTarget::SeparateFolder {
+            directory: output
+                .separate_folder
+                .clone()
+                .ok_or("default separate output folder is required")?,
+            source_root: None,
+        },
+    };
     let mut summary = AnalysisQueueSummary::default();
     let selected = match request.selection {
         AnalysisQueueSelection::AllFiles => None,
@@ -131,10 +144,6 @@ pub(crate) fn plan_analysis_enqueue(
         let file = files
             .get(&row.id)
             .ok_or("Analysis native path is unavailable")?;
-        if file.input.to_str().is_none() || file.source_root.to_str().is_none() {
-            summary.exclude(AnalysisQueueExclusion::UnsupportedPath);
-            continue;
-        }
         let key = match scan {
             AnalysisFileScan::Scanned { content_key, .. } => Some(content_key),
             AnalysisFileScan::SettledOutput {
@@ -158,21 +167,10 @@ pub(crate) fn plan_analysis_enqueue(
                 continue;
             }
         }
-        let output_target = match state.settings.output.default_mode {
-            DefaultOutputMode::Replace => OutputTarget::Replace,
-            DefaultOutputMode::Suffix => OutputTarget::Suffix {
-                suffix: state.settings.output.suffix.clone(),
-            },
-            DefaultOutputMode::SeparateFolder => OutputTarget::SeparateFolder {
-                directory: state
-                    .settings
-                    .output
-                    .separate_folder
-                    .clone()
-                    .ok_or("default separate output folder is required")?,
-                source_root: Some(file.source_root.clone()),
-            },
-        };
+        let mut output_target = output_template.clone();
+        if let OutputTarget::SeparateFolder { source_root, .. } = &mut output_target {
+            *source_root = Some(file.source_root.clone());
+        }
         requests.push(QueueAddRequest {
             input: file.input.clone(),
             path_hash: None,
@@ -222,6 +220,17 @@ mod tests {
         }
     }
 
+    fn status(historical: HistoricalLevel, eligibility: RowEligibility) -> Box<AnalysisRowStatus> {
+        Box::new(AnalysisRowStatus {
+            applicable: ApplicableLevel::Scanned {
+                reuse: ReuseStanding::Unanalyzed,
+            },
+            historical,
+            analyze: eligibility.clone(),
+            convert: eligibility,
+        })
+    }
+
     fn scanned(
         key: &str,
         historical: HistoricalLevel,
@@ -231,14 +240,17 @@ mod tests {
             content_key: ContentKey(key.to_owned()),
             metadata: crate::test_support::meta(VideoCodec::H264, 100),
             refresh_failure: None,
-            status: Box::new(AnalysisRowStatus {
-                applicable: ApplicableLevel::Scanned {
-                    reuse: ReuseStanding::Unanalyzed,
-                },
-                historical,
-                analyze: eligibility.clone(),
-                convert: eligibility,
-            }),
+            status: status(historical, eligibility),
+        }
+    }
+
+    fn settled(output_key: &str) -> AnalysisFileScan {
+        AnalysisFileScan::SettledOutput {
+            source_content_key: ContentKey("source".to_owned()),
+            output_content_key: ContentKey(output_key.to_owned()),
+            metadata: None,
+            refresh_failure: None,
+            status: status(HistoricalLevel::Converted, RowEligibility::Eligible),
         }
     }
 
@@ -669,8 +681,108 @@ mod tests {
             applied.reply,
             Reply::AnalysisQueued(AnalysisQueueSummary {
                 added: 0,
-                excluded: vec![(AnalysisQueueExclusion::UnsupportedPath, 1)],
+                excluded: vec![(
+                    AnalysisQueueExclusion::Policy {
+                        reason: SkipReason::PathNotPersistable
+                    },
+                    1
+                )],
             })
+        );
+        assert!(applied.durable.is_empty());
+    }
+
+    #[test]
+    fn settled_outputs_deduplicate_by_output_content() {
+        let mut state = state(vec![
+            row(1, settled("output")),
+            row(2, settled("output")),
+            row(3, settled("other")),
+        ]);
+        let applied = enqueue(
+            &mut state,
+            AnalysisQueueSelection::AllFiles,
+            vec![file(1), file(2), file(3)],
+        );
+        assert_eq!(
+            applied.reply,
+            Reply::AnalysisQueued(AnalysisQueueSummary {
+                added: 2,
+                excluded: vec![(AnalysisQueueExclusion::DuplicateIdentity, 1)],
+            })
+        );
+    }
+
+    #[test]
+    fn refresh_failures_count_as_scan_failures() {
+        let failure = Some(Box::new(AnalysisScanFailure::Missing));
+        let mut stale_scan = scanned("stale", HistoricalLevel::Scanned, RowEligibility::Eligible);
+        let mut stale_output = settled("output");
+        for scan in [&mut stale_scan, &mut stale_output] {
+            if let AnalysisFileScan::Scanned {
+                refresh_failure, ..
+            }
+            | AnalysisFileScan::SettledOutput {
+                refresh_failure, ..
+            } = scan
+            {
+                *refresh_failure = failure.clone();
+            }
+        }
+        let mut state = state(vec![row(1, stale_scan), row(2, stale_output)]);
+        let applied = enqueue(
+            &mut state,
+            AnalysisQueueSelection::AllFiles,
+            vec![file(1), file(2)],
+        );
+        assert_eq!(
+            applied.reply,
+            Reply::AnalysisQueued(AnalysisQueueSummary {
+                added: 0,
+                excluded: vec![(AnalysisQueueExclusion::ScanFailed, 2)],
+            })
+        );
+    }
+
+    #[test]
+    fn bulk_actions_skip_folders_without_counting_them() {
+        let mut folder = row(1, AnalysisFileScan::Discovered);
+        folder.entry = AnalysisRowEntry::Folder { failure: None };
+        let mut state = state(vec![folder, row(2, AnalysisFileScan::Discovered)]);
+        let applied = enqueue(&mut state, AnalysisQueueSelection::AllFiles, vec![file(2)]);
+        assert_eq!(
+            applied.reply,
+            Reply::AnalysisQueued(AnalysisQueueSummary {
+                added: 1,
+                excluded: Vec::new(),
+            })
+        );
+    }
+
+    #[test]
+    fn separate_folder_mode_without_a_folder_rejects_before_planning_rows() {
+        let mut state = state(Vec::new());
+        state.settings.output.default_mode = DefaultOutputMode::SeparateFolder;
+        state.settings.output.separate_folder = None;
+        let applied = enqueue(&mut state, AnalysisQueueSelection::AllFiles, Vec::new());
+        assert_eq!(
+            applied.reply,
+            Reply::Rejected {
+                reason: "default separate output folder is required".to_owned()
+            }
+        );
+    }
+
+    #[test]
+    fn the_typed_reply_is_the_only_summary() {
+        let mut state = state(vec![row(1, AnalysisFileScan::Discovered)]);
+        let applied = enqueue(&mut state, AnalysisQueueSelection::AllFiles, vec![file(1)]);
+        assert!(matches!(applied.reply, Reply::AnalysisQueued(_)));
+        assert!(
+            !applied
+                .ephemeral
+                .iter()
+                .any(|delta| matches!(delta, EphemeralDelta::QueueAddSummary { .. }))
         );
     }
 }

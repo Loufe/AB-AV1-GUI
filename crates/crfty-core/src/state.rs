@@ -331,6 +331,14 @@ impl DurableState {
         {
             return Err("queue item id high-water mark is invalid");
         }
+        let unique = self
+            .queue
+            .iter()
+            .map(|item| item.id)
+            .collect::<BTreeSet<_>>();
+        if unique.len() != self.queue.len() {
+            return Err("queue item ids are not unique");
+        }
         let mark = self.runtime_id_high_water;
         let queued = self.queue.iter().filter_map(|item| match item.state {
             QueueItemState::Reserved { claim_id, run_id }

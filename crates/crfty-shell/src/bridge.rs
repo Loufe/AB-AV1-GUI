@@ -139,6 +139,9 @@ impl From<crfty_engine::analysis::AnalysisError> for CommandError {
             | crfty_engine::analysis::AnalysisError::Rejected(_) => {
                 Self::new("rejected", error.to_string())
             }
+            crfty_engine::analysis::AnalysisError::DurabilityUnknown(_) => {
+                Self::new("durability_unknown", error.to_string())
+            }
             crfty_engine::analysis::AnalysisError::MissingTools
             | crfty_engine::analysis::AnalysisError::ShuttingDown
             | crfty_engine::analysis::AnalysisError::Submit(_)

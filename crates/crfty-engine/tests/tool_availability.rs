@@ -167,7 +167,7 @@ fn startup_without_tools_replays_and_serves_non_media_commands() {
     assert_eq!(
         seeder
             .commands
-            .submit(Command::Queue(add_one(PathBuf::from("video.mkv"),)))
+            .submit(Command::Queue(add_one(PathBuf::from("video.mkv"))))
             .expect("seed add reply"),
         Reply::Accepted
     );

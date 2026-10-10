@@ -139,19 +139,18 @@ impl AnalysisRuntime {
             let registry = state.current_registry.as_ref().ok_or_else(|| {
                 AnalysisError::Rejected("no Analysis generation exists".to_owned())
             })?;
-            if lock(registry).generation != request.generation {
-                return Err(AnalysisError::Rejected(
-                    "queue action names a stale Analysis generation".to_owned(),
-                ));
-            }
             Arc::clone(registry)
         };
         match self.commands.enqueue_analysis(request, registry)? {
             Reply::AnalysisQueued(summary) => Ok(summary),
-            Reply::Rejected { reason } | Reply::DurabilityUnknown { reason } => {
-                Err(AnalysisError::Rejected(reason))
-            }
-            _ => Err(AnalysisError::UnexpectedReply),
+            Reply::Rejected { reason } => Err(AnalysisError::Rejected(reason)),
+            Reply::DurabilityUnknown { reason } => Err(AnalysisError::DurabilityUnknown(reason)),
+            Reply::Accepted
+            | Reply::AnalysisStarted { .. }
+            | Reply::BasicScan(_)
+            | Reply::Reserved(_)
+            | Reply::Claimed(_)
+            | Reply::Imported { .. } => Err(AnalysisError::UnexpectedReply),
         }
     }
 

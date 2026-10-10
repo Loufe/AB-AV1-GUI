@@ -136,6 +136,12 @@ function skipReasonText(reason: SkipReason): { reason: string; detail: string | 
   if (reason === "AlreadyQueued") {
     return { reason: "already queued", detail: "This path is already in the queue" };
   }
+  if (reason === "PathNotPersistable") {
+    return {
+      reason: "unsupported path",
+      detail: "This path contains characters the queue cannot store",
+    };
+  }
   if ("LowResolution" in reason && reason.LowResolution !== undefined) {
     return {
       reason: "below minimum resolution",

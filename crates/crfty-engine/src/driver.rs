@@ -923,7 +923,7 @@ mod tests {
     fn journal_failure_emits_no_durable_delta_and_stops_driver() {
         let (reply_tx, reply_rx) = mpsc::sync_channel(1);
         let envelope = Envelope {
-            command: (add_command("video.mkv")).into(),
+            command: add_command("video.mkv").into(),
             reply: reply_tx,
         };
         let (event_tx, event_rx) = mpsc::channel();
@@ -1255,7 +1255,7 @@ mod tests {
         // An ordinary durable batch does not schedule a forced compaction.
         let (reply_tx, _reply_rx) = mpsc::sync_channel(1);
         let envelope = Envelope {
-            command: (add_command("video.mkv")).into(),
+            command: add_command("video.mkv").into(),
             reply: reply_tx,
         };
         let outcome = process_batch(

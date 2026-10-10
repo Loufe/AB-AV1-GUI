@@ -17,6 +17,10 @@ export const commands = {
 	 */
 	analysisDiscover: (roots: string[]) => typedError<AnalysisGenerationId, CommandError>(__TAURI_INVOKE("analysis_discover", { roots })),
 	analysisBasicScan: (generation: AnalysisGenerationId) => typedError<null, CommandError>(__TAURI_INVOKE("analysis_basic_scan", { generation })),
+	/**
+	 *  Enqueue rows of the named standing generation. The typed summary is the
+	 *  only add summary; this action emits no `QueueAddSummary` on the stream.
+	 */
 	analysisEnqueue: (request: AnalysisQueueRequest) => typedError<AnalysisQueueSummary, CommandError>(__TAURI_INVOKE("analysis_enqueue", { request })),
 	analysisCancel: () => typedError<null, CommandError>(__TAURI_INVOKE("analysis_cancel")),
 	/**
@@ -248,7 +252,7 @@ export type AnalysisProfile = {
 	encoder_revision: string,
 };
 
-export type AnalysisQueueExclusion = "Folder" | "DuplicateIdentity" | "ScanFailed" | "UnsupportedPath" | { Policy: {
+export type AnalysisQueueExclusion = "Folder" | "DuplicateIdentity" | "ScanFailed" | { Policy: {
 	reason: SkipReason,
 } };
 
@@ -1550,7 +1554,12 @@ export type SkipReason = ({ LowResolution: {
  *  Add-summary only: the path is already queued and not finished. Never a
  *  terminal outcome.
  */
-"AlreadyQueued";
+"AlreadyQueued" | 
+/**
+ *  Add-summary only: a queue path cannot round trip through the journal.
+ *  Never a terminal outcome.
+ */
+"PathNotPersistable";
 
 /**
  *  The exhaustive Statistics answer. Conversion output-size reduction, VMAF,

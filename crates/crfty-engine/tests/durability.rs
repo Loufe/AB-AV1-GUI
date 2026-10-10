@@ -92,8 +92,8 @@ fn fixture_available() -> ToolAvailability {
     }
 }
 
-fn add(item_id: QueueItemId) -> Command {
-    add_input(PathBuf::from(format!("video-{}.mkv", item_id.0)))
+fn add(name: &str) -> Command {
+    add_input(PathBuf::from(name))
 }
 
 fn add_input(input: PathBuf) -> Command {
@@ -411,7 +411,7 @@ fn crash_sentinel_reports_an_abnormal_previous_run_and_only_that_run() {
     // stale AbnormalShutdown.
     let reply = driver
         .commands
-        .submit(add(QueueItemId(1)))
+        .submit(add("video-1.mkv"))
         .expect("driver reply");
     assert_eq!(reply, Reply::Accepted);
     assert!(matches!(
@@ -469,7 +469,7 @@ fn driver_persists_before_emitting_and_replays_after_restart() {
     ));
     let reply = driver
         .commands
-        .submit(add(QueueItemId(1)))
+        .submit(add("video-1.mkv"))
         .expect("driver reply");
     assert_eq!(reply, Reply::Accepted);
     // Per-command emit order: ephemerals precede the durable deltas they
@@ -590,7 +590,7 @@ fn corrupted_journal_starts_degraded_and_rejects_mutation() {
     ));
     let reply = driver
         .commands
-        .submit(add(QueueItemId(1)))
+        .submit(add("video-1.mkv"))
         .expect("rejection reply");
     assert!(matches!(reply, Reply::Rejected { .. }));
     driver.shutdown().expect("degraded shutdown");
@@ -675,7 +675,7 @@ fn acknowledged_corruption_archives_compacts_and_restarts_healthy() {
     assert_eq!(
         driver
             .commands
-            .submit(add(QueueItemId(2)))
+            .submit(add("video-2.mkv"))
             .expect("post-recovery add"),
         Reply::Accepted
     );
@@ -695,7 +695,7 @@ fn acknowledged_corruption_archives_compacts_and_restarts_healthy() {
     assert_eq!(
         restarted
             .commands
-            .submit(add(QueueItemId(3)))
+            .submit(add("video-3.mkv"))
             .expect("restart add"),
         Reply::Accepted
     );
@@ -730,7 +730,7 @@ fn wrong_signature_acknowledgement_is_rejected_and_stays_degraded() {
     // Still degraded: ordinary mutation stays rejected.
     let reply = driver
         .commands
-        .submit(add(QueueItemId(2)))
+        .submit(add("video-2.mkv"))
         .expect("still-degraded add");
     assert!(matches!(reply, Reply::Rejected { .. }));
     driver.shutdown().expect("degraded shutdown");
@@ -844,7 +844,7 @@ fn history_import_parks_compacts_adopts_and_reimports_as_noop() {
     assert_eq!(
         driver
             .commands
-            .submit(add(QueueItemId(1)))
+            .submit(add("video-1.mkv"))
             .expect("add reply"),
         Reply::Accepted
     );
@@ -1047,7 +1047,7 @@ fn telemetry_pressure_coalesces_and_terminal_value_wins() {
     assert_eq!(
         driver
             .commands
-            .submit(add(QueueItemId(1)))
+            .submit(add("video-1.mkv"))
             .expect("add reply"),
         Reply::Accepted
     );
@@ -1141,7 +1141,7 @@ fn terminal_publishes_final_telemetry_and_clear_before_item_finished() {
     )
     .expect("driver");
     for command in [
-        add(QueueItemId(1)),
+        add("video-1.mkv"),
         Command::System(SystemCommand::ToolsDiscovered {
             availability: fixture_available(),
         }),
@@ -1225,7 +1225,7 @@ fn restart_after_fsynced_terminal_folds_to_finished_snapshot() {
     let mut state = AppState::default();
     let mut durable = Vec::new();
     for command in [
-        add(QueueItemId(1)),
+        add("video-1.mkv"),
         Command::System(SystemCommand::ToolsDiscovered {
             availability: fixture_available(),
         }),

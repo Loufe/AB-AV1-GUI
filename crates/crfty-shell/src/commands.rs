@@ -160,6 +160,8 @@ fn analysis_basic_scan(
     bridge.begin_analysis_basic_scan(generation)
 }
 
+/// Enqueue rows of the named standing generation. The typed summary is the
+/// only add summary; this action emits no `QueueAddSummary` on the stream.
 #[tauri::command]
 #[specta::specta]
 fn analysis_enqueue(

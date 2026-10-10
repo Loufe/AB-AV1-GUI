@@ -3701,11 +3701,14 @@ proptest! {
         let mut live = AppState::default();
         let mut emitted = Vec::new();
         for (index, remove) in operations.into_iter().enumerate() {
-            let item_id = QueueItemId(u64::try_from(index).expect("small generated index"));
             let added = apply(
                 &mut live,
                 add_command(PathBuf::from(format!("video-{index}.mkv"))),
             );
+            let item_id = match added.durable.first() {
+                Some(DurableDelta::QueueAdded { item }) => item.id,
+                _ => panic!("expected an added item"),
+            };
             emitted.extend(added.durable);
             if remove {
                 let removed = apply(
@@ -3714,6 +3717,7 @@ proptest! {
                         item_ids: vec![item_id],
                     }),
                 );
+                prop_assert_eq!(removed.reply, Reply::Accepted);
                 emitted.extend(removed.durable);
             }
         }
@@ -4685,6 +4689,55 @@ fn add_many_judges_each_request_and_reports_one_summary() {
                 (SkipReason::AlreadyQueued, 1),
             ],
         }]
+    );
+}
+
+#[cfg(any(unix, windows))]
+#[test]
+fn add_many_skips_paths_the_journal_cannot_store() {
+    #[cfg(unix)]
+    let unsupported = {
+        use std::os::unix::ffi::OsStringExt;
+        std::ffi::OsString::from_vec(vec![0xff])
+    };
+    #[cfg(windows)]
+    let unsupported = {
+        use std::os::windows::ffi::OsStringExt;
+        std::ffi::OsString::from_wide(&[0xd800])
+    };
+    let mut state = AppState::default();
+    let applied = apply(
+        &mut state,
+        Command::Queue(QueueCommand::AddMany {
+            requests: vec![
+                add_request(unsupported.clone()),
+                QueueAddRequest {
+                    output_target: OutputTarget::SeparateFolder {
+                        directory: PathBuf::from("output"),
+                        source_root: Some(PathBuf::from(unsupported)),
+                    },
+                    ..add_request("video.mkv")
+                },
+                add_request("other.mkv"),
+            ],
+        }),
+    );
+    assert_eq!(applied.reply, Reply::Accepted);
+    assert_eq!(
+        applied.ephemeral,
+        vec![EphemeralDelta::QueueAddSummary {
+            added: 1,
+            skipped: vec![(SkipReason::PathNotPersistable, 2)],
+        }]
+    );
+    assert_eq!(
+        state
+            .durable
+            .queue
+            .iter()
+            .map(|item| item.id)
+            .collect::<Vec<_>>(),
+        vec![QueueItemId(1)]
     );
 }
 
@@ -7487,6 +7540,53 @@ fn snapshot_rejects_a_mark_below_retained_ids_or_above_wire_precision() {
     let replayed = replay(&bytes);
     assert!(replayed.corruption.is_none());
     assert_eq!(replayed.state, exhausted);
+}
+
+#[test]
+#[expect(clippy::expect_used, reason = "fixture serialization")]
+fn snapshot_rejects_queue_ids_outside_the_mark_or_repeated() {
+    let mut state = active_state();
+    let _second = apply(&mut state, add_command("second.mkv"));
+    let valid = state.durable;
+    assert_eq!(valid.queue_item_id_high_water, 2);
+    assert!(!valid.conversion_runs.is_empty());
+    let corruptions: [fn(&mut crate::DurableState); 5] = [
+        |durable| durable.queue_item_id_high_water = crate::DurableState::MAX_RUNTIME_ID + 1,
+        |durable| {
+            if let Some(item) = durable.queue.last_mut() {
+                item.id = QueueItemId(0);
+            }
+        },
+        |durable| {
+            if let Some(item) = durable.queue.last_mut() {
+                item.id = QueueItemId(3);
+            }
+        },
+        |durable| {
+            if let Some(item) = durable.queue.last_mut() {
+                item.id = QueueItemId(1);
+            }
+        },
+        |durable| {
+            for run in durable.conversion_runs.values_mut() {
+                run.spec.item_id = QueueItemId(3);
+            }
+        },
+    ];
+    for corrupt in corruptions {
+        let mut invalid = valid.clone();
+        corrupt(&mut invalid);
+        let bytes =
+            encode_snapshot("test", UnixMillis(0), JournalSequence(0), &invalid).expect("snapshot");
+        let replayed = replay(&bytes);
+        assert!(replayed.corruption.is_some());
+        assert_eq!(replayed.valid_prefix_len, 0);
+    }
+    let bytes =
+        encode_snapshot("test", UnixMillis(0), JournalSequence(0), &valid).expect("snapshot");
+    let replayed = replay(&bytes);
+    assert!(replayed.corruption.is_none());
+    assert_eq!(replayed.state, valid);
 }
 
 #[test]
