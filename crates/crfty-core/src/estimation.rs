@@ -291,8 +291,8 @@ mod tests {
     use crate::{
         AnalysisProfile, ClaimId, CompletionEvidence, ContentKey, ConversionRun, Crf, DecodeMode,
         DurationMs, ExecutionSettings, FileRecord, JobAction, JobPhase, JobSpec, MediaContainer,
-        OutputTarget, PhaseSpan, QueueItemId, RunId, SearchMeasurement, UnixMillis, Verdict,
-        VerdictKind, VideoMeta, VmafScore, VmafTarget,
+        OutputTarget, PhaseSpan, QualityScore, QualityTarget, QueueItemId, RunId,
+        SearchMeasurement, UnixMillis, Verdict, VerdictKind, VideoMeta,
     };
 
     fn meta(codec: VideoCodec, width: u32, height: u32, duration_ms: u64) -> VideoMeta {
@@ -373,7 +373,8 @@ mod tests {
                 output_size: None,
                 encoding_time: None,
                 crf: None,
-                vmaf: None,
+                metric: crate::QualityMetric::Vmaf,
+                score: None,
                 target: None,
             },
             source_run: Some(RunId(run)),
@@ -411,8 +412,9 @@ mod tests {
         let mut record = FileRecord::new(source);
         record.verdict = Some(Verdict {
             kind: VerdictKind::NotWorthwhile {
-                requested: VmafTarget(95),
-                floor: VmafTarget(90),
+                metric: crate::QualityMetric::Vmaf,
+                requested: QualityTarget(95),
+                floor: QualityTarget(90),
             },
             source_run: Some(RunId(run)),
             decided_at: UnixMillis(1_000_000),
@@ -428,14 +430,14 @@ mod tests {
 
     fn analysis_with_prediction(predicted_duration_ms: u64) -> crate::AnalysisResult {
         crate::AnalysisResult {
-            requested_target: VmafTarget(95),
-            successful_target: VmafTarget(95),
-            fallback_floor: VmafTarget(90),
+            requested_target: QualityTarget(95),
+            successful_target: QualityTarget(95),
+            fallback_floor: QualityTarget(90),
             fallback_step: 1,
             failed_attempts: Vec::new(),
             measurement: SearchMeasurement {
                 crf: Crf(24_000),
-                score: VmafScore(9_512),
+                score: QualityScore(9_512),
                 predicted_size: 400_000,
                 predicted_percent_basis_points: 4_000,
                 predicted_duration_ms,

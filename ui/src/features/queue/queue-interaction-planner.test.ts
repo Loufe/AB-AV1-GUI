@@ -37,7 +37,7 @@ function row(value: number, input: string, state: QueueItemState = "Queued"): Qu
     timeMs: null,
     timeConfidence: "exact",
     crf: null,
-    vmaf: null,
+    quality: null,
     status: state === "Queued" ? { kind: "queued" } : { kind: "starting" },
   };
 }

@@ -73,7 +73,7 @@ export function CurrentProcessingCard({ row }: { row: QueueRowData }) {
       ? percent
       : null;
   const facts: string[] = [];
-  if (row.vmaf !== null) facts.push(`VMAF ${formatEngineVmafScore(row.vmaf)}`);
+  if (row.quality !== null) facts.push(`VMAF ${formatEngineVmafScore(row.quality)}`);
   if (row.crf !== null) facts.push(`CRF ${formatEngineCrf(row.crf)}`);
   if (telemetry?.fps_centi !== null && telemetry?.fps_centi !== undefined) {
     facts.push(`${(telemetry.fps_centi / 100).toFixed(2)} fps`);

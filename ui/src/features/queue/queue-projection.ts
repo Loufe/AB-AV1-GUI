@@ -136,7 +136,10 @@ export function queueRows(state: DurableState_Deserialize): QueueRowData[] {
       timeMs: finished ? totalRunTime(run?.run) : null,
       timeConfidence: "exact",
       crf: analysis?.measurement.crf ?? null,
-      vmaf: analysis?.measurement.score ?? null,
+      quality:
+        analysis === null
+          ? null
+          : { metric: analysis.profile.metric, score: analysis.measurement.score },
       status: deriveRowStatus(item.state, null, metadata?.duration_ms ?? null, sizeDelta),
     };
   });

@@ -25,10 +25,11 @@ use crfty_core::{
     ExecutionSettings, FileSystemId, FileTimeNs, HardwareDecoder, HistoryCommand, ImportPath,
     ImportedHistoryRecord, ItemOutcome, LocatedTool, LocatedTools, MediaContainer,
     MediaObservation, Operation, OutputDelta, OutputState, OutputTarget, OutputTransaction,
-    OverwriteDecision, ParkedStatus, PathBinding, PathHash, QueueAddRequest, QueueCommand,
-    QueueItemId, Replacement, RunId, SearchMeasurement, SessionCommand, SettingsCommand,
-    SuccessReply, SystemCommand, TimestampReliability, ToolAvailability, ToolRevisions, ToolSource,
-    ToolVerification, UnixMillis, VideoCodec, VideoMeta, VmafScore, WorkerCommand, apply,
+    OverwriteDecision, ParkedStatus, PathBinding, PathHash, QualityScore, QueueAddRequest,
+    QueueCommand, QueueItemId, Replacement, RunId, SearchMeasurement, SessionCommand,
+    SettingsCommand, SuccessReply, SystemCommand, TimestampReliability, ToolAvailability,
+    ToolRevisions, ToolSource, ToolVerification, UnixMillis, VideoCodec, VideoMeta, WorkerCommand,
+    apply,
 };
 use serde::Serialize;
 
@@ -321,7 +322,7 @@ fn result_for(execution: &ExecutionSettings) -> AnalysisResult {
         failed_attempts: Vec::new(),
         measurement: SearchMeasurement {
             crf: Crf(31_000),
-            score: VmafScore(9_530),
+            score: QualityScore(9_530),
             predicted_size: 1_600_000_000,
             predicted_percent_basis_points: 4_000,
             predicted_duration_ms: 2_700_000,

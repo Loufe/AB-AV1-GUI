@@ -29,7 +29,7 @@ export function statisticsPayload(overrides: StatisticsOverrides = {}): Statisti
     total_time_ms: 0,
     gigabytes_per_hour: null,
     reduction_percent: null,
-    vmaf: null,
+    quality: [],
     crf: null,
     reduction_bins: [0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
     grew_count: 0,

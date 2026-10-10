@@ -1325,6 +1325,12 @@ fn tools_transition(state: &AppState, next: ToolAvailability) -> Result<Applied,
 fn apply_history(state: &AppState, command: HistoryCommand) -> Result<Applied, Rejection> {
     match command {
         HistoryCommand::Import { records } => {
+            if let Some(reason) = records
+                .iter()
+                .find_map(|(_, record)| record.validate().err())
+            {
+                return rejected(format!("invalid imported history: {reason}"));
+            }
             let mut applied = Applied::accepted();
             let mut known: std::collections::BTreeSet<ImportPath> = state
                 .durable
@@ -1768,14 +1774,17 @@ pub(crate) fn validate_terminal(
             if run.analysis.is_some() || output.is_some() {
                 return Err("not-worthwhile outcome cannot retain analysis or output state");
             }
+            let execution = &run.spec.execution;
             if attempts.is_empty()
                 || attempts.iter().any(|attempt| {
-                    attempt.target > run.spec.execution.requested_target
-                        || attempt.target < run.spec.execution.fallback_floor
+                    attempt.target > execution.requested_target
+                        || attempt.target < execution.fallback_floor
                         || attempt
                             .last_measurement
                             .as_ref()
-                            .is_some_and(|measurement| measurement.validate().is_err())
+                            .is_some_and(|measurement| {
+                                measurement.validate(execution.profile.metric).is_err()
+                            })
                 })
             {
                 return Err("not-worthwhile attempts are inconsistent with the claimed job");

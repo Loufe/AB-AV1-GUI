@@ -226,7 +226,9 @@ describe("StatisticsView payload presentation", () => {
       converted_files: 1,
       sized_converted_files: 1,
       reduction_percent: { average: 42.5, minimum: 40, maximum: 45, count: 1 },
-      vmaf: { average: 95.1, minimum: 95.1, maximum: 95.1, count: 1 },
+      quality: [
+        { metric: "Vmaf", spread: { average: 95.1, minimum: 95.1, maximum: 95.1, count: 1 } },
+      ],
       crf: { average: 24, minimum: 24, maximum: 24, count: 1 },
     });
     await renderApp(<StatisticsHarness active />, { appState: { statistics: payload } });

@@ -12,8 +12,8 @@ use std::{
 
 use crfty_core::{
     AnalysisIntent, AnalysisProfile, DecodeMode, DecodePreference, DurableDelta, ExecutionSettings,
-    Operation, OutputTarget, OverwriteDecision, QueueAddRequest, QueueCommand, SessionCommand,
-    VmafTarget,
+    Operation, OutputTarget, OverwriteDecision, QualityMetric, QualityTarget, QueueAddRequest,
+    QueueCommand, SessionCommand,
 };
 
 fn add_convert_with_suffix(input: &Path, suffix: &str) -> QueueCommand {
@@ -33,7 +33,7 @@ fn add_convert_with_suffix(input: &Path, suffix: &str) -> QueueCommand {
     }
 }
 
-const REAL_CONTRACT_TARGET: VmafTarget = VmafTarget(80);
+const REAL_CONTRACT_TARGET: QualityTarget = QualityTarget(80);
 const REAL_CONTRACT_PRESET: u8 = 12;
 const REAL_CONTRACT_MAX_ENCODED_PERCENT_BASIS_POINTS: u32 = 50_000;
 const REAL_CONTRACT_SAMPLE_COUNT: u64 = 1;
@@ -365,6 +365,7 @@ fn real_engine_config(directory: &Path, tools: &MediaTools) -> EngineConfig {
                 samples: Some(REAL_CONTRACT_SAMPLE_COUNT),
                 sample_duration_ms: REAL_CONTRACT_SAMPLE_DURATION_MS,
                 thorough: false,
+                metric: QualityMetric::Vmaf,
                 decode_mode: DecodeMode::Software,
                 ab_av1_revision: String::new(),
                 ffmpeg_revision: String::new(),

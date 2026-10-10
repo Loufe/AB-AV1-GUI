@@ -15,8 +15,8 @@ use std::{
 use crfty_core::{
     AnalysisIntent, AnalysisProfile, CompletionEvidence, DEFAULT_VMAF_TARGET, DecodeMode,
     DecodePreference, ExecutionSettings, HardwareDecoder, ItemOutcome, MIN_VMAF_FALLBACK_TARGET,
-    Operation, OutputTarget, OverwriteDecision, QueueAddRequest, QueueCommand, QueueItemId,
-    SessionCommand, VMAF_FALLBACK_STEP,
+    Operation, OutputTarget, OverwriteDecision, QualityMetric, QueueAddRequest, QueueCommand,
+    QueueItemId, SessionCommand, VMAF_FALLBACK_STEP,
 };
 
 const CONTRACT_PRESET: u8 = 12;
@@ -302,6 +302,7 @@ fn run_coordinator_contract(
                 samples: Some(CONTRACT_SAMPLE_COUNT),
                 sample_duration_ms: CONTRACT_SAMPLE_DURATION_MS,
                 thorough: false,
+                metric: QualityMetric::Vmaf,
                 decode_mode: DecodeMode::Software,
                 ab_av1_revision: String::new(),
                 ffmpeg_revision: String::new(),
@@ -526,6 +527,7 @@ fn run_ladder_contract(
                 samples: Some(CONTRACT_SAMPLE_COUNT),
                 sample_duration_ms: CONTRACT_SAMPLE_DURATION_MS,
                 thorough: false,
+                metric: QualityMetric::Vmaf,
                 decode_mode: DecodeMode::Software,
                 ab_av1_revision: String::new(),
                 ffmpeg_revision: String::new(),

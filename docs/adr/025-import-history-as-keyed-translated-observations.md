@@ -62,6 +62,6 @@ Import assumes the one-time move this format exists for: a V2 history that is no
 
 ## More information
 
-The observation contract and the logical History model are `docs/HISTORY.md`; the storage workload these rules are tested under is `docs/design/history-storage-workload.md`. ADR-024 fixes the observation unit and ADR-022 the metric tag every imported quality value carries. The accessor and its cohort label are implemented in `crfty_core::Observation::imported_fact`; import planning is `crfty_core::plan_import`.
+The observation contract and the logical History model are `docs/HISTORY.md`; the storage workload these rules are tested under is `docs/design/history-storage-workload.md`. ADR-024 fixes the observation unit and ADR-022 the metric that imported quality values inherit from their origin. The accessor and its cohort label are implemented in `crfty_core::Observation::imported_fact`; import planning is `crfty_core::plan_import`.
 
 This record replaces ADR-015 when translated observations are stored. ADR-015 is then deleted, and every document and record that references ADR-015, adoption, or the parked inbox is rewritten to this record, including ADR-009, ADR-016, ADR-017, ADR-018, ADR-019, `docs/ARCHITECTURE.md`, `docs/PLAN.md`, `docs/POLICY.md`, `docs/ANALYSIS.md`, `docs/HISTORY.md`, `docs/HISTORY_IMPORT.md`, `docs/TESTING.md`, and the History design notes. Until then ADR-015 describes the shipped parked path and `docs/HISTORY_IMPORT.md` the shipped file format.

@@ -16,6 +16,7 @@
   },
   "outcome": {
     "NotWorthwhile": {
+      "metric": "Vmaf",
       "requested": 95,
       "floor": 93,
       "attempts": [

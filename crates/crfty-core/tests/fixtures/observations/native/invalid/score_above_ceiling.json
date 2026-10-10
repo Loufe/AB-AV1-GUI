@@ -27,6 +27,7 @@
               "samples": null,
               "sample_duration_ms": 20000,
               "thorough": false,
+              "metric": "Vmaf",
               "decode_mode": "Software",
               "ab_av1_revision": "ab-av1 0.10.0",
               "ffmpeg_revision": "ffmpeg 7.1",

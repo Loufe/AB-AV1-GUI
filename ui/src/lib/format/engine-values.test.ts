@@ -18,23 +18,25 @@ import {
 // Values mirror converted_with_live_evidence in projection-fixtures.json.
 const HISTORY_WIRE_VALUES = {
   crf: 24_000,
-  vmaf: 9_512,
+  quality: { metric: "Vmaf", score: 9_512 },
   encoding_time_ms: 240_000,
   happened_at: 1_728_003_600_000,
-} satisfies Pick<HistoryRow, "crf" | "vmaf" | "encoding_time_ms" | "happened_at">;
+} satisfies Pick<HistoryRow, "crf" | "quality" | "encoding_time_ms" | "happened_at">;
 
 // Statistics spreads have already crossed the fixed-point boundary in Rust.
 const STATISTICS_WIRE_VALUES = {
   crf: { average: 24, minimum: 24, maximum: 24, count: 1 },
-  vmaf: { average: 95.12, minimum: 95.12, maximum: 95.12, count: 1 },
+  quality: [
+    { metric: "Vmaf", spread: { average: 95.12, minimum: 95.12, maximum: 95.12, count: 1 } },
+  ],
   reduction_percent: { average: -2.25, minimum: -2.25, maximum: -2.25, count: 1 },
   gigabytes_per_hour: 111.76,
-} satisfies Pick<StatisticsPayload, "crf" | "vmaf" | "reduction_percent" | "gigabytes_per_hour">;
+} satisfies Pick<StatisticsPayload, "crf" | "quality" | "reduction_percent" | "gigabytes_per_hour">;
 
 describe("serialized fixed-point values", () => {
   it("formats History CRF and VMAF after scaling each exactly once", () => {
     expect(formatEngineCrf(HISTORY_WIRE_VALUES.crf)).toBe("24");
-    expect(formatEngineVmafScore(HISTORY_WIRE_VALUES.vmaf)).toBe("95.1");
+    expect(formatEngineVmafScore(HISTORY_WIRE_VALUES.quality)).toBe("95.1");
   });
 
   it("preserves fractional CRF precision after scaling", () => {
@@ -44,7 +46,9 @@ describe("serialized fixed-point values", () => {
   it("uses each human formatter's intentional unavailable placeholder", () => {
     for (const invalid of [null, -1, Number.NaN, Number.POSITIVE_INFINITY]) {
       expect(formatEngineCrf(invalid)).toBe("?");
-      expect(formatEngineVmafScore(invalid)).toBe("—");
+      expect(
+        formatEngineVmafScore(invalid === null ? null : { metric: "Vmaf", score: invalid }),
+      ).toBe("—");
     }
   });
 });
@@ -79,7 +83,7 @@ describe("already-normalized engine values", () => {
 
   it("does not divide Statistics CRF or VMAF spreads again", () => {
     expect(formatStatisticsCrf(STATISTICS_WIRE_VALUES.crf.average)).toBe("24");
-    expect(formatStatisticsVmaf(STATISTICS_WIRE_VALUES.vmaf.average)).toBe("95.1");
+    expect(formatStatisticsVmaf(STATISTICS_WIRE_VALUES.quality[0].spread.average)).toBe("95.1");
   });
 
   it("preserves the sign of a normalized negative reduction", () => {

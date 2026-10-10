@@ -19,13 +19,24 @@ use std::{collections::BTreeMap, path::PathBuf};
 
 use serde::{Deserialize, Serialize};
 
-use crate::{Crf, DurationMs, UnixMillis, VideoCodec, VmafScore, VmafTarget};
+use crate::{Crf, DurationMs, QualityMetric, QualityScore, QualityTarget, UnixMillis, VideoCodec};
 
 /// Where translated evidence came from. Identity is the pair of origin and
 /// record key, so a later origin cannot collide with this one.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 pub enum ImportOrigin {
     V2History,
+}
+
+impl ImportOrigin {
+    /// The metric of every quality value the origin recorded; V2 measured
+    /// and targeted VMAF only.
+    #[must_use]
+    pub const fn quality_metric(self) -> QualityMetric {
+        match self {
+            Self::V2History => QualityMetric::Vmaf,
+        }
+    }
 }
 
 const RECORD_KEY_LENGTH: usize = 16;
@@ -115,21 +126,22 @@ pub enum TranslatedOutcome {
         encode_duration: Option<DurationMs>,
     },
     NotWorthwhile {
-        requested: Option<VmafTarget>,
-        floor: Option<VmafTarget>,
+        requested: Option<QualityTarget>,
+        floor: Option<QualityTarget>,
     },
 }
 
-/// The search result the origin recorded. The origin kept no profile or
+/// The search result the origin recorded, in the origin's
+/// [`ImportOrigin::quality_metric`]. The origin kept no profile or
 /// predictions, so this is display and prior evidence, never a reusable
 /// analysis.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct TranslatedQuality {
     pub crf: Option<Crf>,
-    pub score: Option<VmafScore>,
+    pub score: Option<QualityScore>,
     /// The target the result satisfied.
-    pub target: Option<VmafTarget>,
+    pub target: Option<QualityTarget>,
 }
 
 impl TranslatedObservation {
@@ -144,27 +156,25 @@ impl TranslatedObservation {
     /// Rejects the facts native validation rejects, wherever the fact is
     /// present.
     pub fn validate(&self) -> Result<(), &'static str> {
+        let metric = self.origin.quality_metric();
         match &self.outcome {
             TranslatedOutcome::Analyzed { quality }
-            | TranslatedOutcome::Converted { quality, .. } => quality.validate(),
-            TranslatedOutcome::NotWorthwhile { requested, floor } => {
-                requested.map_or(Ok(()), VmafTarget::validate)?;
-                floor.map_or(Ok(()), VmafTarget::validate)?;
-                if let (Some(requested), Some(floor)) = (requested, floor)
-                    && floor > requested
-                {
-                    return Err("not-worthwhile floor exceeds the requested target");
-                }
-                Ok(())
-            }
+            | TranslatedOutcome::Converted { quality, .. } => quality.validate(metric),
+            TranslatedOutcome::NotWorthwhile { requested, floor } => match (requested, floor) {
+                (Some(requested), Some(floor)) => metric.validate_range(*requested, *floor),
+                (Some(target), None) | (None, Some(target)) => metric.validate_target(*target),
+                (None, None) => Ok(()),
+            },
         }
     }
 }
 
 impl TranslatedQuality {
-    fn validate(&self) -> Result<(), &'static str> {
-        self.score.map_or(Ok(()), VmafScore::validate)?;
-        self.target.map_or(Ok(()), VmafTarget::validate)
+    fn validate(&self, metric: QualityMetric) -> Result<(), &'static str> {
+        self.score
+            .map_or(Ok(()), |score| metric.validate_score(score))?;
+        self.target
+            .map_or(Ok(()), |target| metric.validate_target(target))
     }
 }
 
@@ -331,7 +341,7 @@ mod tests {
         high_score.outcome = TranslatedOutcome::Analyzed {
             quality: TranslatedQuality {
                 crf: None,
-                score: Some(VmafScore(10_001)),
+                score: Some(QualityScore(10_001)),
                 target: None,
             },
         };
@@ -344,8 +354,8 @@ mod tests {
         high_target.outcome = TranslatedOutcome::Converted {
             quality: TranslatedQuality {
                 crf: None,
-                score: Some(VmafScore(10_000)),
-                target: Some(VmafTarget(101)),
+                score: Some(QualityScore(10_000)),
+                target: Some(QualityTarget(101)),
             },
             output_size: None,
             encode_duration: None,
@@ -360,17 +370,17 @@ mod tests {
             ..sparse.clone()
         };
         assert_eq!(declined(None, None).validate(), Ok(()));
-        assert_eq!(declined(None, Some(VmafTarget(99))).validate(), Ok(()));
+        assert_eq!(declined(None, Some(QualityTarget(99))).validate(), Ok(()));
         assert_eq!(
-            declined(Some(VmafTarget(95)), Some(VmafTarget(95))).validate(),
+            declined(Some(QualityTarget(95)), Some(QualityTarget(95))).validate(),
             Ok(())
         );
         assert_eq!(
-            declined(Some(VmafTarget(90)), Some(VmafTarget(95))).validate(),
-            Err("not-worthwhile floor exceeds the requested target")
+            declined(Some(QualityTarget(90)), Some(QualityTarget(95))).validate(),
+            Err("quality fallback floor exceeds the requested target")
         );
         assert_eq!(
-            declined(Some(VmafTarget(101)), None).validate(),
+            declined(Some(QualityTarget(101)), None).validate(),
             Err("VMAF targets must be in 0..=100")
         );
     }
@@ -379,14 +389,14 @@ mod tests {
     fn one_invalid_record_rejects_the_whole_batch_at_the_first_failure() {
         let mut invalid = converted("00000000000000a2", 30_000);
         invalid.outcome = TranslatedOutcome::NotWorthwhile {
-            requested: Some(VmafTarget(90)),
-            floor: Some(VmafTarget(95)),
+            requested: Some(QualityTarget(90)),
+            floor: Some(QualityTarget(95)),
         };
         let mut also_invalid = converted("00000000000000a3", 30_000);
         also_invalid.outcome = TranslatedOutcome::Analyzed {
             quality: TranslatedQuality {
                 crf: None,
-                score: Some(VmafScore(10_001)),
+                score: Some(QualityScore(10_001)),
                 target: None,
             },
         };
@@ -399,7 +409,7 @@ mod tests {
             plan_import(batch, empty_store),
             Err(ImportRejection {
                 index: 1,
-                reason: "not-worthwhile floor exceeds the requested target",
+                reason: "quality fallback floor exceeds the requested target",
             })
         );
     }

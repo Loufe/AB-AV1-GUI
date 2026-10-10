@@ -63,7 +63,12 @@ interface Metric {
   icon: ComponentType<{ className?: string }>;
 }
 
+function vmafSpread(payload: StatisticsPayload): ValueSpread | null {
+  return payload.quality.find(({ metric }) => metric === "Vmaf")?.spread ?? null;
+}
+
 function StatStrip({ payload }: { payload: StatisticsPayload }) {
+  const vmaf = vmafSpread(payload);
   const metrics: Metric[] = [
     {
       label: "Output-size reduction",
@@ -101,11 +106,11 @@ function StatStrip({ payload }: { payload: StatisticsPayload }) {
       icon: TrendingDown,
     });
   }
-  if (payload.vmaf !== null) {
+  if (vmaf !== null) {
     metrics.push({
       label: "Average VMAF",
-      value: formatStatisticsVmaf(payload.vmaf.average),
-      description: `${payload.vmaf.count.toLocaleString()} converted measurements`,
+      value: formatStatisticsVmaf(vmaf.average),
+      description: `${vmaf.count.toLocaleString()} converted measurements`,
       icon: Eye,
     });
   }
@@ -425,6 +430,7 @@ function SpreadRow({
 }
 
 function OutcomeDetailsCard({ payload }: { payload: StatisticsPayload }) {
+  const vmaf = vmafSpread(payload);
   const runRows = runOutcomeRows(payload.runs);
 
   return (
@@ -530,7 +536,7 @@ function OutcomeDetailsCard({ payload }: { payload: StatisticsPayload }) {
           </dl>
         </section>
 
-        {(payload.reduction_percent !== null || payload.vmaf !== null || payload.crf !== null) && (
+        {(payload.reduction_percent !== null || vmaf !== null || payload.crf !== null) && (
           <section className="lg:col-span-3" aria-labelledby="statistics-measurements-heading">
             <h3 id="statistics-measurements-heading" className="mb-2 font-medium">
               Converted measurements
@@ -543,8 +549,8 @@ function OutcomeDetailsCard({ payload }: { payload: StatisticsPayload }) {
                   format={formatStatisticsReduction}
                 />
               )}
-              {payload.vmaf !== null && (
-                <SpreadRow label="VMAF" spread={payload.vmaf} format={formatStatisticsVmaf} />
+              {vmaf !== null && (
+                <SpreadRow label="VMAF" spread={vmaf} format={formatStatisticsVmaf} />
               )}
               {payload.crf !== null && (
                 <SpreadRow label="CRF" spread={payload.crf} format={formatStatisticsCrf} />

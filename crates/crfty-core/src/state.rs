@@ -795,7 +795,8 @@ pub fn fold(state: &mut DurableState, delta: &DurableDelta) {
                                 output_size,
                                 encoding_time: phase_duration(phase_spans, JobPhase::Encoding),
                                 crf: run.analysis.as_ref().map(|found| found.measurement.crf),
-                                vmaf: run.analysis.as_ref().map(|found| found.measurement.score),
+                                metric: run.spec.execution.profile.metric,
+                                score: run.analysis.as_ref().map(|found| found.measurement.score),
                                 target: run.analysis.as_ref().map(|found| found.successful_target),
                             }
                         })
@@ -811,6 +812,7 @@ pub fn fold(state: &mut DurableState, delta: &DurableDelta) {
                         })
                     }
                     ItemOutcome::NotWorthwhile { .. } => Some(VerdictKind::NotWorthwhile {
+                        metric: run.spec.execution.profile.metric,
                         requested: run.spec.execution.requested_target,
                         floor: run.spec.execution.fallback_floor,
                     }),
