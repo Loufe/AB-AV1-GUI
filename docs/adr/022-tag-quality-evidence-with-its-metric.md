@@ -3,7 +3,7 @@ status: accepted
 date: 2026-08-20
 ---
 
-# Tag quality evidence with its metric
+# Name the quality metric once per record
 
 ## Context and problem statement
 

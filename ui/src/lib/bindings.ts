@@ -17,6 +17,11 @@ export const commands = {
 	 */
 	analysisDiscover: (roots: string[]) => typedError<AnalysisGenerationId, CommandError>(__TAURI_INVOKE("analysis_discover", { roots })),
 	analysisBasicScan: (generation: AnalysisGenerationId) => typedError<null, CommandError>(__TAURI_INVOKE("analysis_basic_scan", { generation })),
+	/**
+	 *  Enqueue rows of the named standing generation. The typed summary is the
+	 *  only add summary; this action emits no `QueueAddSummary` on the stream.
+	 */
+	analysisEnqueue: (request: AnalysisQueueRequest) => typedError<AnalysisQueueSummary, CommandError>(__TAURI_INVOKE("analysis_enqueue", { request })),
 	analysisCancel: () => typedError<null, CommandError>(__TAURI_INVOKE("analysis_cancel")),
 	/**
 	 *  Adds files and folders in one batch: folders expand through the engine
@@ -251,6 +256,25 @@ export type AnalysisProfile = {
 	ab_av1_revision: string,
 	ffmpeg_revision: string,
 	encoder_revision: string,
+};
+
+export type AnalysisQueueExclusion = "Folder" | "DuplicateIdentity" | "ScanFailed" | { Policy: {
+	reason: SkipReason,
+} };
+
+export type AnalysisQueueRequest = {
+	generation: AnalysisGenerationId,
+	selection: AnalysisQueueSelection,
+	operation: Operation,
+};
+
+export type AnalysisQueueSelection = "AllFiles" | { Selected: {
+	row_ids: AnalysisRowId[],
+} };
+
+export type AnalysisQueueSummary = {
+	added: number,
+	excluded: ([AnalysisQueueExclusion, number])[],
 };
 
 export type AnalysisResult = {
@@ -722,6 +746,8 @@ export type DurableDelta_Serialize = ({ QueueAdded: {
 export type DurableState = DurableState_Serialize | DurableState_Deserialize;
 
 export type DurableState_Deserialize = {
+	/**  Highest durably allocated queue ID, retained after removal. */
+	queue_item_id_high_water: number,
 	/**  Highest durably reserved claim or run ID, retained after queue removal. */
 	runtime_id_high_water: number,
 	queue: QueueItem[],
@@ -744,6 +770,8 @@ export type DurableState_Deserialize = {
 };
 
 export type DurableState_Serialize = {
+	/**  Highest durably allocated queue ID, retained after removal. */
+	queue_item_id_high_water: number,
 	/**  Highest durably reserved claim or run ID, retained after queue removal. */
 	runtime_id_high_water: number,
 	queue: QueueItem[],
@@ -1571,7 +1599,12 @@ export type SkipReason = ({ LowResolution: {
  *  Add-summary only: the path is already queued and not finished. Never a
  *  terminal outcome.
  */
-"AlreadyQueued";
+"AlreadyQueued" | 
+/**
+ *  Add-summary only: a queue path cannot round trip through the journal.
+ *  Never a terminal outcome.
+ */
+"PathNotPersistable";
 
 /**
  *  The exhaustive Statistics answer. Conversion output-size reduction, VMAF,

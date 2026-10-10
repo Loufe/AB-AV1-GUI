@@ -44,6 +44,7 @@ export function emptyDurableState(): DurableState_Deserialize {
     records: {},
     outputs: {},
     runtime_id_high_water: 0,
+    queue_item_id_high_water: 0,
     conversion_runs: {},
     parked: {},
     adopted_imports: [],
@@ -55,7 +56,11 @@ export function foldDurable(
   delta: DurableDelta,
 ): DurableState_Deserialize {
   if ("QueueAdded" in delta && delta.QueueAdded !== undefined) {
-    return { ...state, queue: [...state.queue, delta.QueueAdded.item] };
+    return {
+      ...state,
+      queue_item_id_high_water: delta.QueueAdded.item.id,
+      queue: [...state.queue, delta.QueueAdded.item],
+    };
   }
   if ("QueueItemsRemoved" in delta && delta.QueueItemsRemoved !== undefined) {
     const removed = new Set(delta.QueueItemsRemoved.item_ids);

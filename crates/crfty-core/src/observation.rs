@@ -269,6 +269,7 @@ pub struct RateSample<'a> {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct PredictionPair<'a> {
     pub source: &'a SourceFacts,
+    pub metric: QualityMetric,
     pub predicted: &'a SearchMeasurement,
     pub measured: MeasuredSizes,
     pub encoding: DurationMs,
@@ -280,6 +281,7 @@ pub struct PredictionPair<'a> {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ImportedFact<'a> {
     pub source: &'a TranslatedSource,
+    pub metric: QualityMetric,
     pub kind: ImportedKind<'a>,
     pub updated_at: Option<UnixMillis>,
 }
@@ -378,6 +380,7 @@ impl Observation {
         };
         Some(ImportedFact {
             source: &translated.source,
+            metric: translated.origin.quality_metric(),
             kind,
             updated_at: translated.updated_at,
         })
@@ -566,6 +569,7 @@ impl NativeObservation {
         matched(encode.assessment)?;
         Some(PredictionPair {
             source,
+            metric: search.analysis.profile.metric,
             predicted: &search.analysis.measurement,
             measured: encode.measurement.sizes()?,
             encoding: encode.duration?,
@@ -1149,6 +1153,7 @@ mod tests {
             panic!("translated conversion is an imported fact");
         };
         assert_eq!(fact.source.size_bytes, Some(8_000));
+        assert_eq!(fact.metric, QualityMetric::Vmaf);
         assert_eq!(fact.updated_at, None);
         let ImportedKind::Converted {
             quality,
@@ -1267,6 +1272,7 @@ mod tests {
         let Some(pair) = matched.prediction_pair() else {
             panic!("matched conversion is a prediction pair");
         };
+        assert_eq!(pair.metric, QualityMetric::Vmaf);
         assert_eq!(pair.predicted.predicted_size, 1_000);
         assert_eq!(pair.measured.output, 3_000);
         assert_eq!(pair.encoding, DurationMs(240_000));

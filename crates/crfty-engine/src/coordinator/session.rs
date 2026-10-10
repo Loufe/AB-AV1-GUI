@@ -177,6 +177,7 @@ pub(super) fn run_session(
             Ok(
                 Reply::Accepted
                 | Reply::AnalysisStarted { .. }
+                | Reply::AnalysisQueued(_)
                 | Reply::BasicScan(_)
                 | Reply::Claimed(_)
                 | Reply::Imported { .. },

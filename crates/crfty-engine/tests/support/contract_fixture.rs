@@ -45,7 +45,6 @@ fn write_distinct_media(path: &Path, seed: u8) -> io::Result<()> {
 /// enqueue-time filtering is inert and claim-time policy stays the tier
 /// under test.
 fn add_one(
-    item_id: u64,
     input: &Path,
     operation: Operation,
     intent: AnalysisIntent,
@@ -53,7 +52,6 @@ fn add_one(
 ) -> QueueCommand {
     QueueCommand::AddMany {
         requests: vec![QueueAddRequest {
-            item_id: QueueItemId(item_id),
             input: input.to_path_buf(),
             path_hash: None,
             identity: None,
@@ -319,7 +317,6 @@ fn run_coordinator_contract(
     let analyze_input = output_dir.join("input-analyzed.mkv");
     fs::copy(&input, &analyze_input)?;
     accepted_reply(engine.commands.submit_queue(add_one(
-        1,
         &analyze_input,
         Operation::Analyze,
         AnalysisIntent::ReuseIfFresh,
@@ -328,7 +325,6 @@ fn run_coordinator_contract(
     let incompatible_input = output_dir.join("incompatible-av1.mp4");
     write_distinct_media(&incompatible_input, 2)?;
     accepted_reply(engine.commands.submit_queue(add_one(
-        4,
         &incompatible_input,
         Operation::Convert,
         AnalysisIntent::ReuseIfFresh,
@@ -337,7 +333,6 @@ fn run_coordinator_contract(
         },
     ))?)?;
     accepted_reply(engine.commands.submit_queue(add_one(
-        2,
         &input,
         Operation::Convert,
         AnalysisIntent::ReuseIfFresh,
@@ -348,7 +343,6 @@ fn run_coordinator_contract(
     let remux_input = output_dir.join("already-av1.mp4");
     write_distinct_media(&remux_input, 3)?;
     accepted_reply(engine.commands.submit_queue(add_one(
-        3,
         &remux_input,
         Operation::Convert,
         AnalysisIntent::ReuseIfFresh,
@@ -402,13 +396,13 @@ fn run_coordinator_contract(
                     item_id, outcome, ..
                 },
             ) => {
-                if item_id == QueueItemId(2) {
+                if item_id == QueueItemId(3) {
                     let ItemOutcome::Converted(evidence) = &outcome else {
                         return Err(format!("coordinated encode failed: {outcome:?}").into());
                     };
                     encode_evidence = Some(evidence.clone());
                 }
-                if item_id == QueueItemId(4)
+                if item_id == QueueItemId(2)
                     && matches!(&outcome, crfty_core::ItemOutcome::Failed { .. })
                 {
                     remux_failures = remux_failures.saturating_add(1);
@@ -462,7 +456,6 @@ fn run_coordinator_contract(
     // Re-converting content that already carries a Converted verdict needs
     // the Refresh escape hatch — ReuseIfFresh would skip it as a duplicate.
     accepted_reply(engine.commands.submit_queue(add_one(
-        5,
         &input,
         Operation::Convert,
         AnalysisIntent::Refresh,
@@ -556,7 +549,6 @@ fn run_ladder_contract(
     // 1: the hardware search fails; the ladder records a software analysis
     //    and the encode runs software from the start.
     accepted_reply(engine.commands.submit_queue(add_one(
-        1,
         &search_input,
         Operation::Convert,
         AnalysisIntent::ReuseIfFresh,
@@ -568,7 +560,6 @@ fn run_ladder_contract(
     //    records a hardware-profile analysis. Same content as item 3 but a
     //    distinct path — one item per path.
     accepted_reply(engine.commands.submit_queue(add_one(
-        2,
         &analyze_input,
         Operation::Analyze,
         AnalysisIntent::ReuseIfFresh,
@@ -577,7 +568,6 @@ fn run_ladder_contract(
     // 3: reuses that hardware analysis; the full staging encode fails under
     //    hardware and retries in place with software.
     accepted_reply(engine.commands.submit_queue(add_one(
-        3,
         &encode_input,
         Operation::Convert,
         AnalysisIntent::ReuseIfFresh,

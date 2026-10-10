@@ -59,7 +59,7 @@ Claim evaluates in this order: media-fact skip, then verdict short-circuit, then
 
 Content identity is the sampled probabilistic `ContentKey`, so duplicate reuse and skipping are probabilistic by design. That authority extends to reusing a record, reusing an analysis, and skipping a probable duplicate with a visible reason. It never authorizes deleting, overwriting, or cleaning up a file.
 
-## Analysis reuse and VMAF targets
+## Analysis reuse and quality targets
 
 Each content record stores analyses as a map from `AnalysisProfile` to a map from the successful `QualityTarget` to the result. The profile is the reuse identity: preset, maximum encoded percent, sample count, sample duration, thorough flag, quality metric (ADR-022), decode mode, and the ab-av1, FFmpeg, and encoder revisions. Every target and score beneath a profile is in its metric. Reuse requires exact profile equality, so a tool upgrade, metric change, or settings change starts a new search.
 

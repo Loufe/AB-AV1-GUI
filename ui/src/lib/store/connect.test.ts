@@ -115,6 +115,7 @@ function snapshot(item: QueueItem): StreamPayload_Deserialize {
         records: {},
         outputs: {},
         runtime_id_high_water: 0,
+        queue_item_id_high_water: 0,
         conversion_runs: {},
         parked: {},
         adopted_imports: [],

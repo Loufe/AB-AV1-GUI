@@ -90,8 +90,59 @@ impl fmt::Display for SubmitError {
 impl std::error::Error for SubmitError {}
 
 struct Envelope {
-    command: Command,
+    command: DriverCommand,
     reply: mpsc::SyncSender<Reply>,
+}
+
+enum DriverCommand {
+    Core(Command),
+    AnalysisQueue {
+        request: crfty_core::AnalysisQueueRequest,
+        registry: Arc<Mutex<crate::analysis::AnalysisGenerationRegistry>>,
+    },
+}
+
+impl From<Command> for DriverCommand {
+    fn from(command: Command) -> Self {
+        Self::Core(command)
+    }
+}
+
+impl DriverCommand {
+    fn into_core(self) -> Result<Command, &'static str> {
+        match self {
+            Self::Core(command) => Ok(command),
+            Self::AnalysisQueue { request, registry } => {
+                let registry = match registry.lock() {
+                    Ok(registry) => registry,
+                    Err(poisoned) => {
+                        tracing::warn!(
+                            generation = request.generation.0,
+                            "Analysis queue action recovered a poisoned native-path registry"
+                        );
+                        poisoned.into_inner()
+                    }
+                };
+                if registry.generation != request.generation {
+                    return Err("queue action names a stale Analysis generation");
+                }
+                let files = registry
+                    .rows
+                    .iter()
+                    .filter(|(_, row)| row.kind == crate::analysis::NativeEntryKind::File)
+                    .map(|(id, row)| crfty_core::AnalysisQueueFile {
+                        row_id: *id,
+                        input: row.path.clone(),
+                        source_root: row.source_root.clone(),
+                    })
+                    .collect();
+                Ok(Command::Analysis(crfty_core::AnalysisCommand::Enqueue {
+                    request,
+                    files,
+                }))
+            }
+        }
+    }
 }
 
 struct DriverPersistence {
@@ -114,6 +165,18 @@ pub struct CommandSender {
 
 impl CommandSender {
     pub fn submit(&self, command: Command) -> Result<Reply, SubmitError> {
+        self.submit_driver(command.into())
+    }
+
+    pub(crate) fn enqueue_analysis(
+        &self,
+        request: crfty_core::AnalysisQueueRequest,
+        registry: Arc<Mutex<crate::analysis::AnalysisGenerationRegistry>>,
+    ) -> Result<Reply, SubmitError> {
+        self.submit_driver(DriverCommand::AnalysisQueue { request, registry })
+    }
+
+    fn submit_driver(&self, command: DriverCommand) -> Result<Reply, SubmitError> {
         let (reply_tx, reply_rx) = mpsc::sync_channel(COMMAND_REPLY_CHANNEL_CAPACITY);
         self.sender
             .send(Envelope {
@@ -407,11 +470,11 @@ fn maybe_compact(
 fn split_batch_at_settings(batch: Vec<Envelope>) -> Vec<Vec<Envelope>> {
     let mut groups: Vec<Vec<Envelope>> = Vec::new();
     for envelope in batch {
-        let settings = matches!(&envelope.command, Command::Settings(_));
+        let settings = matches!(&envelope.command, DriverCommand::Core(Command::Settings(_)));
         let append = groups.last().is_some_and(|group| {
-            group
-                .first()
-                .is_some_and(|first| matches!(&first.command, Command::Settings(_)) == settings)
+            group.first().is_some_and(|first| {
+                matches!(&first.command, DriverCommand::Core(Command::Settings(_))) == settings
+            })
         });
         if append {
             if let Some(group) = groups.last_mut() {
@@ -445,12 +508,17 @@ fn process_batch(
     let mut applied_batch = Vec::with_capacity(batch.len());
     let mut recovered = false;
     for envelope in batch {
+        let command = match envelope.command.into_core() {
+            Ok(command) => command,
+            Err(reason) => {
+                applied_batch.push((envelope.reply, rejected_applied(reason.to_owned())));
+                continue;
+            }
+        };
         // Acknowledgement is intercepted ahead of the reducer: degraded state
         // deliberately lives outside `AppState`, so only the driver can
         // verify the signature and rewrite the journal.
-        if let Command::System(SystemCommand::AcknowledgeCorruption { signature }) =
-            &envelope.command
-        {
+        if let Command::System(SystemCommand::AcknowledgeCorruption { signature }) = &command {
             let applied = acknowledge_corruption(signature, degraded, writer, &state.durable);
             recovered = recovered || matches!(applied.reply, Reply::Accepted);
             applied_batch.push((envelope.reply, applied));
@@ -459,13 +527,13 @@ fn process_batch(
         let applied = if let Some(report) = degraded.as_ref() {
             // System commands (shutdown, tool availability) emit no durable
             // deltas, so they stay usable over a corrupt journal.
-            if matches!(envelope.command, Command::System(_)) {
-                apply(state, envelope.command)
+            if matches!(command, Command::System(_)) {
+                apply(state, command)
             } else {
                 rejected_applied(report.reason.clone())
             }
         } else {
-            apply(state, envelope.command)
+            apply(state, command)
         };
         durable.extend(applied.durable.iter().cloned());
         applied_batch.push((envelope.reply, applied));
@@ -807,10 +875,9 @@ mod tests {
         ToolAvailability, ToolRevisions, UnixMillis, WorkerCommand, apply,
     };
 
-    fn add_command(id: u64, input: &str) -> Command {
+    fn add_command(input: &str) -> Command {
         Command::Queue(QueueCommand::AddMany {
             requests: vec![QueueAddRequest {
-                item_id: QueueItemId(id),
                 input: PathBuf::from(input),
                 path_hash: None,
                 identity: None,
@@ -862,7 +929,7 @@ mod tests {
     fn journal_failure_emits_no_durable_delta_and_stops_driver() {
         let (reply_tx, reply_rx) = mpsc::sync_channel(1);
         let envelope = Envelope {
-            command: add_command(1, "video.mkv"),
+            command: add_command("video.mkv").into(),
             reply: reply_tx,
         };
         let (event_tx, event_rx) = mpsc::channel();
@@ -908,7 +975,7 @@ mod tests {
     #[expect(clippy::expect_used, reason = "test assertion")]
     fn standing_analysis_publishes_after_durable_facts_from_the_same_command() {
         let mut state = AppState::default();
-        let mut applied = apply(&mut state, add_command(1, "video.mkv"));
+        let mut applied = apply(&mut state, add_command("video.mkv"));
         applied
             .ephemeral
             .push(EphemeralDelta::Analysis(AnalysisDelta::Reset {
@@ -942,7 +1009,7 @@ mod tests {
     fn terminal_orders_progress_before_and_aggregates_after_the_durable_finish() {
         let mut state = AppState::default();
         for command in [
-            add_command(1, "video.mkv"),
+            add_command("video.mkv"),
             Command::System(SystemCommand::ToolsDiscovered {
                 availability: ToolAvailability::Located {
                     tools: crfty_core::LocatedTools {
@@ -981,7 +1048,7 @@ mod tests {
 
         let (reply_tx, reply_rx) = mpsc::sync_channel(1);
         let envelope = Envelope {
-            command: Command::Worker(WorkerCommand::Terminal {
+            command: (Command::Worker(WorkerCommand::Terminal {
                 item_id: QueueItemId(1),
                 claim_id: ClaimId(1),
                 run_id: RunId(2),
@@ -999,7 +1066,8 @@ mod tests {
                     fps_centi: None,
                     eta_ms: None,
                 }),
-            }),
+            }))
+            .into(),
             reply: reply_tx,
         };
         let (event_tx, event_rx) = mpsc::channel();
@@ -1054,13 +1122,14 @@ mod tests {
         let (second_reply_tx, second_reply_rx) = mpsc::sync_channel(1);
         let batch = vec![
             Envelope {
-                command: Command::Settings(SettingsCommand::Set { settings: first }),
+                command: (Command::Settings(SettingsCommand::Set { settings: first })).into(),
                 reply: first_reply_tx,
             },
             Envelope {
-                command: Command::Settings(SettingsCommand::Set {
+                command: (Command::Settings(SettingsCommand::Set {
                     settings: second.clone(),
-                }),
+                }))
+                .into(),
                 reply: second_reply_tx,
             },
         ];
@@ -1105,7 +1174,7 @@ mod tests {
         };
         let (reply_tx, reply_rx) = mpsc::sync_channel(1);
         let envelope = Envelope {
-            command: Command::Settings(SettingsCommand::Set { settings: changed }),
+            command: (Command::Settings(SettingsCommand::Set { settings: changed })).into(),
             reply: reply_tx,
         };
         let (event_tx, event_rx) = mpsc::channel();
@@ -1160,12 +1229,13 @@ mod tests {
         };
         let (reply_tx, reply_rx) = mpsc::sync_channel(1);
         let envelope = Envelope {
-            command: Command::History(crfty_core::HistoryCommand::Import {
+            command: (Command::History(crfty_core::HistoryCommand::Import {
                 records: vec![(
                     crfty_core::ImportPath("c:/videos/movie.mkv".to_owned()),
                     record,
                 )],
-            }),
+            }))
+            .into(),
             reply: reply_tx,
         };
         let (event_tx, _event_rx) = mpsc::channel();
@@ -1191,7 +1261,7 @@ mod tests {
         // An ordinary durable batch does not schedule a forced compaction.
         let (reply_tx, _reply_rx) = mpsc::sync_channel(1);
         let envelope = Envelope {
-            command: add_command(1, "video.mkv"),
+            command: add_command("video.mkv").into(),
             reply: reply_tx,
         };
         let outcome = process_batch(
@@ -1216,7 +1286,7 @@ mod tests {
     }
 
     fn add_item(state: &mut AppState, id: u64) -> Vec<DurableDelta> {
-        let applied = apply(state, add_command(id, &format!("video-{id}.mkv")));
+        let applied = apply(state, add_command(&format!("video-{id}.mkv")));
         assert_eq!(applied.reply, Reply::Accepted);
         applied.durable
     }
@@ -1314,7 +1384,8 @@ mod tests {
             let (reply_tx, reply_rx) = mpsc::sync_channel(1);
             (
                 Envelope {
-                    command: Command::System(SystemCommand::AcknowledgeCorruption { signature }),
+                    command: (Command::System(SystemCommand::AcknowledgeCorruption { signature }))
+                        .into(),
                     reply: reply_tx,
                 },
                 reply_rx,
@@ -1399,9 +1470,10 @@ mod tests {
     fn acknowledgement_is_rejected_while_healthy() {
         let (reply_tx, reply_rx) = mpsc::sync_channel(1);
         let envelope = Envelope {
-            command: Command::System(SystemCommand::AcknowledgeCorruption {
+            command: (Command::System(SystemCommand::AcknowledgeCorruption {
                 signature: crfty_core::corruption_signature(b"anything"),
-            }),
+            }))
+            .into(),
             reply: reply_tx,
         };
         let (event_tx, event_rx) = mpsc::channel();
@@ -1436,13 +1508,16 @@ mod tests {
     #[test]
     #[expect(clippy::expect_used, reason = "test assertion")]
     fn settings_form_ordered_batch_barriers_but_consecutive_writes_coalesce() {
-        let envelope = |command| {
+        let envelope = |command: Command| {
             let (reply, _receiver) = mpsc::sync_channel(1);
-            Envelope { command, reply }
+            Envelope {
+                command: command.into(),
+                reply,
+            }
         };
         let settings = Settings::default();
         let groups = split_batch_at_settings(vec![
-            envelope(add_command(1, "one.mkv")),
+            envelope(add_command("one.mkv")),
             envelope(Command::Settings(SettingsCommand::Set {
                 settings: settings.clone(),
             })),
@@ -1453,5 +1528,88 @@ mod tests {
         assert_eq!(groups.first().expect("first command group").len(), 1);
         assert_eq!(groups.get(1).expect("second command group").len(), 2);
         assert_eq!(groups.get(2).expect("third command group").len(), 1);
+    }
+
+    #[test]
+    fn analysis_paths_are_captured_when_the_driver_handles_the_action()
+    -> Result<(), Box<dyn std::error::Error>> {
+        use crate::analysis::{AnalysisGenerationRegistry, NativeEntryKind};
+        use crfty_core::{
+            AnalysisCommand, AnalysisDisplayText, AnalysisFileScan, AnalysisGenerationId,
+            AnalysisQueueRequest, AnalysisQueueSelection, AnalysisQueueSummary, AnalysisRow,
+            AnalysisRowEntry,
+        };
+        use std::sync::{Arc, Mutex};
+
+        let generation = AnalysisGenerationId(1);
+        let registry = Arc::new(Mutex::new(AnalysisGenerationRegistry::new(generation)));
+        let command = super::DriverCommand::AnalysisQueue {
+            request: AnalysisQueueRequest {
+                generation,
+                selection: AnalysisQueueSelection::AllFiles,
+                operation: Operation::Analyze,
+            },
+            registry: Arc::clone(&registry),
+        };
+        let mut state = AppState::default();
+        apply(
+            &mut state,
+            Command::Analysis(AnalysisCommand::Begin {
+                roots: vec![AnalysisDisplayText {
+                    text: "native".to_owned(),
+                    lossy: false,
+                }],
+            }),
+        );
+        let mut registry = registry.lock().map_err(|_| "registry poisoned")?;
+        let id = registry
+            .insert(
+                "native/new.mkv".into(),
+                "native".into(),
+                None,
+                NativeEntryKind::File,
+            )
+            .map_err(|()| "row ID exhausted")?;
+        registry
+            .insert(
+                "native/unpublished.mkv".into(),
+                "native".into(),
+                None,
+                NativeEntryKind::File,
+            )
+            .map_err(|()| "row ID exhausted")?;
+        drop(registry);
+        let display = AnalysisDisplayText {
+            text: "display only".to_owned(),
+            lossy: false,
+        };
+        apply(
+            &mut state,
+            Command::Analysis(AnalysisCommand::UpsertRows {
+                generation,
+                rows: vec![AnalysisRow {
+                    id,
+                    parent: None,
+                    entry: AnalysisRowEntry::File {
+                        scan: AnalysisFileScan::Discovered,
+                    },
+                    display_name: display.clone(),
+                    display_path: display,
+                }],
+            }),
+        );
+        let applied = apply(&mut state, command.into_core()?);
+        assert_eq!(
+            applied.reply,
+            Reply::AnalysisQueued(AnalysisQueueSummary {
+                added: 1,
+                excluded: Vec::new()
+            })
+        );
+        assert_eq!(
+            state.durable.queue.first().map(|item| &item.input),
+            Some(&PathBuf::from("native/new.mkv"))
+        );
+        Ok(())
     }
 }

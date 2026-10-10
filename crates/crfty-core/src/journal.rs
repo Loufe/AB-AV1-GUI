@@ -6,7 +6,7 @@ use crate::{
     UnixMillis, fold, output::validate_output_delta,
 };
 
-pub(crate) const JOURNAL_SCHEMA_VERSION: u32 = 20;
+pub(crate) const JOURNAL_SCHEMA_VERSION: u32 = 21;
 
 /// Compaction fires at an idle writer barrier when the journal is both large
 /// in absolute terms and dominated by dead upserts. The floor keeps
@@ -310,8 +310,8 @@ pub fn replay(bytes: &[u8]) -> JournalReplay {
 fn validate_replayed_delta(state: &DurableState, delta: &DurableDelta) -> Result<(), &'static str> {
     match delta {
         DurableDelta::QueueAdded { item } => {
-            if state.queue.iter().any(|current| current.id == item.id) {
-                return Err("queue item id already exists");
+            if item.id != crate::QueueItemId::next_after(state.queue_item_id_high_water)? {
+                return Err("queue item id is not the next allocation");
             }
             if !matches!(item.state, QueueItemState::Queued) {
                 return Err("new queue item is not queued");

@@ -4,6 +4,7 @@
     {
       "name": "empty",
       "state": {
+        "queue_item_id_high_water": 0,
         "runtime_id_high_water": 0,
         "queue": [],
         "paths": {},
@@ -18,6 +19,7 @@
     {
       "name": "converted_with_live_evidence",
       "state": {
+        "queue_item_id_high_water": 0,
         "runtime_id_high_water": 0,
         "queue": [],
         "paths": {},
@@ -190,6 +192,7 @@
     {
       "name": "converted_recovered_at_startup",
       "state": {
+        "queue_item_id_high_water": 0,
         "runtime_id_high_water": 0,
         "queue": [],
         "paths": {},
@@ -392,6 +395,7 @@
     {
       "name": "converted_verdict_without_run",
       "state": {
+        "queue_item_id_high_water": 0,
         "runtime_id_high_water": 0,
         "queue": [],
         "paths": {},
@@ -475,6 +479,7 @@
     {
       "name": "parked_imported_history",
       "state": {
+        "queue_item_id_high_water": 0,
         "runtime_id_high_water": 0,
         "queue": [],
         "paths": {},
@@ -634,6 +639,7 @@
     {
       "name": "parked_not_worthwhile_partial_ranges",
       "state": {
+        "queue_item_id_high_water": 0,
         "runtime_id_high_water": 0,
         "queue": [],
         "paths": {},
@@ -788,6 +794,7 @@
     {
       "name": "adopted_imported_history",
       "state": {
+        "queue_item_id_high_water": 0,
         "runtime_id_high_water": 0,
         "queue": [],
         "paths": {},
@@ -892,6 +899,7 @@
     {
       "name": "remuxed",
       "state": {
+        "queue_item_id_high_water": 0,
         "runtime_id_high_water": 0,
         "queue": [],
         "paths": {},
@@ -1029,6 +1037,7 @@
     {
       "name": "not_worthwhile",
       "state": {
+        "queue_item_id_high_water": 0,
         "runtime_id_high_water": 0,
         "queue": [],
         "paths": {},
@@ -1195,6 +1204,7 @@
     {
       "name": "verdict_wins_over_interruptions",
       "state": {
+        "queue_item_id_high_water": 0,
         "runtime_id_high_water": 0,
         "queue": [],
         "paths": {},
@@ -1641,6 +1651,7 @@
     {
       "name": "incomplete_cached_analysis_and_verdict_precedence",
       "state": {
+        "queue_item_id_high_water": 0,
         "runtime_id_high_water": 0,
         "queue": [],
         "paths": {},
@@ -2036,6 +2047,7 @@
     {
       "name": "analyzed_latest_run_wins",
       "state": {
+        "queue_item_id_high_water": 0,
         "runtime_id_high_water": 0,
         "queue": [],
         "paths": {},
@@ -2233,6 +2245,7 @@
     {
       "name": "analyzed_record_only",
       "state": {
+        "queue_item_id_high_water": 0,
         "runtime_id_high_water": 0,
         "queue": [],
         "paths": {},
@@ -2375,6 +2388,7 @@
     {
       "name": "scanned_only_skipped_and_rotation",
       "state": {
+        "queue_item_id_high_water": 0,
         "runtime_id_high_water": 0,
         "queue": [],
         "paths": {},
