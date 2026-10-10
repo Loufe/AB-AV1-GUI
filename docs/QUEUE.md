@@ -75,7 +75,7 @@ Queue state and job phase answer different questions. `Running` includes prepara
 | Encode | Preparing and destination checks, optional Analyzing, staging creation, Encoding, Verifying, then Finalizing and output settlement. |
 | Remux | Preparing and destination checks, staging creation, Remuxing, Verifying, then Finalizing and output settlement. |
 
-[Policy's VMAF target rules](POLICY.md#analysis-reuse-and-vmaf-targets) own the search ladder and not-worthwhile decision; its [hardware-decode rules](POLICY.md#hardware-decode) own software retries. The coordinator uses those rules within the same prepared run. The requested `JobSpec` stays unchanged; retained analysis and completion evidence identify the decode mode actually used.
+[Policy's quality target rules](POLICY.md#analysis-reuse-and-quality-targets) own the search ladder and not-worthwhile decision; its [hardware-decode rules](POLICY.md#hardware-decode) own software retries. The coordinator uses those rules within the same prepared run. The requested `JobSpec` stays unchanged; retained analysis and completion evidence identify the decode mode actually used.
 
 Output intent is durable before staging is created. A successful process result enters verification and finalization; it becomes Converted or Remuxed only after the output transaction proves successful settlement. Cancellation or failure settles staging before the terminal command. Cleanup conflicts remain failures. [ADR-020, own output promotion as a journaled transaction](adr/020-own-output-promotion-as-a-journaled-transaction.md) owns promotion, retirement, and identity-based deletion rules.
 
