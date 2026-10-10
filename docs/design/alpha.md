@@ -32,7 +32,7 @@ Pre-release builds may require a fresh data directory. The [released History upg
 
 CI-built alpha artifacts are exercised from an installed location, first with no media tools reachable and then with a user-installed FFmpeg configured through Settings. Tool discovery, the session-start capability probe, execution, restart, and native conversion must pass on both supported platforms, and the install guidance shown for each platform is followed on a clean machine.
 
-Filesystem work and History import and queries leave the interface responsive. Command failures remain inspectable in context; the complete notices panel can follow. A privacy control is enabled only when recording and import enforce its promise. Until then it is disabled and explicitly unavailable. Existing anonymized logs and anonymous records retain their protections, and records without readable paths expose no path actions.
+Filesystem work and History import and queries leave the interface responsive. Command failures remain inspectable in context; the complete notices panel can follow. A privacy control is enabled only when recording and import enforce its promise. Until then it is disabled and explicitly unavailable. Existing anonymized logs and pathless records retain their protections, and records without readable paths expose no path actions. Pathless History remains pseudonymous, as its [privacy contract](../HISTORY.md#pathless-is-pseudonymous-not-anonymous) explains.
 
 ## Completion beyond alpha
 
