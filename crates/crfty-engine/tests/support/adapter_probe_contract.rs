@@ -10,6 +10,9 @@ use std::{
     time::Duration,
 };
 
+#[cfg(any(target_os = "linux", windows))]
+use std::time::Instant;
+
 use crfty_engine::{
     ab_av1::{AbAv1Runtime, CancelMode, JobFailureKind, JobTerminal, ProbeFailureKind},
     tools::MediaTools,
@@ -18,6 +21,10 @@ use crfty_engine::{
 const DIAGNOSTIC_NOISE_BYTES: usize = 32 * 1024;
 const OVERSIZED_JSON_BYTES: usize = 2 * 1024 * 1024;
 const HEARTBEAT_SETTLEMENT_CHECK: Duration = Duration::from_millis(200);
+#[cfg(any(target_os = "linux", windows))]
+const DESCENDANT_EXIT_TIMEOUT: Duration = Duration::from_secs(5);
+#[cfg(any(target_os = "linux", windows))]
+const EXIT_POLL_INTERVAL: Duration = Duration::from_millis(10);
 
 pub(super) fn fake_probe(input: &Path) -> Result<bool, Box<dyn Error>> {
     let name = input
@@ -36,7 +43,11 @@ pub(super) fn fake_probe(input: &Path) -> Result<bool, Box<dyn Error>> {
         if name.starts_with("adapter-orphan-closed") || name.starts_with("adapter-closed-hang") {
             descendant.stdout(Stdio::null()).stderr(Stdio::null());
         }
-        let _child = descendant.spawn()?;
+        let child = descendant.spawn()?;
+        let descendant_pid = marker.with_extension("descendant-pid");
+        let staging = marker.with_extension("descendant-pid-staging");
+        fs::write(&staging, child.id().to_string())?;
+        fs::rename(staging, descendant_pid)?;
         super::wait_for_file(&marker)?;
         if orphan {
             return Ok(false);
@@ -147,6 +158,7 @@ pub(super) fn run(mut arguments: impl Iterator<Item = OsString>) -> Result<(), B
         let job = runtime.start_search(tools.clone(), super::search_request(&input))?;
         if mode.to_string_lossy().starts_with("cancel-") {
             super::wait_for_file(&marker()?)?;
+            super::wait_for_file(&marker()?.with_extension("descendant-pid"))?;
             if mode == "cancel-closed-probe" {
                 super::wait_for_file(&marker()?.with_extension("closed"))?;
             }
@@ -160,6 +172,7 @@ pub(super) fn run(mut arguments: impl Iterator<Item = OsString>) -> Result<(), B
         )?;
         if mode.to_string_lossy().starts_with("cancel-") {
             super::wait_for_file(&marker()?)?;
+            super::wait_for_file(&marker()?.with_extension("descendant-pid"))?;
             if mode == "cancel-closed-probe" {
                 super::wait_for_file(&marker()?.with_extension("closed"))?;
             }
@@ -244,11 +257,6 @@ fn completion_only<T>(terminal: JobTerminal<T>) -> JobTerminal<()> {
 
 fn verify_settlement() -> Result<(), Box<dyn Error>> {
     let marker = marker()?;
-    let stopped = fs::read(&marker)?;
-    thread::sleep(HEARTBEAT_SETTLEMENT_CHECK);
-    if fs::read(&marker)? != stopped {
-        return Err("probe left a live descendant".into());
-    }
     let pid = fs::read_to_string(marker.with_extension("pid"))?;
     #[cfg(target_os = "linux")]
     if Path::new("/proc").join(pid.trim()).exists() {
@@ -273,5 +281,55 @@ fn verify_settlement() -> Result<(), Box<dyn Error>> {
             return Err("probe leader still present".into());
         }
     }
+    // Group termination does not reap grandchildren. Observe descendant exit
+    // before sampling the heartbeat so an in-flight final write is not a leak.
+    #[cfg(any(target_os = "linux", windows))]
+    wait_for_descendant_exit(&marker)?;
+    let stopped = fs::read(&marker)?;
+    thread::sleep(HEARTBEAT_SETTLEMENT_CHECK);
+    if fs::read(&marker)? != stopped {
+        return Err("probe left a live descendant".into());
+    }
     Ok(())
+}
+
+#[cfg(any(target_os = "linux", windows))]
+fn wait_for_descendant_exit(marker: &Path) -> Result<(), Box<dyn Error>> {
+    let pid: u32 = fs::read_to_string(marker.with_extension("descendant-pid"))?.parse()?;
+    let deadline = Instant::now() + DESCENDANT_EXIT_TIMEOUT;
+    loop {
+        if descendant_has_exited(pid)? {
+            return Ok(());
+        }
+        if Instant::now() >= deadline {
+            return Err(format!("probe descendant {pid} survived termination").into());
+        }
+        thread::sleep(EXIT_POLL_INTERVAL);
+    }
+}
+
+#[cfg(target_os = "linux")]
+fn descendant_has_exited(pid: u32) -> Result<bool, Box<dyn Error>> {
+    match fs::read_to_string(Path::new("/proc").join(pid.to_string()).join("stat")) {
+        Ok(stat) => {
+            let (_, fields) = stat.rsplit_once(')').ok_or("malformed descendant stat")?;
+            let state = fields.split_whitespace().next();
+            Ok(matches!(state, Some("Z" | "X")))
+        }
+        Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(true),
+        Err(error) => Err(error.into()),
+    }
+}
+
+#[cfg(windows)]
+fn descendant_has_exited(pid: u32) -> Result<bool, Box<dyn Error>> {
+    let tasklist = PathBuf::from(env::var_os("SystemRoot").ok_or("SystemRoot missing")?)
+        .join("System32/tasklist.exe");
+    let output = Command::new(tasklist)
+        .args(["/FI", &format!("PID eq {pid}"), "/FO", "CSV", "/NH"])
+        .output()?;
+    if !output.status.success() {
+        return Err("could not observe probe descendant".into());
+    }
+    Ok(!String::from_utf8_lossy(&output.stdout).contains(&format!("\"{pid}\"")))
 }
