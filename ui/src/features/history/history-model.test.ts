@@ -1,3 +1,4 @@
+import { audioSummary } from "@/lib/format/media";
 import { describe, expect, it } from "vitest";
 
 import type { DurableState_Deserialize, HistoryRow, HistoryStatus } from "@/lib/bindings";
@@ -5,7 +6,6 @@ import fixturesJson from "@/lib/projection/projection-fixtures.json";
 import { emptyDurableState } from "@/lib/store/fold";
 
 import {
-  audioSummary,
   compareHistoryDefault,
   historyDisplayRows,
   historyRowId,
