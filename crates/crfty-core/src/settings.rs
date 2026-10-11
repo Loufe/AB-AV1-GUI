@@ -46,6 +46,29 @@ pub struct OutputSettings {
     pub overwrite_existing: bool,
 }
 
+impl OutputSettings {
+    /// Resolve the committed default for an enqueue, retaining the originating
+    /// folder only when the output should mirror a discovered source tree.
+    pub fn target(
+        &self,
+        source_root: Option<PathBuf>,
+    ) -> Result<crate::OutputTarget, &'static str> {
+        match self.default_mode {
+            DefaultOutputMode::Replace => Ok(crate::OutputTarget::Replace),
+            DefaultOutputMode::Suffix => Ok(crate::OutputTarget::Suffix {
+                suffix: self.suffix.clone(),
+            }),
+            DefaultOutputMode::SeparateFolder => Ok(crate::OutputTarget::SeparateFolder {
+                directory: self
+                    .separate_folder
+                    .clone()
+                    .ok_or("default separate output folder is required")?,
+                source_root,
+            }),
+        }
+    }
+}
+
 impl Default for OutputSettings {
     fn default() -> Self {
         Self {
@@ -144,5 +167,39 @@ impl Default for Settings {
             log_folder: None,
             tools: ToolPathSettings::default(),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::OutputTarget;
+
+    #[test]
+    fn enqueue_target_uses_only_the_selected_default_and_source_root() -> Result<(), &'static str> {
+        let source = PathBuf::from("source");
+        let mut output = OutputSettings::default();
+        assert_eq!(output.target(Some(source.clone()))?, OutputTarget::Replace);
+        output.default_mode = DefaultOutputMode::Suffix;
+        output.suffix = "_encoded".to_owned();
+        assert_eq!(
+            output.target(Some(source.clone()))?,
+            OutputTarget::Suffix {
+                suffix: "_encoded".to_owned()
+            }
+        );
+        output.default_mode = DefaultOutputMode::SeparateFolder;
+        assert!(output.target(None).is_err());
+        output.separate_folder = Some("destination".into());
+        for root in [None, Some(source)] {
+            assert_eq!(
+                output.target(root.clone())?,
+                OutputTarget::SeparateFolder {
+                    directory: "destination".into(),
+                    source_root: root,
+                }
+            );
+        }
+        Ok(())
     }
 }

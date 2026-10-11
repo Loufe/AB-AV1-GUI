@@ -8,7 +8,6 @@ import {
   type CommandError,
   type CorruptionSignature,
   type Operation,
-  type OutputTarget,
   type QueueItemEdit,
   type QueueItemId,
   type ShellEvent,
@@ -84,12 +83,8 @@ export async function queueAddPaths(
   inputs: string[],
   operation: Operation,
   intent: AnalysisIntent,
-  outputTarget: OutputTarget,
 ): Promise<void> {
-  expectAccepted(
-    await commands.queueAddPaths(inputs, operation, intent, outputTarget),
-    "queue add",
-  );
+  expectAccepted(await commands.queueAddPaths(inputs, operation, intent), "queue add");
 }
 
 export async function queueClear(): Promise<void> {

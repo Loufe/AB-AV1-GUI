@@ -45,6 +45,8 @@ allow = [
     "GPL-3.0-or-later",
     # ring and the rustls tree.
     "ISC",
+    # tempfile is reused by shell delegation tests; its MIT/Apache-2.0
+    # licenses and registry source are already covered by this policy.
     "MIT",
     "MIT-0",
     "MPL-2.0",

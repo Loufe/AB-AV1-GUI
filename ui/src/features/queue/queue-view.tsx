@@ -13,14 +13,7 @@ import {
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
 import { EmptyState } from "@/components/empty-state";
-import type {
-  Operation,
-  OutputTarget,
-  QueueItem,
-  QueueItemEdit,
-  QueueItemId,
-  Settings,
-} from "@/lib/bindings";
+import type { Operation, QueueItem, QueueItemEdit, QueueItemId } from "@/lib/bindings";
 import {
   forceStop,
   openPath,
@@ -84,15 +77,6 @@ type ReorderInteraction =
       baselinePending: readonly QueueItemId[];
       snapshotGeneration: number;
     };
-
-function configuredOutputTarget(settings: Settings): OutputTarget {
-  if (settings.output.default_mode === "replace") return "Replace";
-  if (settings.output.default_mode === "suffix")
-    return { Suffix: { suffix: settings.output.suffix } };
-  if (settings.output.separate_folder === null)
-    throw new Error("Choose a separate output folder in Settings before adding files.");
-  return { SeparateFolder: { directory: settings.output.separate_folder, source_root: null } };
-}
 
 function isRemovable(item: QueueItem): boolean {
   return item.state === "Queued" || "Finished" in item.state;
@@ -367,8 +351,7 @@ export function QueueView() {
     void runAction(action, async () => {
       if (settings === null) throw new Error("Settings have not loaded yet.");
       const paths = await pickPaths(kind, settings.last_input_folder);
-      if (paths.length > 0)
-        await queueAddPaths(paths, "Convert", "ReuseIfFresh", configuredOutputTarget(settings));
+      if (paths.length > 0) await queueAddPaths(paths, "Convert", "ReuseIfFresh");
     });
   const editSelected = async (patch: QueueItemEdit): Promise<boolean> => {
     if (selected === null) return false;

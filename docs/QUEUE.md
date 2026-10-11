@@ -20,7 +20,9 @@ Worker commands carry the item, claim, and run identities. Preparation, start, a
 
 ## Enqueue
 
-`AddMany` receives ordered requests with an input path, operation, analysis intent, output target, overwrite decision, and optional filesystem facts. In the current path-add bridge, the engine expands files and folders using configured extensions; the shell submits the resulting requests. Callers never allocate item IDs. Execution settings are resolved later, at preparation.
+`UserCommandSender::queue_add_paths` accepts native input paths, an operation, and an analysis intent. The engine reads committed scan Settings through the writer before expanding folders; directly selected files pass through without extension filtering. Expansion preserves input order and uses sorted breadth-first traversal within each folder. Filesystem work runs outside the state writer. The shell and frontend supply no scan policy, output target, or item IDs.
+
+After expansion, the writer resolves output targets from its committed Settings and each file’s originating source root. Folder-discovered files retain that root for separate-folder output; directly selected files have no source root. A Settings update committed during expansion applies to the resulting output targets, while the extension filter stays fixed for that expansion. Failed Settings writes roll back before either settings read. The resulting ordered `AddMany` requests carry an input path, operation, analysis intent, output target, overwrite decision, and optional filesystem facts. Direct additions and Analysis enqueue converge on this reducer transaction for policy, validation, and ID allocation. Execution settings are resolved later, at preparation.
 
 The reducer validates every output target and rejects the whole batch on an invalid target or exhausted item IDs. Paths that cannot round-trip through the JSON journal contribute `PathNotPersistable` to the summary. Duplicate detection compares input paths against unfinished queue items and requests already accepted in the batch. A duplicate contributes `AlreadyQueued` to the summary. Finished rows do not block a new add.
 
@@ -110,7 +112,7 @@ When unsettled output requires unavailable media tools, recovery leaves the item
 | Session sequence and phases | [Session worker](../crates/crfty-engine/src/coordinator/session.rs), [job dispatch](../crates/crfty-engine/src/coordinator/job.rs), and [adapter process contracts](../crates/crfty-engine/tests/ab_av1_process.rs) |
 | Output and restart | [Output flow](../crates/crfty-engine/src/coordinator/output_flow.rs), [startup recovery](../crates/crfty-engine/src/coordinator/recovery.rs), and [durability contracts](../crates/crfty-engine/tests/durability.rs) |
 | Cancellation and process containment | [Supervisor](../crates/crfty-engine/src/coordinator/supervision.rs), [process supervision contracts](../crates/crfty-engine/tests/process_supervisor.rs), and [remux process contracts](../crates/crfty-engine/tests/remux_process.rs) |
-| Path-add boundary | [Shell bridge](../crates/crfty-shell/src/bridge.rs) and [engine input expansion](../crates/crfty-engine/src/scan.rs) |
+| Path-add boundary | [Engine command surface](../crates/crfty-engine/src/coordinator/mod.rs), [engine input expansion](../crates/crfty-engine/src/scan.rs), and [writer settings boundary](../crates/crfty-engine/src/driver.rs) |
 | Frontend reorder | [Interaction planner](../ui/src/features/queue/queue-interaction-planner.ts), [drag adapter](../ui/src/features/queue/queue-dnd-adapter.ts), and [queue interaction tests](../ui/src/features/queue/queue-view-interactions.browser.test.tsx) |
 
 The [testing strategy](TESTING.md) owns commands and broader suite coverage. Passing those suites does not establish the pending lifecycle fixes or installed alpha acceptance.
