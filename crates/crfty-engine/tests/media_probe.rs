@@ -404,8 +404,13 @@ fn config(directory: &Path, ffmpeg: PathBuf, ffprobe: PathBuf) -> EngineConfig {
         config_path: directory.join("config.json"),
         tools: ToolsConfig::Fixed(FixedTools {
             tools: crfty_core::LocatedTools {
+                ab_av1: (crfty_core::LocatedTool {
+                    path: ffmpeg.clone(),
+                    source: ToolSource::Environment,
+                })
+                .clone(),
                 ffmpeg: crfty_core::LocatedTool {
-                    path: ffmpeg,
+                    path: ffmpeg.clone(),
                     source: ToolSource::Environment,
                 },
                 ffprobe: crfty_core::LocatedTool {

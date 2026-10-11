@@ -136,9 +136,7 @@ pub(super) fn run_encode(
                 // retry-after-abandonment unrepresentable. The requested
                 // JobSpec is never rewritten — the divergence is recorded in
                 // the terminal evidence's `encode_decode`.
-                if matches!(decode_mode, DecodeMode::Hardware(_))
-                    && !matches!(failure.kind, JobFailureKind::Probe { .. })
-                {
+                if matches!(decode_mode, DecodeMode::Hardware(_)) {
                     match restage_for_retry(&manager, services.commands, &mut transaction) {
                         Ok(()) => {
                             tracing::warn!(
@@ -442,13 +440,7 @@ pub(super) fn search_with_fallback(
                         last_measurement: Some(measured),
                     });
                 }
-                JobFailureKind::Probe { .. } => {
-                    return Err(ItemOutcome::Failed(
-                        FailureFacts::new(FailureKind::SearchRun, failure.message)
-                            .with_diagnostic(failure.diagnostic),
-                    ));
-                }
-                JobFailureKind::Other => {
+                JobFailureKind::Other | JobFailureKind::Process { .. } => {
                     // Hardware→software retry (parse-free trigger): any
                     // encode/score failure under hardware decode
                     // restarts the whole VMAF ladder once with the software
@@ -467,10 +459,10 @@ pub(super) fn search_with_fallback(
                         failed_attempts.clear();
                         continue;
                     }
-                    return Err(ItemOutcome::Failed(FailureFacts::new(
-                        FailureKind::SearchRun,
-                        failure.message,
-                    )));
+                    return Err(ItemOutcome::Failed(
+                        FailureFacts::new(FailureKind::SearchRun, failure.message)
+                            .with_diagnostic(failure.diagnostic),
+                    ));
                 }
             },
             JobTerminal::Cancelled => return Err(ItemOutcome::Stopped),

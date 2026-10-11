@@ -8,7 +8,7 @@ Three CI workflows, mirroring what a commit is expected to pass locally.
 
 - `.github/workflows/rust.yml`, on every push and pull request against `rewrite`, on Ubuntu and Windows: `cargo fmt --all -- --check`, `cargo clippy --workspace --all-targets --all-features --locked -- -D warnings`, `cargo test --workspace --all-features --locked`, then a `git diff --exit-code` over the three generated artifacts. A separate Linux step greps `crates/**/*.rs` and fails the build on any `allow(` attribute. A supply-chain job runs `cargo deny check`.
 - `.github/workflows/ui.yml`, on changes under `ui/`: `pnpm lint`, `pnpm format:check`, `pnpm typecheck`, `pnpm knip`, `pnpm test`, `pnpm build`, with Chromium installed for the browser test project.
-- `.github/workflows/media-contract.yml`, on changes to `Cargo.lock`, core or engine sources, or engine tests, on Ubuntu and Windows: installs a current BtbN FFmpeg build at job time and runs the `#[ignore]`d real-media and native-tool contract suites against it. Because the ab-av1 revision is pinned in `Cargo.lock`, changing that revision triggers this suite.
+- `.github/workflows/media-contract.yml`, on changes to `Cargo.lock`, core or engine sources, or engine tests, on Ubuntu and Windows: installs a current BtbN FFmpeg build at job time and runs the `#[ignore]`d real-media and native-tool contract suites against it. The suite installs official ab-av1 0.11.7 and proves the CLI protocol against actual binaries.
 
 Lint discipline extends to tests. Tests run under the same workspace lints as production code, `#[allow(...)]` is forbidden outright, the narrowest item-scoped `#[expect(..., reason = "...")]` is the only escape, and unsafe code stays forbidden everywhere including tests.
 

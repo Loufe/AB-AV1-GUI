@@ -392,6 +392,7 @@ pub struct AppState {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, specta::Type)]
 pub enum MediaTool {
+    AbAv1,
     Ffmpeg,
     Ffprobe,
 }
@@ -400,6 +401,7 @@ impl MediaTool {
     #[must_use]
     pub const fn name(self) -> &'static str {
         match self {
+            Self::AbAv1 => "ab-av1",
             Self::Ffmpeg => "ffmpeg",
             Self::Ffprobe => "ffprobe",
         }
@@ -425,6 +427,7 @@ pub struct LocatedTool {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, specta::Type)]
 pub struct LocatedTools {
+    pub ab_av1: LocatedTool,
     pub ffmpeg: LocatedTool,
     pub ffprobe: LocatedTool,
 }
@@ -469,6 +472,7 @@ impl ToolLocationFailure {
 /// carried only as a diagnostic.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, specta::Type)]
 pub enum ToolCapability {
+    AbAv1Json,
     FfprobeVersion,
     Svtav1Encoder,
     VmafFilter,
@@ -478,6 +482,7 @@ impl ToolCapability {
     #[must_use]
     pub const fn describe(self) -> &'static str {
         match self {
+            Self::AbAv1Json => "ab-av1 JSON search protocol",
             Self::FfprobeVersion => "ffprobe version report",
             Self::Svtav1Encoder => "ffmpeg libsvtav1 encoder",
             Self::VmafFilter => "ffmpeg libvmaf filter",

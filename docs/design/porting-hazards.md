@@ -12,7 +12,7 @@ This document dies with the rewrite. Once the port is complete the porting risk 
 
 ## Hazards
 
-**Patch surface.** The ab-av1 library patch must stay narrow and reviewable: a library target, typed encode progress, cancellation, and cleanup. *Addressed* by ADR-003, embed a pinned ab-av1 adapter. `crates/crfty-engine/Cargo.toml` takes the dependency at a pinned git revision with `default-features = false, features = ["library"]`. The call surface in `crates/crfty-engine/src/ab_av1/operation.rs` is limited to tool paths, CRF search, encode, probe, finish, and cancel. A test in `crates/crfty-engine/src/ab_av1/mod.rs` asserts that the pinned revision matches the lockfile.
+**Encoder boundary.** CRFty invokes the official ab-av1 CLI JSON contract and supervises FFmpeg encoding directly. ADR-003 owns the required protocol; ADR-021 owns operation containment and cleanup. The adapter requires no patched library or git dependency.
 
 **Runtime ownership.** `crf_search::run` uses `spawn_local`, so every job has to run inside a dedicated current-thread `LocalSet` rather than an ambient multi-thread runtime. *Addressed* in `crates/crfty-engine/src/ab_av1/runtime.rs`: `AbAv1Runtime::start` spawns one named OS thread, that thread builds a current-thread Tokio runtime, and `run_catching_panic` runs each job inside a fresh `LocalSet` via `block_on(local.run_until(...))`.
 

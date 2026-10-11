@@ -1,33 +1,16 @@
-//! Isolated adapter for CRFty's pinned ab-av1 revision.
+//! Official ab-av1 CLI search and directly supervised FFmpeg encoding.
 
-mod operation;
+pub(crate) mod operation;
+mod protocol;
 mod runtime;
+mod tool_path;
 mod types;
-
-/// The ab-av1 revision compiled into this binary, recorded as analysis
-/// provenance. A unit test pins it to the workspace lockfile so the string
-/// cannot drift from the dependency it describes.
-pub const AB_AV1_REVISION: &str = "94e7fb0352a72a52f61f5da343ca3283363d37d1";
 
 #[cfg(feature = "contract-test-fixture")]
 pub use runtime::FaultInjection;
 pub use runtime::{AbAv1Runtime, CancellationHandle, JobHandle};
 pub use types::{
     CancelMode, EncodeRequest, EncodeTelemetry, JobFailure, JobFailureKind, JobReport, JobTerminal,
-    ProbeFailureKind, RuntimeStartError, SearchOutcome, SearchRequest, SearchTelemetry, SearchWork,
+    ProcessFailureKind, RuntimeStartError, SearchOutcome, SearchRequest, SearchTelemetry,
     ShutdownError, StartJobError, Telemetry, WaitError,
 };
-
-#[cfg(test)]
-mod tests {
-    use super::AB_AV1_REVISION;
-
-    #[test]
-    fn pinned_revision_matches_the_workspace_lockfile() {
-        let lockfile = include_str!("../../../../Cargo.lock");
-        assert!(
-            lockfile.contains(&format!("?rev={AB_AV1_REVISION}#{AB_AV1_REVISION}")),
-            "AB_AV1_REVISION does not match the locked ab-av1 dependency"
-        );
-    }
-}

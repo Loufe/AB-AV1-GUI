@@ -4,9 +4,9 @@
   "version": "3.0.0-alpha.0",
   "identifier": "io.github.loufe.crfty",
   "build": {
-    "beforeDevCommand": "pnpm dev",
+    "beforeDevCommand": "cargo build -p crfty-engine --bin crfty-media-relay && pnpm dev",
     "devUrl": "http://localhost:5173",
-    "beforeBuildCommand": "pnpm build",
+    "beforeBuildCommand": "cargo build --release -p crfty-engine --bin crfty-media-relay && pnpm build",
     "frontendDist": "../../ui/dist"
   },
   "app": {

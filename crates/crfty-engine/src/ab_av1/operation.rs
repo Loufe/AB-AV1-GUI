@@ -1,495 +1,461 @@
+#[cfg(feature = "contract-test-fixture")]
+use super::FaultInjection;
+use super::{
+    EncodeRequest, EncodeTelemetry, JobFailure, JobTerminal, SearchOutcome, SearchRequest,
+    SearchTelemetry, Telemetry, protocol::SearchProtocol, tool_path,
+};
+use super::{JobFailureKind, ProcessFailureKind};
+use crate::{
+    failure::scrub_tail,
+    process_supervisor::{
+        self, ProcessCancellation, ProcessLimits, ProcessReport, ProcessTerminal,
+    },
+    tools::MediaTools,
+};
+use crfty_core::DecodeMode;
 use std::{
-    fmt,
-    path::{Path, PathBuf},
-    str::FromStr,
-    sync::{Arc, Mutex},
+    process::Command,
+    sync::{Arc, Mutex, MutexGuard},
     time::Duration,
 };
 
-use ab_av1::{command, ffprobe};
-use crfty_core::DecodeMode;
-use tokio_stream::StreamExt;
+const STDERR_BYTES: usize = 64 * 1024;
+const PROGRESS_LINE_BYTES: usize = 4096;
+const KEYFRAME_INTERVAL: &str = "240";
+const PIXEL_FORMAT: &str = "yuv420p10le";
 
-use super::types::{
-    CancelMode, EncodeRequest, EncodeTelemetry, JobFailure, JobFailureKind, JobTerminal,
-    ProbeFailureKind, SearchOutcome, SearchRequest, SearchTelemetry, SearchWork, Telemetry,
-};
-use crate::tools::MediaTools;
-
-const DEFAULT_SAMPLE_EVERY: Duration = Duration::from_secs(12 * 60);
-const DEFAULT_XPSNR_FPS: f32 = 60.0;
-
-#[cfg(feature = "contract-test-fixture")]
-use super::runtime::FaultInjection;
-
-pub(crate) async fn run_search(
+pub(crate) fn run_search(
     tools: MediaTools,
     request: SearchRequest,
-    cancellation: tokio::sync::watch::Receiver<Option<CancelMode>>,
+    cancellation: ProcessCancellation,
     telemetry: Arc<Mutex<Option<Telemetry>>>,
 ) -> JobTerminal<SearchOutcome> {
-    let tools = ab_av1::ToolPaths {
-        ffmpeg: tools.ffmpeg,
-        ffprobe: tools.ffprobe,
-    };
-    ab_av1::with_tool_paths(tools, async move {
-        let result = search(request, cancellation, telemetry).await;
-        finalize(result).await
-    })
-    .await
+    run_search_limited(tools, request, cancellation, telemetry, None, None)
 }
 
-pub(crate) async fn run_encode(
+pub(crate) fn run_search_limited(
     tools: MediaTools,
-    request: EncodeRequest,
-    cancellation: tokio::sync::watch::Receiver<Option<CancelMode>>,
-    telemetry: Arc<Mutex<Option<Telemetry>>>,
-    #[cfg(feature = "contract-test-fixture")] fault: FaultInjection,
-) -> JobTerminal<()> {
-    let tools = ab_av1::ToolPaths {
-        ffmpeg: tools.ffmpeg,
-        ffprobe: tools.ffprobe,
-    };
-    ab_av1::with_tool_paths(tools, async move {
-        let result = encode(
-            request,
-            cancellation,
-            telemetry,
-            #[cfg(feature = "contract-test-fixture")]
-            fault,
-        )
-        .await;
-        finalize(result).await
-    })
-    .await
-}
-
-enum OperationError {
-    Cancelled,
-    Failed(JobFailure),
-}
-
-async fn search(
     request: SearchRequest,
-    mut cancellation: tokio::sync::watch::Receiver<Option<CancelMode>>,
+    cancellation: ProcessCancellation,
     telemetry: Arc<Mutex<Option<Telemetry>>>,
-) -> Result<SearchOutcome, OperationError> {
-    if cancellation.borrow().is_some() {
-        return Err(OperationError::Cancelled);
-    }
-    let probe = probe_input(&request.input, &mut cancellation).await?;
-    let mut args = search_args(&request).map_err(OperationError::Failed)?;
-    args.sample
-        .set_extension_from_input(&request.input, &args.args.encoder, &probe);
-    args.validate()
-        .map_err(failure)
-        .map_err(OperationError::Failed)?;
-
-    let mut updates = std::pin::pin!(command::crf_search::run(args, probe));
-    let mut outcome = None;
-    loop {
-        tokio::select! {
-            changed = cancellation.changed() => {
-                if changed.is_err() || cancellation.borrow().is_some() {
-                    return Err(OperationError::Cancelled);
-                }
-            }
-            update = updates.next() => match update {
-                Some(Ok(command::crf_search::Update::Status { crf_run, crf, sample })) => {
-                    set_telemetry(&telemetry, Telemetry::Search(SearchTelemetry {
-                        crf_run,
-                        crf,
-                        work: map_work(sample.work),
-                        fps: sample.fps,
-                        progress: sample.progress,
-                        sample: sample.sample,
-                        samples: sample.samples,
-                        full_pass: sample.full_pass,
-                    }));
-                }
-                Some(Ok(command::crf_search::Update::Done(best))) => {
-                    let Some(vmaf) = best.enc.vmaf_score else {
-                        return Err(OperationError::Failed(JobFailure::new(
-                            "VMAF search completed without a VMAF score",
-                        )));
-                    };
-                    outcome = Some(SearchOutcome {
-                        crf: best.crf,
-                        vmaf,
-                        predicted_size: best.enc.predicted_encode_size,
-                        predicted_percent: best.enc.encode_percent,
-                        predicted_duration: best.enc.predicted_encode_time,
-                        from_cache: best.enc.from_cache,
-                    });
-                }
-                Some(Ok(_)) => {}
-                Some(Err(command::crf_search::Error::NoGoodCrf { last })) => {
-                    let Some(vmaf) = last.enc.vmaf_score else {
-                        return Err(OperationError::Failed(JobFailure::new(
-                            "failed CRF search omitted its final VMAF score",
-                        )));
-                    };
-                    return Err(OperationError::Failed(JobFailure::no_good_crf(SearchOutcome {
-                        crf: last.crf,
-                        vmaf,
-                        predicted_size: last.enc.predicted_encode_size,
-                        predicted_percent: last.enc.encode_percent,
-                        predicted_duration: last.enc.predicted_encode_time,
-                        from_cache: last.enc.from_cache,
-                    })));
-                }
-                Some(Err(command::crf_search::Error::Other(error))) => return Err(OperationError::Failed(operation_failure(error))),
-                None => return outcome.ok_or_else(|| OperationError::Failed(JobFailure::new(
-                    "quality search ended without a result",
-                ))),
-            }
+    timeout: Option<Duration>,
+    fixed_crf: Option<f32>,
+) -> JobTerminal<SearchOutcome> {
+    let temporary = match tempfile::Builder::new().prefix("crfty-search-").tempdir() {
+        Ok(directory) => directory,
+        Err(error) => {
+            return JobTerminal::Failed(JobFailure::new(format!(
+                "cannot create search workspace: {error}"
+            )));
         }
-    }
-}
-
-async fn encode(
-    request: EncodeRequest,
-    mut cancellation: tokio::sync::watch::Receiver<Option<CancelMode>>,
-    telemetry: Arc<Mutex<Option<Telemetry>>>,
-    #[cfg(feature = "contract-test-fixture")] fault: FaultInjection,
-) -> Result<(), OperationError> {
-    if cancellation.borrow().is_some() {
-        return Err(OperationError::Cancelled);
-    }
-    let probe = probe_input(&request.input, &mut cancellation).await?;
-    let args = encode_args(&request).map_err(OperationError::Failed)?;
-    let mut updates = std::pin::pin!(command::encode::run(args, probe));
-    loop {
-        tokio::select! {
-            changed = cancellation.changed() => {
-                if changed.is_err() || cancellation.borrow().is_some() {
-                    return Err(OperationError::Cancelled);
-                }
-            }
-            update = updates.next() => match update {
-                Some(Ok(command::encode::Update::Progress { frame, fps, time })) => {
-                    set_telemetry(&telemetry, Telemetry::Encode(EncodeTelemetry {
-                        frame,
-                        fps,
-                        position: time,
-                    }));
-                    #[cfg(feature = "contract-test-fixture")]
-                    if fault == FaultInjection::PanicAfterFirstProgress {
-                        panic!("contract fault after first encode progress");
-                    }
-                }
-                // ab-av1 derives this rounded breakdown from FFmpeg's human
-                // summary; it is deliberately not an application contract.
-                Some(Ok(command::encode::Update::StreamSizes { .. })) => {}
-                Some(Ok(command::encode::Update::Done { .. })) => return Ok(()),
-                Some(Err(error)) => return Err(OperationError::Failed(operation_failure(error))),
-                None => return Err(OperationError::Failed(JobFailure::new(
-                    "encode ended without a result",
-                ))),
-            }
-        }
-    }
-}
-
-async fn probe_input(
-    input: &Path,
-    cancellation: &mut tokio::sync::watch::Receiver<Option<CancelMode>>,
-) -> Result<Arc<ffprobe::Ffprobe>, OperationError> {
-    tokio::select! {
-        biased;
-        _ = cancellation.changed() => Err(OperationError::Cancelled),
-        result = ffprobe::probe(input) => result.map(Arc::new)
-            .map_err(|error| OperationError::Failed(probe_failure(error))),
-    }
-}
-
-fn operation_failure(
-    error: impl fmt::Display + AsRef<dyn std::error::Error + Send + Sync>,
-) -> JobFailure {
-    let mut source: &dyn std::error::Error = error.as_ref();
-    loop {
-        if let Some(probe) = source.downcast_ref::<ffprobe::ProbeFailure>() {
-            return probe_failure(probe.clone());
-        }
-        match source.source() {
-            Some(next) => source = next,
-            None => return failure(error),
-        }
-    }
-}
-
-fn probe_failure(error: ffprobe::ProbeFailure) -> JobFailure {
-    let kind = match error.kind {
-        ffprobe::ProbeFailureKind::Unavailable => ProbeFailureKind::Unavailable,
-        ffprobe::ProbeFailureKind::TimedOut => ProbeFailureKind::TimedOut,
-        ffprobe::ProbeFailureKind::Rejected { code } => ProbeFailureKind::Rejected { code },
-        ffprobe::ProbeFailureKind::InvalidOutput => ProbeFailureKind::InvalidOutput,
-        ffprobe::ProbeFailureKind::Supervision => ProbeFailureKind::Supervision,
     };
-    let mut message = format!("ffprobe: {}", error.detail);
-    if error.diagnostic.truncated {
-        message.push_str("; diagnostic tail truncated");
+    let mut command = search_command(&tools, &request, temporary.path());
+    if let Err(error) = tool_path::configure(&mut command, &tools, temporary.path()) {
+        return JobTerminal::Failed(JobFailure::new(error));
     }
-    for cleanup in error.cleanup_failures {
-        message.push_str(&format!("; cleanup failed: {cleanup}"));
+    if let Some(crf) = fixed_crf {
+        command
+            .arg("--min-crf")
+            .arg(crf.to_string())
+            .arg("--max-crf")
+            .arg((crf + 1.0).to_string());
     }
-    JobFailure {
-        kind: JobFailureKind::Probe { kind },
-        message,
-        diagnostic: crate::failure::scrub_tail(
-            &error.diagnostic.text,
-            &[(error.input.as_path(), "<probe-input>")],
+    let protocol = Arc::new(Mutex::new(SearchProtocol::default()));
+    let reader_protocol = Arc::clone(&protocol);
+    let report = process_supervisor::run_streaming(
+        &mut command,
+        &cancellation,
+        ProcessLimits::new(timeout, 0, STDERR_BYTES),
+        redactions(&request.input, &[temporary.path()]),
+        move |bytes| {
+            let mut protocol = lock(&reader_protocol);
+            protocol.push(bytes)?;
+            if let Some(last) = &protocol.last {
+                *lock(&telemetry) = Some(Telemetry::Search(SearchTelemetry {
+                    completed_trials: protocol.trials,
+                    last: last.clone(),
+                }));
+            }
+            Ok(())
+        },
+    );
+    let mut protocol = lock(&protocol);
+    let terminal = match &report.terminal {
+        ProcessTerminal::Cancelled => JobTerminal::Cancelled,
+        ProcessTerminal::Success(_) | ProcessTerminal::ToolFailed(_) => match protocol.finish() {
+            Err(error) => JobTerminal::Failed(JobFailure::new(error)),
+            Ok(()) => match protocol.terminal.take() {
+                Some(Ok(result)) if matches!(report.terminal, ProcessTerminal::Success(_)) => {
+                    JobTerminal::Completed(result)
+                }
+                Some(Err(failure)) if matches!(report.terminal, ProcessTerminal::ToolFailed(_)) => {
+                    JobTerminal::Failed(failure)
+                }
+                None if matches!(report.terminal, ProcessTerminal::ToolFailed(_)) => {
+                    process_failure(&report)
+                }
+                _ => JobTerminal::Failed(JobFailure::new(
+                    "ab-av1 exit status and JSON terminal result disagree",
+                )),
+            },
+        },
+        _ => process_failure(&report),
+    };
+    let terminal = diagnostic(
+        terminal,
+        &report,
+        &[
+            (request.input.as_path(), "<input>"),
+            (temporary.path(), "<temporary>"),
+        ],
+    );
+    match temporary.close() {
+        Ok(()) => terminal,
+        Err(error) => append_cleanup(
+            terminal,
+            format!("search workspace cleanup failed: {:?}", error.kind()),
         ),
     }
 }
 
-async fn finalize<T>(result: Result<T, OperationError>) -> JobTerminal<T> {
-    let cleanup = match &result {
-        Ok(_) => ab_av1::finish_job(false).await,
-        Err(_) => ab_av1::cancel_job().await,
-    };
-    settled_terminal(result, cleanup)
-}
-
-fn settled_terminal<T>(
-    result: Result<T, OperationError>,
-    cleanup: Result<(), impl fmt::Display>,
-) -> JobTerminal<T> {
-    match (result, cleanup) {
-        (Ok(value), Ok(())) => JobTerminal::Completed(value),
-        (Err(OperationError::Cancelled), Ok(())) => JobTerminal::Cancelled,
-        (Err(OperationError::Failed(error)), Ok(())) => JobTerminal::Failed(error),
-        (Ok(_), Err(cleanup)) => JobTerminal::Failed(failure(cleanup)),
-        (Err(OperationError::Cancelled), Err(cleanup)) => JobTerminal::Failed(JobFailure::new(
-            format!("job was cancelled; cleanup failed: {cleanup}"),
-        )),
-        (Err(OperationError::Failed(mut error)), Err(cleanup)) => {
-            error
-                .message
-                .push_str(&format!("; cleanup failed: {cleanup}"));
-            JobTerminal::Failed(error)
-        }
-    }
-}
-
-pub(crate) fn search_args(
+fn search_command(
+    tools: &MediaTools,
     request: &SearchRequest,
-) -> Result<command::crf_search::Args, JobFailure> {
-    Ok(command::crf_search::Args {
-        args: common_encode_args(request.input.clone(), request.preset, request.decode_mode)?,
-        min_vmaf: Some(request.target_vmaf),
-        min_xpsnr: None,
-        max_encoded_percent: request.max_encoded_percent,
-        min_crf: None,
-        max_crf: None,
-        thorough: request.thorough,
-        crf_increment: None,
-        high_crf_means_hq: None,
-        cache: true,
-        sample: command::args::Sample {
-            samples: request.samples,
-            sample_every: DEFAULT_SAMPLE_EVERY,
-            min_samples: None,
-            sample_duration: request.sample_duration,
-            keep: false,
-            temp_dir: None,
-            extension: None,
-        },
-        vmaf: command::args::Vmaf::default(),
-        score: command::args::ScoreArgs {
-            reference_vfilter: None,
-        },
-        xpsnr: command::args::Xpsnr {
-            xpsnr_fps: DEFAULT_XPSNR_FPS,
-            xpsnr_pix_format: None,
-        },
-        verbose: Default::default(),
-    })
+    directory: &std::path::Path,
+) -> Command {
+    let mut command = Command::new(&tools.ab_av1);
+    command
+        .args([
+            "crf-search",
+            "--stdout-format",
+            "json",
+            "--encoder",
+            "libsvtav1",
+            "--pix-format",
+            PIXEL_FORMAT,
+            "--keyint",
+            KEYFRAME_INTERVAL,
+            "--scd",
+            "false",
+            "--cache",
+            "false",
+            "--input",
+        ])
+        .arg(&request.input)
+        .arg("--min-vmaf")
+        .arg(request.target_vmaf.to_string())
+        .arg("--max-encoded-percent")
+        .arg(request.max_encoded_percent.to_string())
+        .arg("--preset")
+        .arg(request.preset.to_string())
+        .arg("--sample-duration")
+        .arg(format!("{}ms", request.sample_duration.as_millis()))
+        .arg("--temp-dir")
+        .arg(directory)
+        .current_dir(directory);
+    if let Some(samples) = request.samples {
+        command.arg("--samples").arg(samples.to_string());
+    }
+    if request.thorough {
+        command.arg("--thorough");
+    }
+    if let DecodeMode::Hardware(decoder) = request.decode_mode {
+        command
+            .arg("--enc-input")
+            .arg(format!("c:v={}", crate::media::decoder_name(decoder)));
+    }
+    command
 }
 
-pub(crate) fn encode_args(request: &EncodeRequest) -> Result<command::encode::Args, JobFailure> {
-    Ok(command::encode::Args {
-        args: common_encode_args(request.input.clone(), request.preset, request.decode_mode)?,
-        crf: request.crf,
-        encode: command::args::EncodeToOutput {
-            output: Some(request.output.clone()),
-            audio_codec: None,
-            downmix_to_stereo: false,
-            video_only: false,
-            overwrite_input: false,
+pub(crate) fn run_encode(
+    tools: MediaTools,
+    request: EncodeRequest,
+    cancellation: ProcessCancellation,
+    telemetry: Arc<Mutex<Option<Telemetry>>>,
+    #[cfg(feature = "contract-test-fixture")] fault: FaultInjection,
+) -> JobTerminal<()> {
+    let existed = request.output.exists();
+    let mut command = encode_command(&tools, &request);
+    let state = Arc::new(Mutex::new(EncodeProgress::default()));
+    let reader_state = Arc::clone(&state);
+    let report = process_supervisor::run_streaming(
+        &mut command,
+        &cancellation,
+        ProcessLimits::new(None, 0, STDERR_BYTES),
+        redactions(&request.input, &[request.output.as_path()]),
+        move |bytes| {
+            let mut state = lock(&reader_state);
+            state.push(bytes)?;
+            *lock(&telemetry) = Some(Telemetry::Encode(state.update.clone()));
+            #[cfg(feature = "contract-test-fixture")]
+            if fault == FaultInjection::PanicAfterFirstProgress && state.update.frame > 0 {
+                panic!("injected encode telemetry panic");
+            }
+            Ok(())
         },
-    })
-}
-
-fn common_encode_args(
-    input: PathBuf,
-    preset: u8,
-    decode_mode: DecodeMode,
-) -> Result<command::args::Encode, JobFailure> {
-    let enc_input_args = match decode_mode {
-        DecodeMode::Software => Vec::new(),
-        DecodeMode::Hardware(decoder) => {
-            vec![format!("c:v={}", crate::media::decoder_name(decoder))]
-        }
+    );
+    let mut terminal = match &report.terminal {
+        ProcessTerminal::Success(_) if lock(&state).finish().is_ok() => JobTerminal::Completed(()),
+        ProcessTerminal::Success(_) => JobTerminal::Failed(JobFailure::new(
+            "FFmpeg exited without a complete progress report",
+        )),
+        ProcessTerminal::Cancelled => JobTerminal::Cancelled,
+        _ => process_failure(&report),
     };
-    Ok(command::args::Encode {
-        encoder: command::args::Encoder::from_str("libsvtav1").map_err(failure)?,
-        input,
-        vfilter: None,
-        pix_format: None,
-        preset: Some(preset.to_string().into()),
-        keyint: None,
-        scd: None,
-        svt_args: Vec::new(),
-        enc_args: Vec::new(),
-        enc_input_args,
-    })
+    #[cfg(feature = "contract-test-fixture")]
+    if fault == FaultInjection::PanicAfterFirstProgress && lock(&state).update.frame > 0 {
+        terminal = JobTerminal::Panicked {
+            cleanup_failure: match &report.terminal {
+                ProcessTerminal::CleanupFailed(failure) => Some(failure.message.clone()),
+                _ => None,
+            },
+        };
+    }
+    if !matches!(terminal, JobTerminal::Completed(_))
+        && !existed
+        && let Err(error) = std::fs::remove_file(&request.output)
+        && error.kind() != std::io::ErrorKind::NotFound
+    {
+        terminal = append_cleanup(
+            terminal,
+            format!("encode artifact cleanup failed: {:?}", error.kind()),
+        );
+    }
+    diagnostic(
+        terminal,
+        &report,
+        &[
+            (request.input.as_path(), "<input>"),
+            (request.output.as_path(), "<staging>"),
+        ],
+    )
 }
 
-fn map_work(work: command::sample_encode::Work) -> SearchWork {
-    match work {
-        command::sample_encode::Work::Encode => SearchWork::Encode,
-        command::sample_encode::Work::Score(command::sample_encode::ScoreKind::Vmaf) => {
-            SearchWork::Vmaf
-        }
-        command::sample_encode::Work::Score(command::sample_encode::ScoreKind::Xpsnr) => {
-            SearchWork::Xpsnr
+fn encode_command(tools: &MediaTools, request: &EncodeRequest) -> Command {
+    let mut command = Command::new(&tools.ffmpeg);
+    command.args([
+        "-hide_banner",
+        "-nostdin",
+        "-y",
+        "-loglevel",
+        "error",
+        "-progress",
+        "pipe:1",
+        "-nostats",
+    ]);
+    if let DecodeMode::Hardware(decoder) = request.decode_mode {
+        command.args(["-c:v", crate::media::decoder_name(decoder)]);
+    }
+    command
+        .arg("-i")
+        .arg(&request.input)
+        .args([
+            "-map",
+            "0",
+            "-map",
+            "-0:d",
+            "-c",
+            "copy",
+            "-c:v:0",
+            "libsvtav1",
+            "-pix_fmt:v:0",
+            PIXEL_FORMAT,
+            "-g:v:0",
+            KEYFRAME_INTERVAL,
+            "-preset:v:0",
+        ])
+        .arg(request.preset.to_string())
+        .arg("-crf:v:0")
+        .arg(request.crf.min(63.0).to_string())
+        .arg("-svtav1-params:v:0")
+        .arg(format!("scd=0:crf={}", request.crf))
+        .arg(&request.output);
+    command
+}
+
+#[derive(Default)]
+struct EncodeProgress {
+    pending: Vec<u8>,
+    update: EncodeTelemetry,
+    saw_end: bool,
+}
+impl EncodeProgress {
+    fn finish(&self) -> Result<(), String> {
+        if self.saw_end && self.pending.is_empty() {
+            Ok(())
+        } else {
+            Err("FFmpeg progress stream is incomplete".into())
         }
     }
-}
-
-pub(crate) fn set_telemetry(telemetry: &Mutex<Option<Telemetry>>, update: Telemetry) {
-    match telemetry.lock() {
-        Ok(mut slot) => *slot = Some(update),
-        Err(poisoned) => *poisoned.into_inner() = Some(update),
+    fn push(&mut self, bytes: &[u8]) -> Result<(), String> {
+        for &byte in bytes {
+            if self.saw_end {
+                return Err("FFmpeg wrote data after progress=end".into());
+            }
+            if byte != b'\n' {
+                if self.pending.len() >= PROGRESS_LINE_BYTES {
+                    return Err("FFmpeg progress line is too long".into());
+                }
+                self.pending.push(byte);
+                continue;
+            }
+            let line =
+                std::str::from_utf8(&self.pending).map_err(|_| "invalid FFmpeg progress text")?;
+            if let Some((key, value)) = line.trim_end_matches('\r').split_once('=') {
+                match key {
+                    "frame" => {
+                        self.update.frame = value
+                            .trim()
+                            .parse()
+                            .map_err(|_| "invalid FFmpeg frame count")?
+                    }
+                    "fps" if value != "N/A" => {
+                        let fps: f32 = value.parse().map_err(|_| "invalid FFmpeg fps")?;
+                        if !fps.is_finite() || fps < 0.0 {
+                            return Err("invalid FFmpeg fps".into());
+                        }
+                        self.update.fps = fps;
+                    }
+                    "out_time_us" if value != "N/A" => {
+                        let value: i64 = value.parse().map_err(|_| "invalid FFmpeg output time")?;
+                        self.update.position =
+                            Duration::from_micros(u64::try_from(value).unwrap_or_default());
+                    }
+                    "progress" if value == "end" => self.saw_end = true,
+                    _ => {}
+                }
+            }
+            self.pending.clear();
+        }
+        Ok(())
     }
 }
+fn process_failure<T>(report: &ProcessReport) -> JobTerminal<T> {
+    let message = match &report.terminal {
+        ProcessTerminal::ToolFailed(status) => {
+            format!("media tool failed with exit status {status}")
+        }
+        ProcessTerminal::SpawnFailed(failure)
+        | ProcessTerminal::SupervisionFailed(failure)
+        | ProcessTerminal::CleanupFailed(failure) => failure.message.clone(),
+        ProcessTerminal::TimedOut => "media tool exceeded its deadline".into(),
+        _ => "media tool did not complete".into(),
+    };
+    let kind = match &report.terminal {
+        ProcessTerminal::ToolFailed(status) => ProcessFailureKind::Rejected {
+            code: status.code(),
+        },
+        ProcessTerminal::SpawnFailed(_) => ProcessFailureKind::Unavailable,
+        ProcessTerminal::TimedOut => ProcessFailureKind::TimedOut,
+        ProcessTerminal::CleanupFailed(_) => ProcessFailureKind::Cleanup,
+        _ => ProcessFailureKind::Supervision,
+    };
+    let mut failure = JobFailure::new(message);
+    failure.kind = JobFailureKind::Process { kind };
+    JobTerminal::Failed(failure)
+}
+fn diagnostic<T>(
+    terminal: JobTerminal<T>,
+    report: &ProcessReport,
+    paths: &[(&std::path::Path, &str)],
+) -> JobTerminal<T> {
+    match terminal {
+        JobTerminal::Failed(mut failure) => {
+            failure.diagnostic = scrub_tail(
+                &String::from_utf8_lossy(report.stderr_tail.as_bytes()),
+                paths,
+            );
+            JobTerminal::Failed(failure)
+        }
+        terminal => terminal,
+    }
+}
+fn lock<T>(value: &Mutex<T>) -> MutexGuard<'_, T> {
+    value
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+}
 
-fn failure(error: impl fmt::Display) -> JobFailure {
-    JobFailure::new(format!("{error:#}"))
+fn redactions(input: &std::path::Path, other: &[&std::path::Path]) -> Vec<(Vec<u8>, Vec<u8>)> {
+    let mut patterns = vec![(native_bytes(input.as_os_str()), b"<input>".to_vec())];
+    if let Some(stem) = input.file_stem() {
+        patterns.push((native_bytes(stem), b"<media>".to_vec()));
+    }
+    patterns.extend(
+        other
+            .iter()
+            .map(|path| (native_bytes(path.as_os_str()), b"<temporary>".to_vec())),
+    );
+    patterns
+}
+fn native_bytes(value: &std::ffi::OsStr) -> Vec<u8> {
+    #[cfg(unix)]
+    {
+        use std::os::unix::ffi::OsStrExt;
+        value.as_bytes().to_vec()
+    }
+    #[cfg(windows)]
+    {
+        value.to_string_lossy().as_bytes().to_vec()
+    }
+}
+fn append_cleanup<T>(terminal: JobTerminal<T>, cleanup: String) -> JobTerminal<T> {
+    match terminal {
+        JobTerminal::Failed(mut failure) => {
+            failure.message = format!("{}; {cleanup}", failure.message);
+            JobTerminal::Failed(failure)
+        }
+        JobTerminal::Panicked { cleanup_failure } => JobTerminal::Panicked {
+            cleanup_failure: Some(
+                cleanup_failure.map_or(cleanup.clone(), |prior| format!("{prior}; {cleanup}")),
+            ),
+        },
+        terminal => {
+            let mut failure = JobFailure::new(match terminal {
+                JobTerminal::Cancelled => format!("operation was cancelled; {cleanup}"),
+                _ => cleanup,
+            });
+            failure.kind = JobFailureKind::Process {
+                kind: ProcessFailureKind::Cleanup,
+            };
+            JobTerminal::Failed(failure)
+        }
+    }
 }
 
 #[cfg(test)]
 mod tests {
-    use crfty_core::{DecodeMode, HardwareDecoder};
-
-    use super::{
-        OperationError, encode_args, operation_failure, search_args, set_telemetry,
-        settled_terminal,
-    };
-    use crate::ab_av1::{EncodeRequest, EncodeTelemetry, SearchRequest, Telemetry};
-    use crate::ab_av1::{JobFailureKind, JobTerminal, ProbeFailureKind};
-    use std::{path::PathBuf, sync::Mutex, time::Duration};
-
-    fn probe_error() -> ab_av1::ffprobe::ProbeFailure {
-        ab_av1::ffprobe::ProbeFailure {
-            input: PathBuf::from("/fixture/private-sample.crf.mkv"),
-            kind: ab_av1::ffprobe::ProbeFailureKind::TimedOut,
-            detail: "fixture deadline".to_owned(),
-            diagnostic: ab_av1::ffprobe::ProbeDiagnostic {
-                text: "fixture tail /fixture/private-sample.crf.mkv".to_owned(),
-                truncated: true,
-            },
-            cleanup_failures: vec!["fixture process cleanup".to_owned()],
-        }
-    }
-
+    use super::*;
     #[test]
-    fn contextual_probe_errors_keep_their_kind_and_diagnostic() {
-        let wrapped = ab_av1::command::crf_search::Error::Other(probe_error().into());
-        let ab_av1::command::crf_search::Error::Other(error) = wrapped else {
-            panic!("expected wrapped probe failure");
-        };
-        let failure = operation_failure(error.context("encoded sample probe"));
-        assert_eq!(
-            failure.kind,
-            JobFailureKind::Probe {
-                kind: ProbeFailureKind::TimedOut
-            }
-        );
-        assert_eq!(failure.diagnostic.as_str(), "fixture tail <probe-input>");
-        assert!(failure.message.contains("fixture process cleanup"));
-        assert!(failure.message.contains("diagnostic tail truncated"));
+    fn encoding_progress_requires_a_complete_final_record() -> Result<(), String> {
+        let mut progress = EncodeProgress::default();
+        progress.push(b"frame=12\nfps=3.5\nout_time_us=2500000\nprogress=end\n")?;
+        progress.finish()?;
+        assert_eq!(progress.update.frame, 12);
+        assert_eq!(progress.update.position.as_millis(), 2500);
+        assert!(progress.push(b"trailing").is_err());
+        let mut incomplete = EncodeProgress::default();
+        incomplete.push(b"progress=en")?;
+        assert!(incomplete.finish().is_err());
+        Ok(())
     }
-
     #[test]
-    fn finalizer_failure_preserves_the_primary_probe_failure() {
-        let terminal: JobTerminal<()> = settled_terminal(
-            Err(OperationError::Failed(super::probe_failure(probe_error()))),
-            Err("fixture finalizer cleanup"),
+    fn cleanup_failure_preserves_the_primary_kind_and_diagnostic() {
+        let mut failure = JobFailure::new("protocol rejected");
+        failure.kind = JobFailureKind::Process {
+            kind: ProcessFailureKind::Rejected { code: Some(9) },
+        };
+        failure.diagnostic = crfty_core::DiagnosticTail::truncated("useful diagnostic");
+        let terminal: JobTerminal<()> = append_cleanup(
+            JobTerminal::Failed(failure.clone()),
+            "workspace removal failed".into(),
         );
-        let JobTerminal::Failed(failure) = terminal else {
-            panic!("expected failed probe");
+        let JobTerminal::Failed(result) = terminal else {
+            panic!("missing primary failure");
         };
-        assert_eq!(
-            failure.kind,
-            JobFailureKind::Probe {
-                kind: ProbeFailureKind::TimedOut
-            }
-        );
-        assert_eq!(failure.diagnostic.as_str(), "fixture tail <probe-input>");
-        assert!(failure.message.contains("fixture process cleanup"));
-        assert!(failure.message.contains("fixture finalizer cleanup"));
-    }
-
-    #[test]
-    #[expect(clippy::expect_used, reason = "test assertion")]
-    fn telemetry_keeps_only_the_latest_value_under_pressure() {
-        let slot = Mutex::new(None);
-        for frame in 0..100_000 {
-            set_telemetry(
-                &slot,
-                Telemetry::Encode(EncodeTelemetry {
-                    frame,
-                    fps: 5.0,
-                    position: Duration::from_secs(frame),
-                }),
-            );
-        }
-        assert_eq!(
-            *slot.lock().expect("telemetry slot"),
-            Some(Telemetry::Encode(EncodeTelemetry {
-                frame: 99_999,
-                fps: 5.0,
-                position: Duration::from_secs(99_999),
-            }))
-        );
-    }
-
-    #[test]
-    #[expect(clippy::expect_used, reason = "test assertion")]
-    fn requests_map_to_typed_ab_av1_arguments() {
-        let search = SearchRequest {
-            input: PathBuf::from("input.mkv"),
-            target_vmaf: 96.0,
-            max_encoded_percent: 70.0,
-            preset: 6,
-            samples: Some(4),
-            sample_duration: Duration::from_secs(12),
-            thorough: true,
-            decode_mode: DecodeMode::Software,
-        };
-        let args = search_args(&search).expect("search arguments");
-        assert_eq!(args.args.input, search.input);
-        assert_eq!(args.min_vmaf, Some(96.0));
-        assert_eq!(args.sample.samples, Some(4));
-
-        let encode = EncodeRequest {
-            input: PathBuf::from("input.mkv"),
-            output: PathBuf::from("output.mkv"),
-            crf: 31.5,
-            preset: 7,
-            decode_mode: DecodeMode::Software,
-        };
-        let args = encode_args(&encode).expect("encode arguments");
-        assert_eq!(args.crf, 31.5);
-        assert_eq!(args.encode.output, Some(encode.output.clone()));
-
-        let hardware = EncodeRequest {
-            decode_mode: DecodeMode::Hardware(HardwareDecoder::H264Cuvid),
-            ..encode
-        };
-        let args = encode_args(&hardware).expect("hardware encode arguments");
-        assert_eq!(args.args.enc_input_args, vec!["c:v=h264_cuvid"]);
+        assert_eq!(result.kind, failure.kind);
+        assert_eq!(result.diagnostic, failure.diagnostic);
+        assert!(result.message.contains("protocol rejected"));
+        assert!(result.message.contains("workspace removal failed"));
     }
 }

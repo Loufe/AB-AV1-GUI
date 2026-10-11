@@ -1040,6 +1040,11 @@ mod tests {
             Command::System(SystemCommand::ToolsDiscovered {
                 availability: ToolAvailability::Located {
                     tools: crfty_core::LocatedTools {
+                        ab_av1: (crfty_core::LocatedTool {
+                            source: crfty_core::ToolSource::SearchPath,
+                            path: PathBuf::from("fixture-ffmpeg"),
+                        })
+                        .clone(),
                         ffmpeg: crfty_core::LocatedTool {
                             source: crfty_core::ToolSource::SearchPath,
                             path: PathBuf::from("fixture-ffmpeg"),
@@ -1141,6 +1146,11 @@ mod tests {
         let mut state = AppState {
             tools: ToolAvailability::Located {
                 tools: LocatedTools {
+                    ab_av1: (LocatedTool {
+                        source: ToolSource::SearchPath,
+                        path: PathBuf::from("fixture-ffmpeg"),
+                    })
+                    .clone(),
                     ffmpeg: LocatedTool {
                         source: ToolSource::SearchPath,
                         path: PathBuf::from("fixture-ffmpeg"),

@@ -9,7 +9,7 @@ import { installGuidance, toolsStatus, type ToolsTone } from "@/lib/tools";
 import { FolderInput } from "./path-input";
 import { SettingContainer, SettingsGroup } from "./settings-primitives";
 
-export type ToolPathField = "tool-ffmpeg" | "tool-ffprobe";
+export type ToolPathField = "tool-ab-av1" | "tool-ffmpeg" | "tool-ffprobe";
 
 interface MediaToolsGroupProps {
   draft: ToolPathSettings;
@@ -57,6 +57,23 @@ export function MediaToolsGroup({ draft, disabled, invalidField, onChange }: Med
 
   return (
     <SettingsGroup title="Media tools">
+      <SettingContainer
+        label="ab-av1 path"
+        description="Use the official ab-av1 CLI with JSON search output; leave empty to use PATH"
+        htmlFor="settings-ab-av1-path"
+      >
+        <FolderInput
+          id="settings-ab-av1-path"
+          kind="File"
+          value={draft.ab_av1 ?? ""}
+          placeholder="ab-av1 from PATH"
+          browseLabel="Choose ab-av1 executable"
+          disabled={disabled}
+          invalid={invalidField === "tool-ab-av1"}
+          describedBy={invalidField === "tool-ab-av1" ? "settings-error" : undefined}
+          onChange={(value) => onChange({ ...draft, ab_av1: optionalPath(value) })}
+        />
+      </SettingContainer>
       <SettingContainer
         label="ffmpeg path"
         description="Leave empty to use ffmpeg from PATH"

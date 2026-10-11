@@ -23,26 +23,13 @@ pub struct EncodeRequest {
     pub decode_mode: DecodeMode,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum SearchWork {
-    Encode,
-    Vmaf,
-    Xpsnr,
-}
-
 #[derive(Debug, Clone, PartialEq)]
 pub struct SearchTelemetry {
-    pub crf_run: usize,
-    pub crf: f32,
-    pub work: SearchWork,
-    pub fps: f32,
-    pub progress: f32,
-    pub sample: u64,
-    pub samples: u64,
-    pub full_pass: bool,
+    pub completed_trials: usize,
+    pub last: SearchOutcome,
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, Default, PartialEq)]
 pub struct EncodeTelemetry {
     pub frame: u64,
     pub fps: f32,
@@ -66,18 +53,18 @@ pub struct SearchOutcome {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum ProbeFailureKind {
+pub enum ProcessFailureKind {
     Unavailable,
     TimedOut,
     Rejected { code: Option<i32> },
-    InvalidOutput,
     Supervision,
+    Cleanup,
 }
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum JobFailureKind {
     NoGoodCrf { last: SearchOutcome },
-    Probe { kind: ProbeFailureKind },
+    Process { kind: ProcessFailureKind },
     Other,
 }
 

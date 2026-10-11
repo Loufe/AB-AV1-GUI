@@ -355,10 +355,7 @@ mod tests {
     use crfty_core::RunId;
 
     use super::{ActiveCancellation, ActiveJobCancellation};
-    use crate::{
-        ab_av1::{CancelMode, CancellationHandle},
-        process_supervisor::ProcessCancellation,
-    };
+    use crate::{ab_av1::CancellationHandle, process_supervisor::ProcessCancellation};
 
     #[test]
     fn session_probe_registration_observes_latched_cancellation() {
@@ -386,7 +383,7 @@ mod tests {
         assert!(run.probes().is_cancelled());
         let (handle, receiver) = CancellationHandle::fixture();
         let _registration = run.register_adapter(ActiveJobCancellation::AbAv1(handle));
-        assert_eq!(*receiver.borrow(), Some(CancelMode::Force));
+        assert!(receiver.is_cancelled());
     }
 
     #[test]
@@ -399,7 +396,7 @@ mod tests {
 
         cancellation.force(Some(RunId(3)));
         assert!(run.probes().is_cancelled());
-        assert_eq!(*receiver.borrow(), Some(CancelMode::Force));
+        assert!(receiver.is_cancelled());
 
         // A probe that runs after the adapter registration is released, such
         // as output verification, still sees the same cancelled signal.

@@ -1,5 +1,4 @@
 use std::{
-    future::Future,
     marker::PhantomData,
     sync::{
         Arc, Mutex,
@@ -19,7 +18,6 @@ use super::{
 };
 use crate::tools::MediaTools;
 
-static RUNTIME_ACTIVE: AtomicBool = AtomicBool::new(false);
 const RUNTIME_COMMAND_CAPACITY: usize = 1;
 const RUNTIME_READY_CAPACITY: usize = 0;
 
@@ -122,14 +120,14 @@ enum RuntimeCommand {
     Search {
         tools: MediaTools,
         request: SearchRequest,
-        cancellation: tokio::sync::watch::Receiver<Option<CancelMode>>,
+        cancellation: crate::process_supervisor::ProcessCancellation,
         telemetry: Arc<Mutex<Option<Telemetry>>>,
         result: mpsc::Sender<JobReport<SearchOutcome>>,
     },
     Encode {
         tools: MediaTools,
         request: EncodeRequest,
-        cancellation: tokio::sync::watch::Receiver<Option<CancelMode>>,
+        cancellation: crate::process_supervisor::ProcessCancellation,
         telemetry: Arc<Mutex<Option<Telemetry>>>,
         result: mpsc::Sender<JobReport<()>>,
         #[cfg(feature = "contract-test-fixture")]
@@ -142,12 +140,10 @@ pub struct AbAv1Runtime {
     sender: SyncSender<RuntimeCommand>,
     state: Arc<RuntimeState>,
     worker: Option<thread::JoinHandle<()>>,
-    _permit: RuntimePermit,
 }
 
 impl AbAv1Runtime {
     pub fn start() -> Result<Self, RuntimeStartError> {
-        let permit = RuntimePermit::acquire()?;
         let (sender, receiver) = mpsc::sync_channel(RUNTIME_COMMAND_CAPACITY);
         let (ready_tx, ready_rx) = mpsc::sync_channel(RUNTIME_READY_CAPACITY);
         let state = Arc::new(RuntimeState::new());
@@ -166,7 +162,6 @@ impl AbAv1Runtime {
             sender,
             state,
             worker: Some(worker),
-            _permit: permit,
         })
     }
 
@@ -242,6 +237,7 @@ impl AbAv1Runtime {
         if !self.state.accepting.load(Ordering::Acquire) {
             return Err(StartJobError::ShuttingDown);
         }
+        validate_tool("ab-av1", &tools.ab_av1)?;
         validate_tool("ffmpeg", &tools.ffmpeg)?;
         validate_tool("ffprobe", &tools.ffprobe)?;
         if self.state.try_acquire() {
@@ -278,23 +274,6 @@ impl AbAv1Runtime {
     }
 }
 
-struct RuntimePermit;
-
-impl RuntimePermit {
-    fn acquire() -> Result<Self, RuntimeStartError> {
-        RUNTIME_ACTIVE
-            .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
-            .map(|_| Self)
-            .map_err(|_| RuntimeStartError("an ab-av1 runtime is already active".into()))
-    }
-}
-
-impl Drop for RuntimePermit {
-    fn drop(&mut self) {
-        RUNTIME_ACTIVE.store(false, Ordering::Release);
-    }
-}
-
 impl Drop for AbAv1Runtime {
     fn drop(&mut self) {
         let _result = self.stop_and_join();
@@ -311,25 +290,27 @@ pub struct JobHandle<T> {
 
 type JobChannels<T> = (
     JobHandle<T>,
-    tokio::sync::watch::Receiver<Option<CancelMode>>,
+    crate::process_supervisor::ProcessCancellation,
     Arc<Mutex<Option<Telemetry>>>,
     mpsc::Sender<JobReport<T>>,
 );
 
 impl<T> JobHandle<T> {
     fn channels() -> JobChannels<T> {
-        let (cancel_tx, cancel_rx) = tokio::sync::watch::channel(None);
+        let cancellation = crate::process_supervisor::ProcessCancellation::new();
         let (result_tx, result_rx) = mpsc::channel();
         let telemetry = Arc::new(Mutex::new(None));
         (
             Self {
-                cancellation: CancellationHandle { sender: cancel_tx },
+                cancellation: CancellationHandle {
+                    signal: cancellation.clone(),
+                },
                 result: result_rx,
                 telemetry: Arc::clone(&telemetry),
                 cancel_on_drop: true,
                 marker: PhantomData,
             },
-            cancel_rx,
+            cancellation,
             telemetry,
             result_tx,
         )
@@ -389,18 +370,23 @@ impl<T> Drop for JobHandle<T> {
 
 #[derive(Clone)]
 pub struct CancellationHandle {
-    sender: tokio::sync::watch::Sender<Option<CancelMode>>,
+    signal: crate::process_supervisor::ProcessCancellation,
 }
 
 impl CancellationHandle {
-    pub fn cancel(&self, mode: CancelMode) {
-        let _result = self.sender.send(Some(mode));
+    pub fn cancel(&self, _mode: CancelMode) {
+        self.signal.cancel();
     }
 
     #[cfg(test)]
-    pub(crate) fn fixture() -> (Self, tokio::sync::watch::Receiver<Option<CancelMode>>) {
-        let (sender, receiver) = tokio::sync::watch::channel(None);
-        (Self { sender }, receiver)
+    pub(crate) fn fixture() -> (Self, crate::process_supervisor::ProcessCancellation) {
+        let signal = crate::process_supervisor::ProcessCancellation::new();
+        (
+            Self {
+                signal: signal.clone(),
+            },
+            signal,
+        )
     }
 }
 
@@ -409,18 +395,6 @@ fn runtime_thread(
     state: Arc<RuntimeState>,
     ready: SyncSender<Result<(), RuntimeStartError>>,
 ) {
-    let runtime = match tokio::runtime::Builder::new_current_thread()
-        .enable_all()
-        .build()
-    {
-        Ok(runtime) => runtime,
-        Err(error) => {
-            let _result = ready.send(Err(RuntimeStartError(format!(
-                "failed to build ab-av1 Tokio runtime: {error}"
-            ))));
-            return;
-        }
-    };
     if ready.send(Ok(())).is_err() {
         return;
     }
@@ -434,7 +408,7 @@ fn runtime_thread(
                 telemetry,
                 result,
             } => {
-                let terminal = run_catching_panic(&runtime, || {
+                let terminal = run_catching_panic(|| {
                     operation::run_search(tools, request, cancellation, Arc::clone(&telemetry))
                 });
                 send_report(&state, result, telemetry, terminal);
@@ -448,7 +422,7 @@ fn runtime_thread(
                 #[cfg(feature = "contract-test-fixture")]
                 fault,
             } => {
-                let terminal = run_catching_panic(&runtime, || {
+                let terminal = run_catching_panic(|| {
                     operation::run_encode(
                         tools,
                         request,
@@ -466,24 +440,12 @@ fn runtime_thread(
     state.accepting.store(false, Ordering::Release);
 }
 
-fn run_catching_panic<T, F, Fut>(runtime: &tokio::runtime::Runtime, job: F) -> JobTerminal<T>
-where
-    F: FnOnce() -> Fut,
-    Fut: Future<Output = JobTerminal<T>> + 'static,
-{
-    let execution = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        let local = tokio::task::LocalSet::new();
-        runtime.block_on(local.run_until(job()))
-    }));
-    match execution {
+fn run_catching_panic<T>(job: impl FnOnce() -> JobTerminal<T>) -> JobTerminal<T> {
+    match std::panic::catch_unwind(std::panic::AssertUnwindSafe(job)) {
         Ok(terminal) => terminal,
-        Err(_) => {
-            let cleanup_failure = runtime
-                .block_on(ab_av1::cancel_job())
-                .err()
-                .map(|error| error.to_string());
-            JobTerminal::Panicked { cleanup_failure }
-        }
+        Err(_) => JobTerminal::Panicked {
+            cleanup_failure: None,
+        },
     }
 }
 
@@ -560,7 +522,7 @@ mod tests {
     use super::{
         CancellationHandle, RuntimeState, validate_encode_request, validate_search_request,
     };
-    use crate::ab_av1::{CancelMode, EncodeRequest, SearchRequest};
+    use crate::ab_av1::{EncodeRequest, SearchRequest};
 
     #[test]
     fn cancel_during_acquisition_window_cancels_the_installed_handle() {
@@ -570,10 +532,10 @@ mod tests {
         // Shutdown races into the window: no handle to snapshot yet.
         state.cancel_active();
         let (handle, receiver) = CancellationHandle::fixture();
-        assert_eq!(*receiver.borrow(), None);
+        assert!(!receiver.is_cancelled());
         // Installing the handle observes the pending cancel and fires it at once.
         state.install_cancellation(&handle);
-        assert_eq!(*receiver.borrow(), Some(CancelMode::Force));
+        assert!(receiver.is_cancelled());
     }
 
     #[test]
@@ -582,9 +544,9 @@ mod tests {
         assert!(state.try_acquire());
         let (handle, receiver) = CancellationHandle::fixture();
         state.install_cancellation(&handle);
-        assert_eq!(*receiver.borrow(), None);
+        assert!(!receiver.is_cancelled());
         state.cancel_active();
-        assert_eq!(*receiver.borrow(), Some(CancelMode::Force));
+        assert!(receiver.is_cancelled());
     }
 
     #[test]
@@ -594,7 +556,7 @@ mod tests {
         state.cancel_active();
         let (handle, receiver) = CancellationHandle::fixture();
         state.install_cancellation(&handle);
-        assert_eq!(*receiver.borrow(), None);
+        assert!(!receiver.is_cancelled());
     }
 
     #[test]
@@ -619,7 +581,7 @@ mod tests {
         assert!(state.try_acquire());
         let (handle, receiver) = CancellationHandle::fixture();
         state.install_cancellation(&handle);
-        assert_eq!(*receiver.borrow(), None);
+        assert!(!receiver.is_cancelled());
     }
 
     #[test]

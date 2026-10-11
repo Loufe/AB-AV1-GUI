@@ -2,7 +2,7 @@ name: UI
 
 on:
   push:
-    branches: [rewrite]
+    branches: [rewrite, 'feature/**', 'fix/**', 'refactor/**']
     paths:
       - "ui/**"
       - ".github/workflows/ui.yml"

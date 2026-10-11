@@ -28,7 +28,7 @@ Crates split on hard dependency boundaries (no Tauri, no process), never by topi
 | Analysis pipeline | `docs/ANALYSIS.md`; ADR-016 (scope analysis work to ephemeral generations), ADR-017 (keep analysis paths engine-native) |
 | Queue and job coordination | [Queue contract](QUEUE.md); ADR-002 (centralize mutation in a driver reducer), ADR-013 (filter queue adds at enqueue) |
 | Job lifecycle, cancellation, and output settlement | `docs/design/lifecycle.md`; ADR-018 (unify job cancellation and completion; proposed), ADR-020 (own output promotion as a journaled transaction) |
-| ab-av1 adapter | ADR-003 (embed a pinned ab-av1 adapter); ADR-021 (drive ab-av1 through an owned operation; proposed) |
+| ab-av1 adapter | ADR-003 (official CLI JSON search and direct FFmpeg encoding); ADR-021 (owned media processes) |
 | Events and IPC | `docs/design/event-stream.md`; ADR-006 (generate IPC bindings with tauri-specta) |
 | History and statistics | `docs/HISTORY.md`; `docs/design/history-storage.md`; ADR-004 (persist state in an append-only journal); ADR-015 (project imported history separately) |
 | V2 history import | `docs/HISTORY_IMPORT.md`; ADR-015 (project imported history separately); ADR-025 (import history as keyed translated observations) |

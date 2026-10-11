@@ -32,7 +32,7 @@ function settings(): Settings {
     hardware_decode: true,
     privacy: { anonymize_logs: true, anonymize_history: true },
     log_folder: null,
-    tools: { ffmpeg: null, ffprobe: null },
+    tools: { ab_av1: null, ffmpeg: null, ffprobe: null },
   };
 }
 

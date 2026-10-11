@@ -3,7 +3,7 @@ name: Native media contract
 on:
   workflow_dispatch:
   push:
-    branches: [rewrite]
+    branches: [rewrite, 'feature/**', 'fix/**', 'refactor/**']
     paths:
       - Cargo.lock
       - crates/crfty-core/src/**
@@ -12,7 +12,7 @@ on:
       - crates/crfty-engine/tests/**
       - .github/workflows/media-contract.yml
   pull_request:
-    branches: [rewrite]
+    branches: [rewrite, 'feature/**', 'fix/**', 'refactor/**']
     paths:
       - Cargo.lock
       - crates/crfty-core/src/**
@@ -68,15 +68,30 @@ jobs:
           $root = Get-ChildItem -Path $extract -Directory | Select-Object -First 1
           Move-Item -Path (Join-Path $root.FullName '*') -Destination .ci/ffmpeg
           & .ci/ffmpeg/bin/ffmpeg.exe -hide_banner -version | Select-Object -First 1
+      - name: Install official ab-av1 on Linux
+        if: runner.os == 'Linux'
+        shell: bash
+        run: |
+          mkdir -p .ci/ab-av1
+          curl --fail --location --retry 3 --output "$RUNNER_TEMP/ab-av1.tar.zst" https://github.com/alexheretic/ab-av1/releases/download/v0.11.7/ab-av1-v0.11.7-x86_64-unknown-linux-musl.tar.zst
+          tar --zstd --extract --file "$RUNNER_TEMP/ab-av1.tar.zst" --directory .ci/ab-av1
+      - name: Install official ab-av1 on Windows
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force -Path .ci/ab-av1 | Out-Null
+          Invoke-WebRequest -Uri https://github.com/alexheretic/ab-av1/releases/download/v0.11.7/ab-av1.exe -OutFile .ci/ab-av1/ab-av1.exe
       - name: Run real-media contract on Linux
         if: runner.os == 'Linux'
         env:
+          CRFTY_AB_AV1: ${{ github.workspace }}/.ci/ab-av1/ab-av1
           CRFTY_FFMPEG: ${{ github.workspace }}/.ci/ffmpeg/bin/ffmpeg
           CRFTY_FFPROBE: ${{ github.workspace }}/.ci/ffmpeg/bin/ffprobe
         run: cargo test -p crfty-engine --all-features --locked --test ab_av1_real_media -- --ignored --nocapture
       - name: Run real-media contract on Windows
         if: runner.os == 'Windows'
         env:
+          CRFTY_AB_AV1: ${{ github.workspace }}/.ci/ab-av1/ab-av1.exe
           CRFTY_FFMPEG: ${{ github.workspace }}/.ci/ffmpeg/bin/ffmpeg.exe
           CRFTY_FFPROBE: ${{ github.workspace }}/.ci/ffmpeg/bin/ffprobe.exe
         run: cargo test -p crfty-engine --all-features --locked --test ab_av1_real_media -- --ignored --nocapture
@@ -87,12 +102,14 @@ jobs:
       - name: Run native tool contract on Linux
         if: runner.os == 'Linux'
         env:
+          CRFTY_AB_AV1: ${{ github.workspace }}/.ci/ab-av1/ab-av1
           CRFTY_FFMPEG: ${{ github.workspace }}/.ci/ffmpeg/bin/ffmpeg
           CRFTY_FFPROBE: ${{ github.workspace }}/.ci/ffmpeg/bin/ffprobe
         run: cargo test -p crfty-engine --all-features --locked --test tools_native -- --ignored --nocapture
       - name: Run native tool contract on Windows
         if: runner.os == 'Windows'
         env:
+          CRFTY_AB_AV1: ${{ github.workspace }}/.ci/ab-av1/ab-av1.exe
           CRFTY_FFMPEG: ${{ github.workspace }}/.ci/ffmpeg/bin/ffmpeg.exe
           CRFTY_FFPROBE: ${{ github.workspace }}/.ci/ffmpeg/bin/ffprobe.exe
         run: cargo test -p crfty-engine --all-features --locked --test tools_native -- --ignored --nocapture

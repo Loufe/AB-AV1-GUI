@@ -26,7 +26,6 @@ path = "tests/support/history_fixture.rs"
 required-features = ["contract-test-fixture", "history-storage-spike"]
 
 [dependencies]
-ab-av1 = { version = "0.11.4", git = "https://github.com/alexheretic/ab-av1.git", rev = "94e7fb0352a72a52f61f5da343ca3283363d37d1", default-features = false, features = ["library"] }
 blake2 = { version = "0.10.6", default-features = false }
 process-wrap = { version = "10.0.1", default-features = false, features = ["std", "tokio1", "creation-flags", "job-object", "kill-on-drop", "process-group"] }
 crfty-core = { path = "../crfty-core" }
@@ -47,7 +46,6 @@ serde = { workspace = true }
 serde_json = { workspace = true }
 tempfile = { version = "3.27.0", default-features = false }
 tokio = { version = "1.49.0", features = ["rt", "sync"] }
-tokio-stream = "0.1.18"
 tracing = { version = "0.1.44", default-features = false, features = ["std"] }
 tracing-subscriber = { version = "0.3.23", default-features = false, features = ["fmt", "registry", "std"] }
 turso = { version = "0.8.1", default-features = false, optional = true }

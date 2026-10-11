@@ -21,7 +21,7 @@ function settings(overrides: Partial<Settings> = {}): Settings {
     hardware_decode: true,
     privacy: { anonymize_logs: false, anonymize_history: false },
     log_folder: null,
-    tools: { ffmpeg: null, ffprobe: null },
+    tools: { ab_av1: null, ffmpeg: null, ffprobe: null },
     ...overrides,
   };
 }
@@ -41,6 +41,7 @@ function verifiedTools(): ToolAvailability {
   return {
     Located: {
       tools: {
+        ab_av1: { source: "SearchPath", path: "/usr/bin/ab-av1" },
         ffmpeg: { source: "Settings", path: "/opt/ffmpeg/bin/ffmpeg" },
         ffprobe: { source: "SearchPath", path: "/usr/bin/ffprobe" },
       },
@@ -223,7 +224,7 @@ describe("Settings view", () => {
     await ffmpeg.fill("/opt/ffmpeg/bin/ffmpeg");
     await page.getByRole("button", { name: "Save changes" }).click();
     expect(tauri.callsFor("set_settings").at(0)?.payload).toEqual({
-      settings: { ...committed, tools: { ffmpeg: "/opt/ffmpeg/bin/ffmpeg", ffprobe: null } },
+      settings: { ...committed, tools: { ab_av1: null, ffmpeg: "/opt/ffmpeg/bin/ffmpeg", ffprobe: null } },
     });
   });
 

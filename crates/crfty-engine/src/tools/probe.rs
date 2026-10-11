@@ -14,7 +14,6 @@ use serde::Deserialize;
 
 use super::MediaTools;
 use crate::{
-    ab_av1::AB_AV1_REVISION,
     media::decoder_name,
     process_supervisor::{
         self, BoundedOutput, ProcessCancellation, ProcessLimits, ProcessTerminal,
@@ -81,6 +80,20 @@ pub(crate) fn probe_capabilities(
             StepResult::Cancelled => return ProbeOutcome::Cancelled,
         }
     }
+    match verify_ab_av1(tools, cancellation) {
+        StepResult::Passed(_) => {}
+        StepResult::Failed(failure) => return ProbeOutcome::Failed(failure),
+        StepResult::Cancelled => return ProbeOutcome::Cancelled,
+    }
+    let ab_av1_revision = match super::executable_revision(&tools.ab_av1) {
+        Ok(revision) => revision,
+        Err(error) => {
+            return ProbeOutcome::Failed(ProbeFailure::CouldNotRun {
+                capability: ToolCapability::AbAv1Json,
+                detail: format!("cannot inspect ab-av1 executable: {error}"),
+            });
+        }
+    };
     let mut hardware_decoders = BTreeSet::new();
     for decoder in HardwareDecoder::ALL {
         match query_decoder(tools, decoder, cancellation) {
@@ -93,11 +106,78 @@ pub(crate) fn probe_capabilities(
     }
     ProbeOutcome::Verified {
         revisions: ToolRevisions {
-            ab_av1: AB_AV1_REVISION.to_owned(),
+            ab_av1: ab_av1_revision,
             ffmpeg: version.clone(),
             encoder: version,
         },
         hardware_decoders,
+    }
+}
+
+fn verify_ab_av1(tools: &MediaTools, cancellation: &ProcessCancellation) -> StepResult {
+    use crate::ab_av1::{JobTerminal, SearchRequest, operation::run_search_limited};
+    use std::sync::{Arc, Mutex};
+    let capability = ToolCapability::AbAv1Json;
+    let directory = match tempfile::tempdir() {
+        Ok(directory) => directory,
+        Err(error) => {
+            return StepResult::Failed(ProbeFailure::CouldNotRun {
+                capability,
+                detail: error.to_string(),
+            });
+        }
+    };
+    let input = directory.path().join("probe.mkv");
+    let mut command = ffmpeg_command(tools);
+    command
+        .args(["-f", "lavfi", "-i", SYNTHETIC_SOURCE, "-c:v", "ffv1"])
+        .arg(&input);
+    match run_step(command, capability, cancellation) {
+        StepResult::Passed(_) => {}
+        other => return other,
+    }
+    let request = SearchRequest {
+        input,
+        target_vmaf: 0.0,
+        max_encoded_percent: 100_000.0,
+        preset: 12,
+        samples: Some(1),
+        sample_duration: Duration::from_secs(1),
+        thorough: false,
+        decode_mode: crfty_core::DecodeMode::Software,
+    };
+    match run_search_limited(
+        tools.clone(),
+        request,
+        cancellation.clone(),
+        Arc::new(Mutex::new(None)),
+        Some(STEP_TIMEOUT),
+        Some(30.0),
+    ) {
+        JobTerminal::Completed(_) => StepResult::Passed(Vec::new()),
+        JobTerminal::Cancelled => StepResult::Cancelled,
+        JobTerminal::Failed(failure) => StepResult::Failed(match failure.kind {
+            crate::ab_av1::JobFailureKind::Process {
+                kind: crate::ab_av1::ProcessFailureKind::TimedOut,
+            } => ProbeFailure::TimedOut { capability },
+            crate::ab_av1::JobFailureKind::Process {
+                kind:
+                    crate::ab_av1::ProcessFailureKind::Unavailable
+                    | crate::ab_av1::ProcessFailureKind::Supervision
+                    | crate::ab_av1::ProcessFailureKind::Cleanup,
+            } => ProbeFailure::CouldNotRun {
+                capability,
+                detail: failure.message,
+            },
+            _ => ProbeFailure::Unsupported {
+                capability,
+                diagnostic: failure.message,
+            },
+        }),
+        JobTerminal::Panicked { .. } => StepResult::Failed(ProbeFailure::CouldNotRun {
+            capability,
+            detail: "quality-search supervisor panicked".into(),
+        }),
     }
 }
 

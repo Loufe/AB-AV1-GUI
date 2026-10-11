@@ -264,8 +264,15 @@ impl<T> ExpectReport<T> for crfty_engine::ab_av1::JobHandle<T> {
     }
 }
 
+#[expect(
+    clippy::expect_used,
+    reason = "explicit tool paths required by the ignored native contract"
+)]
 fn tools_from_environment() -> MediaTools {
     MediaTools {
+        ab_av1: std::env::var_os("CRFTY_AB_AV1")
+            .map(std::path::PathBuf::from)
+            .expect("CRFTY_AB_AV1 is set"),
         ffmpeg: absolute_environment_path("CRFTY_FFMPEG"),
         ffprobe: absolute_environment_path("CRFTY_FFPROBE"),
     }
@@ -336,6 +343,11 @@ fn real_engine_config(directory: &Path, tools: &MediaTools) -> EngineConfig {
         tools: crfty_engine::coordinator::ToolsConfig::Fixed(
             crfty_engine::coordinator::FixedTools {
                 tools: crfty_core::LocatedTools {
+                    ab_av1: (crfty_core::LocatedTool {
+                        source: crfty_core::ToolSource::Environment,
+                        path: tools.ab_av1.clone(),
+                    })
+                    .clone(),
                     ffmpeg: crfty_core::LocatedTool {
                         source: crfty_core::ToolSource::Environment,
                         path: tools.ffmpeg.clone(),

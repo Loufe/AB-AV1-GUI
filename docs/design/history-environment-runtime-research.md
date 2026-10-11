@@ -136,7 +136,7 @@ FFmpeg and SVT are the direct sources for facts about the media pipeline and enc
 
 | Fact | Preferred source | Contract treatment |
 | --- | --- | --- |
-| Requested encoder/search settings | V3's typed request and pinned ab-av1 adapter arguments | Authoritative intent; do not reconstruct by parsing logs |
+| Requested encoder/search settings | V3's typed request and official ab-av1 CLI adapter arguments | Authoritative intent; do not reconstruct by parsing logs |
 | Encoder-effective settings | Revision-scoped compatibility contract or preflight validation; otherwise allowlisted SVT startup evidence | Record separately from requested intent; never assume equality when the encoder can map, clamp, or reject |
 | Current tool provenance and capability | Session-start ffprobe version document plus behavioural `libsvtav1` and `libvmaf` checks on the selected FFmpeg | Verifies the tested capabilities; ffprobe's version is the current proxy for both revision fields and proves neither FFmpeg nor encoder artifact identity |
 | Independently reported runtime identity | Candidate allowlisted `ffmpeg -version` fields plus SVT startup version when emitted | Separately sourced revision evidence with typed absence; never retain the complete banner/build configuration or equate a version string with exact artifact identity |
@@ -146,7 +146,7 @@ FFmpeg and SVT are the direct sources for facts about the media pipeline and enc
 | Exit cause, cancellation escalation, retries, and decoder fallback | V3 supervisor/attempt ledger | Authoritative; FFmpeg cannot see the enclosing orchestration |
 | Resource caps and system contention | Narrow OS collector only if a consumer justifies it | Not replaceable by an FFmpeg query |
 
-FFmpeg documents [`-progress`](https://ffmpeg.org/ffmpeg.html) as periodic machine-readable `key=value` sequences ending in `progress=continue` or `progress=end`. V3's remux path already uses this interface. Search and encode already receive typed progress from the pinned ab-av1 adapter, so History should not introduce a second competing progress parser.
+FFmpeg documents [`-progress`](https://ffmpeg.org/ffmpeg.html) as periodic machine-readable `key=value` sequences ending in `progress=continue` or `progress=end`. V3's remux path already uses this interface. Search and encode already receive typed progress from the official ab-av1 CLI adapter, so History should not introduce a second competing progress parser.
 
 FFmpeg's [`-benchmark`](https://ffmpeg.org/ffmpeg.html) prints transcode real, system, and user time plus maximum memory. [Current FFmpeg source](https://ffmpeg.org/doxygen/trunk/ffmpeg_8c_source.html) starts the timing baseline after option parsing and input/output initialization, uses `getrusage(RUSAGE_SELF)` and `ru_maxrss` on Linux, and uses `GetProcessTimes` plus `PROCESS_MEMORY_COUNTERS.PeakPagefileUsage` on Windows. The memory value is process-lifetime cumulative, but the time values omit startup and teardown. Linux maximum resident set and Windows peak pagefile usage must never share one portable field.
 
@@ -158,7 +158,7 @@ The Windows fixture used FFmpeg 8.1.2. Five successful trials emitted two lines:
 
 The Linux fixture used a retained BtbN FFmpeg 8.1 build, with its published SHA-256 verified before extraction. BtbN deletes daily artifacts under its [documented retention policy](https://github.com/BtbN/FFmpeg-Builds#release-retention-policy), which is why CRFty no longer pins or downloads a build and instead verifies whatever FFmpeg the user installed (ADR-023).
 
-On the Linux fixture, normal SVT encodes emitted both benchmark lines. `SIGINT` and `SIGTERM` allowed FFmpeg to emit full benchmark output; `SIGKILL` emitted none. The pinned ab-av1 library uses [`process-wrap`](https://github.com/watchexec/process-wrap) to request process-group `SIGKILL` on Unix and `TerminateJobObject` on Windows before waiting for settlement. Therefore stopped/cancelled V3 attempts cannot rely on FFmpeg benchmark evidence.
+On the Linux fixture, normal SVT encodes emitted both benchmark lines. `SIGINT` and `SIGTERM` allowed FFmpeg to emit full benchmark output; `SIGKILL` emitted none. CRFty uses [`process-wrap`](https://github.com/watchexec/process-wrap) to request process-group `SIGKILL` on Unix and `TerminateJobObject` on Windows before waiting for settlement. Therefore stopped/cancelled V3 attempts cannot rely on FFmpeg benchmark evidence.
 
 Across five one-frame and five thirty-frame Linux SVT trials, FFmpeg `maxrss` exactly matched the parent-observed terminal maximum RSS in every trial (91,800-92,680 KiB and 147,620-150,456 KiB respectively). Parent-observed CPU and wall time were slightly larger because terminal accounting included the lifecycle outside FFmpeg's transcode baseline. The self benchmark adds no Linux peak-memory fact and provides a narrower time scope than `wait4`.
 

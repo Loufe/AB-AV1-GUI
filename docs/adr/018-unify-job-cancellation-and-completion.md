@@ -7,15 +7,15 @@ date: 2026-08-16
 
 ## Context and problem statement
 
-The engine represents the same one-shot supervision contract with three cancellation mechanisms and two nearly identical job handles:
+The engine represents the same one-shot supervision contract with two cancellation mechanisms and two nearly identical job handles:
 
-* ab-av1 jobs use a Tokio watch channel, `CancellationHandle`, and `JobHandle<T>`
+* media adapter jobs use `ProcessCancellation`, `CancellationHandle`, and `JobHandle<T>`
 * remux jobs use a standard MPSC channel, `RemuxCancellationHandle`, and `RemuxHandle`
 * synchronous supervised processes use `ProcessCancellation` over `Arc<AtomicBool>`
 
 The coordinator adapts the ab-av1 and remux handles through `ActiveJobCancellation` and maintains two polling loops with the same result, timeout, telemetry, and cancellation behaviour. Each implementation must independently get pre-registration cancellation, channel disconnection, cancel-on-drop, terminal cleanup, worker termination, and subprocess settlement right.
 
-The ab-av1 library lifecycle is a related but separate external-boundary decision selected by [ADR-021](021-drive-ab-av1-through-an-owned-operation.md), with evidence in [`docs/design/ab-av1-library-lifecycle-research.md`](../design/ab-av1-library-lifecycle-research.md). ADR-021 gives ab-av1 a generic shutdown future and keeps its owned settlement inside that finite operation; this record decides how CRFty produces that signal, owns the executor worker, and publishes the terminal report.
+The external operation boundary is selected by [ADR-021](021-own-media-operation-processes.md). CRFty supervises a fresh official CLI process or direct FFmpeg process and publishes completion after containment cleanup, reader joins, and owned temporary cleanup.
 
 Four guarantees must remain distinct:
 
@@ -79,7 +79,7 @@ The worker does not receive the terminal oneshot sender. A private spawn wrapper
 
 Receiving a valid terminal report disarms cancel-on-drop. A timeout does not. Bounded polling borrows `&mut self` so it cannot consume and silently discard the live handle. A final blocking or asynchronous wait consumes `self`.
 
-Synchronous workers call `is_cancelled()` at their existing interruption points. Async workers select on `cancelled()`, with cancellation ahead of progress/update branches when a continuously ready stream could otherwise delay shutdown. The current ab-av1 operation must not be wrapped wholesale in `CancellationToken::run_until_cancelled`, because that helper drops the wrapped future and is safe only when the future is cancellation-safe. The current pinned library provisionally uses explicit `cancel_job()` and `finish_job()` calls, but the durable CRFty requirement is mechanism-neutral: the adapter must await the selected ab-av1 terminal lifecycle and publish no domain report before its task, process, and temporary-state settlement contract returns.
+Synchronous workers check sticky cancellation at their interruption points. Media operations delegate cancellation to the process supervisor, which stops their containment and joins pipe readers before returning. A shared supervision API must retain those cleanup and terminal-publication guarantees.
 
 `tokio_util::task::TaskTracker` provides the shared worker-lifetime ledger. Tokio tasks are spawned or wrapped through the tracker. A non-cloneable local wrapper around `TaskTrackerToken` can be moved into a standard thread so a panic or normal return removes that worker from the ledger when the token drops. This ledger proves that registered worker bodies released their permits; it does not replace retaining standard `JoinHandle`s or observing Tokio `JoinError`s.
 
@@ -170,7 +170,7 @@ Use ordinary barriers and controllable fake workers for protocol races. Loom is 
 
 ## More information
 
-See ADR-015, which retains the rule that statistics and prediction provenance derive from validated facts; cancellation telemetry is not such a fact. ADR-021 selects the upstream ab-av1 operation boundary, its research is recorded in [`docs/design/ab-av1-library-lifecycle-research.md`](../design/ab-av1-library-lifecycle-research.md), and its implementation-validation contract is tracked separately.
+See ADR-015, which retains the rule that statistics and prediction provenance derive from validated facts; cancellation telemetry is not such a fact. ADR-021 selects the upstream ab-av1 operation boundary, its research is recorded in [`docs/design/ab-av1-process-boundary.md`](../design/ab-av1-process-boundary.md), and its implementation-validation contract is tracked separately.
 
 Implementation locations at the time this decision was recorded:
 

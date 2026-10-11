@@ -41,7 +41,6 @@ fn add_one(input: PathBuf) -> QueueCommand {
     }
 }
 use crfty_engine::{
-    ab_av1::AB_AV1_REVISION,
     coordinator::{EngineConfig, EngineRuntime, FixedTools, ToolsConfig},
     driver::{DriverEvent, DriverHandle},
     journal::JournalWriter,
@@ -80,6 +79,11 @@ fn fixture_revisions() -> ToolRevisions {
 
 fn located(media: &MediaTools, source: ToolSource) -> LocatedTools {
     LocatedTools {
+        ab_av1: (LocatedTool {
+            source,
+            path: media.ab_av1.clone(),
+        })
+        .clone(),
         ffmpeg: LocatedTool {
             source,
             path: media.ffmpeg.clone(),
@@ -96,6 +100,7 @@ fn fixture_available() -> ToolAvailability {
     ToolAvailability::Located {
         tools: located(
             &MediaTools {
+                ab_av1: std::path::PathBuf::from(env!("CARGO_BIN_EXE_crfty-contract-fixture")),
                 ffmpeg: PathBuf::from("fixture-ffmpeg"),
                 ffprobe: PathBuf::from("fixture-ffprobe"),
             },
@@ -203,6 +208,9 @@ fn startup_without_tools_replays_and_serves_non_media_commands() {
     assert_eq!(
         failures,
         vec![
+            ToolLocationFailure::NotOnSearchPath {
+                tool: MediaTool::AbAv1
+            },
             ToolLocationFailure::NotOnSearchPath {
                 tool: MediaTool::Ffmpeg
             },
@@ -365,6 +373,7 @@ fn startup_recovery_without_ffprobe_defers_output_settlement() {
         ToolsConfig::Fixed(FixedTools {
             tools: located(
                 &MediaTools {
+                    ab_av1: std::path::PathBuf::from(env!("CARGO_BIN_EXE_crfty-contract-fixture")),
                     ffmpeg: executable.clone(),
                     ffprobe: executable,
                 },
@@ -399,6 +408,7 @@ fn fixture_path_directory(directory: &TestDirectory) -> PathBuf {
     fs::create_dir(&path_dir).expect("fixture PATH directory");
     fs::copy(&fixture, path_dir.join(tool_file_name("ffmpeg"))).expect("fixture ffmpeg");
     fs::copy(&fixture, path_dir.join(tool_file_name("ffprobe"))).expect("fixture ffprobe");
+    fs::copy(&fixture, path_dir.join(tool_file_name("ab-av1"))).expect("fixture ab-av1");
     path_dir
 }
 
@@ -412,6 +422,7 @@ fn tool_file_name(binary: &str) -> String {
 
 fn fixture_media(path_dir: &Path) -> MediaTools {
     MediaTools {
+        ab_av1: path_dir.join(tool_file_name("ab-av1")),
         ffmpeg: path_dir.join(tool_file_name("ffmpeg")),
         ffprobe: path_dir.join(tool_file_name("ffprobe")),
     }
@@ -419,6 +430,7 @@ fn fixture_media(path_dir: &Path) -> MediaTools {
 
 fn search_path_environment(path_dir: &Path) -> DiscoveryEnvironment {
     DiscoveryEnvironment {
+        ab_av1_override: None,
         ffmpeg_override: None,
         ffprobe_override: None,
         search_path: Some(path_dir.as_os_str().to_owned()),
@@ -441,6 +453,9 @@ fn discovery_reports_every_tool_missing_when_no_tier_provides_one() {
         availability,
         ToolAvailability::Missing {
             failures: vec![
+                ToolLocationFailure::NotOnSearchPath {
+                    tool: MediaTool::AbAv1
+                },
                 ToolLocationFailure::NotOnSearchPath {
                     tool: MediaTool::Ffmpeg
                 },
@@ -476,6 +491,7 @@ fn settings_paths_win_over_the_search_path_and_fail_closed() {
     let media = fixture_media(&path_dir);
 
     let configured = ToolPathSettings {
+        ab_av1: Some(media.ab_av1.clone()),
         ffmpeg: Some(media.ffmpeg.clone()),
         ffprobe: Some(media.ffprobe.clone()),
     };
@@ -491,6 +507,7 @@ fn settings_paths_win_over_the_search_path_and_fail_closed() {
     // reason to fall through to whatever PATH holds.
     let dangling = directory.path().join("missing-ffmpeg");
     let half_configured = ToolPathSettings {
+        ab_av1: None,
         ffmpeg: Some(dangling.clone()),
         ffprobe: None,
     };
@@ -514,10 +531,12 @@ fn environment_overrides_win_over_settings_and_fail_closed() {
 
     // Settings name files that do not exist, yet the override wins outright.
     let stale_settings = ToolPathSettings {
+        ab_av1: None,
         ffmpeg: Some(dangling.clone()),
         ffprobe: Some(dangling.clone()),
     };
     let overrides = DiscoveryEnvironment {
+        ab_av1_override: Some(media.ab_av1.clone().into_os_string()),
         ffmpeg_override: Some(media.ffmpeg.clone().into_os_string()),
         ffprobe_override: Some(media.ffprobe.clone().into_os_string()),
         search_path: None,
@@ -531,6 +550,7 @@ fn environment_overrides_win_over_settings_and_fail_closed() {
     );
 
     let broken_override = DiscoveryEnvironment {
+        ab_av1_override: None,
         ffmpeg_override: None,
         ffprobe_override: Some(dangling.clone().into_os_string()),
         search_path: Some(path_dir.as_os_str().to_owned()),
@@ -677,7 +697,13 @@ fn session_start_probes_located_tools_and_records_their_revisions() {
         hardware_decoders,
         std::collections::BTreeSet::from([crfty_core::HardwareDecoder::H264Cuvid])
     );
-    assert_eq!(revisions.ab_av1, AB_AV1_REVISION);
+    assert_eq!(
+        revisions.ab_av1,
+        crfty_engine::tools::executable_revision(&PathBuf::from(env!(
+            "CARGO_BIN_EXE_crfty-contract-fixture"
+        )))
+        .expect("fixture revision")
+    );
     assert_eq!(revisions.ffmpeg, "fixture-8.1.2");
     assert_eq!(revisions.encoder, "fixture-8.1.2");
 
@@ -695,7 +721,13 @@ fn session_start_probes_located_tools_and_records_their_revisions() {
     let Some(DriverEvent::Durable(DurableDelta::ItemPrepared { spec })) = seen.last() else {
         unreachable!();
     };
-    assert_eq!(spec.execution.profile.ab_av1_revision, AB_AV1_REVISION);
+    assert_eq!(
+        spec.execution.profile.ab_av1_revision,
+        crfty_engine::tools::executable_revision(&PathBuf::from(env!(
+            "CARGO_BIN_EXE_crfty-contract-fixture"
+        )))
+        .expect("fixture revision")
+    );
     assert_eq!(spec.execution.profile.ffmpeg_revision, "fixture-8.1.2");
     assert_eq!(spec.execution.profile.encoder_revision, "fixture-8.1.2");
     engine.shutdown().expect("engine shutdown");
@@ -893,6 +925,7 @@ fn rediscovery_and_changed_tool_paths_replace_the_located_tools() {
     );
 
     settings.tools = ToolPathSettings {
+        ab_av1: Some(media.ab_av1.clone()),
         ffmpeg: Some(media.ffmpeg.clone()),
         ffprobe: Some(media.ffprobe.clone()),
     };

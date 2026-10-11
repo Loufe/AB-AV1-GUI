@@ -312,9 +312,14 @@ fn config(directory: &Path, ffmpeg: PathBuf, ffprobe: PathBuf) -> EngineConfig {
         config_path: directory.join("config.json"),
         tools: ToolsConfig::Fixed(FixedTools {
             tools: LocatedTools {
+                ab_av1: (LocatedTool {
+                    source: ToolSource::Environment,
+                    path: ffmpeg.clone(),
+                })
+                .clone(),
                 ffmpeg: LocatedTool {
                     source: ToolSource::Environment,
-                    path: ffmpeg,
+                    path: ffmpeg.clone(),
                 },
                 ffprobe: LocatedTool {
                     source: ToolSource::Environment,
