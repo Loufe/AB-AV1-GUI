@@ -86,8 +86,11 @@ fn sample_probe_path_is_scrubbed_before_tail_truncation() {
 
 #[expect(clippy::expect_used, reason = "fixture setup and assertions")]
 fn contract(mode: &str) {
-    let directory = tempfile::tempdir().expect("create adapter probe fixture directory");
     let fixture = PathBuf::from(env!("CARGO_BIN_EXE_crfty-contract-fixture"));
+    // Keep native tool aliases on the executable's filesystem so links do not
+    // multiply the large fixture binary across concurrent process contracts.
+    let directory = tempfile::tempdir_in(fixture.parent().expect("fixture executable parent"))
+        .expect("create adapter probe fixture directory");
     let tools = directory.path().join("tools");
     fs::create_dir_all(&tools).expect("create tool directory");
     let empty_path = directory.path().join("empty-path");
@@ -102,8 +105,8 @@ fn contract(mode: &str) {
                 .success()
         );
     }
-    let ffmpeg = copy_tool(&fixture, &tools, "ffmpeg");
-    let ffprobe = copy_tool(&fixture, &tools, "ffprobe");
+    let ffmpeg = link_tool(&fixture, &tools, "ffmpeg");
+    let ffprobe = link_tool(&fixture, &tools, "ffprobe");
     let report = run(
         Command::new(&fixture)
             .arg("adapter-probes")
@@ -132,11 +135,11 @@ fn contract(mode: &str) {
 }
 
 #[expect(clippy::expect_used, reason = "fixture setup")]
-fn copy_tool(fixture: &Path, directory: &Path, name: &str) -> PathBuf {
+fn link_tool(fixture: &Path, directory: &Path, name: &str) -> PathBuf {
     let destination = match fixture.extension() {
         Some(extension) => directory.join(name).with_extension(extension),
         None => directory.join(name),
     };
-    fs::copy(fixture, &destination).expect("copy fake media tool");
+    fs::hard_link(fixture, &destination).expect("link fake media tool");
     destination
 }

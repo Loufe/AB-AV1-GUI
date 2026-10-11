@@ -7,7 +7,7 @@ mod types;
 /// The ab-av1 revision compiled into this binary, recorded as analysis
 /// provenance. A unit test pins it to the workspace lockfile so the string
 /// cannot drift from the dependency it describes.
-pub const AB_AV1_REVISION: &str = "24d54bcc5b6f9d9928443403c9f49d84b90de923";
+pub const AB_AV1_REVISION: &str = "94e7fb0352a72a52f61f5da343ca3283363d37d1";
 
 #[cfg(feature = "contract-test-fixture")]
 pub use runtime::FaultInjection;
