@@ -194,6 +194,52 @@ fn cancellation_terminates_the_native_process_tree_and_joins_readers() {
     fs::remove_dir_all(directory).expect("remove process supervisor test directory");
 }
 
+#[cfg(windows)]
+#[test]
+fn application_exit_terminates_its_running_job_tree() -> Result<(), Box<dyn std::error::Error>> {
+    let directory = tempfile::tempdir()?;
+    let heartbeat = directory.path().join("exit-heartbeat");
+    let status = Command::new(fixture())
+        .arg("exit-with-running-tree")
+        .arg(&heartbeat)
+        .status()?;
+    assert!(status.success());
+    // Closing a Job requests termination asynchronously. Allow the request to
+    // finish before checking that the descendant's heartbeat remains stopped.
+    thread::sleep(Duration::from_millis(200));
+    let stopped_value = fs::read(&heartbeat)?;
+    thread::sleep(Duration::from_millis(200));
+    assert_eq!(fs::read(&heartbeat)?, stopped_value);
+    Ok(())
+}
+
+#[cfg(windows)]
+#[test]
+fn cancellation_settles_a_nested_job_tree() -> Result<(), Box<dyn std::error::Error>> {
+    let directory = tempfile::tempdir()?;
+    let heartbeat = directory.path().join("nested-heartbeat");
+    let cancellation = ProcessCancellation::new();
+    let worker_cancellation = cancellation.clone();
+    let worker_heartbeat = heartbeat.clone();
+    let worker = thread::spawn(move || {
+        run(
+            Command::new(fixture())
+                .arg("nested-job-heartbeat")
+                .arg(worker_heartbeat),
+            &worker_cancellation,
+            limits(Some(Duration::from_secs(10))),
+        )
+    });
+    wait_for_file(&heartbeat);
+    cancellation.cancel();
+    let report = worker.join().map_err(|_| "nested Job worker panicked")?;
+    assert_eq!(report.terminal, ProcessTerminal::Cancelled);
+    let stopped_value = fs::read(&heartbeat)?;
+    thread::sleep(Duration::from_millis(200));
+    assert_eq!(fs::read(&heartbeat)?, stopped_value);
+    Ok(())
+}
+
 #[test]
 #[expect(clippy::expect_used, reason = "test assertion")]
 fn cancellation_before_spawn_has_no_side_effect() {

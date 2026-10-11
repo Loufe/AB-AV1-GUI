@@ -1,9 +1,10 @@
 //! Bounded, cancellable supervision for short-lived external tools.
 //!
 //! The caller owns concurrency: hold a permit while calling [`run`]. The call
-//! returns only after the complete process group/job has exited and both pipe
-//! readers have joined, so returning also marks the safe point at which that
-//! permit may be released.
+//! requests process-group/Job termination, waits for the direct child, and joins
+//! both pipe readers before returning. Windows Job completion notifications do
+//! not independently prove that every descendant has exited; the containment
+//! contract documents this platform limit.
 
 use std::{
     collections::VecDeque,

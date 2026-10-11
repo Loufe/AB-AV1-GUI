@@ -26,9 +26,9 @@ path = "tests/support/history_fixture.rs"
 required-features = ["contract-test-fixture", "history-storage-spike"]
 
 [dependencies]
-ab-av1 = { version = "0.11.4", git = "https://github.com/Loufe/ab-av1.git", rev = "94e7fb0352a72a52f61f5da343ca3283363d37d1", default-features = false, features = ["library"] }
+ab-av1 = { version = "0.11.4", git = "https://github.com/alexheretic/ab-av1.git", rev = "94e7fb0352a72a52f61f5da343ca3283363d37d1", default-features = false, features = ["library"] }
 blake2 = { version = "0.10.6", default-features = false }
-command-group = "5.0.1"
+process-wrap = { version = "10.0.1", default-features = false, features = ["std", "tokio1", "creation-flags", "job-object", "kill-on-drop", "process-group"] }
 crfty-core = { path = "../crfty-core" }
 keepawake = { version = "0.6.0", default-features = false }
 # The `reveal` feature adds select-in-file-manager (D-Bus FileManager1 on
@@ -53,6 +53,7 @@ tracing-subscriber = { version = "0.3.23", default-features = false, features = 
 turso = { version = "0.8.1", default-features = false, optional = true }
 
 [target.'cfg(windows)'.dependencies]
+windows = { version = "0.62.2", default-features = false, features = ["Win32_System_Threading"] }
 file-id = { version = "0.2.3", git = "https://github.com/notify-rs/notify.git", rev = "33e1f19264da0aacdf46acaeddaee083e7b5137d" }
 windows-sys = { version = "0.61.2", features = ["Win32_Storage_FileSystem"] }
 

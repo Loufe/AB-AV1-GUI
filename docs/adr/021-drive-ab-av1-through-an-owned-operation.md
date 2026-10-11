@@ -7,7 +7,7 @@ date: 2026-08-18
 
 ## Context and problem statement
 
-ADR-003 selected an in-process pinned ab-av1 adapter, and ADR-018 defines CRFty's private job supervision contract. The current fork exposes typed command streams followed by global `finish_job()` or `cancel_job()` calls. That boundary cannot connect the stream to the correct cleanup authority through ownership, and upstream ab-av1 can detach its sample producer while sample-copy FFmpeg remains outside global finalization.
+ADR-003 selected an in-process pinned ab-av1 adapter, and ADR-018 defines CRFty's private job supervision contract. The current pinned library exposes typed command streams followed by global `finish_job()` or `cancel_job()` calls. That boundary cannot connect the stream to the correct cleanup authority through ownership, and upstream ab-av1 can detach its sample producer while sample-copy FFmpeg remains outside global finalization.
 
 CRFty needs a regular semver library boundary that preserves typed progress while making a terminal result mean that ab-av1's tasks, process trees, pipes, and temporary state have settled. The boundary must not require ab-av1 to expose CRFty's private `CancellationToken` or duplicate CRFty's background job supervisor.
 

@@ -1,0 +1,2 @@
+[patch."https://github.com/alexheretic/ab-av1.git"]
+ab-av1 = { path = ".ci/ab-av1" }
