@@ -7,7 +7,7 @@ date: 2026-08-20
 
 ## Context and problem statement
 
-Quality targets and scores thread the analysis map key, verdicts, `StatFact`, observations, the statistics payload, and import. Their units must remain explicit in durable evidence. The pinned ab-av1 interface exposes a `min_xpsnr` argument the adapter sets to none, and telemetry classifies XPSNR sample work, so a second metric sits one flag away. The journal outlives the code that records it; a metric named in durable evidence lets a later metric variant describe its units without replacing the durable quality types.
+Quality targets and scores thread the analysis map key, verdicts, observations and their Statistics facts, the statistics payload, and import. Their units must remain explicit in durable evidence. The pinned ab-av1 interface exposes a `min_xpsnr` argument the adapter sets to none, and telemetry classifies XPSNR sample work, so a second metric sits one flag away. The journal outlives the code that records it; a metric named in durable evidence lets a later metric variant describe its units without replacing the durable quality types.
 
 ## Decision drivers
 

@@ -32,11 +32,11 @@ use std::path::PathBuf;
 use serde::{Deserialize, Serialize};
 
 use crate::{
-    AnalysisAttempt, AnalysisResult, CompletionEvidence, ContentKey, ConversionRun, DecodeMode,
-    DurableState, DurationMs, FailureKind, ItemOutcome, JobPhase, Operation, PhaseSpan,
-    QualityMetric, QualityTarget, RunId, SearchMeasurement, ToolRevisions, TranslatedId,
-    TranslatedObservation, TranslatedOutcome, TranslatedQuality, TranslatedSource, UnixMillis,
-    VideoCodec, VideoMeta,
+    AnalysisAttempt, AnalysisResult, CompletionEvidence, ContentKey, ConversionRun, Crf,
+    DecodeMode, DurableState, DurationMs, FailureKind, ImportedHistoryRecord, ItemOutcome,
+    JobPhase, MetricScore, Operation, ParkedStatus, PhaseSpan, QualityMetric, QualityTarget, RunId,
+    SearchMeasurement, ToolRevisions, TranslatedId, TranslatedObservation, TranslatedOutcome,
+    TranslatedQuality, TranslatedSource, UnixMillis, VideoCodec, VideoMeta,
 };
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -290,6 +290,20 @@ pub struct RateSample<'a> {
     pub elapsed: DurationMs,
 }
 
+/// A decisive file count plus independently qualified aggregate evidence.
+/// The source facts are frozen at preparation, never joined from a later scan.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct StatisticsFact<'a> {
+    pub source: &'a SourceFacts,
+    pub kind: DecisiveKind,
+    pub finished_at: Option<UnixMillis>,
+    pub sizes: Option<MeasuredSizes>,
+    pub analyzing: Option<DurationMs>,
+    pub encoding: Option<DurationMs>,
+    pub quality: Option<MetricScore>,
+    pub crf: Option<Crf>,
+}
+
 /// A prediction and the measurement that tests it, from the same run.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct PredictionPair<'a> {
@@ -303,21 +317,21 @@ pub struct PredictionPair<'a> {
 /// Translated evidence, a labelled cohort of its own: it is never
 /// deduplicated against native observations, since the two share no
 /// identity.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct ImportedFact<'a> {
-    pub source: &'a TranslatedSource,
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ImportedFact {
+    pub source: TranslatedSource,
     pub metric: QualityMetric,
-    pub kind: ImportedKind<'a>,
+    pub kind: ImportedKind,
     pub updated_at: Option<UnixMillis>,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum ImportedKind<'a> {
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ImportedKind {
     /// Quality-prior evidence only: the origin kept no profile, so this is
     /// never a reusable analysis.
-    Analyzed { quality: &'a TranslatedQuality },
+    Analyzed { quality: TranslatedQuality },
     Converted {
-        quality: &'a TranslatedQuality,
+        quality: TranslatedQuality,
         /// Present only when the record held both the source and output size.
         sizes: Option<MeasuredSizes>,
         encode_duration: Option<DurationMs>,
@@ -372,6 +386,11 @@ impl Observation {
     }
 
     #[must_use]
+    pub fn statistics_fact(&self) -> Option<StatisticsFact<'_>> {
+        self.native()?.statistics_fact()
+    }
+
+    #[must_use]
     pub fn prediction_pair(&self) -> Option<PredictionPair<'_>> {
         self.native()?.prediction_pair()
     }
@@ -379,36 +398,16 @@ impl Observation {
     /// Eligible for the imported cohort: every translated observation.
     /// Native observations are never imported evidence.
     #[must_use]
-    pub fn imported_fact(&self) -> Option<ImportedFact<'_>> {
+    pub fn imported_fact(&self) -> Option<ImportedFact> {
         let Self::Translated(translated) = self else {
             return None;
         };
-        let kind = match &translated.outcome {
-            TranslatedOutcome::Converted {
-                quality,
-                output_size,
-                encode_duration,
-            } => ImportedKind::Converted {
-                quality,
-                sizes: translated
-                    .source
-                    .size_bytes
-                    .zip(*output_size)
-                    .map(|(input, output)| MeasuredSizes { input, output }),
-                encode_duration: *encode_duration,
-            },
-            TranslatedOutcome::NotWorthwhile { requested, floor } => ImportedKind::NotWorthwhile {
-                requested: *requested,
-                floor: *floor,
-            },
-            TranslatedOutcome::Analyzed { quality } => ImportedKind::Analyzed { quality },
-        };
-        Some(ImportedFact {
-            source: &translated.source,
-            metric: translated.origin.quality_metric(),
-            kind,
-            updated_at: translated.updated_at,
-        })
+        Some(imported_fact(
+            translated.source.clone(),
+            translated.origin.quality_metric(),
+            translated.outcome.clone(),
+            translated.updated_at,
+        ))
     }
 
     fn native(&self) -> Option<&NativeObservation> {
@@ -416,6 +415,76 @@ impl Observation {
             Self::Native(native) => Some(native),
             Self::Translated(_) => None,
         }
+    }
+}
+
+fn imported_fact(
+    source: TranslatedSource,
+    metric: QualityMetric,
+    outcome: TranslatedOutcome,
+    updated_at: Option<UnixMillis>,
+) -> ImportedFact {
+    let kind = match outcome {
+        TranslatedOutcome::Converted {
+            quality,
+            output_size,
+            encode_duration,
+        } => ImportedKind::Converted {
+            quality,
+            sizes: source
+                .size_bytes
+                .zip(output_size)
+                .map(|(input, output)| MeasuredSizes { input, output }),
+            encode_duration,
+        },
+        TranslatedOutcome::NotWorthwhile { requested, floor } => {
+            ImportedKind::NotWorthwhile { requested, floor }
+        }
+        TranslatedOutcome::Analyzed { quality } => ImportedKind::Analyzed { quality },
+    };
+    ImportedFact {
+        source,
+        metric,
+        kind,
+        updated_at,
+    }
+}
+
+impl ImportedHistoryRecord {
+    /// The production import summary exposes the same sparse facts as a
+    /// translated observation. Scanned summaries have no reportable outcome.
+    #[must_use]
+    pub(crate) fn imported_fact(&self) -> Option<ImportedFact> {
+        let quality = TranslatedQuality {
+            crf: self.crf,
+            score: self.vmaf,
+            target: self.target,
+        };
+        let outcome = match self.status {
+            ParkedStatus::Converted => TranslatedOutcome::Converted {
+                quality,
+                output_size: self.output_size,
+                encode_duration: self.encoding_time,
+            },
+            ParkedStatus::Analyzed => TranslatedOutcome::Analyzed { quality },
+            ParkedStatus::NotWorthwhile => TranslatedOutcome::NotWorthwhile {
+                requested: self.requested_target,
+                floor: self.floor_target,
+            },
+            ParkedStatus::Scanned => return None,
+        };
+        Some(imported_fact(
+            TranslatedSource {
+                codec: self.video_codec.clone(),
+                width: self.width,
+                height: self.height,
+                duration_ms: self.duration_ms,
+                size_bytes: self.size,
+            },
+            Self::METRIC,
+            outcome,
+            Some(self.decided_at),
+        ))
     }
 }
 
@@ -533,6 +602,35 @@ impl NativeObservation {
         })
     }
 
+    #[must_use]
+    pub(crate) fn statistics_fact(&self) -> Option<StatisticsFact<'_>> {
+        let decisive = self.decisive_fact()?;
+        let source = self.source.as_ref()?;
+        let search = match &self.outcome {
+            ObservedOutcome::Converted { search, .. } if matched(search.assessment).is_some() => {
+                Some(&search.analysis)
+            }
+            _ => None,
+        };
+        Some(StatisticsFact {
+            source,
+            kind: decisive.kind,
+            finished_at: decisive.finished_at,
+            sizes: self.reduction_fact().map(|fact| fact.sizes),
+            analyzing: self
+                .rate_sample(Operation::Analyze)
+                .map(|sample| sample.elapsed),
+            encoding: self
+                .rate_sample(Operation::Convert)
+                .map(|sample| sample.elapsed),
+            quality: search.map(|analysis| MetricScore {
+                metric: analysis.profile.metric,
+                score: analysis.measurement.score,
+            }),
+            crf: search.map(|analysis| analysis.measurement.crf),
+        })
+    }
+
     /// Eligible for the time cohort of `operation`: the phase ran in this
     /// run against a source of known positive duration that matched across
     /// the phase. Analyze samples come from every outcome that searched;
@@ -619,6 +717,41 @@ impl RemuxMeasurement {
 
 fn matched(assessment: Option<SourceAssessment>) -> Option<()> {
     (assessment == Some(SourceAssessment::Matched)).then_some(())
+}
+
+/// Terminal run outcomes counted across every conversion run, independent of
+/// the per-content current verdicts.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, specta::Type)]
+pub struct RunTotals {
+    pub analyzed: u32,
+    pub converted: u32,
+    pub remuxed: u32,
+    pub not_worthwhile: u32,
+    pub stopped: u32,
+    pub incomplete: u32,
+    pub skipped: u32,
+    pub failed: u32,
+}
+
+pub(crate) fn run_totals(state: &DurableState) -> RunTotals {
+    let mut runs = RunTotals::default();
+    for run in state.conversion_runs.values() {
+        match &run.outcome {
+            Some(ItemOutcome::Analyzed) => runs.analyzed = runs.analyzed.saturating_add(1),
+            Some(ItemOutcome::Converted(_)) => runs.converted = runs.converted.saturating_add(1),
+            Some(ItemOutcome::Remuxed(_)) => runs.remuxed = runs.remuxed.saturating_add(1),
+            Some(ItemOutcome::NotWorthwhile { .. }) => {
+                runs.not_worthwhile = runs.not_worthwhile.saturating_add(1);
+            }
+            Some(ItemOutcome::Stopped) => runs.stopped = runs.stopped.saturating_add(1),
+            Some(ItemOutcome::Incomplete) => runs.incomplete = runs.incomplete.saturating_add(1),
+            Some(ItemOutcome::Skipped { .. }) => runs.skipped = runs.skipped.saturating_add(1),
+            Some(ItemOutcome::Failed(_)) => runs.failed = runs.failed.saturating_add(1),
+            None => {}
+        }
+    }
+
+    runs
 }
 
 /// Every terminal, non-skipped run as a native observation, in run order.
@@ -1236,6 +1369,7 @@ mod tests {
         assert_eq!(wrapped.validate(), Ok(()));
         assert_eq!(wrapped.decisive_fact(), native.decisive_fact());
         assert_eq!(wrapped.reduction_fact(), native.reduction_fact());
+        assert_eq!(wrapped.statistics_fact(), native.statistics_fact());
         assert!(wrapped.reduction_fact().is_some());
         for operation in [Operation::Analyze, Operation::Convert] {
             assert_eq!(
@@ -1254,6 +1388,7 @@ mod tests {
         assert_eq!(wrapped.id(), ObservationId::Translated(imported.id()));
         assert_eq!(wrapped.dated_at(), Some(FINISHED));
         assert_eq!(wrapped.decisive_fact(), None);
+        assert_eq!(wrapped.statistics_fact(), None);
         assert_eq!(wrapped.reduction_fact(), None);
         assert_eq!(wrapped.rate_sample(Operation::Analyze), None);
         assert_eq!(wrapped.rate_sample(Operation::Convert), None);
@@ -1340,7 +1475,7 @@ mod tests {
         assert_eq!(
             analyzed.imported_fact().map(|fact| fact.kind),
             Some(ImportedKind::Analyzed {
-                quality: &TranslatedQuality {
+                quality: TranslatedQuality {
                     crf: Some(Crf(30_000)),
                     score: None,
                     target: None,
@@ -1362,6 +1497,15 @@ mod tests {
         assert!(unassessed.rate_sample(Operation::Analyze).is_none());
         assert!(unassessed.rate_sample(Operation::Convert).is_none());
         assert!(unassessed.prediction_pair().is_none());
+        let Some(fact) = unassessed.statistics_fact() else {
+            panic!("unassessed conversion still counts");
+        };
+        assert_eq!(fact.kind, DecisiveKind::Converted);
+        assert_eq!(fact.sizes, None);
+        assert_eq!(fact.analyzing, None);
+        assert_eq!(fact.encoding, None);
+        assert_eq!(fact.quality, None);
+        assert_eq!(fact.crf, None);
 
         let matched = assessed(unassessed.clone(), Some(SourceAssessment::Matched));
         let Some(reduction) = matched.reduction_fact() else {
@@ -1404,7 +1548,55 @@ mod tests {
             assert!(changed.reduction_fact().is_none());
             assert!(changed.rate_sample(Operation::Convert).is_none());
             assert!(changed.prediction_pair().is_none());
+            let Some(fact) = changed.statistics_fact() else {
+                panic!("changed conversion still counts");
+            };
+            assert_eq!(fact.sizes, None);
+            assert_eq!(fact.analyzing, None);
+            assert_eq!(fact.encoding, None);
+            assert_eq!(fact.quality, None);
+            assert_eq!(fact.crf, None);
         }
+    }
+
+    #[test]
+    fn statistics_qualifies_search_and_output_evidence_independently() {
+        let state = state_with(vec![run(
+            1,
+            "a",
+            ItemOutcome::Converted(live(8_000, 3_000)),
+        )]);
+        let mut observation = assessed(only(&state), Some(SourceAssessment::Matched));
+        if let ObservedOutcome::Converted { encode, .. } = &mut observation.outcome {
+            encode.assessment = Some(SourceAssessment::PropertiesChanged);
+        }
+        let Some(fact) = observation.statistics_fact() else {
+            panic!("conversion still counts");
+        };
+        assert_eq!(fact.analyzing, Some(DurationMs(60_000)));
+        assert_eq!(fact.crf, Some(Crf(24_000)));
+        assert!(fact.quality.is_some());
+        assert_eq!(fact.encoding, None);
+        assert_eq!(fact.sizes, None);
+
+        if let ObservedOutcome::Converted { search, encode } = &mut observation.outcome {
+            search.assessment = Some(SourceAssessment::Absent);
+            encode.assessment = Some(SourceAssessment::Matched);
+        }
+        let Some(fact) = observation.statistics_fact() else {
+            panic!("conversion still counts");
+        };
+        assert_eq!(fact.analyzing, None);
+        assert_eq!(fact.quality, None);
+        assert_eq!(fact.crf, None);
+        assert_eq!(fact.encoding, Some(DurationMs(240_000)));
+        assert_eq!(
+            fact.sizes,
+            Some(MeasuredSizes {
+                input: 8_000,
+                output: 3_000
+            })
+        );
     }
 
     #[test]
@@ -1419,6 +1611,11 @@ mod tests {
         assert!(observation.reduction_fact().is_none());
         assert!(observation.prediction_pair().is_none());
         assert!(observation.rate_sample(Operation::Convert).is_some());
+        let Some(fact) = observation.statistics_fact() else {
+            panic!("recovered conversion still counts");
+        };
+        assert_eq!(fact.sizes, None);
+        assert_eq!(fact.crf, Some(Crf(24_000)));
     }
 
     #[test]
@@ -1484,6 +1681,7 @@ mod tests {
             let observation = assessed(observation, Some(SourceAssessment::Matched));
             assert!(observation.source.is_some());
             assert!(observation.decisive_fact().is_none());
+            assert!(observation.statistics_fact().is_none());
             assert!(observation.reduction_fact().is_none());
             assert!(observation.rate_sample(Operation::Analyze).is_none());
             assert!(observation.rate_sample(Operation::Convert).is_none());

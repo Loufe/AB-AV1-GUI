@@ -10,7 +10,7 @@ The [source-continuity contract](design/source-continuity.md) defines required a
 
 A History entry describes work that reached a terminal outcome: a conversion, a remux, a not-worthwhile judgment, a completed analysis, or a failed, stopped, or incomplete run. Content that was only scanned has nothing to report and gets no entry. A skipped run decided nothing and gets no entry either; its reason belongs to the queue item that was skipped.
 
-In production, History rows and Statistics are context-free projections of durable state, recomputed with no clock, filesystem, or cache, per ADR-015, project imported history separately. The frontend derives History rows from its durable snapshot; requested Statistics arrive through the stream. The storage candidates instead persist immutable observations and serve bounded reads independently of production IPC.
+In production, History rows remain a per-content projection of durable state, recomputed with no clock, filesystem, or cache, per ADR-015. Statistics derive native facts through the observation accessors and project imported summaries separately. The frontend derives History rows from its durable snapshot; requested Statistics arrive through the stream. The storage candidates instead persist immutable observations and serve bounded reads independently of production IPC.
 
 Facts flow one way. The analysis level a file stands at, the analysis it may reuse, and its eligibility for the queue are all decided from current freshness-checked evidence about the file on disk, never from History:
 
@@ -55,6 +55,7 @@ Consumers never read run fields directly. Each obtains facts through a typed acc
 | --- | --- |
 | Decisive fact | Converted, remuxed, or not worthwhile with an identified source; no assessment required |
 | Reduction fact | Converted or remuxed with both sizes measured and the producing phase assessed as matched |
+| Statistics fact | A decisive native fact, with sizes from the reduction accessor, times from the rate accessor, and converted CRF and quality only when the search was assessed as matched |
 | Analyze rate sample | Analyzed or converted with a positive search duration, a positive source duration, and the search assessed as matched |
 | Convert rate sample | Converted with a positive encode duration, a positive source duration, and the encode assessed as matched |
 | Prediction pair | Converted with measured sizes and encode duration, and both search and encode assessed as matched |
@@ -62,7 +63,13 @@ Consumers never read run fields directly. Each obtains facts through a typed acc
 
 A translated observation has no content key and no assessment, so every accessor except the imported fact yields nothing for it, and the imported fact yields nothing for a native observation. The imported cohort is labelled separately and never deduplicated against native evidence (ADR-025).
 
-Source assessment uses the classes of the [source-continuity contract](design/source-continuity.md). The shipped engine does not yet produce one, so every recorded observation is unassessed, and unassessed evidence does not qualify for aggregates or prediction pairs. Statistics and estimation still read the older per-content projections until they move onto these accessors.
+Source assessment uses the classes of the [source-continuity contract](design/source-continuity.md). The shipped engine does not yet produce one, so every recorded native observation is unassessed. Statistics retain decisive file counts and source-codec counts, but native sizes, measured times, CRF, and quality do not qualify for their aggregates. Historical estimation and prediction pairs admit no unassessed native evidence. Each phase qualifies independently: a matched search can supply its measured time and quality even when the encode does not qualify.
+
+Statistics count the latest decisive native observation per content in run order; later analyzed, failed, stopped, and incomplete observations do not erase it. Their source facts are those frozen at preparation, unaffected by later scans. The terminal-run summary remains an operational count, including failed, stopped, incomplete, and skipped outcomes, and is exposed at the observation boundary separately from aggregate eligibility. An unknown finish instant supplies no date or cumulative-series point; its qualified measurements still contribute to undated totals.
+
+Input throughput pairs bytes and processing time from the same converted fact: both sizes and a positive qualified encode duration must be present. Its processing time includes any independently qualified search duration from that fact. Facts missing either side still contribute their known size or time totals, but never one side of the throughput ratio. Imported facts use the same pairing rule over their recorded sizes and encode duration.
+
+Statistics and estimation no longer consume verdict-carried summaries, inspected-metadata size fallbacks, or phase spans directly. A verdict without a reportable observation contributes no native Statistics fact. Not-worthwhile attempts supply no rate sample. Adopted imported durations no longer enter the native estimation ladder. The existing production import summaries, both parked and retained on content records, pass through the imported-fact accessor and preserve their known Statistics facts; they are counted independently of native evidence. Import collisions still retain only the selected summary in the current operational model. History browsing keeps its existing projection and size fallbacks until bounded queries replace it.
 
 ## Logical model
 
