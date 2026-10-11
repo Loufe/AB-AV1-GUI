@@ -1,6 +1,16 @@
 # Analysis pipeline
 
-The Analysis view is a generation-scoped, ephemeral tree over durable media facts. Discovery streams names without probing. A user-requested Basic Scan then consumes the discovered file rows from the engine's native-path registry; it never traverses the roots again and no projection or renderer touches the filesystem.
+The Analysis view is a generation-scoped, ephemeral view over durable media facts. Discovery streams names without probing. A user-requested Basic Scan then consumes the discovered file rows from the engine's native-path registry; it never traverses the roots again and no projection or renderer touches the filesystem.
+
+## Production view
+
+Choose folders opens the native multi-folder picker and starts discovery. The flat table shows file names and relative folders, current applicability, media facts, current file sizes, and applicable search predictions or measured output facts. Folder failures appear alongside files; healthy folder rows supply presentation context without becoming selectable work. Discovered files and basic scans have no pre-search size or time estimates. Search predictions are explicitly labelled and never derived from historical standing. A failed refresh retains labelled previous metadata and withholds the old prediction.
+
+Basic Scan and Cancel scan submit engine commands; activity and row changes arrive through the single production stream consumer. Analyze and Convert submit either selected generation-local row IDs or all published files. All actions include files outside the current search. The returned enqueue summary shows added counts and every exclusion reason; rejected and uncertain commits remain visible beside the action. Added jobs run when the user starts Queue, and subsequent stream updates expose completed search predictions in Analysis.
+
+Selection survives streamed updates, filtering, and navigation within the same generation. Replacing a generation or reconnecting clears selection, inspection, and pending action feedback; an old response cannot update the replacement view even if a restarted engine reuses the same generation ID. Focus returns to Choose folders when the replaced view owned focus, without taking focus from another view. Cancelled and failed generations remain inspectable and require a new folder choice for further work.
+
+The table renders a bounded window with the existing virtualizer and retains the focused row when scrolling would otherwise remove it. Arrow keys, Home, End, Page Up, and Page Down move between file selection controls and folder-error inspection controls. Inspection exposes complete display paths, lossy-path warnings, typed failure diagnostics, and prediction details. Closing details returns focus to the invoking row, or Search if filtering removed that row. Display paths never enter queue commands. A 10,000-file browser fixture covers bounded rendering, keyboard traversal, search, and selected IDs outside the rendered window.
 
 ## Basic scan
 

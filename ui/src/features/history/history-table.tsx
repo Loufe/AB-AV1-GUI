@@ -1,3 +1,4 @@
+import { audioSummary, containerLabel, videoCodecLabel } from "@/lib/format/media";
 import {
   type Column,
   type ColumnDef,
@@ -49,14 +50,11 @@ import { openPath, revealInFileManager } from "@/lib/ipc";
 import { cn } from "@/lib/utils";
 
 import {
-  audioSummary,
   compareHistoryDefault,
-  containerLabel,
   HISTORY_STATUSES,
   type HistoryDisplayRow,
   type HistoryStatusLabel,
   historyTotals,
-  videoCodecLabel,
 } from "./history-model";
 
 const ROW_HEIGHT = 52;

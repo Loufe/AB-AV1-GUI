@@ -6,6 +6,7 @@ import { render, type RenderResult } from "vitest-browser-react";
 import { ErrorBoundary } from "@/components/error-boundary";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { appStore, initialAppState, type AppStoreState } from "@/lib/store/app-store";
+import { analysisStore, emptyAnalysisState } from "@/lib/store/analysis-store";
 import {
   emptySessionAggregates,
   progressStore,
@@ -20,12 +21,13 @@ export interface RenderAppOptions {
   createRootOptions?: RootOptions;
 }
 
-/** Restore both production stores to independent, deterministic test state. */
+/** Restore production stores to independent, deterministic test state. */
 export function resetTestStores(
   appState: Partial<AppStoreState> = {},
   progressState: Partial<ProgressStoreState> = {},
 ): void {
   appStore.setState({ ...initialAppState(), ...appState }, true);
+  analysisStore.setState(emptyAnalysisState(), true);
   progressStore.setState(
     {
       telemetry: {},
