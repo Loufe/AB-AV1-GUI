@@ -3,7 +3,7 @@
 //! serves whichever request currently holds the slot.
 
 use std::{
-    collections::{BTreeMap, BTreeSet},
+    collections::BTreeMap,
     io,
     path::PathBuf,
     sync::{Arc, Condvar, Mutex},
@@ -12,7 +12,7 @@ use std::{
 
 use crfty_core::{
     AnalysisActivity, AnalysisCommand, AnalysisGenerationId, AnalysisRowId, Command, LocatedTools,
-    Reply, VideoExtension,
+    Reply,
 };
 
 use crate::{driver::CommandSender, process_supervisor::ProcessCancellation};
@@ -182,11 +182,7 @@ impl AnalysisRuntime {
         }))
     }
 
-    pub(crate) fn begin(
-        &self,
-        roots: Vec<PathBuf>,
-        extensions: BTreeSet<VideoExtension>,
-    ) -> Result<AnalysisGenerationId, AnalysisError> {
+    pub(crate) fn begin(&self, roots: Vec<PathBuf>) -> Result<AnalysisGenerationId, AnalysisError> {
         let _gate = lock(&self.start_gate);
         if lock(&self.control.state).shutting_down {
             return Err(AnalysisError::ShuttingDown);
@@ -195,6 +191,7 @@ impl AnalysisRuntime {
         if roots.is_empty() {
             return Err(AnalysisError::EmptyRoots);
         }
+        let extensions = self.commands.committed_settings()?.scan_extensions;
         let display_roots = roots
             .iter()
             .map(|root| display_text(root.as_os_str()))
@@ -395,7 +392,7 @@ mod tests {
 
     use crfty_core::{AnalysisDelta, AnalysisSnapshot, EphemeralDelta, fold_analysis};
 
-    use super::super::test_support::{extensions, test_directory};
+    use super::super::test_support::test_directory;
     use super::*;
     use crate::driver::{DriverEvent, DriverHandle};
 
@@ -425,10 +422,10 @@ mod tests {
         let runtime = AnalysisRuntime::start(driver.commands.clone(), Arc::new(Mutex::new(None)))
             .expect("runtime");
         let first = runtime
-            .begin(vec![first_root.clone()], extensions())
+            .begin(vec![first_root.clone()])
             .expect("first generation");
         let second = runtime
-            .begin(vec![second_root.clone()], extensions())
+            .begin(vec![second_root.clone()])
             .expect("second generation");
         assert_eq!(first, AnalysisGenerationId(1));
         assert_eq!(second, AnalysisGenerationId(2));

@@ -1,7 +1,6 @@
 #![forbid(unsafe_code)]
 
 use std::{
-    collections::BTreeSet,
     fs,
     path::{Path, PathBuf},
     sync::Mutex,
@@ -11,7 +10,7 @@ use std::{
 use crfty_core::{
     AnalysisActivity, AnalysisDelta, AnalysisFileScan, AnalysisProfile, AnalysisRowEntry,
     AnalysisSnapshot, EphemeralDelta, ExecutionSettings, LocatedTool, LocatedTools, ToolRevisions,
-    ToolSource, VideoExtension, fold_analysis,
+    ToolSource, fold_analysis,
 };
 use crfty_engine::{
     coordinator::{EngineConfig, EngineRuntime, FixedTools, ToolsConfig},
@@ -41,10 +40,7 @@ fn basic_scan_streams_results_with_a_bounded_parallel_probe_pool() {
     let engine = EngineRuntime::start(config(fixture.path(), ffmpeg, ffprobe)).expect("engine");
     let generation = engine
         .commands
-        .begin_analysis_discovery(
-            vec![media_root.clone()],
-            BTreeSet::from([VideoExtension::Mkv]),
-        )
+        .begin_analysis_discovery(vec![media_root.clone()])
         .expect("begin discovery");
     let mut snapshot = AnalysisSnapshot::default();
     wait_for_activity(
@@ -138,10 +134,7 @@ fn cancelling_basic_scan_drops_queued_work_and_joins_running_probes() {
     let engine = EngineRuntime::start(config(fixture.path(), ffmpeg, ffprobe)).expect("engine");
     let generation = engine
         .commands
-        .begin_analysis_discovery(
-            vec![media_root.clone()],
-            BTreeSet::from([VideoExtension::Mkv]),
-        )
+        .begin_analysis_discovery(vec![media_root.clone()])
         .expect("begin discovery");
     let mut snapshot = AnalysisSnapshot::default();
     wait_for_activity(
@@ -187,10 +180,7 @@ fn one_probe_failure_is_typed_scrubbed_and_does_not_abort_other_files() {
     let engine = EngineRuntime::start(config(fixture.path(), ffmpeg, ffprobe)).expect("engine");
     let generation = engine
         .commands
-        .begin_analysis_discovery(
-            vec![media_root.clone()],
-            BTreeSet::from([VideoExtension::Mkv]),
-        )
+        .begin_analysis_discovery(vec![media_root.clone()])
         .expect("begin discovery");
     let mut snapshot = AnalysisSnapshot::default();
     wait_for_activity(

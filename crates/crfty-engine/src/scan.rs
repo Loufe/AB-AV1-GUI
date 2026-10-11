@@ -21,7 +21,7 @@ use crate::media;
 /// failed stat or canonicalization yields `None` and the add fails open —
 /// the reducer enqueues the item and claim-time inspection is authoritative.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct ScannedFile {
+pub(crate) struct ScannedFile {
     pub path: PathBuf,
     pub path_hash: Option<PathHash>,
     pub identity: Option<DestructiveIdentity>,
@@ -40,7 +40,7 @@ pub struct ScannedFile {
 /// Order is deterministic: inputs in argument order, each folder's files in
 /// breadth-first name order.
 #[must_use]
-pub fn expand_inputs(
+pub(crate) fn expand_inputs(
     inputs: &[PathBuf],
     extensions: &BTreeSet<VideoExtension>,
 ) -> Vec<ScannedFile> {

@@ -10,8 +10,8 @@ use serde::{Deserialize, Serialize};
 
 use crate::{
     AnalysisFileScan, AnalysisGenerationId, AnalysisIntent, AnalysisRowEntry, AnalysisRowId,
-    AppState, DefaultOutputMode, Operation, OutputTarget, OverwriteDecision, QueueAddRequest,
-    RowEligibility, SkipReason, TimestampReliability,
+    AppState, Operation, OverwriteDecision, QueueAddRequest, RowEligibility, SkipReason,
+    TimestampReliability,
 };
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, specta::Type)]
@@ -82,20 +82,7 @@ pub(crate) fn plan_analysis_enqueue(
     if !current.activity.is_live() {
         return Err("queue action names an inactive Analysis generation");
     }
-    let output = &state.settings.output;
-    let output_template = match output.default_mode {
-        DefaultOutputMode::Replace => OutputTarget::Replace,
-        DefaultOutputMode::Suffix => OutputTarget::Suffix {
-            suffix: output.suffix.clone(),
-        },
-        DefaultOutputMode::SeparateFolder => OutputTarget::SeparateFolder {
-            directory: output
-                .separate_folder
-                .clone()
-                .ok_or("default separate output folder is required")?,
-            source_root: None,
-        },
-    };
+    state.settings.output.target(None)?;
     let mut summary = AnalysisQueueSummary::default();
     let selected = match request.selection {
         AnalysisQueueSelection::AllFiles => None,
@@ -167,10 +154,10 @@ pub(crate) fn plan_analysis_enqueue(
                 continue;
             }
         }
-        let mut output_target = output_template.clone();
-        if let OutputTarget::SeparateFolder { source_root, .. } = &mut output_target {
-            *source_root = Some(file.source_root.clone());
-        }
+        let output_target = state
+            .settings
+            .output
+            .target(Some(file.source_root.clone()))?;
         requests.push(QueueAddRequest {
             input: file.input.clone(),
             path_hash: None,
@@ -195,6 +182,7 @@ mod tests {
         Rejection, ReuseStanding, SettingsCommand, SuccessReply, UnixMillis, VideoCodec,
         encode_record, encode_snapshot, replay,
     };
+    use crate::{DefaultOutputMode, OutputTarget};
 
     fn apply_ok(state: &mut AppState, command: Command) -> crate::Applied {
         match crate::apply(state, command) {

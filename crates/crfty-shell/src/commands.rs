@@ -1,9 +1,8 @@
 use std::path::PathBuf;
 
 use crfty_core::{
-    AnalysisGenerationId, AnalysisIntent, CorruptionSignature, Operation, OutputTarget,
-    ProjectionCommand, QueueCommand, QueueItemEdit, QueueItemId, SessionCommand, Settings,
-    ToolsCommand,
+    AnalysisGenerationId, AnalysisIntent, CorruptionSignature, Operation, ProjectionCommand,
+    QueueCommand, QueueItemEdit, QueueItemId, SessionCommand, Settings, ToolsCommand,
 };
 use serde::{Deserialize, Serialize};
 use tauri::{State, ipc::Channel};
@@ -129,9 +128,8 @@ fn queue_add_paths(
     inputs: Vec<PathBuf>,
     operation: Operation,
     intent: AnalysisIntent,
-    output_target: OutputTarget,
 ) -> Result<(), CommandError> {
-    bridge.queue_add_paths(inputs, operation, intent, output_target)
+    bridge.queue_add_paths(inputs, operation, intent)
 }
 
 /// Start a new Level-0 Analysis generation. The acknowledgement returns the

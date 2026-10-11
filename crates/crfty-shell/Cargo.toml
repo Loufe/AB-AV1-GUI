@@ -48,6 +48,7 @@ rfd = { version = "0.17.2", default-features = false }
 
 [dev-dependencies]
 specta-typescript = "=0.0.12"
+tempfile = { version = "3.27.0", default-features = false }
 
 [lints]
 workspace = true

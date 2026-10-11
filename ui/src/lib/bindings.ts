@@ -29,7 +29,7 @@ export const commands = {
 	 *  files pass through unfiltered. The outcome arrives as one
 	 *  `QueueAddSummary` on the stream.
 	 */
-	queueAddPaths: (inputs: string[], operation: Operation, intent: AnalysisIntent, outputTarget: OutputTarget) => typedError<null, CommandError>(__TAURI_INVOKE("queue_add_paths", { inputs, operation, intent, outputTarget })),
+	queueAddPaths: (inputs: string[], operation: Operation, intent: AnalysisIntent) => typedError<null, CommandError>(__TAURI_INVOKE("queue_add_paths", { inputs, operation, intent })),
 	queueRemoveMany: (itemIds: QueueItemId[]) => typedError<null, CommandError>(__TAURI_INVOKE("queue_remove_many", { itemIds })),
 	/**
 	 *  Atomically replace the complete pending Queue order. The reducer rejects
