@@ -28,6 +28,7 @@ jobs:
         run: |
           mkdir -p .ci/ab-av1
           tar -xzf .ci/ab-av1-verification.tar.gz -C .ci/ab-av1
+          printf '\n[workspace]\n' >> .ci/ab-av1/Cargo.toml
       - name: Install Tauri Linux prerequisites
         if: runner.os == 'Linux'
         run: |
