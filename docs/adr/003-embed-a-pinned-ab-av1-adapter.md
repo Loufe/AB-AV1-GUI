@@ -29,6 +29,8 @@ Chosen option: **Pin a minimally patched ab-av1 library adapter**, because it pr
 
 The initial real-process prototype demonstrated typed progress, cancellation, cleanup, and successful second-job recovery for the path it exercised. It did not cover the detached sample producer or the unmanaged sample-copy FFmpeg path; ADR-021 owns the complete operation-lifecycle boundary.
 
+The [shipped probe lifecycle](../AB_AV1_PROBES.md) makes every adapter entry and encoded-sample ffprobe asynchronous, contained, cancellable, and bounded. Its real-process contracts cover timeout, cancellation, diagnostic bounds, descendant settlement, and subsequent operation reuse; the complete operation-lifecycle boundary still belongs to ADR-021.
+
 The engine permits only one active ab-av1 job. The exact dependency revision and patch remain adapter-private. Structured NDJSON is retained only as a contingency if native platform containment cannot satisfy the lifecycle contract.
 
 ### Consequences

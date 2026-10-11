@@ -7,15 +7,15 @@ mod types;
 /// The ab-av1 revision compiled into this binary, recorded as analysis
 /// provenance. A unit test pins it to the workspace lockfile so the string
 /// cannot drift from the dependency it describes.
-pub const AB_AV1_REVISION: &str = "8bde51723f6f95945792f58a94c08f59171047d7";
+pub const AB_AV1_REVISION: &str = "24d54bcc5b6f9d9928443403c9f49d84b90de923";
 
 #[cfg(feature = "contract-test-fixture")]
 pub use runtime::FaultInjection;
 pub use runtime::{AbAv1Runtime, CancellationHandle, JobHandle};
 pub use types::{
     CancelMode, EncodeRequest, EncodeTelemetry, JobFailure, JobFailureKind, JobReport, JobTerminal,
-    RuntimeStartError, SearchOutcome, SearchRequest, SearchTelemetry, SearchWork, ShutdownError,
-    StartJobError, Telemetry, WaitError,
+    ProbeFailureKind, RuntimeStartError, SearchOutcome, SearchRequest, SearchTelemetry, SearchWork,
+    ShutdownError, StartJobError, Telemetry, WaitError,
 };
 
 #[cfg(test)]

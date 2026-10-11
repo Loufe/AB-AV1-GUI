@@ -1,6 +1,6 @@
 use std::{
     fmt,
-    path::PathBuf,
+    path::{Path, PathBuf},
     str::FromStr,
     sync::{Arc, Mutex},
     time::Duration,
@@ -11,8 +11,8 @@ use crfty_core::DecodeMode;
 use tokio_stream::StreamExt;
 
 use super::types::{
-    CancelMode, EncodeRequest, EncodeTelemetry, JobFailure, JobTerminal, SearchOutcome,
-    SearchRequest, SearchTelemetry, SearchWork, Telemetry,
+    CancelMode, EncodeRequest, EncodeTelemetry, JobFailure, JobFailureKind, JobTerminal,
+    ProbeFailureKind, SearchOutcome, SearchRequest, SearchTelemetry, SearchWork, Telemetry,
 };
 use crate::tools::MediaTools;
 
@@ -77,7 +77,7 @@ async fn search(
     if cancellation.borrow().is_some() {
         return Err(OperationError::Cancelled);
     }
-    let probe = Arc::new(ffprobe::probe(&request.input));
+    let probe = probe_input(&request.input, &mut cancellation).await?;
     let mut args = search_args(&request).map_err(OperationError::Failed)?;
     args.sample
         .set_extension_from_input(&request.input, &args.args.encoder, &probe);
@@ -138,7 +138,7 @@ async fn search(
                         from_cache: last.enc.from_cache,
                     })));
                 }
-                Some(Err(error)) => return Err(OperationError::Failed(failure(error))),
+                Some(Err(command::crf_search::Error::Other(error))) => return Err(OperationError::Failed(operation_failure(error))),
                 None => return outcome.ok_or_else(|| OperationError::Failed(JobFailure::new(
                     "quality search ended without a result",
                 ))),
@@ -156,7 +156,7 @@ async fn encode(
     if cancellation.borrow().is_some() {
         return Err(OperationError::Cancelled);
     }
-    let probe = Arc::new(ffprobe::probe(&request.input));
+    let probe = probe_input(&request.input, &mut cancellation).await?;
     let args = encode_args(&request).map_err(OperationError::Failed)?;
     let mut updates = std::pin::pin!(command::encode::run(args, probe));
     loop {
@@ -182,7 +182,7 @@ async fn encode(
                 // summary; it is deliberately not an application contract.
                 Some(Ok(command::encode::Update::StreamSizes { .. })) => {}
                 Some(Ok(command::encode::Update::Done { .. })) => return Ok(()),
-                Some(Err(error)) => return Err(OperationError::Failed(failure(error))),
+                Some(Err(error)) => return Err(OperationError::Failed(operation_failure(error))),
                 None => return Err(OperationError::Failed(JobFailure::new(
                     "encode ended without a result",
                 ))),
@@ -191,11 +191,70 @@ async fn encode(
     }
 }
 
+async fn probe_input(
+    input: &Path,
+    cancellation: &mut tokio::sync::watch::Receiver<Option<CancelMode>>,
+) -> Result<Arc<ffprobe::Ffprobe>, OperationError> {
+    tokio::select! {
+        biased;
+        _ = cancellation.changed() => Err(OperationError::Cancelled),
+        result = ffprobe::probe(input) => result.map(Arc::new)
+            .map_err(|error| OperationError::Failed(probe_failure(error))),
+    }
+}
+
+fn operation_failure(
+    error: impl fmt::Display + AsRef<dyn std::error::Error + Send + Sync>,
+) -> JobFailure {
+    let mut source: &dyn std::error::Error = error.as_ref();
+    loop {
+        if let Some(probe) = source.downcast_ref::<ffprobe::ProbeFailure>() {
+            return probe_failure(probe.clone());
+        }
+        match source.source() {
+            Some(next) => source = next,
+            None => return failure(error),
+        }
+    }
+}
+
+fn probe_failure(error: ffprobe::ProbeFailure) -> JobFailure {
+    let kind = match error.kind {
+        ffprobe::ProbeFailureKind::Unavailable => ProbeFailureKind::Unavailable,
+        ffprobe::ProbeFailureKind::TimedOut => ProbeFailureKind::TimedOut,
+        ffprobe::ProbeFailureKind::Rejected { code } => ProbeFailureKind::Rejected { code },
+        ffprobe::ProbeFailureKind::InvalidOutput => ProbeFailureKind::InvalidOutput,
+        ffprobe::ProbeFailureKind::Supervision => ProbeFailureKind::Supervision,
+    };
+    let mut message = format!("ffprobe: {}", error.detail);
+    if error.diagnostic.truncated {
+        message.push_str("; diagnostic tail truncated");
+    }
+    for cleanup in error.cleanup_failures {
+        message.push_str(&format!("; cleanup failed: {cleanup}"));
+    }
+    JobFailure {
+        kind: JobFailureKind::Probe { kind },
+        message,
+        diagnostic: crate::failure::scrub_tail(
+            &error.diagnostic.text,
+            &[(error.input.as_path(), "<probe-input>")],
+        ),
+    }
+}
+
 async fn finalize<T>(result: Result<T, OperationError>) -> JobTerminal<T> {
     let cleanup = match &result {
         Ok(_) => ab_av1::finish_job(false).await,
         Err(_) => ab_av1::cancel_job().await,
     };
+    settled_terminal(result, cleanup)
+}
+
+fn settled_terminal<T>(
+    result: Result<T, OperationError>,
+    cleanup: Result<(), impl fmt::Display>,
+) -> JobTerminal<T> {
     match (result, cleanup) {
         (Ok(value), Ok(())) => JobTerminal::Completed(value),
         (Err(OperationError::Cancelled), Ok(())) => JobTerminal::Cancelled,
@@ -204,9 +263,12 @@ async fn finalize<T>(result: Result<T, OperationError>) -> JobTerminal<T> {
         (Err(OperationError::Cancelled), Err(cleanup)) => JobTerminal::Failed(JobFailure::new(
             format!("job was cancelled; cleanup failed: {cleanup}"),
         )),
-        (Err(OperationError::Failed(error)), Err(cleanup)) => JobTerminal::Failed(JobFailure::new(
-            format!("{}; cleanup failed: {cleanup}", error.message),
-        )),
+        (Err(OperationError::Failed(mut error)), Err(cleanup)) => {
+            error
+                .message
+                .push_str(&format!("; cleanup failed: {cleanup}"));
+            JobTerminal::Failed(error)
+        }
     }
 }
 
@@ -311,9 +373,64 @@ fn failure(error: impl fmt::Display) -> JobFailure {
 mod tests {
     use crfty_core::{DecodeMode, HardwareDecoder};
 
-    use super::{encode_args, search_args, set_telemetry};
+    use super::{
+        OperationError, encode_args, operation_failure, search_args, set_telemetry,
+        settled_terminal,
+    };
     use crate::ab_av1::{EncodeRequest, EncodeTelemetry, SearchRequest, Telemetry};
+    use crate::ab_av1::{JobFailureKind, JobTerminal, ProbeFailureKind};
     use std::{path::PathBuf, sync::Mutex, time::Duration};
+
+    fn probe_error() -> ab_av1::ffprobe::ProbeFailure {
+        ab_av1::ffprobe::ProbeFailure {
+            input: PathBuf::from("/fixture/private-sample.crf.mkv"),
+            kind: ab_av1::ffprobe::ProbeFailureKind::TimedOut,
+            detail: "fixture deadline".to_owned(),
+            diagnostic: ab_av1::ffprobe::ProbeDiagnostic {
+                text: "fixture tail /fixture/private-sample.crf.mkv".to_owned(),
+                truncated: true,
+            },
+            cleanup_failures: vec!["fixture process cleanup".to_owned()],
+        }
+    }
+
+    #[test]
+    fn contextual_probe_errors_keep_their_kind_and_diagnostic() {
+        let wrapped = ab_av1::command::crf_search::Error::Other(probe_error().into());
+        let ab_av1::command::crf_search::Error::Other(error) = wrapped else {
+            panic!("expected wrapped probe failure");
+        };
+        let failure = operation_failure(error.context("encoded sample probe"));
+        assert_eq!(
+            failure.kind,
+            JobFailureKind::Probe {
+                kind: ProbeFailureKind::TimedOut
+            }
+        );
+        assert_eq!(failure.diagnostic.as_str(), "fixture tail <probe-input>");
+        assert!(failure.message.contains("fixture process cleanup"));
+        assert!(failure.message.contains("diagnostic tail truncated"));
+    }
+
+    #[test]
+    fn finalizer_failure_preserves_the_primary_probe_failure() {
+        let terminal: JobTerminal<()> = settled_terminal(
+            Err(OperationError::Failed(super::probe_failure(probe_error()))),
+            Err("fixture finalizer cleanup"),
+        );
+        let JobTerminal::Failed(failure) = terminal else {
+            panic!("expected failed probe");
+        };
+        assert_eq!(
+            failure.kind,
+            JobFailureKind::Probe {
+                kind: ProbeFailureKind::TimedOut
+            }
+        );
+        assert_eq!(failure.diagnostic.as_str(), "fixture tail <probe-input>");
+        assert!(failure.message.contains("fixture process cleanup"));
+        assert!(failure.message.contains("fixture finalizer cleanup"));
+    }
 
     #[test]
     #[expect(clippy::expect_used, reason = "test assertion")]

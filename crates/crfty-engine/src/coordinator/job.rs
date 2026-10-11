@@ -136,7 +136,9 @@ pub(super) fn run_encode(
                 // retry-after-abandonment unrepresentable. The requested
                 // JobSpec is never rewritten — the divergence is recorded in
                 // the terminal evidence's `encode_decode`.
-                if matches!(decode_mode, DecodeMode::Hardware(_)) {
+                if matches!(decode_mode, DecodeMode::Hardware(_))
+                    && !matches!(failure.kind, JobFailureKind::Probe { .. })
+                {
                     match restage_for_retry(&manager, services.commands, &mut transaction) {
                         Ok(()) => {
                             tracing::warn!(
@@ -158,7 +160,10 @@ pub(super) fn run_encode(
                     services.commands,
                     job,
                     &transaction,
-                    ItemOutcome::Failed(FailureFacts::new(FailureKind::EncodeRun, failure.message)),
+                    ItemOutcome::Failed(
+                        FailureFacts::new(FailureKind::EncodeRun, failure.message)
+                            .with_diagnostic(failure.diagnostic),
+                    ),
                     map_progress(
                         job.spec.run_id,
                         tracker,
@@ -437,9 +442,15 @@ pub(super) fn search_with_fallback(
                         last_measurement: Some(measured),
                     });
                 }
+                JobFailureKind::Probe { .. } => {
+                    return Err(ItemOutcome::Failed(
+                        FailureFacts::new(FailureKind::SearchRun, failure.message)
+                            .with_diagnostic(failure.diagnostic),
+                    ));
+                }
                 JobFailureKind::Other => {
                     // Hardware→software retry (parse-free trigger): any
-                    // non-NoGoodCrf search failure under hardware decode
+                    // encode/score failure under hardware decode
                     // restarts the whole VMAF ladder once with the software
                     // profile. Attempts measured under hardware are discarded
                     // so the recorded result is honest about the profile it

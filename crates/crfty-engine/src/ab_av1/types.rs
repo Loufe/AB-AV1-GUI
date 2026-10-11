@@ -1,6 +1,6 @@
 use std::{fmt, path::PathBuf, time::Duration};
 
-use crfty_core::DecodeMode;
+use crfty_core::{DecodeMode, DiagnosticTail};
 
 #[derive(Debug, Clone)]
 pub struct SearchRequest {
@@ -65,9 +65,19 @@ pub struct SearchOutcome {
     pub from_cache: bool,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ProbeFailureKind {
+    Unavailable,
+    TimedOut,
+    Rejected { code: Option<i32> },
+    InvalidOutput,
+    Supervision,
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub enum JobFailureKind {
     NoGoodCrf { last: SearchOutcome },
+    Probe { kind: ProbeFailureKind },
     Other,
 }
 
@@ -75,6 +85,7 @@ pub enum JobFailureKind {
 pub struct JobFailure {
     pub kind: JobFailureKind,
     pub message: String,
+    pub diagnostic: DiagnosticTail,
 }
 
 impl JobFailure {
@@ -82,6 +93,7 @@ impl JobFailure {
         Self {
             kind: JobFailureKind::Other,
             message: message.into(),
+            diagnostic: DiagnosticTail::empty(),
         }
     }
 
@@ -89,6 +101,7 @@ impl JobFailure {
         Self {
             kind: JobFailureKind::NoGoodCrf { last },
             message: "failed to find a suitable CRF".to_owned(),
+            diagnostic: DiagnosticTail::empty(),
         }
     }
 }

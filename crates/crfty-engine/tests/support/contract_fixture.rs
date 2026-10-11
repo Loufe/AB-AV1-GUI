@@ -1,5 +1,7 @@
 #![forbid(unsafe_code)]
 
+mod adapter_probe_contract;
+
 use std::{
     env,
     error::Error,
@@ -100,6 +102,9 @@ fn dispatch() -> Result<(), Box<dyn Error>> {
             .next()
             .map(PathBuf::from)
             .ok_or("heartbeat path is missing")?;
+        if arguments.next().as_deref() == Some(OsString::from("closed").as_os_str()) {
+            fs::write(path.with_extension("closed"), b"ready")?;
+        }
         return heartbeat(&path);
     }
 
@@ -120,11 +125,17 @@ fn dispatch() -> Result<(), Box<dyn Error>> {
         Some(argument) if argument == "run" => run_contract(arguments),
         Some(argument) if argument == "coordinate" => run_coordinator_contract(arguments),
         Some(argument) if argument == "ladder" => run_ladder_contract(arguments),
+        Some(argument) if argument == "adapter-probes" => adapter_probe_contract::run(arguments),
         _ => Err("expected: crfty-contract-fixture run INPUT OUTPUT-DIR FFMPEG FFPROBE".into()),
     }
 }
 
 fn fake_ffprobe() -> Result<(), Box<dyn Error>> {
+    if let Some(input) = env::args_os().next_back().map(PathBuf::from)
+        && adapter_probe_contract::fake_probe(&input)?
+    {
+        return Ok(());
+    }
     if env::args_os().any(|argument| argument == "-show_program_version") {
         let mut stdout = io::stdout().lock();
         stdout.write_all(
