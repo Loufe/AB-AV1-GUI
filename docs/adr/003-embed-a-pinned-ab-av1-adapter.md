@@ -37,7 +37,7 @@ The engine permits only one active ab-av1 job. The exact dependency revision and
 
 * Good: Upstream changes surface as compile-time integration work
 * Good: Application code consumes typed events rather than output text
-* Bad: CRFty maintains a small patch until suitable interfaces land upstream
+* Bad: The typed library interface requires upstream contribution and review
 
 ## More information
 
@@ -47,9 +47,9 @@ ab-av1's `main.rs` collapses every failure to exit code 1, so an exit code canno
 
 That one discrimination is the one the application needs, because it is the not-worthwhile verdict and the VMAF fallback trigger. An audit of the Python callers found it was also the only exception any caller branched on; the rest of the regex-derived hierarchy changed log wording and nothing else. Under the library adapter the same fact arrives as a typed variant matched in a `match` arm (`crf_search::Error::NoGoodCrf { last }`, carrying the last search outcome), which is the concrete payoff of this record.
 
-### Upstream and patch-fork strategy
+### Upstream contribution strategy
 
-The dependency is a fork pinned to an exact reviewed commit and built with a `library` feature, so updating it is an application rebuild and upstream API changes surface as compile failures. The reviewable delta is proposed upstream where generally useful. It provides a library target without CLI completion wiring, a typed encode-update stream lifted from the internal FFmpeg event loop, and a per-job cancellation handle with graceful and force modes. MIT licensing permits the fork; attribution and license text ship with the application. Only one ab-av1 job runs at a time because upstream's child and temp registries are process-global.
+The dependency is pinned through the official `alexheretic/ab-av1` repository to an exact reviewed commit and built with a `library` feature. Updating it is an application rebuild, and upstream API changes surface as compile failures. Library and lifecycle changes belong in upstream PRs. A contribution fork may host a PR branch with the repository owner's approval; CRFty does not maintain an ab-av1 fork or take a dependency through its URL. The library boundary provides a target without CLI completion wiring, typed encode updates, configured media-tool paths, bounded probes, and explicit finalization. Attribution and MIT license text ship with the application. Only one ab-av1 job runs at a time because the current child and temporary registries are process-global.
 
 ### The NDJSON contingency, and what it would still cost
 

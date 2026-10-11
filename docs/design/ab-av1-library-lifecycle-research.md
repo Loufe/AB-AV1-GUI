@@ -8,7 +8,7 @@ Related decisions: [ADR-003](../adr/003-embed-a-pinned-ab-av1-adapter.md), [ADR-
 
 This note records an upstream-first investigation of the lifecycle boundary ab-av1 would need to support reliable in-process use by CRFty. It separates the selected public operation shape and confirmed resource-ownership requirements from CRFty's private cancellation and worker-supervision design.
 
-The source review used a fresh clone of alexheretic/ab-av1 at v0.11.6 commit [`629cfaa`](https://github.com/alexheretic/ab-av1/tree/629cfaa) without adding or consulting the CRFty fork while deriving the findings. The existing `Loufe/ab-av1` prototype was compared only afterward and is treated as exploratory evidence rather than the source of the design.
+The source review used a fresh clone of alexheretic/ab-av1 at v0.11.6 commit [`629cfaa`](https://github.com/alexheretic/ab-av1/tree/629cfaa) without adding or consulting the CRFty fork while deriving the findings. The existing library prototype was compared only afterward and is treated as exploratory evidence rather than the source of the design.
 
 This is a research artifact, not an implementation specification or authority to open an upstream PR. It recommends a public lifecycle, progress boundary, and process-management direction; ADR-021 owns the CRFty decision, while implementation and real-process validation belong in separately tracked issues.
 
@@ -273,7 +273,7 @@ The patch touches package/module boundaries, command presentation, every subproc
 
 ## Assessment of the existing CRFty prototype
 
-The prototype lives in the `Loufe/ab-av1` `lib-target` and `crfty-library-api` branches and backs CRFty's pinned dependency.
+The prototype provides the typed library boundary consumed by CRFty. Its generally useful changes belong in upstream PRs under the contribution strategy in ADR-003.
 
 Useful exploratory work includes:
 
@@ -284,7 +284,7 @@ Useful exploratory work includes:
 * immediately registering streamed child processes;
 * adding process-group or Windows Job Object containment through `command-group`.
 
-The relevant experimental commits are [`e2c8a69`](https://github.com/Loufe/ab-av1/commit/e2c8a69), [`e8f692b`](https://github.com/Loufe/ab-av1/commit/e8f692b), [`a7205b9`](https://github.com/Loufe/ab-av1/commit/a7205b9), and [`8bde517`](https://github.com/Loufe/ab-av1/commit/8bde517).
+The relevant experimental commits are [`e2c8a69`](https://github.com/alexheretic/ab-av1/commit/e2c8a69), [`e8f692b`](https://github.com/alexheretic/ab-av1/commit/e8f692b), [`a7205b9`](https://github.com/alexheretic/ab-av1/commit/a7205b9), and [`8bde517`](https://github.com/alexheretic/ab-av1/commit/8bde517).
 
 The prototype is not an upstream-ready lifecycle design because:
 

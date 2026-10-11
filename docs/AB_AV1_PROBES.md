@@ -1,6 +1,6 @@
 # Adapter probe lifecycle
 
-The adapter consumes ab-av1 revision [`94e7fb0352a72a52f61f5da343ca3283363d37d1`](https://github.com/Loufe/ab-av1/commit/94e7fb0352a72a52f61f5da343ca3283363d37d1). The pinned ab-av1 adapter uses asynchronous, contained ffprobe work at search and encode entry and after each encoded sample. These probes need frame-rate and pixel-format facts absent from CRFty's durable `VideoMeta`, so the adapter cannot reconstruct their complete input from an earlier metadata observation. The selected executable remains the session's configured ffprobe path; neither a PATH lookup nor a second tool-selection policy is introduced.
+The adapter consumes ab-av1 revision [`94e7fb0352a72a52f61f5da343ca3283363d37d1`](https://github.com/alexheretic/ab-av1/commit/94e7fb0352a72a52f61f5da343ca3283363d37d1). The pinned ab-av1 adapter uses asynchronous, contained ffprobe work at search and encode entry and after each encoded sample. These probes need frame-rate and pixel-format facts absent from CRFty's durable `VideoMeta`, so the adapter cannot reconstruct their complete input from an earlier metadata observation. The selected executable remains the session's configured ffprobe path; neither a PATH lookup nor a second tool-selection policy is introduced.
 
 ## Bounds and cancellation
 
