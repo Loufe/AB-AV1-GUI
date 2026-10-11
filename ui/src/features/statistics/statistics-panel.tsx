@@ -73,19 +73,19 @@ function StatStrip({ payload }: { payload: StatisticsPayload }) {
     {
       label: "Output-size reduction",
       value: formatSignedFileSize(payload.total_reduction_bytes),
-      description: `${payload.sized_converted_files.toLocaleString()} converted files with both sizes`,
+      description: `${payload.sized_converted_files.toLocaleString()} converted records with eligible sizes`,
       icon: HardDrive,
     },
     {
-      label: "Converted standings",
+      label: "Converted records",
       value: payload.converted_files.toLocaleString(),
-      description: "Current per-content verdicts",
+      description: "Latest file outcomes and imported records",
       icon: FileCheck2,
     },
     {
       label: "Processing time",
       value: formatDurationMsCompact(payload.total_time_ms),
-      description: "Analysis plus encoding",
+      description: "Eligible analysis and encoding time",
       icon: Clock,
     },
   ];
@@ -94,7 +94,7 @@ function StatStrip({ payload }: { payload: StatisticsPayload }) {
     metrics.push({
       label: "Input throughput",
       value: formatStatisticsInputThroughput(payload.gigabytes_per_hour),
-      description: "Input GiB per processing hour",
+      description: "Conversions with eligible sizes and encode time",
       icon: Gauge,
     });
   }
@@ -336,7 +336,7 @@ function CodecBreakdownCard({ payload }: { payload: StatisticsPayload }) {
         <CardTitle>
           <h2>Source codecs</h2>
         </CardTitle>
-        <CardDescription>Every codec reported for converted standings</CardDescription>
+        <CardDescription>Source codecs from converted records</CardDescription>
       </CardHeader>
       <CardContent className="flex flex-col gap-3">
         {rows.length === 0 ? (
@@ -440,13 +440,13 @@ function OutcomeDetailsCard({ payload }: { payload: StatisticsPayload }) {
           <h2>Outcomes and coverage</h2>
         </CardTitle>
         <CardDescription>
-          Current per-content standings and terminal run outcomes are separate populations
+          Latest file outcomes and imported records are counted separately from terminal runs
         </CardDescription>
       </CardHeader>
       <CardContent className="grid gap-6 lg:grid-cols-3">
-        <section aria-labelledby="statistics-standings-heading">
-          <h3 id="statistics-standings-heading" className="mb-2 font-medium">
-            Current standings
+        <section aria-labelledby="statistics-records-heading">
+          <h3 id="statistics-records-heading" className="mb-2 font-medium">
+            File and imported outcomes
           </h3>
           <dl className="grid gap-1 text-sm text-muted-foreground">
             <div className="flex justify-between gap-4">
@@ -456,7 +456,7 @@ function OutcomeDetailsCard({ payload }: { payload: StatisticsPayload }) {
               </dd>
             </div>
             <div className="flex justify-between gap-4">
-              <dt>Converted with both sizes</dt>
+              <dt>Converted with eligible sizes</dt>
               <dd className="text-foreground tabular-nums">
                 {payload.sized_converted_files.toLocaleString()}
               </dd>

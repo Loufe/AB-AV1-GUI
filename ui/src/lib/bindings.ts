@@ -1625,7 +1625,7 @@ export type SourceFacts = {
 
 /**
  *  The exhaustive Statistics answer. Conversion output-size reduction, VMAF,
- *  CRF, and time aggregates cover converted verdicts only; remux facts are
+ *  CRF, and time aggregates cover qualified converted facts only; remux facts are
  *  counted and summed separately and never blend into conversion aggregates.
  */
 export type StatisticsPayload = {
@@ -1650,7 +1650,10 @@ export type StatisticsPayload = {
 	remux_reduction_bytes: number,
 	/**  Analyzing plus encoding time across converted facts. */
 	total_time_ms: number,
-	/**  Input gigabytes processed per hour of conversion time. */
+	/**
+	 *  Input gigabytes per processing hour, from conversions with qualified
+	 *  sizes and a positive encode duration on the same fact.
+	 */
 	gigabytes_per_hour: number | null,
 	reduction_percent: ValueSpread | null,
 	quality: QualitySpread[],

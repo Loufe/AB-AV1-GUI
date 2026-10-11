@@ -21,19 +21,16 @@
 //! is what the UI shows, so one number is what this computes.
 //!
 //! Convert estimates use encoding time, analyze estimates use CRF-search
-//! time. Rate samples come from [`StatFact`]s. Parked imported records are
-//! deliberately excluded because they have no content identity; an adopted
-//! Converted verdict can contribute through the ordinary fact path. Imported
-//! Analyzed summaries remain display-only. Native analyzed-only runs also
-//! supply search samples despite producing no verdict and therefore no fact.
+//! time. History admits samples through the observation rate accessor;
+//! estimation owns grouping and weighting. Translated import summaries have
+//! no assessed native rates and never enter this historical ladder.
 
 use std::collections::BTreeMap;
 
 use serde::Serialize;
 
 use crate::{
-    AnalysisResult, DurableState, ItemOutcome, Operation, VideoCodec, VideoMeta,
-    collect_stat_facts, projection::phase_totals,
+    AnalysisResult, DurableState, Observation, Operation, VideoCodec, VideoMeta, observations,
 };
 
 /// A group answers only once it holds this many rate samples; sparser groups
@@ -197,36 +194,30 @@ pub struct EstimationModel {
 impl EstimationModel {
     #[must_use]
     pub fn from_state(state: &DurableState) -> Self {
+        let observations: Vec<_> = observations(state)
+            .into_iter()
+            .map(|observation| Observation::Native(Box::new(observation)))
+            .collect();
+        Self::from_observations(&observations)
+    }
+
+    #[must_use]
+    pub fn from_observations(observations: &[Observation]) -> Self {
         let mut model = Self::default();
-        for fact in collect_stat_facts(state) {
-            let bucket = ResolutionBucket::from_dimensions(fact.width, fact.height);
-            if let Some(rate) = rate(fact.encoding_ms, fact.duration_ms) {
-                model.convert.insert(&fact.codec, bucket, rate);
-            }
-            if let Some(rate) = rate(fact.analyzing_ms, fact.duration_ms) {
-                model.analyze.insert(&fact.codec, bucket, rate);
-            }
-        }
-        // Analyzed-only runs decide no verdict and so produce no fact, but
-        // their search time is a real observation. They cannot double-count
-        // fact sources: only Converted/Remuxed/NotWorthwhile runs back
-        // verdicts.
-        for run in state.conversion_runs.values() {
-            if !matches!(run.outcome, Some(ItemOutcome::Analyzed)) {
-                continue;
-            }
-            let Some(record) = run
-                .spec
-                .content_key()
-                .and_then(|content_key| state.records.get(content_key))
-            else {
-                continue;
-            };
-            let (analyzing_ms, _) = phase_totals(Some(run));
-            if let Some(rate) = rate(analyzing_ms, record.metadata.duration_ms) {
-                let metadata = &record.metadata;
-                let bucket = ResolutionBucket::from_dimensions(metadata.width, metadata.height);
-                model.analyze.insert(&metadata.codec, bucket, rate);
+        for observation in observations {
+            for (operation, rates) in [
+                (Operation::Analyze, &mut model.analyze),
+                (Operation::Convert, &mut model.convert),
+            ] {
+                if let Some(sample) = observation.rate_sample(operation) {
+                    let source = sample.source;
+                    let bucket = ResolutionBucket::from_dimensions(source.width, source.height);
+                    rates.insert(
+                        &source.codec,
+                        bucket,
+                        sample.elapsed.0 as f64 / source.duration_ms as f64,
+                    );
+                }
             }
         }
         model
@@ -267,15 +258,6 @@ impl EstimationModel {
     }
 }
 
-/// Phase time per second of video; `None` keeps unmeasured and zero-duration
-/// samples out of every group.
-fn rate(elapsed_ms: u64, duration_ms: u64) -> Option<f64> {
-    if elapsed_ms == 0 || duration_ms == 0 {
-        return None;
-    }
-    Some(elapsed_ms as f64 / duration_ms as f64)
-}
-
 fn scale(duration_ms: f64, rate: f64) -> u64 {
     (duration_ms * rate).round() as u64
 }
@@ -289,8 +271,8 @@ mod tests {
     use super::*;
     use crate::{
         AnalysisProfile, ClaimId, CompletionEvidence, ContentKey, ConversionRun, Crf, DecodeMode,
-        DurationMs, ExecutionSettings, FileRecord, JobAction, JobPhase, JobSpec, MediaContainer,
-        OutputTarget, PhaseSpan, QualityScore, QualityTarget, QueueItemId, RunId,
+        DurationMs, ExecutionSettings, FileRecord, ItemOutcome, JobAction, JobPhase, JobSpec,
+        MediaContainer, OutputTarget, PhaseSpan, QualityScore, QualityTarget, QueueItemId, RunId,
         SearchMeasurement, UnixMillis, Verdict, VerdictKind, VideoMeta,
     };
 
@@ -367,6 +349,7 @@ mod tests {
         encoding_ms: u64,
     ) {
         let content_key = ContentKey(format!("content-{run:04}"));
+        let frozen_source = crate::SourceFacts::from_media(content_key.clone(), &source);
         let mut record = FileRecord::new(source);
         record.verdict = Some(Verdict {
             kind: VerdictKind::Converted {
@@ -384,6 +367,8 @@ mod tests {
         });
         state.records.insert(content_key.clone(), record);
         let mut conversion = run_shell(run, &content_key, Operation::Convert);
+        conversion.spec.source = Some(frozen_source);
+        conversion.analysis = Some(analysis_with_prediction(60_000));
         conversion.outcome = Some(ItemOutcome::Converted(CompletionEvidence::LiveEncode {
             input_size: 1_000_000,
             output_size: 400_000,
@@ -395,10 +380,13 @@ mod tests {
 
     fn add_analyzed(state: &mut DurableState, run: u64, source: VideoMeta, analyzing_ms: u64) {
         let content_key = ContentKey(format!("content-{run:04}"));
+        let frozen_source = crate::SourceFacts::from_media(content_key.clone(), &source);
         state
             .records
             .insert(content_key.clone(), FileRecord::new(source));
         let mut analyzed = run_shell(run, &content_key, Operation::Analyze);
+        analyzed.spec.source = Some(frozen_source);
+        analyzed.analysis = Some(analysis_with_prediction(60_000));
         analyzed.outcome = Some(ItemOutcome::Analyzed);
         analyzed.phase_spans = spans(analyzing_ms, 0);
         state.conversion_runs.insert(RunId(run), analyzed);
@@ -411,6 +399,7 @@ mod tests {
         analyzing_ms: u64,
     ) {
         let content_key = ContentKey(format!("content-{run:04}"));
+        let frozen_source = crate::SourceFacts::from_media(content_key.clone(), &source);
         let mut record = FileRecord::new(source);
         record.verdict = Some(Verdict {
             kind: VerdictKind::NotWorthwhile {
@@ -423,6 +412,7 @@ mod tests {
         });
         state.records.insert(content_key.clone(), record);
         let mut declined = run_shell(run, &content_key, Operation::Convert);
+        declined.spec.source = Some(frozen_source);
         declined.outcome = Some(ItemOutcome::NotWorthwhile {
             attempts: Vec::new(),
         });
@@ -447,6 +437,14 @@ mod tests {
             },
             profile: AnalysisProfile::production(),
         }
+    }
+
+    fn assessed_model(state: &DurableState) -> EstimationModel {
+        let observations: Vec<_> = crate::test_support::assessed_observations(state)
+            .into_iter()
+            .map(|observation| Observation::Native(Box::new(observation)))
+            .collect();
+        EstimationModel::from_observations(&observations)
     }
 
     /// Five HEVC 1080p conversions of a 600s video at rates 1..=5.
@@ -499,7 +497,7 @@ mod tests {
     #[test]
     #[expect(clippy::expect_used, reason = "test assertion")]
     fn fresh_analysis_prediction_wins_for_convert() {
-        let model = EstimationModel::from_state(&hevc_ladder_state());
+        let model = assessed_model(&hevc_ladder_state());
         let analysis = analysis_with_prediction(123_456);
         let estimate = model
             .estimate(
@@ -517,7 +515,7 @@ mod tests {
     fn analysis_prediction_never_answers_analyze_estimates() {
         // The prediction covers encoding; analyze estimates fall through to
         // the ladder, which has no analyze samples here.
-        let model = EstimationModel::from_state(&hevc_ladder_state());
+        let model = assessed_model(&hevc_ladder_state());
         let analysis = analysis_with_prediction(123_456);
         assert_eq!(
             model.estimate(
@@ -532,7 +530,7 @@ mod tests {
     #[test]
     #[expect(clippy::expect_used, reason = "test assertion")]
     fn historical_estimate_scales_the_median_rate_by_duration() {
-        let model = EstimationModel::from_state(&hevc_ladder_state());
+        let model = assessed_model(&hevc_ladder_state());
         let estimate = model
             .estimate(
                 Operation::Convert,
@@ -552,7 +550,7 @@ mod tests {
     #[test]
     #[expect(clippy::expect_used, reason = "test assertion")]
     fn ladder_falls_back_by_bucket_then_codec() {
-        let model = EstimationModel::from_state(&hevc_ladder_state());
+        let model = assessed_model(&hevc_ladder_state());
         // Same codec, different bucket: the resolution group is empty, the
         // codec group answers.
         let by_codec = model
@@ -592,7 +590,7 @@ mod tests {
                 step * 600_000,
             );
         }
-        let model = EstimationModel::from_state(&state);
+        let model = assessed_model(&state);
         assert_eq!(
             model.estimate(
                 Operation::Convert,
@@ -616,7 +614,7 @@ mod tests {
                 step * 100_000,
             );
         }
-        let model = EstimationModel::from_state(&state);
+        let model = assessed_model(&state);
         // Ten samples in the most specific group, and the same ten reached
         // through the codec tier: neither earns a grade above estimated.
         for (width, height, tier) in [
@@ -637,12 +635,10 @@ mod tests {
 
     #[test]
     #[expect(clippy::expect_used, reason = "test assertion")]
-    fn analyze_rates_come_from_facts_and_analyzed_runs() {
+    fn analyze_rates_come_from_analyzed_and_converted_observations() {
         let mut state = DurableState::default();
-        // Two not-worthwhile verdicts, one converted fact with search time,
-        // and two analyzed-only runs: five analyze samples, zero convert
-        // samples short of a group... (the converted fact also adds one
-        // convert sample, still below the threshold).
+        // Not-worthwhile attempts yield no rate sample; the converted and
+        // two analyzed outcomes supply the three qualifying search samples.
         add_not_worthwhile(
             &mut state,
             1,
@@ -674,7 +670,7 @@ mod tests {
             meta(VideoCodec::Hevc, 1920, 1080, 600_000),
             3_000_000,
         );
-        let model = EstimationModel::from_state(&state);
+        let model = assessed_model(&state);
         let estimate = model
             .estimate(
                 Operation::Analyze,
@@ -682,8 +678,7 @@ mod tests {
                 None,
             )
             .expect("analysis history produces an estimate");
-        // Analyze rates 1, 2, 3, 4, 5 → median 3.0 × 600s.
-        assert_eq!(estimate.duration_ms, 1_800_000);
+        assert_eq!(estimate.duration_ms, 2_400_000);
         assert_eq!(
             estimate.basis,
             EstimateBasis::Historical(HistoricalTier::CodecResolution)
@@ -711,7 +706,7 @@ mod tests {
                 600_000,
             );
         }
-        let model = EstimationModel::from_state(&state);
+        let model = assessed_model(&state);
         assert_eq!(
             model.estimate(
                 Operation::Convert,
@@ -721,7 +716,7 @@ mod tests {
             None
         );
         // A zero-duration request cannot be scaled either.
-        let populated = EstimationModel::from_state(&hevc_ladder_state());
+        let populated = assessed_model(&hevc_ladder_state());
         assert_eq!(
             populated.estimate(
                 Operation::Convert,
@@ -730,6 +725,93 @@ mod tests {
             ),
             None
         );
+    }
+
+    #[test]
+    fn production_unassessed_history_never_supplies_a_rate() {
+        let state = hevc_ladder_state();
+        let model = EstimationModel::from_state(&state);
+        assert!(model.convert.all.is_empty());
+        assert!(model.analyze.all.is_empty());
+    }
+
+    #[test]
+    fn samples_keep_frozen_sources_and_all_qualified_runs_without_verdicts() {
+        let mut state = hevc_ladder_state();
+        for record in state.records.values_mut() {
+            record.verdict = None;
+            record.metadata = meta(VideoCodec::Av1, 0, 0, 0);
+        }
+        let mut observations = crate::test_support::assessed_observations(&state);
+        for observation in &mut observations {
+            if let Some(source) = &mut observation.source {
+                source.content_key = ContentKey("one-content-with-several-runs".to_owned());
+            }
+        }
+        let observations: Vec<_> = observations
+            .into_iter()
+            .map(|observation| Observation::Native(Box::new(observation)))
+            .collect();
+        let model = EstimationModel::from_observations(&observations);
+        assert_eq!(model.convert.all.len(), 5);
+        assert_eq!(
+            model.convert.by_codec.get(&VideoCodec::Hevc).map(Vec::len),
+            Some(5)
+        );
+        assert_eq!(model.convert.by_codec.get(&VideoCodec::Av1), None);
+        assert_eq!(
+            model
+                .estimate(
+                    Operation::Convert,
+                    &meta(VideoCodec::Hevc, 1920, 1080, 600_000),
+                    None
+                )
+                .map(|estimate| estimate.duration_ms),
+            Some(1_800_000)
+        );
+    }
+
+    #[test]
+    fn rejected_and_imported_observations_never_fill_a_historical_tier()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let imported = Observation::Translated(serde_json::from_str(include_str!(
+            "../tests/fixtures/observations/translated/valid/converted_with_sizes_and_quality.json"
+        ))?);
+        let state = hevc_ladder_state();
+        let matched = crate::test_support::assessed_observations(&state);
+        let Some(base) = matched.first() else {
+            panic!("ladder has observations");
+        };
+        let mut rejected = vec![imported];
+        for outcome in [
+            crate::ObservedOutcome::Failed {
+                kind: crate::FailureKind::EncodeRun,
+            },
+            crate::ObservedOutcome::Stopped,
+            crate::ObservedOutcome::Incomplete,
+        ] {
+            let mut observation = base.clone();
+            observation.outcome = outcome;
+            rejected.push(Observation::Native(Box::new(observation)));
+        }
+        for assessment in [
+            None,
+            Some(crate::SourceAssessment::IdentityDiffers),
+            Some(crate::SourceAssessment::PropertiesChanged),
+            Some(crate::SourceAssessment::Absent),
+            Some(crate::SourceAssessment::Unassessable),
+        ] {
+            let mut observation = base.clone();
+            if let crate::ObservedOutcome::Converted { search, encode } = &mut observation.outcome {
+                search.assessment = assessment;
+                encode.assessment = assessment;
+            }
+            rejected.push(Observation::Native(Box::new(observation)));
+        }
+        let model = EstimationModel::from_observations(&rejected);
+        assert!(model.analyze.all.is_empty());
+        assert!(model.convert.all.is_empty());
+        Ok(())
     }
 
     proptest! {
@@ -748,7 +830,7 @@ mod tests {
         #[test]
         #[expect(clippy::expect_used, reason = "test assertion")]
         fn estimates_scale_linearly_with_duration(duration_ms in 1_000u64..10_000_000) {
-            let model = EstimationModel::from_state(&hevc_ladder_state());
+            let model = assessed_model(&hevc_ladder_state());
             let estimate = model
                 .estimate(
                     Operation::Convert,

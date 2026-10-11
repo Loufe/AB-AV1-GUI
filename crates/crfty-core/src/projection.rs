@@ -1,5 +1,6 @@
-//! Pure read-model projections over durable state: the flattened per-content
-//! facts, the Statistics aggregates, and the History rows derived from them.
+//! Pure read-model projections over durable state: Statistics consumes
+//! History's qualified observation facts; History rows retain their
+//! per-content projection.
 //!
 //! Everything here is a context-free function of [`DurableState`] — no clock,
 //! no filesystem, no caching. The reducer publishes [`StatisticsPayload`] as
@@ -33,115 +34,16 @@ const REDUCTION_BIN_WIDTH_PERCENT: f64 = 10.0;
 const BYTES_PER_GIB: f64 = 1_073_741_824.0;
 const MILLIS_PER_HOUR: f64 = 3_600_000.0;
 
-/// What the current verdict says happened to this content.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) enum StatFactKind {
-    Converted,
-    Remuxed,
-    NotWorthwhile {
-        metric: QualityMetric,
-        requested: QualityTarget,
-        floor: QualityTarget,
-    },
-}
-
-/// One flattened fact per content with a standing verdict: the joined sizes,
-/// measured times, and media facts that Statistics and estimation consume.
-/// Adopted verdicts have no backing run; their summary comes from the
-/// verdict-carried fields the fold absorbed at adoption time.
-#[derive(Debug, Clone, PartialEq)]
-pub(crate) struct StatFact {
-    pub content_key: ContentKey,
-    pub kind: StatFactKind,
-    pub source_run: Option<RunId>,
-    /// When the deciding run finished; falls back to the verdict decision
-    /// time when the run itself is no longer present.
-    pub finished_at: UnixMillis,
-    pub codec: VideoCodec,
-    pub width: u32,
-    pub height: u32,
-    pub duration_ms: u64,
-    pub input_size_bytes: Option<u64>,
-    pub output_size_bytes: Option<u64>,
-    pub analyzing_ms: u64,
-    pub encoding_ms: u64,
-    pub quality: Option<MetricScore>,
-    pub crf: Option<Crf>,
-}
-
-impl StatFact {
-    /// Signed output-size reduction in bytes when both sizes are known: source
-    /// logical size minus produced-file logical size. Negative when the output
-    /// grew; `None` never contributes to reduction aggregates.
-    #[must_use]
-    pub(crate) fn size_reduction_bytes(&self) -> Option<i128> {
-        let input = self.input_size_bytes?;
-        let output = self.output_size_bytes?;
-        Some(i128::from(input) - i128::from(output))
+/// The latest decisive observation per content, with aggregate eligibility
+/// already decided by History. Later failures never erase a decisive fact.
+fn collect_stat_facts(observations: &[crate::NativeObservation]) -> Vec<crate::StatisticsFact<'_>> {
+    let mut facts = BTreeMap::new();
+    for observation in observations {
+        if let Some(fact) = observation.statistics_fact() {
+            facts.insert(&fact.source.content_key, fact);
+        }
     }
-}
-
-/// Flatten every content with a standing verdict into one [`StatFact`],
-/// joining sizes in evidence → settled-transaction → metadata order.
-#[must_use]
-pub(crate) fn collect_stat_facts(state: &DurableState) -> Vec<StatFact> {
-    let mut facts = Vec::new();
-    for (content_key, record) in &state.records {
-        let Some(verdict) = &record.verdict else {
-            continue;
-        };
-        let run = verdict
-            .source_run
-            .and_then(|run_id| state.conversion_runs.get(&run_id));
-        let (input_size_bytes, output_size_bytes) = joined_sizes(verdict, run, state, record);
-        let (analyzing_ms, encoding_ms) = phase_totals(run);
-        let analysis = run.and_then(|run| run.analysis.as_ref());
-        let measurement = analysis.map(|analysis| &analysis.measurement);
-        let (carried_encoding, carried_crf, carried_quality) = carried_summary(&verdict.kind);
-        let kind = match &verdict.kind {
-            VerdictKind::Converted { .. } => StatFactKind::Converted,
-            VerdictKind::Remuxed { .. } => StatFactKind::Remuxed,
-            VerdictKind::NotWorthwhile {
-                metric,
-                requested,
-                floor,
-            } => StatFactKind::NotWorthwhile {
-                metric: *metric,
-                requested: *requested,
-                floor: *floor,
-            },
-        };
-        let is_converted = kind == StatFactKind::Converted;
-        facts.push(StatFact {
-            content_key: content_key.clone(),
-            kind,
-            source_run: verdict.source_run,
-            finished_at: run
-                .and_then(|run| run.finished_at)
-                .unwrap_or(verdict.decided_at),
-            codec: record.metadata.codec.clone(),
-            width: record.metadata.width,
-            height: record.metadata.height,
-            duration_ms: record.metadata.duration_ms,
-            input_size_bytes,
-            output_size_bytes,
-            analyzing_ms,
-            encoding_ms: if run.is_none() {
-                carried_encoding.map_or(encoding_ms, |time| time.0)
-            } else {
-                encoding_ms
-            },
-            quality: analysis
-                .filter(|_| is_converted)
-                .map(analysis_quality)
-                .or(carried_quality),
-            crf: measurement
-                .filter(|_| is_converted)
-                .map(|measurement| measurement.crf)
-                .or(carried_crf),
-        });
-    }
-    facts
+    facts.into_values().collect()
 }
 
 /// The encode time, CRF, and quality a converted verdict carries for
@@ -291,22 +193,8 @@ pub struct CumulativeReductionPoint {
     pub cumulative_reduction_bytes: i64,
 }
 
-/// Terminal run outcomes counted across every conversion run, independent of
-/// the per-content current verdicts.
-#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, specta::Type)]
-pub struct RunTotals {
-    pub analyzed: u32,
-    pub converted: u32,
-    pub remuxed: u32,
-    pub not_worthwhile: u32,
-    pub stopped: u32,
-    pub incomplete: u32,
-    pub skipped: u32,
-    pub failed: u32,
-}
-
 /// The exhaustive Statistics answer. Conversion output-size reduction, VMAF,
-/// CRF, and time aggregates cover converted verdicts only; remux facts are
+/// CRF, and time aggregates cover qualified converted facts only; remux facts are
 /// counted and summed separately and never blend into conversion aggregates.
 #[derive(Debug, Clone, PartialEq, Serialize, specta::Type)]
 pub struct StatisticsPayload {
@@ -332,7 +220,8 @@ pub struct StatisticsPayload {
     /// Analyzing plus encoding time across converted facts.
     #[specta(type = crate::JsNumber)]
     pub total_time_ms: u64,
-    /// Input gigabytes processed per hour of conversion time.
+    /// Input gigabytes per processing hour, from conversions with qualified
+    /// sizes and a positive encode duration on the same fact.
     pub gigabytes_per_hour: Option<f64>,
     pub reduction_percent: Option<ValueSpread>,
     pub quality: Vec<QualitySpread>,
@@ -351,51 +240,40 @@ pub struct StatisticsPayload {
     pub first_epoch_day: Option<i64>,
     #[specta(type = Option<crate::JsNumber>)]
     pub last_epoch_day: Option<i64>,
-    pub runs: RunTotals,
+    pub runs: crate::RunTotals,
 }
 
 /// Compute the full Statistics answer for the requester's timezone offset.
 #[must_use]
 pub(crate) fn statistics(state: &DurableState, utc_offset_minutes: i32) -> StatisticsPayload {
-    let facts = collect_stat_facts(state);
-    let mut accumulator = StatisticsAccumulator::new(utc_offset_minutes);
-    for fact in &facts {
-        let imported = state
-            .records
-            .get(&fact.content_key)
-            .and_then(|record| record.imported.as_ref());
-        if fact.source_run.is_none()
-            && let Some(imported) = imported
-            && matches!(
-                imported.record.status,
-                ParkedStatus::Converted | ParkedStatus::NotWorthwhile
-            )
-        {
-            accumulator.add_imported(&imported.record);
-            continue;
-        }
-        accumulator.add_native(fact);
-    }
-    for imported in state.parked.values() {
-        accumulator.add_imported(imported);
-    }
-    let mut runs = RunTotals::default();
-    for run in state.conversion_runs.values() {
-        match &run.outcome {
-            Some(ItemOutcome::Analyzed) => runs.analyzed = runs.analyzed.saturating_add(1),
-            Some(ItemOutcome::Converted(_)) => runs.converted = runs.converted.saturating_add(1),
-            Some(ItemOutcome::Remuxed(_)) => runs.remuxed = runs.remuxed.saturating_add(1),
-            Some(ItemOutcome::NotWorthwhile { .. }) => {
-                runs.not_worthwhile = runs.not_worthwhile.saturating_add(1);
-            }
-            Some(ItemOutcome::Stopped) => runs.stopped = runs.stopped.saturating_add(1),
-            Some(ItemOutcome::Incomplete) => runs.incomplete = runs.incomplete.saturating_add(1),
-            Some(ItemOutcome::Skipped { .. }) => runs.skipped = runs.skipped.saturating_add(1),
-            Some(ItemOutcome::Failed(_)) => runs.failed = runs.failed.saturating_add(1),
-            None => {}
-        }
-    }
+    let observations = crate::observations(state);
+    let imports = state
+        .records
+        .values()
+        .filter_map(|record| record.imported.as_ref().map(|imported| &imported.record))
+        .chain(state.parked.values())
+        .filter_map(ImportedHistoryRecord::imported_fact);
+    statistics_from_observations(
+        &observations,
+        imports,
+        crate::observation::run_totals(state),
+        utc_offset_minutes,
+    )
+}
 
+fn statistics_from_observations(
+    observations: &[crate::NativeObservation],
+    imports: impl IntoIterator<Item = crate::ImportedFact>,
+    runs: crate::RunTotals,
+    utc_offset_minutes: i32,
+) -> StatisticsPayload {
+    let mut accumulator = StatisticsAccumulator::new(utc_offset_minutes);
+    for fact in collect_stat_facts(observations) {
+        accumulator.add_native(&fact);
+    }
+    for imported in imports {
+        accumulator.add_imported(&imported);
+    }
     accumulator.finish(runs)
 }
 
@@ -409,6 +287,8 @@ struct StatisticsAccumulator {
     total_output: u128,
     remux_reduction: i128,
     total_time_ms: u64,
+    throughput_input: u128,
+    throughput_time_ms: u64,
     reductions: Vec<f64>,
     quality_values: BTreeMap<QualityMetric, Vec<f64>>,
     crf_values: Vec<f64>,
@@ -421,11 +301,12 @@ struct StatisticsAccumulator {
 }
 
 struct ConvertedStatisticsInput<'a> {
-    finished_at: UnixMillis,
+    finished_at: Option<UnixMillis>,
     codec: Option<&'a VideoCodec>,
     input_size_bytes: Option<u64>,
     output_size_bytes: Option<u64>,
-    time_ms: u64,
+    analyzing_ms: u64,
+    encoding_ms: Option<u64>,
     quality: Option<MetricScore>,
     crf: Option<Crf>,
 }
@@ -442,6 +323,8 @@ impl StatisticsAccumulator {
             total_output: 0,
             remux_reduction: 0,
             total_time_ms: 0,
+            throughput_input: 0,
+            throughput_time_ms: 0,
             reductions: Vec::new(),
             quality_values: BTreeMap::new(),
             crf_values: Vec::new(),
@@ -454,44 +337,54 @@ impl StatisticsAccumulator {
         }
     }
 
-    fn add_native(&mut self, fact: &StatFact) {
+    fn add_native(&mut self, fact: &crate::StatisticsFact<'_>) {
         match fact.kind {
-            StatFactKind::Converted => self.add_converted(ConvertedStatisticsInput {
+            crate::DecisiveKind::Converted => self.add_converted(ConvertedStatisticsInput {
                 finished_at: fact.finished_at,
-                codec: Some(&fact.codec),
-                input_size_bytes: fact.input_size_bytes,
-                output_size_bytes: fact.output_size_bytes,
-                time_ms: fact.analyzing_ms.saturating_add(fact.encoding_ms),
+                codec: Some(&fact.source.codec),
+                input_size_bytes: fact.sizes.map(|sizes| sizes.input),
+                output_size_bytes: fact.sizes.map(|sizes| sizes.output),
+                analyzing_ms: fact.analyzing.map_or(0, |duration| duration.0),
+                encoding_ms: fact.encoding.map(|duration| duration.0),
                 quality: fact.quality,
                 crf: fact.crf,
             }),
-            StatFactKind::Remuxed => {
+            crate::DecisiveKind::Remuxed => {
                 self.remuxed_files = self.remuxed_files.saturating_add(1);
-                if let Some(reduction) = fact.size_reduction_bytes() {
+                if let Some(sizes) = fact.sizes {
+                    let reduction = i128::from(sizes.input) - i128::from(sizes.output);
                     self.remux_reduction = self.remux_reduction.saturating_add(reduction);
                 }
             }
-            StatFactKind::NotWorthwhile { .. } => {
+            crate::DecisiveKind::NotWorthwhile { .. } => {
                 self.not_worthwhile_files = self.not_worthwhile_files.saturating_add(1);
             }
         }
     }
 
-    fn add_imported(&mut self, imported: &ImportedHistoryRecord) {
-        match imported.status {
-            ParkedStatus::Converted => self.add_converted(ConvertedStatisticsInput {
-                finished_at: imported.decided_at,
-                codec: imported.video_codec.as_ref(),
-                input_size_bytes: imported.size,
-                output_size_bytes: imported.output_size,
-                time_ms: imported.encoding_time.map_or(0, |duration| duration.0),
-                quality: imported_quality(imported),
-                crf: imported.crf,
+    fn add_imported(&mut self, imported: &crate::ImportedFact) {
+        match &imported.kind {
+            crate::ImportedKind::Converted {
+                quality,
+                sizes,
+                encode_duration,
+            } => self.add_converted(ConvertedStatisticsInput {
+                finished_at: imported.updated_at,
+                codec: imported.source.codec.as_ref(),
+                input_size_bytes: sizes.map(|sizes| sizes.input),
+                output_size_bytes: sizes.map(|sizes| sizes.output),
+                analyzing_ms: 0,
+                encoding_ms: encode_duration.map(|duration| duration.0),
+                quality: quality.score.map(|score| MetricScore {
+                    metric: imported.metric,
+                    score,
+                }),
+                crf: quality.crf,
             }),
-            ParkedStatus::NotWorthwhile => {
+            crate::ImportedKind::NotWorthwhile { .. } => {
                 self.not_worthwhile_files = self.not_worthwhile_files.saturating_add(1);
             }
-            ParkedStatus::Scanned | ParkedStatus::Analyzed => {}
+            crate::ImportedKind::Analyzed { .. } => {}
         }
     }
 
@@ -501,11 +394,13 @@ impl StatisticsAccumulator {
             codec,
             input_size_bytes,
             output_size_bytes,
-            time_ms,
+            analyzing_ms,
+            encoding_ms,
             quality,
             crf,
         } = converted;
         self.converted_files = self.converted_files.saturating_add(1);
+        let time_ms = analyzing_ms.saturating_add(encoding_ms.unwrap_or(0));
         self.total_time_ms = self.total_time_ms.saturating_add(time_ms);
         if let Some(codec) = codec {
             let count = self.codecs.entry(codec.clone()).or_default();
@@ -522,9 +417,11 @@ impl StatisticsAccumulator {
                 .push(f64::from(crf.0) / f64::from(crate::CRF_FIXED_SCALE));
         }
 
-        let day = local_epoch_day(finished_at, self.utc_offset_minutes);
-        self.first_epoch_day = Some(self.first_epoch_day.map_or(day, |first| first.min(day)));
-        self.last_epoch_day = Some(self.last_epoch_day.map_or(day, |last| last.max(day)));
+        let day = finished_at.map(|at| local_epoch_day(at, self.utc_offset_minutes));
+        if let Some(day) = day {
+            self.first_epoch_day = Some(self.first_epoch_day.map_or(day, |first| first.min(day)));
+            self.last_epoch_day = Some(self.last_epoch_day.map_or(day, |last| last.max(day)));
+        }
 
         let (Some(input), Some(output)) = (input_size_bytes, output_size_bytes) else {
             return;
@@ -532,9 +429,17 @@ impl StatisticsAccumulator {
         self.sized_converted_files = self.sized_converted_files.saturating_add(1);
         self.total_input = self.total_input.saturating_add(u128::from(input));
         self.total_output = self.total_output.saturating_add(u128::from(output));
+        // A throughput ratio requires bytes and a qualified encode time
+        // from the same conversion, rather than unrelated aggregate totals.
+        if encoding_ms.is_some_and(|duration| duration > 0) {
+            self.throughput_input = self.throughput_input.saturating_add(u128::from(input));
+            self.throughput_time_ms = self.throughput_time_ms.saturating_add(time_ms);
+        }
         let reduction = i128::from(input) - i128::from(output);
-        let entry = self.daily_reduction.entry(day).or_default();
-        *entry = entry.saturating_add(reduction);
+        if let Some(day) = day {
+            let entry = self.daily_reduction.entry(day).or_default();
+            *entry = entry.saturating_add(reduction);
+        }
 
         if input == 0 {
             return;
@@ -552,7 +457,7 @@ impl StatisticsAccumulator {
         }
     }
 
-    fn finish(self, runs: RunTotals) -> StatisticsPayload {
+    fn finish(self, runs: crate::RunTotals) -> StatisticsPayload {
         let total_reduction = i128::try_from(self.total_input).unwrap_or(i128::MAX)
             - i128::try_from(self.total_output).unwrap_or(i128::MAX);
         let mut running = 0i128;
@@ -567,9 +472,10 @@ impl StatisticsAccumulator {
                 }
             })
             .collect();
-        let gigabytes_per_hour = if self.total_time_ms > 0 && self.total_input > 0 {
-            let gib = u64::try_from(self.total_input).unwrap_or(u64::MAX) as f64 / BYTES_PER_GIB;
-            let hours = self.total_time_ms as f64 / MILLIS_PER_HOUR;
+        let gigabytes_per_hour = if self.throughput_time_ms > 0 && self.throughput_input > 0 {
+            let gib =
+                u64::try_from(self.throughput_input).unwrap_or(u64::MAX) as f64 / BYTES_PER_GIB;
+            let hours = self.throughput_time_ms as f64 / MILLIS_PER_HOUR;
             Some(gib / hours)
         } else {
             None
@@ -952,15 +858,33 @@ mod tests {
     use proptest::prelude::*;
 
     use super::*;
-    use crate::test_support::{analysis, finished_run, identity, key, live, meta};
+    use crate::test_support::{
+        analysis, assessed_observations, finished_run, identity, key, live, meta,
+    };
     use crate::{
         ArtifactIdentity, CompletionEvidence, Crf, DurableDelta, DurableState, DurationMs,
         FailureFacts, FileRecord, FileTimeNs, ImportPath, ImportedHistoryRecord, ItemOutcome,
         OutputState, OutputTransaction, ParkedStatus, QualityScore, QualityTarget, Replacement,
-        RunId, UnixMillis, Verdict, VerdictKind, VideoCodec,
+        RunId, RunTotals, UnixMillis, Verdict, VerdictKind, VideoCodec,
     };
 
     const DAY_MS: u64 = 86_400_000;
+
+    fn assessed_statistics(state: &DurableState, utc_offset_minutes: i32) -> StatisticsPayload {
+        let observations = assessed_observations(state);
+        let imports = state
+            .records
+            .values()
+            .filter_map(|record| record.imported.as_ref().map(|imported| &imported.record))
+            .chain(state.parked.values())
+            .filter_map(ImportedHistoryRecord::imported_fact);
+        statistics_from_observations(
+            &observations,
+            imports,
+            crate::observation::run_totals(state),
+            utc_offset_minutes,
+        )
+    }
 
     fn converted(evidence: CompletionEvidence) -> ItemOutcome {
         ItemOutcome::Converted(evidence)
@@ -1043,7 +967,7 @@ mod tests {
     #[test]
     fn empty_state_projects_to_zeroes_and_no_rows() {
         let state = DurableState::default();
-        let payload = statistics(&state, 0);
+        let payload = assessed_statistics(&state, 0);
         assert_eq!(payload.converted_files, 0);
         assert_eq!(payload.total_reduction_bytes, 0);
         assert_eq!(payload.reduction_percent, None);
@@ -1053,6 +977,163 @@ mod tests {
         assert!(payload.cumulative_reduction.is_empty());
         assert_eq!(payload.first_epoch_day, None);
         assert!(history_rows(&state).is_empty());
+    }
+
+    #[test]
+    fn production_unassessed_observations_count_without_training_aggregates() {
+        let state = converted_state(&[(10_000, 4_000)], DAY_MS * 20_000);
+        let payload = statistics(&state, 0);
+        assert_eq!(payload.converted_files, 1);
+        assert_eq!(payload.runs.converted, 1);
+        assert_eq!(payload.sized_converted_files, 0);
+        assert_eq!(payload.total_input_bytes, 0);
+        assert_eq!(payload.total_output_bytes, 0);
+        assert_eq!(payload.total_time_ms, 0);
+        assert!(payload.quality.is_empty());
+        assert_eq!(payload.crf, None);
+        assert!(payload.cumulative_reduction.is_empty());
+        assert_eq!(
+            history_rows(&state)
+                .first()
+                .and_then(|row| row.output_size_bytes),
+            Some(4_000)
+        );
+    }
+
+    #[test]
+    fn file_counts_use_the_latest_decisive_observation_and_keep_imports_separate() {
+        let mut state = converted_state(&[(10_000, 4_000)], DAY_MS * 20_000);
+        let content_key = key("content-0001");
+        for (run_id, outcome) in [
+            (2, ItemOutcome::Converted(live(10_000, 3_000))),
+            (
+                3,
+                ItemOutcome::Failed(FailureFacts::new(FailureKind::EncodeRun, "failed")),
+            ),
+            (4, ItemOutcome::Stopped),
+            (5, ItemOutcome::Incomplete),
+        ] {
+            state.conversion_runs.insert(
+                RunId(run_id),
+                finished_run(run_id, &content_key, outcome, UnixMillis(DAY_MS * 19_000)),
+            );
+        }
+        if let Some(record) = state.records.get_mut(&content_key) {
+            record.verdict = None;
+            record.metadata = meta(VideoCodec::Av1, 1);
+            record.imported = Some(crate::ImportedProvenance {
+                import_path: ImportPath("/fixtures/imported.mkv".to_owned()),
+                record: imported(ParkedStatus::Converted, Some(VideoCodec::H264)),
+            });
+        }
+        let payload = assessed_statistics(&state, 0);
+        assert_eq!(payload.converted_files, 2);
+        assert_eq!(payload.total_reduction_bytes, 13_000);
+        assert_eq!(
+            payload.codecs,
+            vec![
+                CodecCount {
+                    codec: VideoCodec::H264,
+                    count: 1
+                },
+                CodecCount {
+                    codec: VideoCodec::Hevc,
+                    count: 1
+                }
+            ]
+        );
+        assert_eq!(payload.runs.converted, 2);
+        assert_eq!(payload.runs.failed, 1);
+        assert_eq!(payload.runs.stopped, 1);
+        assert_eq!(payload.runs.incomplete, 1);
+    }
+
+    #[test]
+    fn missing_finish_instant_keeps_measured_totals_without_inventing_a_day() {
+        let state = converted_state(&[(10_000, 4_000)], DAY_MS * 20_000);
+        let mut observations = assessed_observations(&state);
+        for observation in &mut observations {
+            observation.finished_at = None;
+        }
+        let payload = statistics_from_observations(&observations, [], RunTotals::default(), 0);
+        assert_eq!(payload.total_reduction_bytes, 6_000);
+        assert_eq!(payload.total_time_ms, 300_000);
+        assert_eq!(payload.first_epoch_day, None);
+        assert_eq!(payload.last_epoch_day, None);
+        assert!(payload.cumulative_reduction.is_empty());
+    }
+
+    #[test]
+    fn throughput_pairs_sizes_and_time_from_the_same_qualified_conversion() {
+        const GIB: u64 = 1_073_741_824;
+        const HOUR_MS: u64 = 3_600_000;
+        let state = converted_state(
+            &[(GIB, GIB / 2), (GIB, GIB / 2), (GIB, GIB / 2)],
+            DAY_MS * 20_000,
+        );
+        let mut observations = assessed_observations(&state);
+        for observation in &mut observations {
+            if let crate::ObservedOutcome::Converted { search, encode } = &mut observation.outcome {
+                search.duration = Some(DurationMs(HOUR_MS));
+                encode.duration = Some(DurationMs(HOUR_MS));
+                if observation.run_id == RunId(2) {
+                    encode.assessment = Some(crate::SourceAssessment::PropertiesChanged);
+                }
+                if observation.run_id == RunId(3) {
+                    search.duration = None;
+                    encode.duration = None;
+                    encode.measurement = crate::EncodeMeasurement::Recovered {
+                        sizes: Some(crate::MeasuredSizes {
+                            input: GIB,
+                            output: GIB / 2,
+                        }),
+                    };
+                }
+            }
+        }
+        let payload = statistics_from_observations(&observations, [], RunTotals::default(), 0);
+        assert_eq!(payload.converted_files, 3);
+        assert_eq!(payload.sized_converted_files, 2);
+        assert_eq!(payload.total_input_bytes, 2 * GIB);
+        assert_eq!(payload.total_time_ms, 3 * HOUR_MS);
+        assert_eq!(payload.gigabytes_per_hour, Some(0.5));
+    }
+
+    #[test]
+    fn throughput_excludes_sparse_imports_without_discarding_their_known_totals() {
+        let mut sized = imported(ParkedStatus::Converted, None);
+        sized.size = Some(1_073_741_824);
+        sized.output_size = Some(500_000_000);
+        sized.encoding_time = Some(DurationMs(3_600_000));
+        let mut no_time = sized.clone();
+        no_time.encoding_time = None;
+        let mut no_sizes = sized.clone();
+        no_sizes.output_size = None;
+        let imports = [sized, no_time, no_sizes]
+            .into_iter()
+            .filter_map(|record| record.imported_fact());
+        let payload = statistics_from_observations(&[], imports, RunTotals::default(), 0);
+        assert_eq!(payload.converted_files, 3);
+        assert_eq!(payload.total_input_bytes, 2 * 1_073_741_824);
+        assert_eq!(payload.total_time_ms, 7_200_000);
+        assert_eq!(payload.gigabytes_per_hour, Some(1.0));
+    }
+
+    #[test]
+    fn imported_facts_keep_sparse_measurements_without_entering_native_accessors() {
+        let mut summary = imported(ParkedStatus::Converted, None);
+        summary.output_size = None;
+        let Some(fact) = summary.imported_fact() else {
+            panic!("converted import is reportable");
+        };
+        let payload = statistics_from_observations(&[], [fact], RunTotals::default(), 0);
+        assert_eq!(payload.converted_files, 1);
+        assert_eq!(payload.sized_converted_files, 0);
+        assert_eq!(payload.total_time_ms, 120_000);
+        assert!(payload.codecs.is_empty());
+        assert_eq!(payload.crf.map(|spread| spread.average), Some(30.0));
+        summary.status = ParkedStatus::Scanned;
+        assert!(summary.imported_fact().is_none());
     }
 
     #[test]
@@ -1076,7 +1157,7 @@ mod tests {
             imported(ParkedStatus::Scanned, None),
         );
 
-        let payload = statistics(&state, 0);
+        let payload = assessed_statistics(&state, 0);
         assert_eq!(payload.converted_files, 1);
         assert_eq!(payload.sized_converted_files, 1);
         assert_eq!(payload.not_worthwhile_files, 1);
@@ -1110,7 +1191,7 @@ mod tests {
             .parked
             .insert(ImportPath("/fixtures/sparse.mkv".to_owned()), recorded);
 
-        let payload = statistics(&state, 0);
+        let payload = assessed_statistics(&state, 0);
         assert_eq!(payload.converted_files, 3);
         assert_eq!(
             payload.quality,
@@ -1135,7 +1216,7 @@ mod tests {
         state
             .parked
             .insert(import_path.clone(), converted_import.clone());
-        let before = statistics(&state, 0);
+        let before = assessed_statistics(&state, 0);
 
         let content_key = key("movie-content");
         state.records.insert(
@@ -1152,7 +1233,7 @@ mod tests {
             },
         );
 
-        assert_eq!(statistics(&state, 0), before);
+        assert_eq!(assessed_statistics(&state, 0), before);
         assert_eq!(state.adopted_imports.len(), 1);
         assert!(state.parked.is_empty());
         assert_eq!(
@@ -1193,7 +1274,7 @@ mod tests {
         let mut state = DurableState::default();
         state.parked.insert(path_a.clone(), older.clone());
         state.parked.insert(path_b.clone(), newer.clone());
-        assert_eq!(statistics(&state, 0).converted_files, 2);
+        assert_eq!(assessed_statistics(&state, 0).converted_files, 2);
 
         let content_key = key("shared-content");
         state.records.insert(
@@ -1212,7 +1293,7 @@ mod tests {
             );
         }
 
-        let payload = statistics(&state, 0);
+        let payload = assessed_statistics(&state, 0);
         assert_eq!(payload.converted_files, 1);
         assert_eq!(payload.runs, RunTotals::default());
         assert_eq!(state.adopted_imports.len(), 2);
@@ -1242,7 +1323,7 @@ mod tests {
             );
         }
         assert_eq!(
-            statistics(&state, 0)
+            assessed_statistics(&state, 0)
                 .codecs
                 .into_iter()
                 .map(|entry| entry.codec)
@@ -1255,7 +1336,7 @@ mod tests {
     #[expect(clippy::expect_used, reason = "test assertion")]
     fn single_conversion_aggregates_from_live_evidence() {
         let state = converted_state(&[(10_000_000_000, 4_000_000_000)], DAY_MS * 20_000);
-        let payload = statistics(&state, 0);
+        let payload = assessed_statistics(&state, 0);
         assert_eq!(payload.converted_files, 1);
         assert_eq!(payload.sized_converted_files, 1);
         assert_eq!(payload.total_input_bytes, 10_000_000_000);
@@ -1310,16 +1391,22 @@ mod tests {
                 },
             },
         );
-        let facts = collect_stat_facts(&state);
+        let observations = assessed_observations(&state);
+        let facts = collect_stat_facts(&observations);
         assert_eq!(facts.len(), 1);
         let fact = facts.first().expect("one statistics fact");
-        assert_eq!(fact.input_size_bytes, Some(8_000));
-        assert_eq!(fact.output_size_bytes, Some(3_000));
+        assert_eq!(
+            fact.sizes,
+            Some(crate::MeasuredSizes {
+                input: 8_000,
+                output: 3_000
+            })
+        );
     }
 
     #[test]
     #[expect(clippy::expect_used, reason = "test assertion")]
-    fn verdict_without_run_or_transaction_keeps_input_from_metadata() {
+    fn verdict_without_a_reportable_observation_is_history_only() {
         let mut state = DurableState::default();
         let content_key = key("adopted");
         let mut record = FileRecord::new(meta(VideoCodec::H264, 5_000));
@@ -1339,16 +1426,12 @@ mod tests {
         });
         state.records.insert(content_key.clone(), record);
 
-        let facts = collect_stat_facts(&state);
-        assert_eq!(facts.len(), 1);
-        let fact = facts.first().expect("one statistics fact");
-        assert_eq!(fact.input_size_bytes, Some(5_000));
-        assert_eq!(fact.output_size_bytes, None);
-        assert_eq!(fact.finished_at, UnixMillis(DAY_MS * 19_000));
+        let observations = assessed_observations(&state);
+        let facts = collect_stat_facts(&observations);
+        assert!(facts.is_empty());
 
-        let payload = statistics(&state, 0);
-        // Counted as converted, but never enters reduction totals or bins.
-        assert_eq!(payload.converted_files, 1);
+        let payload = assessed_statistics(&state, 0);
+        assert_eq!(payload.converted_files, 0);
         assert_eq!(payload.sized_converted_files, 0);
         assert_eq!(payload.total_reduction_bytes, 0);
         assert_eq!(payload.reduction_bins.iter().sum::<u32>(), 0);
@@ -1389,7 +1472,7 @@ mod tests {
         run.analysis = None;
         state.conversion_runs.insert(RunId(50), run);
 
-        let payload = statistics(&state, 0);
+        let payload = assessed_statistics(&state, 0);
         assert_eq!(payload.converted_files, 1);
         assert_eq!(payload.remuxed_files, 1);
         assert_eq!(payload.total_reduction_bytes, 5_000);
@@ -1416,7 +1499,7 @@ mod tests {
             &[(10_000, 4_000), (5_000, 8_000)], // second one grew by 3000
             DAY_MS * 20_000,
         );
-        let payload = statistics(&state, 0);
+        let payload = assessed_statistics(&state, 0);
         assert_eq!(payload.grew_count, 1);
         assert_eq!(payload.reduction_bins.iter().sum::<u32>(), 1);
         assert_eq!(payload.total_reduction_bytes, 3_000);
@@ -1448,11 +1531,14 @@ mod tests {
     fn reduction_bin_boundaries_belong_to_the_upper_bin() {
         // Exactly 30% reduction: bin index 3, matching Python's floor rule.
         let state = converted_state(&[(10_000, 7_000)], DAY_MS * 20_000);
-        let payload = statistics(&state, 0);
+        let payload = assessed_statistics(&state, 0);
         assert_eq!(payload.reduction_bins.get(3), Some(&1));
         // A 100% reduction clamps into the last bin instead of overflowing.
         let full = converted_state(&[(10_000, 0)], DAY_MS * 20_000);
-        assert_eq!(statistics(&full, 0).reduction_bins.get(9), Some(&1));
+        assert_eq!(
+            assessed_statistics(&full, 0).reduction_bins.get(9),
+            Some(&1)
+        );
     }
 
     #[test]
@@ -1492,7 +1578,7 @@ mod tests {
             ),
         );
 
-        let payload = statistics(&state, 0);
+        let payload = assessed_statistics(&state, 0);
         assert_eq!(payload.not_worthwhile_files, 1);
         assert_eq!(payload.converted_files, 0);
         let rows = history_rows(&state);
@@ -1561,7 +1647,7 @@ mod tests {
             }
         );
         assert_eq!(failed_row.source_run, Some(RunId(3)));
-        assert_eq!(statistics(&state, 0).runs.failed, 2);
+        assert_eq!(assessed_statistics(&state, 0).runs.failed, 2);
     }
 
     #[test]
@@ -1594,9 +1680,8 @@ mod tests {
             })
         );
         assert_eq!(row.source_run, Some(RunId(4)));
-        // Analyses alone never create a StatFact.
-        assert!(collect_stat_facts(&state).is_empty());
-        assert_eq!(statistics(&state, 0).runs.analyzed, 1);
+        assert!(collect_stat_facts(&crate::observations(&state)).is_empty());
+        assert_eq!(assessed_statistics(&state, 0).runs.analyzed, 1);
     }
 
     #[test]
@@ -1641,7 +1726,7 @@ mod tests {
             )
         ) {
             let state = converted_state(&sizes, DAY_MS * 20_000);
-            let payload = statistics(&state, 0);
+            let payload = assessed_statistics(&state, 0);
 
             let expected_input: u128 = sizes.iter().map(|(input, _)| u128::from(*input)).sum();
             let expected_output: u128 = sizes.iter().map(|(_, output)| u128::from(*output)).sum();
@@ -1671,7 +1756,7 @@ mod tests {
                 .map(|index| ((index as u64 + 1) * 1_000, (index as u64 + 1) * 400))
                 .collect();
             let state = converted_state(&sizes, DAY_MS * 20_000);
-            prop_assert_eq!(statistics(&state, 0), statistics(&state, 0));
+            prop_assert_eq!(assessed_statistics(&state, 0), assessed_statistics(&state, 0));
             let rows_a = history_rows(&state);
             let rows_b = history_rows(&state);
             prop_assert_eq!(rows_a, rows_b);

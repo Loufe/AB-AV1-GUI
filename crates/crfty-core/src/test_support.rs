@@ -119,3 +119,25 @@ pub(crate) fn identity(size: u64) -> DestructiveIdentity {
         modified_ns: None,
     }
 }
+
+pub(crate) fn assessed_observations(state: &crate::DurableState) -> Vec<crate::NativeObservation> {
+    crate::observations(state)
+        .into_iter()
+        .map(|mut observation| {
+            match &mut observation.outcome {
+                crate::ObservedOutcome::Analyzed { search } => {
+                    search.assessment = Some(crate::SourceAssessment::Matched);
+                }
+                crate::ObservedOutcome::Converted { search, encode } => {
+                    search.assessment = Some(crate::SourceAssessment::Matched);
+                    encode.assessment = Some(crate::SourceAssessment::Matched);
+                }
+                crate::ObservedOutcome::Remuxed { remux } => {
+                    remux.assessment = Some(crate::SourceAssessment::Matched);
+                }
+                _ => {}
+            }
+            observation
+        })
+        .collect()
+}

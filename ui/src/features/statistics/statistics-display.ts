@@ -40,7 +40,7 @@ const RUN_LABELS: ReadonlyArray<[keyof RunTotals, string]> = [
   ["failed", "Failed"],
 ];
 
-/** Empty means no standing outcome and no terminal run of any kind. */
+/** Empty means no file or imported outcome and no terminal run of any kind. */
 export function hasStatisticsData(payload: StatisticsPayload): boolean {
   return (
     payload.converted_files > 0 ||
@@ -108,5 +108,5 @@ function formatVideoCodec(codec: VideoCodec): string {
 
 export function coverageMessage(payload: StatisticsPayload): string | null {
   if (payload.sized_converted_files === payload.converted_files) return null;
-  return `${payload.sized_converted_files.toLocaleString()} of ${payload.converted_files.toLocaleString()} converted standings include both sizes; output-size reduction statistics cover only those files.`;
+  return `${payload.sized_converted_files.toLocaleString()} of ${payload.converted_files.toLocaleString()} converted records have eligible size measurements; output-size reduction statistics cover only those records.`;
 }
