@@ -1127,6 +1127,7 @@ export type LocatedTool = {
 };
 
 export type LocatedTools = {
+	ab_av1: LocatedTool,
 	ffmpeg: LocatedTool,
 	ffprobe: LocatedTool,
 };
@@ -1147,7 +1148,7 @@ export type MediaObservation_Serialize = {
 	metadata: VideoMeta,
 };
 
-export type MediaTool = "Ffmpeg" | "Ffprobe";
+export type MediaTool = "AbAv1" | "Ffmpeg" | "Ffprobe";
 
 /**
  *  A score read outside the record that measured it, carrying that record's
@@ -1799,7 +1800,7 @@ export type ToolAvailability = ({ Missing: {
  *  is a real invocation judged by exit status; human-oriented output is
  *  carried only as a diagnostic.
  */
-export type ToolCapability = "FfprobeVersion" | "Svtav1Encoder" | "VmafFilter";
+export type ToolCapability = "AbAv1Json" | "FfprobeVersion" | "Svtav1Encoder" | "VmafFilter";
 
 /**
  *  Why one tool could not be located. Paths live only in typed fields so a
@@ -1821,6 +1822,7 @@ export type ToolLocationFailure = ({ EnvironmentPathIsNotAFile: {
  *  when it does not name a file, never falling through to the search path.
  */
 export type ToolPathSettings = {
+	ab_av1: string | null,
 	ffmpeg: string | null,
 	ffprobe: string | null,
 };

@@ -1,6 +1,6 @@
 use std::{fmt, path::PathBuf, time::Duration};
 
-use crfty_core::DecodeMode;
+use crfty_core::{DecodeMode, DiagnosticTail};
 
 #[derive(Debug, Clone)]
 pub struct SearchRequest {
@@ -23,26 +23,13 @@ pub struct EncodeRequest {
     pub decode_mode: DecodeMode,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum SearchWork {
-    Encode,
-    Vmaf,
-    Xpsnr,
-}
-
 #[derive(Debug, Clone, PartialEq)]
 pub struct SearchTelemetry {
-    pub crf_run: usize,
-    pub crf: f32,
-    pub work: SearchWork,
-    pub fps: f32,
-    pub progress: f32,
-    pub sample: u64,
-    pub samples: u64,
-    pub full_pass: bool,
+    pub completed_trials: usize,
+    pub last: SearchOutcome,
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, Default, PartialEq)]
 pub struct EncodeTelemetry {
     pub frame: u64,
     pub fps: f32,
@@ -65,9 +52,19 @@ pub struct SearchOutcome {
     pub from_cache: bool,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ProcessFailureKind {
+    Unavailable,
+    TimedOut,
+    Rejected { code: Option<i32> },
+    Supervision,
+    Cleanup,
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub enum JobFailureKind {
     NoGoodCrf { last: SearchOutcome },
+    Process { kind: ProcessFailureKind },
     Other,
 }
 
@@ -75,6 +72,7 @@ pub enum JobFailureKind {
 pub struct JobFailure {
     pub kind: JobFailureKind,
     pub message: String,
+    pub diagnostic: DiagnosticTail,
 }
 
 impl JobFailure {
@@ -82,6 +80,7 @@ impl JobFailure {
         Self {
             kind: JobFailureKind::Other,
             message: message.into(),
+            diagnostic: DiagnosticTail::empty(),
         }
     }
 
@@ -89,6 +88,7 @@ impl JobFailure {
         Self {
             kind: JobFailureKind::NoGoodCrf { last },
             message: "failed to find a suitable CRF".to_owned(),
+            diagnostic: DiagnosticTail::empty(),
         }
     }
 }

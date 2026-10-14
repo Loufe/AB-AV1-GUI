@@ -514,6 +514,11 @@ mod tests {
     fn located(verification: ToolVerification) -> ToolAvailability {
         ToolAvailability::Located {
             tools: LocatedTools {
+                ab_av1: (LocatedTool {
+                    source: ToolSource::SearchPath,
+                    path: PathBuf::from("/usr/bin/ffmpeg"),
+                })
+                .clone(),
                 ffmpeg: LocatedTool {
                     source: ToolSource::SearchPath,
                     path: PathBuf::from("/usr/bin/ffmpeg"),

@@ -15,6 +15,7 @@ function located(verification: ToolVerification): ToolAvailability {
   return {
     Located: {
       tools: {
+        ab_av1: { source: "SearchPath", path: "/usr/bin/ab-av1" },
         ffmpeg: { source: "Settings", path: "/opt/ffmpeg/bin/ffmpeg" },
         ffprobe: { source: "SearchPath", path: "/usr/bin/ffprobe" },
       },
@@ -92,6 +93,7 @@ describe("tool availability presentation", () => {
       tone: "muted",
       headline: "Media tools located. They are checked when the Queue starts.",
       details: [
+        "ab-av1 (found on PATH): /usr/bin/ab-av1",
         "ffmpeg (configured path): /opt/ffmpeg/bin/ffmpeg",
         "ffprobe (found on PATH): /usr/bin/ffprobe",
       ],
@@ -114,6 +116,7 @@ describe("tool availability presentation", () => {
     ).toMatchObject({
       tone: "destructive",
       details: [
+        "ab-av1 (found on PATH): /usr/bin/ab-av1",
         "ffmpeg (configured path): /opt/ffmpeg/bin/ffmpeg",
         "ffprobe (found on PATH): /usr/bin/ffprobe",
         "The located tools do not support the ffmpeg libvmaf filter.",

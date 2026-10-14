@@ -15,11 +15,13 @@ import type {
 } from "@/lib/bindings";
 
 function toolName(tool: MediaTool): string {
-  return tool === "Ffmpeg" ? "ffmpeg" : "ffprobe";
+  return { AbAv1: "ab-av1", Ffmpeg: "ffmpeg", Ffprobe: "ffprobe" }[tool];
 }
 
 function capabilityLabel(capability: ToolCapability): string {
   switch (capability) {
+    case "AbAv1Json":
+      return "ab-av1 JSON search protocol";
     case "FfprobeVersion":
       return "ffprobe version report";
     case "Svtav1Encoder":
@@ -108,6 +110,7 @@ export function toolsStatus(tools: ToolAvailability | null): ToolsStatus {
   }
   const { tools: located, verification } = tools.Located;
   const paths = [
+    describeLocated("AbAv1", located.ab_av1),
     describeLocated("Ffmpeg", located.ffmpeg),
     describeLocated("Ffprobe", located.ffprobe),
   ];
@@ -166,7 +169,7 @@ export function isAbsolutePath(value: string): boolean {
 
 export function installGuidance(platform: HostPlatform | null): string[] {
   const requirement =
-    "CRFty needs an FFmpeg build with the libsvtav1 encoder and the libvmaf filter; ffmpeg and ffprobe come together in every build.";
+    "CRFty needs the official ab-av1 CLI with JSON search output and an FFmpeg build with the libsvtav1 encoder and the libvmaf filter; ffmpeg and ffprobe come together in every build.";
   switch (platform) {
     case "Windows":
       return [

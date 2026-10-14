@@ -2,9 +2,9 @@ name: Rust
 
 on:
   push:
-    branches: [rewrite]
+    branches: [rewrite, 'feature/**', 'fix/**', 'refactor/**']
   pull_request:
-    branches: [rewrite]
+    branches: [rewrite, 'feature/**', 'fix/**', 'refactor/**']
 
 permissions:
   contents: read

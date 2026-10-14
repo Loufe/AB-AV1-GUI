@@ -27,7 +27,7 @@ function settings(): Settings {
     hardware_decode: true,
     privacy: { anonymize_logs: false, anonymize_history: false },
     log_folder: null,
-    tools: { ffmpeg: null, ffprobe: null },
+    tools: { ab_av1: null, ffmpeg: null, ffprobe: null },
   };
 }
 
@@ -35,6 +35,7 @@ function tools(): ToolAvailability {
   return {
     Located: {
       tools: {
+        ab_av1: { source: "SearchPath", path: "/usr/bin/ab-av1" },
         ffmpeg: { source: "SearchPath", path: "/usr/bin/ffmpeg" },
         ffprobe: { source: "SearchPath", path: "/usr/bin/ffprobe" },
       },

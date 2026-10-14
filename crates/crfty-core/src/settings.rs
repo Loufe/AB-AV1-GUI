@@ -93,12 +93,20 @@ pub struct PrivacySettings {
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, specta::Type)]
 #[serde(deny_unknown_fields)]
 pub struct ToolPathSettings {
+    pub ab_av1: Option<PathBuf>,
     pub ffmpeg: Option<PathBuf>,
     pub ffprobe: Option<PathBuf>,
 }
 
 impl ToolPathSettings {
     fn validate(&self) -> Result<(), &'static str> {
+        if self
+            .ab_av1
+            .as_deref()
+            .is_some_and(|path| !path.is_absolute())
+        {
+            return Err("configured ab-av1 path must be absolute");
+        }
         if self
             .ffmpeg
             .as_deref()

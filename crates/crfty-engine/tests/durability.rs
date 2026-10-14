@@ -59,6 +59,11 @@ fn fixture_revisions() -> ToolRevisions {
 
 fn fixture_located(media: MediaTools) -> LocatedTools {
     LocatedTools {
+        ab_av1: (LocatedTool {
+            source: ToolSource::SearchPath,
+            path: media.ab_av1,
+        })
+        .clone(),
         ffmpeg: LocatedTool {
             source: ToolSource::SearchPath,
             path: media.ffmpeg,
@@ -82,6 +87,7 @@ fn fixture_tools(media: MediaTools) -> ToolsConfig {
 fn fixture_available() -> ToolAvailability {
     ToolAvailability::Located {
         tools: fixture_located(MediaTools {
+            ab_av1: std::path::PathBuf::from(env!("CARGO_BIN_EXE_crfty-contract-fixture")),
             ffmpeg: PathBuf::from("fixture-ffmpeg"),
             ffprobe: PathBuf::from("fixture-ffprobe"),
         }),
@@ -1481,6 +1487,7 @@ fn engine_startup_recovers_an_active_partial_staging_transaction() {
         journal_path,
         config_path: directory.path().join("config.json"),
         tools: fixture_tools(MediaTools {
+            ab_av1: std::path::PathBuf::from(env!("CARGO_BIN_EXE_crfty-contract-fixture")),
             ffmpeg: executable.clone(),
             ffprobe: executable,
         }),
@@ -1598,6 +1605,7 @@ fn engine_startup_abandons_intent_when_staging_was_never_created() {
         journal_path,
         config_path: directory.path().join("config.json"),
         tools: fixture_tools(MediaTools {
+            ab_av1: std::path::PathBuf::from(env!("CARGO_BIN_EXE_crfty-contract-fixture")),
             ffmpeg: executable.clone(),
             ffprobe: executable,
         }),
@@ -1650,6 +1658,7 @@ fn engine_startup_removes_staging_left_before_staging_created_was_durable() {
         journal_path,
         config_path: directory.path().join("config.json"),
         tools: fixture_tools(MediaTools {
+            ab_av1: std::path::PathBuf::from(env!("CARGO_BIN_EXE_crfty-contract-fixture")),
             ffmpeg: executable.clone(),
             ffprobe: executable,
         }),
@@ -1681,6 +1690,7 @@ fn public_event_overflow_severs_the_stream_without_blocking_the_driver() {
         journal_path: directory.path().join("state.jsonl"),
         config_path: directory.path().join("config.json"),
         tools: fixture_tools(MediaTools {
+            ab_av1: std::path::PathBuf::from(env!("CARGO_BIN_EXE_crfty-contract-fixture")),
             ffmpeg: executable.clone(),
             ffprobe: executable,
         }),
@@ -1913,6 +1923,7 @@ fn recover_settled_success(directory: &TestDirectory, fixture: &SettledSuccessFi
         journal_path: fixture.journal_path.clone(),
         config_path: directory.path().join("config.json"),
         tools: fixture_tools(MediaTools {
+            ab_av1: std::path::PathBuf::from(env!("CARGO_BIN_EXE_crfty-contract-fixture")),
             ffmpeg: executable.clone(),
             ffprobe: executable,
         }),
@@ -2572,6 +2583,7 @@ fn exhausted_runtime_ids_do_not_prevent_engine_startup_or_queue_edits() {
         journal_path,
         config_path: directory.path().join("config.json"),
         tools: fixture_tools(MediaTools {
+            ab_av1: std::path::PathBuf::from(env!("CARGO_BIN_EXE_crfty-contract-fixture")),
             ffmpeg: executable.clone(),
             ffprobe: executable,
         }),

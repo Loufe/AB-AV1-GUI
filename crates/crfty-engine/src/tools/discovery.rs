@@ -6,6 +6,8 @@
 //! infallible by design (a missing tool is a reportable fact, not a startup
 //! error) and spawns nothing: whether the located binaries actually work is
 //! the capability probe's question, asked at session start (ADR-023).
+//! Located paths are absolute: ab-av1 runs from a private workspace, so a
+//! relative selection would resolve against the wrong directory there.
 
 use std::{
     ffi::{OsStr, OsString},
@@ -17,6 +19,8 @@ use crfty_core::{
     ToolSource, ToolVerification,
 };
 
+pub const AB_AV1_VARIABLE: &str = "CRFTY_AB_AV1";
+
 pub const FFMPEG_VARIABLE: &str = "CRFTY_FFMPEG";
 pub const FFPROBE_VARIABLE: &str = "CRFTY_FFPROBE";
 
@@ -24,6 +28,7 @@ pub const FFPROBE_VARIABLE: &str = "CRFTY_FFPROBE";
 /// exercise the precedence matrix without process-global mutation.
 #[derive(Debug, Clone, Default)]
 pub struct DiscoveryEnvironment {
+    pub ab_av1_override: Option<OsString>,
     pub ffmpeg_override: Option<OsString>,
     pub ffprobe_override: Option<OsString>,
     pub search_path: Option<OsString>,
@@ -33,6 +38,7 @@ impl DiscoveryEnvironment {
     #[must_use]
     pub fn from_process() -> Self {
         Self {
+            ab_av1_override: std::env::var_os(AB_AV1_VARIABLE),
             ffmpeg_override: std::env::var_os(FFMPEG_VARIABLE),
             ffprobe_override: std::env::var_os(FFPROBE_VARIABLE),
             search_path: std::env::var_os("PATH"),
@@ -45,6 +51,12 @@ pub fn discover(
     environment: &DiscoveryEnvironment,
     configured: &ToolPathSettings,
 ) -> ToolAvailability {
+    let ab_av1 = locate(
+        MediaTool::AbAv1,
+        environment.ab_av1_override.as_deref(),
+        configured.ab_av1.as_deref(),
+        environment.search_path.as_deref(),
+    );
     let ffmpeg = locate(
         MediaTool::Ffmpeg,
         environment.ffmpeg_override.as_deref(),
@@ -57,13 +69,17 @@ pub fn discover(
         configured.ffprobe.as_deref(),
         environment.search_path.as_deref(),
     );
-    match (ffmpeg, ffprobe) {
-        (Ok(ffmpeg), Ok(ffprobe)) => ToolAvailability::Located {
-            tools: LocatedTools { ffmpeg, ffprobe },
+    match (ab_av1, ffmpeg, ffprobe) {
+        (Ok(ab_av1), Ok(ffmpeg), Ok(ffprobe)) => ToolAvailability::Located {
+            tools: LocatedTools {
+                ab_av1,
+                ffmpeg,
+                ffprobe,
+            },
             verification: ToolVerification::Pending,
         },
-        (ffmpeg, ffprobe) => ToolAvailability::Missing {
-            failures: [ffmpeg.err(), ffprobe.err()]
+        (ab_av1, ffmpeg, ffprobe) => ToolAvailability::Missing {
+            failures: [ab_av1.err(), ffmpeg.err(), ffprobe.err()]
                 .into_iter()
                 .flatten()
                 .collect(),
@@ -78,7 +94,7 @@ fn locate(
     search_path: Option<&OsStr>,
 ) -> Result<LocatedTool, ToolLocationFailure> {
     if let Some(path) = environment_override {
-        let path = PathBuf::from(path);
+        let path = absolute(Path::new(path));
         return if path.is_file() {
             Ok(LocatedTool {
                 source: ToolSource::Environment,
@@ -110,11 +126,16 @@ fn locate(
         .map(|paths| std::env::split_paths(paths).collect::<Vec<_>>())
         .unwrap_or_default()
         .into_iter()
-        .map(|directory| directory.join(&file_name))
+        .map(|directory| absolute(&directory.join(&file_name)))
         .find(|candidate| candidate.is_file())
         .map(|path| LocatedTool {
             source: ToolSource::SearchPath,
             path,
         })
         .ok_or(ToolLocationFailure::NotOnSearchPath { tool })
+}
+
+/// An unresolvable path is kept as given; it then fails the file check.
+fn absolute(path: &Path) -> PathBuf {
+    std::path::absolute(path).unwrap_or_else(|_| path.to_path_buf())
 }

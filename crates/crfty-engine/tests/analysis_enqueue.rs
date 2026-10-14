@@ -25,6 +25,7 @@ fn config(root: &Path) -> Result<EngineConfig, Box<dyn std::error::Error>> {
         execution: ExecutionSettings::default(),
         tools: ToolsConfig::Fixed(FixedTools {
             tools: LocatedTools {
+                ab_av1: (tool.clone()).clone(),
                 ffmpeg: tool.clone(),
                 ffprobe: tool,
             },

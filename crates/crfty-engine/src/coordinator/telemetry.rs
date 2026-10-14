@@ -2,9 +2,8 @@
 //! throughput samples, and the measurement a completed search reports.
 
 use crfty_core::{
-    CRF_FIXED_SCALE, Crf, JobProgress, MAX_PERCENT_BASIS_POINTS, MAX_VMAF_SCORE,
-    PERCENT_BASIS_POINTS_SCALE, QualityMetric, QualityScore, SearchMeasurement,
-    VMAF_SCORE_FIXED_SCALE,
+    CRF_FIXED_SCALE, Crf, JobProgress, MAX_VMAF_SCORE, PERCENT_BASIS_POINTS_SCALE, QualityMetric,
+    QualityScore, SearchMeasurement, VMAF_SCORE_FIXED_SCALE,
 };
 
 use crate::{
@@ -12,8 +11,6 @@ use crate::{
     rate::RateSample,
     remux::RemuxTelemetry,
 };
-
-const NORMALIZED_PROGRESS_MIN: f32 = 0.0;
 
 pub(super) const NORMALIZED_PROGRESS_MAX: f32 = 1.0;
 
@@ -23,14 +20,10 @@ pub(super) const NORMALIZED_PROGRESS_MAX: f32 = 1.0;
 /// reported gauge covers the window's first sample).
 pub(super) fn rate_sample(update: &AdapterTelemetry) -> RateSample {
     match update {
-        AdapterTelemetry::Search(search) => RateSample {
+        AdapterTelemetry::Search(_) => RateSample {
             frames: None,
-            fps_gauge: Some(search.fps),
-            work_done: f64::from(
-                search
-                    .progress
-                    .clamp(NORMALIZED_PROGRESS_MIN, NORMALIZED_PROGRESS_MAX),
-            ),
+            fps_gauge: None,
+            work_done: 0.0,
         },
         AdapterTelemetry::Encode(encode) => RateSample {
             frames: Some(encode.frame),
@@ -42,12 +35,7 @@ pub(super) fn rate_sample(update: &AdapterTelemetry) -> RateSample {
 
 pub(super) fn telemetry_progress(telemetry: &AdapterTelemetry) -> JobProgress {
     match telemetry {
-        AdapterTelemetry::Search(search) => JobProgress::SearchBasisPoints(
-            (search
-                .progress
-                .clamp(NORMALIZED_PROGRESS_MIN, NORMALIZED_PROGRESS_MAX)
-                * MAX_PERCENT_BASIS_POINTS as f32) as u32,
-        ),
+        AdapterTelemetry::Search(_) => JobProgress::Phase,
         AdapterTelemetry::Encode(encode) => JobProgress::OutputPositionMs(
             encode.position.as_millis().try_into().unwrap_or(u64::MAX),
         ),

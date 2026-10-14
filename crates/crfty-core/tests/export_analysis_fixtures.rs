@@ -254,6 +254,11 @@ fn display(text: &str) -> AnalysisDisplayText {
 
 fn located_tools() -> LocatedTools {
     LocatedTools {
+        ab_av1: (LocatedTool {
+            source: ToolSource::SearchPath,
+            path: PathBuf::from("/usr/bin/ffmpeg"),
+        })
+        .clone(),
         ffmpeg: LocatedTool {
             source: ToolSource::SearchPath,
             path: PathBuf::from("/usr/bin/ffmpeg"),

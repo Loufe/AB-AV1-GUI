@@ -7,15 +7,15 @@ date: 2026-08-16
 
 ## Context and problem statement
 
-The engine represents the same one-shot supervision contract with three cancellation mechanisms and two nearly identical job handles:
+The engine represents the same one-shot supervision contract with two cancellation mechanisms and two nearly identical job handles:
 
-* ab-av1 jobs use a Tokio watch channel, `CancellationHandle`, and `JobHandle<T>`
+* media adapter jobs use `ProcessCancellation`, `CancellationHandle`, and `JobHandle<T>`
 * remux jobs use a standard MPSC channel, `RemuxCancellationHandle`, and `RemuxHandle`
 * synchronous supervised processes use `ProcessCancellation` over `Arc<AtomicBool>`
 
 The coordinator adapts the ab-av1 and remux handles through `ActiveJobCancellation` and maintains two polling loops with the same result, timeout, telemetry, and cancellation behaviour. Each implementation must independently get pre-registration cancellation, channel disconnection, cancel-on-drop, terminal cleanup, worker termination, and subprocess settlement right.
 
-The ab-av1 library lifecycle is a related but separate external-boundary decision selected by [ADR-021](021-drive-ab-av1-through-an-owned-operation.md), with evidence in [`docs/design/ab-av1-library-lifecycle-research.md`](../design/ab-av1-library-lifecycle-research.md). ADR-021 gives ab-av1 a generic shutdown future and keeps its owned settlement inside that finite operation; this record decides how CRFty produces that signal, owns the executor worker, and publishes the terminal report.
+The external operation boundary is selected by [ADR-021](021-own-media-operation-processes.md). CRFty supervises a fresh official CLI process or direct FFmpeg process and publishes completion after containment cleanup, reader joins, and owned temporary cleanup.
 
 Four guarantees must remain distinct:
 
@@ -58,7 +58,7 @@ This design is an application of **structured job supervision**: cooperative can
 
 Chosen option: **compose `CancellationToken`, `oneshot`, `watch`, and `TaskTracker` behind a small capability-oriented CRFty job API while retaining operation-specific workers**, because these maintained primitives implement the generic synchronization contracts while CRFty retains only its domain reports, cleanup sequencing, worker ownership, and process policy.
 
-The primitive composition is the selected direction. The process implementation and final join-ownership boundary remain open implementation decisions recorded below.
+The primitive composition is the selected supervision direction. The process layer uses the maintained `process-wrap` dependency; final join ownership remains an open implementation decision recorded below.
 
 ### Common contract
 
@@ -79,7 +79,7 @@ The worker does not receive the terminal oneshot sender. A private spawn wrapper
 
 Receiving a valid terminal report disarms cancel-on-drop. A timeout does not. Bounded polling borrows `&mut self` so it cannot consume and silently discard the live handle. A final blocking or asynchronous wait consumes `self`.
 
-Synchronous workers call `is_cancelled()` at their existing interruption points. Async workers select on `cancelled()`, with cancellation ahead of progress/update branches when a continuously ready stream could otherwise delay shutdown. The current ab-av1 operation must not be wrapped wholesale in `CancellationToken::run_until_cancelled`, because that helper drops the wrapped future and is safe only when the future is cancellation-safe. The current fork provisionally uses explicit `cancel_job()` and `finish_job()` calls, but the durable CRFty requirement is mechanism-neutral: the adapter must await the selected ab-av1 terminal lifecycle and publish no domain report before its task, process, and temporary-state settlement contract returns.
+Synchronous workers check sticky cancellation at their interruption points. Media operations delegate cancellation to the process supervisor, which stops their containment and joins pipe readers before returning. A shared supervision API must retain those cleanup and terminal-publication guarantees.
 
 `tokio_util::task::TaskTracker` provides the shared worker-lifetime ledger. Tokio tasks are spawned or wrapped through the tracker. A non-cloneable local wrapper around `TaskTrackerToken` can be moved into a standard thread so a panic or normal return removes that worker from the ledger when the token drops. This ledger proves that registered worker bodies released their permits; it does not replace retaining standard `JoinHandle`s or observing Tokio `JoinError`s.
 
@@ -110,23 +110,17 @@ The enforcement is:
 
 The cancellation token does not replace process containment. Token observation must trigger a process owner that kills the correct containment unit, drains or closes pipes without deadlock, waits or reaps the leader and descendants, joins reader threads, and only then returns the domain report.
 
-Three process-layer choices remain viable:
+The selected wrapper is `process-wrap`, the maintained successor to the retired `command-group` crate. Its standard-library and Tokio frontends preserve CRFty's existing process groups and Windows Jobs without introducing a new process runner. Windows failed-spawn settlement and kill-on-close behaviour follow the [containment contract](../PROCESS_CONTAINMENT.md); dependency changes belong in upstream PRs. It does not provide the terminal-report or worker-supervision contract.
 
-* Keep `ContainedChild` over `command-group`, with focused fixes and contract tests.
-* Migrate to `process-wrap`, which describes itself as the more flexible successor to `command-group` and composes standard-library and Tokio commands with process groups, sessions, Windows Job Objects, and Tokio kill-on-drop.
-* Spike `processkit`, which provides cancellation-aware streaming and run-to-completion APIs, Windows Job Objects, Linux cgroup v2 with process-group fallback, BSD process reapers or process groups, kill-on-drop, and an observable containment mechanism.
+`processkit` remains a candidate only if a required consumer needs stronger containment. Its Linux cgroup v2 support can contain descendants that escape a POSIX process group with `setsid()`, but adoption would require proving streaming parsers, Windows packaging and Jobs, Linux fallback behaviour, cancellation precedence, and kill/wait/reap ordering.
 
-`processkit` is the only researched option that could materially change the architecture rather than merely replace a wrapper. Linux cgroup v2 can contain descendants that escape a POSIX process group by calling `setsid()`, but the crate remains async-first and falls back when a suitable cgroup is unavailable. Adoption requires proving that it preserves ab-av1 and FFmpeg streaming parsers, Windows packaging and Job Object behaviour, Linux fallback behaviour, cancellation precedence, and exact kill/wait/reap ordering.
-
-`process-wrap` is the conservative alternative if CRFty wants a supported successor to `command-group` without adopting a full process runner. It does not itself provide the terminal-report or worker-supervision contract.
-
-The process choice in this record concerns CRFty-owned direct processes. ADR-021 separately places internal process ownership inside ab-av1 so its library operation cannot detach sample producers or leave sample-copy FFmpeg outside terminal settlement.
+The process choice in this record covers every CRFty-owned external process, including the official ab-av1 CLI. ADR-021 places each media operation in its own contained process, so no in-process ab-av1 task can outlive terminal settlement.
 
 ### Counterexamples and failure history
 
 * **Detached worker after apparently successful cancellation:** Dropping either a standard-library or Tokio `JoinHandle` detaches its worker. A handle that only cancels on drop can therefore leave a remux or runtime worker executing after its owner has disappeared. The supervisor must retain unique join authority and shutdown must separately prove worker termination.
 * **Cleanup skipped by cancellation race:** `CancellationToken::run_until_cancelled` drops the wrapped future when cancellation wins and is biased toward future completion on a simultaneous ready poll. Wrapping the current ab-av1 operation wholesale could skip its provisional explicit finalization or classify a completion/cancellation tie according to helper polling order rather than CRFty policy.
-* **Detached ab-av1 sample producer:** Upstream `sample_encode::run` uses `spawn_local` for sample production, and dropping its ordinary `JoinHandle` detaches the task. That producer invokes sample-copy FFmpeg through an unmanaged `.output()` path, so draining the prototype's global child registry can race with later process creation. ADR-021 requires the upstream lifecycle to stop producers before terminating containment units, reaping direct children, and completing the strongest descendant settlement the platform can prove.
+* **Detached ab-av1 sample producer:** The former embedded library ran sample production in a `spawn_local` task whose dropped `JoinHandle` detached it, invoking sample-copy FFmpeg outside any managed registry. Running the official CLI as a contained process (ADR-021) retires this failure mode: terminating the operation's group or Job stops its sample producers with it.
 * **Blocking task that ignores abort:** Tokio documents that an already running `spawn_blocking` task cannot be aborted and may keep runtime shutdown waiting indefinitely. Moving a blocking read into `spawn_blocking` would change scheduling without making it interruptible.
 * **Premature terminal report:** If operation code owns the report sender, it can send `Cancelled` before subprocess settlement or finalization and then fail or panic during cleanup. Returning a report to a private outer sender prevents this ordering error by construction.
 * **False shutdown completion:** `TaskTracker::close()` does not forbid new tracked tasks. Exposing the raw tracker could allow registration after shutdown appears empty, so the supervisor must close registration in its own private state machine or typestate API.
@@ -144,7 +138,7 @@ The process choice in this record concerns CRFty-owned direct processes. ADR-021
 4. **Cleanup failure after cancellation:** Decide whether this becomes a cancellation report carrying cleanup evidence, a common infrastructure error, or a driver-fatal error. A plain `Cancelled` outcome must not hide a process that could not be terminated or reaped.
 5. **Shutdown timeout policy:** Decide whether an unresponsive worker thread blocks shutdown, is deliberately abandoned until process exit, or escalates to application termination. No cancellation crate can safely kill an arbitrary Rust thread.
 6. **Cancellation hierarchy:** Prefer independent fresh per-job tokens for now. Decide whether application shutdown later needs a parent token with child job tokens, noting that cancellation across a token tree is not observed atomically while `cancel()` is in progress.
-7. **Process library:** Run a focused `processkit` spike and compare it with `process-wrap` plus the existing `ContainedChild` before accepting a process-layer choice.
+7. **Stronger containment:** Evaluate `processkit` against the selected `process-wrap` boundary only when a required consumer establishes a need for stronger containment.
 8. **Cancellation latency requirement:** Define the acceptable bound for process polling, then test it with real subprocess fixtures.
 9. **Sync versus async process I/O:** Decide whether fixing concurrent pipe drainage and responsive cancellation justifies moving process execution to Tokio or whether dedicated synchronous reader threads remain the smaller design.
 10. **Typestate scope:** Decide whether `Supervisor<Accepting>` to `Supervisor<Closing>` materially clarifies coordinator code; otherwise enforce the same transition with a private runtime state and focused tests.
@@ -176,7 +170,7 @@ Use ordinary barriers and controllable fake workers for protocol races. Loom is 
 
 ## More information
 
-See ADR-015, which retains the rule that statistics and prediction provenance derive from validated facts; cancellation telemetry is not such a fact. ADR-021 selects the upstream ab-av1 operation boundary, its research is recorded in [`docs/design/ab-av1-library-lifecycle-research.md`](../design/ab-av1-library-lifecycle-research.md), and its implementation-validation contract is tracked separately.
+See ADR-015, which retains the rule that statistics and prediction provenance derive from validated facts; cancellation telemetry is not such a fact. ADR-021 selects the upstream ab-av1 operation boundary, its research is recorded in [`docs/design/ab-av1-process-boundary.md`](../design/ab-av1-process-boundary.md), and its implementation-validation contract is tracked separately.
 
 Implementation locations at the time this decision was recorded:
 

@@ -22,7 +22,6 @@ use crfty_core::{
     ToolLocationFailure, ToolPathSettings, ToolRevisions, ToolSource, ToolVerification,
 };
 use crfty_engine::{
-    ab_av1::AB_AV1_REVISION,
     coordinator::{EngineConfig, EngineRuntime, ToolsConfig},
     driver::DriverEvent,
     tools::discovery::DiscoveryEnvironment,
@@ -77,6 +76,9 @@ fn configured_tools_are_probed_and_execute_from_a_spaces_and_unicode_directory()
 
     let settings = Settings {
         tools: ToolPathSettings {
+            ab_av1: Some(PathBuf::from(
+                env::var_os("CRFTY_AB_AV1").expect("CRFTY_AB_AV1"),
+            )),
             ffmpeg: Some(ffmpeg.clone()),
             ffprobe: Some(ffprobe.clone()),
         },
@@ -205,8 +207,18 @@ fn configured_tools_are_probed_and_execute_from_a_spaces_and_unicode_directory()
 /// The probe reports the running build, so the exact strings are unknown
 /// here; what the contract fixes is their shape and that the encoder
 /// revision is the FFmpeg build that hosts it.
+#[expect(
+    clippy::expect_used,
+    reason = "native fixture requires explicit tools and readable provenance"
+)]
 fn assert_real_revisions(revisions: &ToolRevisions) {
-    assert_eq!(revisions.ab_av1, AB_AV1_REVISION);
+    assert_eq!(
+        revisions.ab_av1,
+        crfty_engine::tools::executable_revision(&PathBuf::from(
+            std::env::var_os("CRFTY_AB_AV1").expect("CRFTY_AB_AV1")
+        ))
+        .expect("ab-av1 revision")
+    );
     assert!(
         !revisions.ffmpeg.trim().is_empty(),
         "probe recorded no ffmpeg revision"

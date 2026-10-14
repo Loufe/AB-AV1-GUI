@@ -52,6 +52,9 @@ function validationIssue(settings: Settings): ValidationIssue | null {
       message: "An output folder is required in separate-folder mode.",
     };
   }
+  if (settings.tools.ab_av1 !== null && !isAbsolutePath(settings.tools.ab_av1)) {
+    return { field: "tool-ab-av1", message: "The ab-av1 path must be absolute." };
+  }
   if (settings.tools.ffmpeg !== null && !isAbsolutePath(settings.tools.ffmpeg)) {
     return { field: "tool-ffmpeg", message: "The ffmpeg path must be absolute." };
   }
@@ -67,7 +70,14 @@ function optionalPath(value: string): string | null {
 
 function toolPathField(issue: ValidationIssue | null): ToolPathField | null {
   if (issue === null) return null;
-  return issue.field === "tool-ffmpeg" || issue.field === "tool-ffprobe" ? issue.field : null;
+  switch (issue.field) {
+    case "tool-ab-av1":
+    case "tool-ffmpeg":
+    case "tool-ffprobe":
+      return issue.field;
+    default:
+      return null;
+  }
 }
 
 export function SettingsView() {

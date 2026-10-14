@@ -35,7 +35,7 @@ function settings(): Settings {
       anonymize_history: false,
     },
     log_folder: null,
-    tools: { ffmpeg: null, ffprobe: null },
+    tools: { ab_av1: null, ffmpeg: null, ffprobe: null },
   };
 }
 
@@ -338,6 +338,7 @@ describe("applyPayload", () => {
     const available = {
       Located: {
         tools: {
+          ab_av1: { source: "SearchPath" as const, path: "/usr/bin/ab-av1" },
           ffmpeg: { source: "SearchPath" as const, path: "/usr/bin/ffmpeg" },
           ffprobe: { source: "SearchPath" as const, path: "/usr/bin/ffprobe" },
         },

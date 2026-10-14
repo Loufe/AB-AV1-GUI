@@ -4,7 +4,7 @@ Living state of the V3 rewrite. Decisions get an ADR; long-form design goes in `
 
 ## Current phase
 
-The branch has the pinned ab-av1 adapter, job coordinator, journal recovery, queue commands, Tauri shell, and frontend stores with contract coverage. Queue, History, Statistics, and Settings have production views over the current model. Analysis has a production flat table connecting streaming discovery, bounded Basic Scan, deterministic selected and bulk queue actions, and applicable search predictions (`docs/ANALYSIS.md`). Queue additions and reservations allocate durable identities, startup releases unprepared work, and prepared interruptions have distinct outcomes. Known adapter-internal probe cancellation and Windows spawn cleanup defects remain; existing coverage does not establish alpha readiness.
+The branch has the official ab-av1 CLI adapter, job coordinator, journal recovery, queue commands, Tauri shell, and frontend stores with contract coverage. Queue, History, Statistics, and Settings have production views over the current model. Analysis has a production flat table connecting streaming discovery, bounded Basic Scan, deterministic selected and bulk queue actions, and applicable search predictions (`docs/ANALYSIS.md`). Queue additions and reservations allocate durable identities, startup releases unprepared work, and prepared interruptions have distinct outcomes. CRFty's own media inspection and capability probes are bounded and cancellable; ab-av1's internal probes stop with the outer CLI process (`docs/AB_AV1_PROBES.md`). Process containment uses the maintained `process-wrap` dependency, with failed-spawn and application-exit contracts (`docs/PROCESS_CONTAINMENT.md`). Existing coverage does not establish alpha readiness.
 
 The delivery target is the runnable alpha defined in [the alpha delivery scope](design/alpha.md). It combines a usable Analysis-to-Queue workflow with durable terminal observations, History browsing, import v1, and clean Windows and Linux installation. First-class History is still a redesign of the current projections. Historical estimation and richer collectors remain V3 work beyond alpha.
 
@@ -12,7 +12,7 @@ The delivery target is the runnable alpha defined in [the alpha delivery scope](
 
 - Three-crate split (core/engine/shell) with one state owner: ADR-001, ADR-002
 - Current persistence: file journal, snapshot-head compaction, generation-identity corruption handling. The selected replacement keeps operational fold and replay in a database row log beside History tables: ADR-004, ADR-009, ADR-011
-- Pinned ab-av1 adapter; user-supplied FFmpeg verified by a capability probe: ADR-003, ADR-023
+- Official ab-av1 CLI for quality search with directly supervised FFmpeg encodes; user-supplied ab-av1, FFmpeg, and ffprobe verified by a capability probe: ADR-003, ADR-023
 - IPC bindings generated from Rust via tauri-specta: ADR-006
 - History and Statistics derive as pure projections, with imported history projected separately until translated observations are stored: ADR-015
 - One immutable observation per terminal run with file standing derived; History owns eligibility and estimation owns weighting: ADR-024
@@ -26,7 +26,7 @@ The delivery target is the runnable alpha defined in [the alpha delivery scope](
 - Durable facts keyed by sampled content identity: ADR-019
 - Output promotion owned as a journaled transaction: ADR-020
 - One supervision kit for job cancellation and completion, not yet implemented: ADR-018
-- The caller-driven owned ab-av1 operation, pending upstream: ADR-021
+- Each media operation owned through the process supervisor, with the official CLI in its own process: ADR-021
 - Every V2 statistic survives as a V3 consumer, with richer evidence where collection allows; the consumer matrix and field dispositions are frozen (`docs/design/history-consumer-matrix.md`)
 - Collection budgets are development-time acceptance thresholds, never runtime mechanisms. A collector ships only when it measures under 5 percent of the search it informs on the benchmark corpus. Collection is event-driven, with no periodic resource sampling and no media or network I/O of its own; scan and startup collection add no process and no file read, and the compatibility probe waits for first claim (`docs/design/history-collection-budgets.md`)
 - Durable quality evidence names its metric once per record, VMAF the sole initial variant; the metric joins the analysis identity and aggregates never blend metrics: ADR-022
@@ -43,6 +43,5 @@ The delivery target is the runnable alpha defined in [the alpha delivery scope](
 - Release-upgrade policy for queue state, saved analyses, and pending output transactions; History reads remain available when an operational payload is unsupported
 - The History IPC request and response types over the decided browse contract
 - Estimation as a subsystem separate from History: sufficiency, promise level, evidence seam, evaluation (`docs/design/estimation.md`)
-- Whether the ab-av1 maintainer accepts the operation boundary ADR-021 selects (alexheretic/ab-av1#371)
 
 Issue conventions: AGENTS.md "GitHub issues". Milestone: `v3.0`.

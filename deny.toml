@@ -3,10 +3,6 @@ all-features = true
 
 [advisories]
 ignore = [
-    # Transitive through ab-av1's sled-backed sample cache. These advisories
-    # report maintenance status, not a known vulnerability.
-    "RUSTSEC-2024-0384",
-    "RUSTSEC-2025-0057",
     # gtk-rs GTK3 bindings: unmaintained, but Tauri v2 still renders through
     # GTK3 on Linux (tao/wry). Maintenance status, not a vulnerability;
     # resolved upstream when Tauri moves off GTK3.
@@ -69,4 +65,4 @@ highlight = "all"
 unknown-registry = "deny"
 unknown-git = "deny"
 allow-registry = ["https://github.com/rust-lang/crates.io-index"]
-allow-git = ["https://github.com/Loufe/ab-av1.git", "https://github.com/notify-rs/notify.git"]
+allow-git = ["https://github.com/notify-rs/notify.git"]

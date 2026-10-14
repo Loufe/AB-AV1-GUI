@@ -47,6 +47,36 @@ fn dispatch() -> Result<(), Box<dyn Error>> {
                 thread::sleep(Duration::from_secs(1));
             }
         }
+        #[cfg(windows)]
+        Some(command) if command == "exit-with-running-tree" => {
+            use crfty_engine::process_supervisor::{ProcessCancellation, ProcessLimits, run};
+            let marker = arguments.next().ok_or("heartbeat path is missing")?;
+            let child_marker = marker.clone();
+            let executable = env::current_exe()?;
+            let _worker = thread::spawn(move || {
+                run(
+                    Command::new(executable)
+                        .arg("spawn-heartbeat")
+                        .arg(child_marker),
+                    &ProcessCancellation::new(),
+                    ProcessLimits::new(Some(Duration::from_secs(30)), CHUNK_BYTES, CHUNK_BYTES),
+                )
+            });
+            wait_for_file(Path::new(&marker))?;
+            process::exit(0);
+        }
+        #[cfg(windows)]
+        Some(command) if command == "nested-job-heartbeat" => {
+            use process_wrap::std::{CommandWrap, JobObject};
+            let marker = arguments.next().ok_or("heartbeat path is missing")?;
+            let mut command = Command::new(env::current_exe()?);
+            command.arg("spawn-heartbeat").arg(&marker);
+            let _child = CommandWrap::from(command).wrap(JobObject).spawn()?;
+            wait_for_file(Path::new(&marker))?;
+            loop {
+                thread::sleep(Duration::from_secs(1));
+            }
+        }
         Some(command) if command == "orphan-heartbeat" => {
             let marker = arguments.next().ok_or("heartbeat path is missing")?;
             let _child = Command::new(env::current_exe()?)

@@ -67,6 +67,11 @@ fn add_one(
 fn fixed_tools(tools: MediaTools, hardware_decoders: &[HardwareDecoder]) -> ToolsConfig {
     ToolsConfig::Fixed(FixedTools {
         tools: crfty_core::LocatedTools {
+            ab_av1: (crfty_core::LocatedTool {
+                source: crfty_core::ToolSource::Environment,
+                path: tools.ab_av1,
+            })
+            .clone(),
             ffmpeg: crfty_core::LocatedTool {
                 source: crfty_core::ToolSource::Environment,
                 path: tools.ffmpeg,
@@ -100,9 +105,39 @@ fn dispatch() -> Result<(), Box<dyn Error>> {
             .next()
             .map(PathBuf::from)
             .ok_or("heartbeat path is missing")?;
+        if arguments.next().as_deref() == Some(OsString::from("closed").as_os_str()) {
+            fs::write(path.with_extension("closed"), b"ready")?;
+        }
         return heartbeat(&path);
     }
 
+    if env::args_os()
+        .nth(1)
+        .is_some_and(|argument| argument == "--relay-proof")
+    {
+        let marker =
+            PathBuf::from(env::var_os("CRFTY_ROUTING_MARKER").ok_or("missing relay marker")?);
+        let mut file = fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(marker)?;
+        writeln!(file, "{:?}", env::args_os().skip(2).collect::<Vec<_>>())?;
+        return Ok(());
+    }
+    if env::args_os()
+        .nth(1)
+        .is_some_and(|argument| argument == "crf-search")
+    {
+        return fake_ab_av1();
+    }
+    if env::args_os()
+        .nth(1)
+        .is_some_and(|argument| argument == "--relay-exit")
+    {
+        println!("relay stdout");
+        eprintln!("relay stderr");
+        process::exit(37);
+    }
     let stem = Path::new(&executable)
         .file_stem()
         .and_then(|value| value.to_str())
@@ -120,6 +155,8 @@ fn dispatch() -> Result<(), Box<dyn Error>> {
         Some(argument) if argument == "run" => run_contract(arguments),
         Some(argument) if argument == "coordinate" => run_coordinator_contract(arguments),
         Some(argument) if argument == "ladder" => run_ladder_contract(arguments),
+        Some(argument) if argument == "cleanup-ladder" => run_cleanup_ladder_contract(arguments),
+        Some(argument) if argument == "cli-case" => run_cli_case(arguments),
         _ => Err("expected: crfty-contract-fixture run INPUT OUTPUT-DIR FFMPEG FFPROBE".into()),
     }
 }
@@ -277,6 +314,7 @@ fn run_coordinator_contract(
         .map(PathBuf::from)
         .ok_or("output directory is missing")?;
     let tools = MediaTools {
+        ab_av1: std::env::current_exe().unwrap_or_default(),
         ffmpeg: arguments
             .next()
             .map(PathBuf::from)
@@ -502,6 +540,7 @@ fn run_ladder_contract(
         .map(PathBuf::from)
         .ok_or("output directory is missing")?;
     let tools = MediaTools {
+        ab_av1: std::env::current_exe().unwrap_or_default(),
         ffmpeg: arguments
             .next()
             .map(PathBuf::from)
@@ -752,7 +791,7 @@ fn fake_ffmpeg() -> Result<(), Box<dyn Error>> {
         pair.first().is_some_and(|argument| argument == "-c")
             && pair.get(1).is_some_and(|argument| argument == "copy")
     });
-    if structured_remux {
+    if structured_remux && !arguments.iter().any(|argument| argument == "libsvtav1") {
         return fake_remux(&arguments);
     }
     let scoring = arguments
@@ -807,6 +846,7 @@ fn fake_ffmpeg() -> Result<(), Box<dyn Error>> {
         thread::sleep(Duration::from_secs(30));
     }
 
+    println!("frame=30\nfps=2\nout_time_us=10000000\nprogress=end");
     eprintln!(
         "video:1KiB audio:2KiB subtitle:0KiB other streams:1KiB global headers:0KiB muxing overhead: 0.0%"
     );
@@ -889,7 +929,8 @@ fn emit_progress() -> Result<(), Box<dyn Error>> {
     eprint!(
         "frame=    1 fps= 2 q=40.0 size=       1kB time=00:00:01.00 bitrate=8.0kbits/s speed=1x    \r"
     );
-    io::stderr().flush()?;
+    println!("frame=1\nfps=2\nout_time_us=1000000\nprogress=continue");
+    io::stdout().flush()?;
     Ok(())
 }
 
@@ -912,6 +953,7 @@ fn run_contract(mut arguments: impl Iterator<Item = OsString>) -> Result<(), Box
         .map(PathBuf::from)
         .ok_or("output directory is missing")?;
     let tools = MediaTools {
+        ab_av1: std::env::current_exe().unwrap_or_default(),
         ffmpeg: arguments
             .next()
             .map(PathBuf::from)
@@ -923,9 +965,7 @@ fn run_contract(mut arguments: impl Iterator<Item = OsString>) -> Result<(), Box
     };
 
     let runtime = AbAv1Runtime::start()?;
-    if AbAv1Runtime::start().is_ok() {
-        return Err("a second ab-av1 runtime started concurrently".into());
-    }
+    AbAv1Runtime::start()?.shutdown()?;
     cancel_search_and_reuse(&runtime, &tools, &input, &output_dir)?;
     successful_search(&runtime, &tools, &input)?;
     successful_encode(&runtime, &tools, &input, &output_dir)?;
@@ -1177,4 +1217,286 @@ fn probe_should_hang(input: &Path) -> Result<bool, Box<dyn Error>> {
         };
     }
     Ok(false)
+}
+
+fn fake_ab_av1() -> Result<(), Box<dyn Error>> {
+    let arguments: Vec<OsString> = env::args_os().skip(1).collect();
+    let input = arguments
+        .windows(2)
+        .find_map(|pair| {
+            (pair.first()?.as_os_str() == "--input")
+                .then(|| pair.get(1))
+                .flatten()
+        })
+        .map(PathBuf::from)
+        .ok_or("missing search input")?;
+    if arguments
+        .iter()
+        .any(|arg| arg.to_string_lossy().contains("h264_cuvid"))
+        && input.to_string_lossy().contains("search-ladder")
+    {
+        return Err("fixture hardware decoder failure".into());
+    }
+    if input.to_string_lossy().contains("cleanup-ladder") {
+        return reject_with_locked_workspace(&arguments, &input);
+    }
+    let directive = env::var("CRFTY_CLI_CASE").unwrap_or_default();
+    if input.to_string_lossy().contains("cancel-search") || directive == "hang" {
+        let _child = Command::new(env::current_exe()?)
+            .arg("heartbeat")
+            .arg(input.with_extension("heartbeat"))
+            .spawn()?;
+        loop {
+            thread::sleep(Duration::from_secs(1));
+        }
+    }
+    if directive == "route" {
+        for tool in ["ffmpeg", "ffprobe"] {
+            let status = Command::new(tool)
+                .args(["--relay-proof", "space path tést", ""])
+                .status()?;
+            if !status.success() {
+                return Err("selected tool relay rejected".into());
+            }
+        }
+    }
+    if directive == "invalid" {
+        println!("human output");
+        return Ok(());
+    }
+    if directive == "oversized" {
+        println!("{}", "x".repeat(128 * 1024));
+        return Ok(());
+    }
+    if directive == "missing" {
+        return Ok(());
+    }
+    if directive == "noisy" {
+        eprintln!("{}", "x".repeat(128 * 1024));
+    }
+    let outcome = serde_json::json!({"type":"sample-encode-done", "crf":34.25, "vmaf":95.0, "from_cache":false, "predicted_encode_size":4096, "predicted_encode_percent":50.0, "predicted_encode_seconds":5.0});
+    println!("{outcome}");
+    io::stdout().flush()?;
+    if directive == "reject" {
+        println!("{{\"type\":\"crf-search-error\",\"message\":\"no good crf\"}}");
+        return Err("no good CRF".into());
+    }
+    let mut done = outcome;
+    *done.get_mut("type").ok_or("missing JSON type")? = "crf-search-done".into();
+    println!("{done}");
+    if directive == "orphan" {
+        let _child = Command::new(env::current_exe()?)
+            .arg("heartbeat")
+            .arg(input.with_extension("heartbeat"))
+            .spawn()?;
+        wait_for_file(&input.with_extension("heartbeat"))?;
+    }
+    if directive == "disagree" {
+        return Err("nonzero after success JSON".into());
+    }
+    Ok(())
+}
+
+/// Rejects the search after leaving a subtree the workspace owner cannot
+/// remove, recording each invocation and the locked path for the contract.
+fn reject_with_locked_workspace(
+    arguments: &[OsString],
+    input: &Path,
+) -> Result<(), Box<dyn Error>> {
+    let workspace = arguments
+        .windows(2)
+        .find_map(|pair| {
+            (pair.first()?.as_os_str() == "--temp-dir")
+                .then(|| pair.get(1))
+                .flatten()
+        })
+        .map(PathBuf::from)
+        .ok_or("missing search workspace")?;
+    let mut searches = fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(input.with_extension("searches"))?;
+    writeln!(searches, "search")?;
+    let locked = workspace.join("locked");
+    fs::create_dir(&locked)?;
+    fs::write(locked.join("residue"), b"residue")?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        fs::set_permissions(&locked, fs::Permissions::from_mode(0o500))?;
+    }
+    fs::write(
+        input.with_extension("locked"),
+        locked.as_os_str().as_encoded_bytes(),
+    )?;
+    let outcome = serde_json::json!({"type":"sample-encode-done", "crf":34.25, "vmaf":80.0, "from_cache":false, "predicted_encode_size":4096, "predicted_encode_percent":50.0, "predicted_encode_seconds":5.0});
+    println!("{outcome}");
+    println!("{{\"type\":\"crf-search-error\",\"message\":\"Failed to find a suitable crf\"}}");
+    Err("no good CRF".into())
+}
+
+/// Proves a search workspace that cannot be removed ends the quality ladder:
+/// the item fails after one search, with the cleanup failure in its outcome.
+fn run_cleanup_ladder_contract(
+    mut arguments: impl Iterator<Item = OsString>,
+) -> Result<(), Box<dyn Error>> {
+    let output_dir = arguments
+        .next()
+        .map(PathBuf::from)
+        .ok_or("output directory is missing")?;
+    let tools = MediaTools {
+        ab_av1: env::current_exe()?,
+        ffmpeg: arguments
+            .next()
+            .map(PathBuf::from)
+            .ok_or("ffmpeg path is missing")?,
+        ffprobe: arguments
+            .next()
+            .map(PathBuf::from)
+            .ok_or("ffprobe path is missing")?,
+    };
+    let engine = EngineRuntime::start(EngineConfig {
+        journal_path: output_dir.join("cleanup-ladder.jsonl"),
+        config_path: output_dir.join("cleanup-ladder-config.json"),
+        tools: fixed_tools(tools, &[]),
+        execution: ExecutionSettings {
+            requested_target: DEFAULT_VMAF_TARGET,
+            fallback_floor: MIN_VMAF_FALLBACK_TARGET,
+            fallback_step: VMAF_FALLBACK_STEP,
+            overwrite_existing: false,
+            decode_preference: DecodePreference::SoftwareOnly,
+            profile: AnalysisProfile {
+                preset: CONTRACT_PRESET,
+                max_encoded_percent_basis_points: CONTRACT_MAX_ENCODED_PERCENT_BASIS_POINTS,
+                samples: Some(CONTRACT_SAMPLE_COUNT),
+                sample_duration_ms: CONTRACT_SAMPLE_DURATION_MS,
+                thorough: false,
+                metric: QualityMetric::Vmaf,
+                decode_mode: DecodeMode::Software,
+                ab_av1_revision: String::new(),
+                ffmpeg_revision: String::new(),
+                encoder_revision: String::new(),
+            },
+        },
+    })?;
+    let _snapshot = engine.events.recv()?;
+    let input = output_dir.join("cleanup-ladder.mkv");
+    write_distinct_media(&input, 7)?;
+    accepted_reply(engine.commands.submit_queue(add_one(
+        &input,
+        Operation::Analyze,
+        AnalysisIntent::ReuseIfFresh,
+        OutputTarget::Replace,
+    ))?)?;
+    accepted_reply(engine.commands.submit_session(SessionCommand::Start)?)?;
+    let outcome = loop {
+        match engine.events.recv_timeout(CONTRACT_EVENT_TIMEOUT)? {
+            crfty_engine::driver::DriverEvent::Durable(
+                crfty_core::DurableDelta::ItemFinished { outcome, .. },
+            ) => break outcome,
+            crfty_engine::driver::DriverEvent::Ephemeral(
+                crfty_core::EphemeralDelta::WorkerCrashed { message },
+            )
+            | crfty_engine::driver::DriverEvent::Fatal { message } => {
+                return Err(format!("cleanup ladder worker failed: {message}").into());
+            }
+            _ => {}
+        }
+    };
+    engine.shutdown()?;
+    let searches = fs::read_to_string(input.with_extension("searches"))?
+        .lines()
+        .count();
+    if searches != 1 {
+        return Err(
+            format!("the ladder continued after cleanup failure: {searches} searches").into(),
+        );
+    }
+    match outcome {
+        ItemOutcome::Failed(facts)
+            if facts.kind == crfty_core::FailureKind::SearchRun
+                && facts.message.contains("search workspace cleanup failed") =>
+        {
+            Ok(())
+        }
+        outcome => Err(format!("cleanup failure was not terminal: {outcome:?}").into()),
+    }
+}
+
+fn run_cli_case(mut arguments: impl Iterator<Item = OsString>) -> Result<(), Box<dyn Error>> {
+    let mode = arguments.next().ok_or("missing case")?;
+    let base = PathBuf::from(arguments.next().ok_or("missing directory")?);
+    let input = base.join("input.mkv");
+    fs::write(&input, b"fixture")?;
+    let executable = env::current_exe()?;
+    let ffmpeg = base.join(if cfg!(windows) {
+        "selected encoder tést.exe"
+    } else {
+        "selected encoder tést"
+    });
+    let ffprobe = base.join(if cfg!(windows) {
+        "selected inspector tést.exe"
+    } else {
+        "selected inspector tést"
+    });
+    fs::hard_link(&executable, &ffmpeg)?;
+    fs::hard_link(&executable, &ffprobe)?;
+    let ab_av1 = if cfg!(windows) && mode == "decoy" {
+        let ab = base.join("ab-av1.exe");
+        fs::hard_link(&executable, &ab)?;
+        fs::hard_link(&executable, base.join("ffmpeg.exe"))?;
+        ab
+    } else {
+        executable.clone()
+    };
+    let tools = MediaTools {
+        ab_av1,
+        ffmpeg,
+        ffprobe,
+    };
+    let runtime = AbAv1Runtime::start()?;
+    let job = runtime.start_search(tools, search_request(&input))?;
+    if mode == "hang" {
+        wait_for_file(&input.with_extension("heartbeat"))?;
+        job.cancel(crfty_engine::ab_av1::CancelMode::Force);
+    }
+    let report = job.wait()?;
+    let expected = if mode == "hang" {
+        matches!(report.terminal, JobTerminal::Cancelled)
+    } else if mode == "reject" {
+        matches!(
+            report.terminal,
+            JobTerminal::Failed(crfty_engine::ab_av1::JobFailure {
+                kind: crfty_engine::ab_av1::JobFailureKind::NoGoodCrf { .. },
+                ..
+            })
+        )
+    } else if mode == "noisy" || mode == "orphan" || mode == "route" {
+        matches!(report.terminal, JobTerminal::Completed(_))
+    } else {
+        matches!(report.terminal, JobTerminal::Failed(_))
+    };
+    if !expected {
+        return Err(format!("wrong {mode:?} terminal: {:?}", report.terminal).into());
+    }
+    if mode == "hang" || mode == "orphan" {
+        let marker = input.with_extension("heartbeat");
+        let before = fs::read(&marker)?;
+        thread::sleep(Duration::from_millis(120));
+        if before != fs::read(&marker)? {
+            return Err("CLI descendant survived terminal publication".into());
+        }
+    }
+    if mode == "route" {
+        let records = fs::read_to_string(base.join("routing.marker"))?;
+        let expected = format!(
+            "{:?}\n",
+            vec![OsString::from("space path tést"), OsString::new()]
+        );
+        if records != expected.repeat(2) {
+            return Err(format!("relay changed arguments: {records:?}").into());
+        }
+    }
+    runtime.shutdown()?;
+    Ok(())
 }

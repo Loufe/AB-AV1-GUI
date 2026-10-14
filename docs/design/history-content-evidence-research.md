@@ -20,13 +20,13 @@ The measurement harness is standalone research tooling that lives outside this r
 
 ## What the pinned adapter already receives and discards
 
-**Read from source.** V3 consumes the ab-av1 fork in process (ADR-003, embed a pinned ab-av1 adapter), so `command::crf_search::run` hands the adapter typed updates rather than text. In `crfty-engine/src/ab_av1/operation.rs` the search loop consumes `Update::Status` into live telemetry, converts `Update::Done` into the one `SearchOutcome` that becomes durable, converts the `NoGoodCrf` error into a failure carrying its final outcome, and matches every remaining update with an empty arm.
+**Available contract.** V3 consumes official ab-av1 NDJSON. `sample-encode-done` provides a completed CRF trial summary, and `crf-search-done` provides the final successful result. A failed search can retain its last completed trial through `crf-search-error`. See [ADR-003](../adr/003-invoke-the-official-ab-av1-cli.md).
 
-Those discarded updates are `SampleResult`, which carries per-sample raw and encoded byte sizes, VMAF and XPSNR scores, sample encode wall time, sample duration, and a cache flag, and `RunResult`, which carries the per-attempt summary for every attempt except the successful final one.
+Per-sample scores, sample byte counts, and internal encode timings are not exposed by the current CLI JSON contract. Collecting them would require additional upstream structured events; completed trial summaries can be retained without a dependency patch.
 
-**Read from source.** Telemetry is explicitly not a durable source in V3: phase spans and outcomes reach the reducer through the lossless terminal command, and `Update::Status` feeds only the live view. Retaining attempt evidence therefore means adding durable observations, not re-reading telemetry.
+**Read from source.** Telemetry is explicitly not a durable source in V3: phase spans and outcomes reach the reducer through the lossless terminal command, and completed-trial telemetry feeds only the live view. Retaining attempt evidence therefore means adding durable observations, not re-reading telemetry.
 
-**Read from source.** Retaining these facts is an adapter change inside the existing patch surface. It widens no fork patch and adds no process, because the updates already arrive on the stream the adapter is reading.
+**Available contract.** Retaining completed trial summaries is an adapter observation change. Per-sample evidence needs an upstream extension; human stderr remains diagnostic only.
 
 ## Where the harness lives
 
@@ -62,7 +62,7 @@ The harness README also fixes the analysis contract. Held-out comparison must gr
 
 **Measured.** Fixture durations run from 10.0 to 183.3 s, and under ab-av1's sampling geometry every fixture contributes exactly one sample window, so nothing in the corpus exercises a window series.
 
-The ground-truth toolchain is not V3's toolchain, and the gap matters when reading the numbers below. V3 pins an ab-av1 0.11.4 fork consumed in process, and `--stdout-format json` postdates that base; the harness used the CLI and its JSON output purely to capture attempts that the in-process adapter would receive as typed updates. FFmpeg was a master build rather than V3's vendored artifact.
+The measurement harness used ab-av1 0.11.5 CLI JSON output and a master FFmpeg build. Production requires the official 0.11.7 JSON contract and a verified user-supplied toolchain; the measurements do not independently validate every production toolchain.
 
 ### Fixtures
 
@@ -134,7 +134,7 @@ That spread is the headroom a content signal would have to capture. It exists in
 
 **Measured.** Ladders from the first pass show the interpolation model overshooting badly enough to spend an attempt far from the target CRF. The bbb1080_s450 search jumped to CRF 70 and measured VMAF 77.43 against a target of 95, then walked back through 57.75, 58.25, and 58.75. The bbb1080_s30 search jumped down to CRF 18 and measured VMAF 97.86 at a predicted encode percent of 203, meaning a predicted output twice the size of its input. Retained attempt observations are exactly the data a better prior would be fitted on.
 
-**Measured.** Log lines are a worse source than the structured stream for the same run. On the four fixtures of the first pass, parsing ab-av1's stderr recovered boundaries for only 16 of 19 attempts and no per-sample score lines, while structured output carried every attempt. This supports consuming the adapter's typed updates rather than adding a log parser.
+**Measured.** Log lines are a worse source than the structured stream for the same run. On the four fixtures of the first pass, parsing ab-av1's stderr recovered boundaries for only 16 of 19 attempts and no per-sample score lines, while structured output carried every attempt. This supports consuming structured CLI messages rather than adding a log parser.
 
 ## Collector cost
 

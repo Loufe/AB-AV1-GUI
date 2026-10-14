@@ -12,7 +12,7 @@ use crfty_core::{
 use crate::{
     ab_av1::{
         AbAv1Runtime, EncodeRequest, JobFailureKind, JobHandle, JobReport, JobTerminal,
-        SearchRequest,
+        ProcessFailureKind, SearchRequest,
     },
     driver::CommandSender,
     failure::scrub_tail,
@@ -129,14 +129,17 @@ pub(super) fn run_encode(
                 final_telemetry,
             }) => {
                 // Hardware→software retry: hook BEFORE any abandonment so the
-                // still-unsettled transaction is reused. The failed attempt's
-                // adapter cleanup deleted the staging file, so restaging moves
-                // the journaled pin to a recreated one; once a transaction is
-                // abandoned the ledger refuses to restage, which is what makes
-                // retry-after-abandonment unrepresentable. The requested
-                // JobSpec is never rewritten — the divergence is recorded in
-                // the terminal evidence's `encode_decode`.
-                if matches!(decode_mode, DecodeMode::Hardware(_)) {
+                // still-unsettled transaction is reused. Restaging replaces the
+                // failed attempt's partial staging file and moves the journaled
+                // pin to the recreated one; once a transaction is abandoned the
+                // ledger refuses to restage, which is what makes
+                // retry-after-abandonment unrepresentable. A process tree that
+                // could not be settled may still write to staging, so cleanup
+                // failure never retries. The requested JobSpec is never
+                // rewritten — the divergence is recorded in the terminal
+                // evidence's `encode_decode`.
+                if matches!(decode_mode, DecodeMode::Hardware(_)) && !cleanup_failed(&failure.kind)
+                {
                     match restage_for_retry(&manager, services.commands, &mut transaction) {
                         Ok(()) => {
                             tracing::warn!(
@@ -158,7 +161,10 @@ pub(super) fn run_encode(
                     services.commands,
                     job,
                     &transaction,
-                    ItemOutcome::Failed(FailureFacts::new(FailureKind::EncodeRun, failure.message)),
+                    ItemOutcome::Failed(
+                        FailureFacts::new(FailureKind::EncodeRun, failure.message)
+                            .with_diagnostic(failure.diagnostic),
+                    ),
                     map_progress(
                         job.spec.run_id,
                         tracker,
@@ -428,6 +434,15 @@ pub(super) fn search_with_fallback(
                 });
             }
             JobTerminal::Failed(failure) => match failure.kind {
+                // Residue from an unsettled process tree or workspace must not
+                // be raced by another search, so cleanup failure ends both
+                // ladders with the primary failure still in its message.
+                kind if cleanup_failed(&kind) => {
+                    return Err(ItemOutcome::Failed(
+                        FailureFacts::new(FailureKind::SearchRun, failure.message)
+                            .with_diagnostic(failure.diagnostic),
+                    ));
+                }
                 JobFailureKind::NoGoodCrf { last } => {
                     let measured = measurement(last, profile.metric).map_err(|message| {
                         ItemOutcome::Failed(FailureFacts::new(FailureKind::SearchRun, message))
@@ -437,9 +452,9 @@ pub(super) fn search_with_fallback(
                         last_measurement: Some(measured),
                     });
                 }
-                JobFailureKind::Other => {
+                JobFailureKind::Other | JobFailureKind::Process { .. } => {
                     // Hardware→software retry (parse-free trigger): any
-                    // non-NoGoodCrf search failure under hardware decode
+                    // encode/score failure under hardware decode
                     // restarts the whole VMAF ladder once with the software
                     // profile. Attempts measured under hardware are discarded
                     // so the recorded result is honest about the profile it
@@ -456,10 +471,10 @@ pub(super) fn search_with_fallback(
                         failed_attempts.clear();
                         continue;
                     }
-                    return Err(ItemOutcome::Failed(FailureFacts::new(
-                        FailureKind::SearchRun,
-                        failure.message,
-                    )));
+                    return Err(ItemOutcome::Failed(
+                        FailureFacts::new(FailureKind::SearchRun, failure.message)
+                            .with_diagnostic(failure.diagnostic),
+                    ));
                 }
             },
             JobTerminal::Cancelled => return Err(ItemOutcome::Stopped),
@@ -491,6 +506,15 @@ pub(super) fn search_with_fallback(
         }
         target = next;
     }
+}
+
+fn cleanup_failed(kind: &JobFailureKind) -> bool {
+    matches!(
+        kind,
+        JobFailureKind::Process {
+            kind: ProcessFailureKind::Cleanup
+        }
+    )
 }
 
 fn wait_for_report<T>(

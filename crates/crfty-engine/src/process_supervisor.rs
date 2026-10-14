@@ -1,9 +1,10 @@
 //! Bounded, cancellable supervision for short-lived external tools.
 //!
 //! The caller owns concurrency: hold a permit while calling [`run`]. The call
-//! returns only after the complete process group/job has exited and both pipe
-//! readers have joined, so returning also marks the safe point at which that
-//! permit may be released.
+//! requests process-group/Job termination, waits for the direct child, and joins
+//! both pipe readers before returning. Windows Job completion notifications do
+//! not independently prove that every descendant has exited; the containment
+//! contract documents this platform limit.
 
 use std::{
     collections::VecDeque,
@@ -18,6 +19,8 @@ use std::{
 };
 
 use crate::process::ContainedChild;
+
+mod redact;
 
 const STATUS_POLL_INTERVAL: Duration = Duration::from_millis(20);
 const READ_BUFFER_BYTES: usize = 8 * 1024;
@@ -145,6 +148,21 @@ pub fn run(
     cancellation: &ProcessCancellation,
     limits: ProcessLimits,
 ) -> ProcessReport {
+    run_streaming(command, cancellation, limits, Vec::new(), |_| Ok(()))
+}
+
+/// Drains stdout while delivering bounded chunks to a machine-protocol consumer.
+/// A rejected chunk cancels the process before both readers are joined.
+pub(crate) fn run_streaming<F>(
+    command: &mut Command,
+    cancellation: &ProcessCancellation,
+    limits: ProcessLimits,
+    redactions: Vec<(Vec<u8>, Vec<u8>)>,
+    observer: F,
+) -> ProcessReport
+where
+    F: FnMut(&[u8]) -> Result<(), String> + Send + 'static,
+{
     if cancellation.is_cancelled() {
         return report(ProcessTerminal::Cancelled);
     }
@@ -185,9 +203,13 @@ pub fn run(
         }
     };
 
+    // Reader failures stop this invocation only; the caller's token may be
+    // shared by later work in the same run and must reflect user intent alone.
+    let reader_stop = ProcessCancellation::new();
+    let stdout_stop = reader_stop.clone();
     let stdout_reader = thread::Builder::new()
         .name("crfty-process-stdout".to_owned())
-        .spawn(move || read_head(stdout, limits.stdout_head_bytes));
+        .spawn(move || read_head(stdout, limits.stdout_head_bytes, observer, stdout_stop));
     let stdout_reader = match stdout_reader {
         Ok(reader) => reader,
         Err(error) => {
@@ -199,9 +221,12 @@ pub fn run(
             );
         }
     };
+    let stderr_stop = reader_stop.clone();
     let stderr_reader = thread::Builder::new()
         .name("crfty-process-stderr".to_owned())
-        .spawn(move || read_tail(stderr, limits.stderr_tail_bytes));
+        .spawn(move || {
+            read_tail_redacted(stderr, limits.stderr_tail_bytes, redactions, stderr_stop)
+        });
     let stderr_reader = match stderr_reader {
         Ok(reader) => reader,
         Err(error) => {
@@ -233,7 +258,9 @@ pub fn run(
     let started = Instant::now();
     let mut exit_status = None;
     loop {
-        if cancellation.is_cancelled() {
+        // A reader stop always records its failure, which `finish` reports in
+        // place of this placeholder terminal.
+        if cancellation.is_cancelled() || reader_stop.is_cancelled() {
             return terminate_and_finish(
                 &mut child,
                 ProcessTerminal::Cancelled,
@@ -371,14 +398,38 @@ struct ReaderResult {
     failure: Option<ProcessFailure>,
 }
 
-fn read_head(mut reader: impl Read, limit: usize) -> ReaderResult {
+fn read_head(
+    mut reader: impl Read,
+    limit: usize,
+    mut observer: impl FnMut(&[u8]) -> Result<(), String>,
+    stop: ProcessCancellation,
+) -> ReaderResult {
     let mut output = Vec::with_capacity(limit.min(READ_BUFFER_BYTES));
     let mut total_bytes = 0_usize;
     let mut buffer = [0_u8; READ_BUFFER_BYTES];
+    let mut observer_failure = None;
     loop {
         match reader.read(&mut buffer) {
             Ok(0) => break,
             Ok(count) => {
+                if observer_failure.is_none()
+                    && let Some(chunk) = buffer.get(..count)
+                {
+                    let observed =
+                        std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| observer(chunk)));
+                    let error = match observed {
+                        Ok(Ok(())) => None,
+                        Ok(Err(error)) => Some(error),
+                        Err(_) => Some("stdout protocol consumer panicked".to_owned()),
+                    };
+                    if let Some(error) = error {
+                        observer_failure = Some(ProcessFailure {
+                            stage: ProcessFailureStage::ReadStdout,
+                            message: error,
+                        });
+                        stop.cancel();
+                    }
+                }
                 total_bytes = total_bytes.saturating_add(count);
                 let remaining = limit.saturating_sub(output.len());
                 let retained = count.min(remaining);
@@ -387,6 +438,7 @@ fn read_head(mut reader: impl Read, limit: usize) -> ReaderResult {
                 }
             }
             Err(error) => {
+                stop.cancel();
                 return ReaderResult {
                     output: BoundedOutput {
                         bytes: output,
@@ -402,11 +454,27 @@ fn read_head(mut reader: impl Read, limit: usize) -> ReaderResult {
             bytes: output,
             total_bytes,
         },
-        failure: None,
+        failure: observer_failure,
     }
 }
 
-fn read_tail(mut reader: impl Read, limit: usize) -> ReaderResult {
+#[cfg(test)]
+pub(crate) fn redact_all(bytes: &[u8], patterns: Vec<(Vec<u8>, Vec<u8>)>) -> Vec<u8> {
+    redact::Redactor::new(patterns).push(bytes, true)
+}
+
+#[cfg(test)]
+fn read_tail(reader: impl Read, limit: usize) -> ReaderResult {
+    read_tail_redacted(reader, limit, Vec::new(), ProcessCancellation::new())
+}
+
+fn read_tail_redacted(
+    mut reader: impl Read,
+    limit: usize,
+    redactions: Vec<(Vec<u8>, Vec<u8>)>,
+    stop: ProcessCancellation,
+) -> ReaderResult {
+    let mut redactor = redact::Redactor::new(redactions);
     let mut output = VecDeque::with_capacity(limit.min(READ_BUFFER_BYTES));
     let mut total_bytes = 0_usize;
     let mut buffer = [0_u8; READ_BUFFER_BYTES];
@@ -416,12 +484,13 @@ fn read_tail(mut reader: impl Read, limit: usize) -> ReaderResult {
             Ok(count) => {
                 total_bytes = total_bytes.saturating_add(count);
                 if let Some(chunk) = buffer.get(..count) {
-                    output.extend(chunk);
+                    output.extend(redactor.push(chunk, false));
                     let excess = output.len().saturating_sub(limit);
                     output.drain(..excess);
                 }
             }
             Err(error) => {
+                stop.cancel();
                 return ReaderResult {
                     output: BoundedOutput {
                         bytes: output.into(),
@@ -431,6 +500,10 @@ fn read_tail(mut reader: impl Read, limit: usize) -> ReaderResult {
                 };
             }
         }
+    }
+    output.extend(redactor.push(&[], true));
+    while output.len() > limit {
+        output.pop_front();
     }
     ReaderResult {
         output: BoundedOutput {
@@ -464,7 +537,12 @@ mod tests {
 
     #[test]
     fn head_retains_prefix_and_counts_discarded_bytes() {
-        let result = read_head(Cursor::new(b"abcdefghij"), 4);
+        let result = read_head(
+            Cursor::new(b"abcdefghij"),
+            4,
+            |_| Ok(()),
+            super::ProcessCancellation::new(),
+        );
         assert_eq!(result.output.as_bytes(), b"abcd");
         assert_eq!(result.output.total_bytes(), 10);
         assert!(result.output.was_truncated());
@@ -482,7 +560,12 @@ mod tests {
 
     #[test]
     fn zero_limits_still_drain_the_streams() {
-        let head = read_head(Cursor::new(b"stdout"), 0);
+        let head = read_head(
+            Cursor::new(b"stdout"),
+            0,
+            |_| Ok(()),
+            super::ProcessCancellation::new(),
+        );
         let tail = read_tail(Cursor::new(b"stderr"), 0);
         assert!(head.output.as_bytes().is_empty());
         assert_eq!(head.output.total_bytes(), 6);
@@ -492,13 +575,35 @@ mod tests {
 
     #[test]
     fn read_failure_preserves_retained_bytes_and_identifies_the_pipe() {
-        let result = read_head(FailingReader::default(), 8);
+        let cancellation = super::ProcessCancellation::new();
+        let result = read_head(
+            FailingReader::default(),
+            8,
+            |_| Ok(()),
+            cancellation.clone(),
+        );
+        assert!(cancellation.is_cancelled());
         assert_eq!(result.output.as_bytes(), b"abc");
         assert_eq!(result.output.total_bytes(), 3);
         assert!(matches!(
             result.failure,
             Some(failure) if failure.stage == ProcessFailureStage::ReadStdout
         ));
+    }
+
+    #[test]
+    fn stderr_read_failure_requests_supervision_stop() {
+        let cancellation = super::ProcessCancellation::new();
+        let result = super::read_tail_redacted(
+            FailingReader::default(),
+            8,
+            Vec::new(),
+            cancellation.clone(),
+        );
+        assert!(cancellation.is_cancelled());
+        assert!(
+            matches!(result.failure, Some(failure) if failure.stage == ProcessFailureStage::ReadStderr)
+        );
     }
 
     #[derive(Default)]
