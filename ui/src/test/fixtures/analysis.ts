@@ -20,7 +20,7 @@ export function analysisSettings(): Settings {
     hardware_decode: true,
     privacy: { anonymize_logs: false, anonymize_history: false },
     log_folder: null,
-    tools: { ffmpeg: null, ffprobe: null },
+    tools: { ab_av1: null, ffmpeg: null, ffprobe: null },
   };
 }
 
@@ -28,6 +28,7 @@ export function analysisTools(): ToolAvailability {
   return {
     Located: {
       tools: {
+        ab_av1: { path: "/fixture/ab-av1", source: "SearchPath" },
         ffmpeg: { path: "/fixture/ffmpeg", source: "SearchPath" },
         ffprobe: { path: "/fixture/ffprobe", source: "SearchPath" },
       },
