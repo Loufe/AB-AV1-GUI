@@ -127,10 +127,13 @@ fn verify_ab_av1(tools: &MediaTools, cancellation: &ProcessCancellation) -> Step
             });
         }
     };
+    // The source is encoded with the already-verified SVT-AV1 encoder: every
+    // search decodes AV1 to score its samples, so this adds no requirement.
     let input = directory.path().join("probe.mkv");
     let mut command = ffmpeg_command(tools);
     command
-        .args(["-f", "lavfi", "-i", SYNTHETIC_SOURCE, "-c:v", "ffv1"])
+        .args(["-f", "lavfi", "-i", SYNTHETIC_SOURCE])
+        .args(["-c:v", "libsvtav1", "-preset", "12"])
         .arg(&input);
     match run_step(command, capability, cancellation) {
         StepResult::Passed(_) => {}

@@ -26,7 +26,7 @@ The delivery target is the runnable alpha defined in [the alpha delivery scope](
 - Durable facts keyed by sampled content identity: ADR-019
 - Output promotion owned as a journaled transaction: ADR-020
 - One supervision kit for job cancellation and completion, not yet implemented: ADR-018
-- The caller-driven owned ab-av1 operation, pending upstream: ADR-021
+- Each media operation owned through the process supervisor, with the official CLI in its own process: ADR-021
 - Every V2 statistic survives as a V3 consumer, with richer evidence where collection allows; the consumer matrix and field dispositions are frozen (`docs/design/history-consumer-matrix.md`)
 - Collection budgets are development-time acceptance thresholds, never runtime mechanisms. A collector ships only when it measures under 5 percent of the search it informs on the benchmark corpus. Collection is event-driven, with no periodic resource sampling and no media or network I/O of its own; scan and startup collection add no process and no file read, and the compatibility probe waits for first claim (`docs/design/history-collection-budgets.md`)
 - Durable quality evidence names its metric once per record, VMAF the sole initial variant; the metric joins the analysis identity and aggregates never blend metrics: ADR-022
@@ -43,6 +43,5 @@ The delivery target is the runnable alpha defined in [the alpha delivery scope](
 - Release-upgrade policy for queue state, saved analyses, and pending output transactions; History reads remain available when an operational payload is unsupported
 - The History IPC request and response types over the decided browse contract
 - Estimation as a subsystem separate from History: sufficiency, promise level, evidence seam, evaluation (`docs/design/estimation.md`)
-- Whether the ab-av1 maintainer accepts the operation boundary ADR-021 selects (alexheretic/ab-av1#371)
 
 Issue conventions: AGENTS.md "GitHub issues". Milestone: `v3.0`.

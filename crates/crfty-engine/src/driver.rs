@@ -94,8 +94,10 @@ struct Envelope {
     reply: mpsc::SyncSender<Reply>,
 }
 
+/// `Core` is boxed: Windows path representations make core commands far
+/// larger than the driver's own variants.
 enum DriverCommand {
-    Core(Command),
+    Core(Box<Command>),
     ReadSettings {
         reply: mpsc::SyncSender<Settings>,
     },
@@ -112,14 +114,18 @@ enum DriverCommand {
 
 impl From<Command> for DriverCommand {
     fn from(command: Command) -> Self {
-        Self::Core(command)
+        Self::Core(Box::new(command))
     }
 }
 
 impl DriverCommand {
+    fn is_settings(&self) -> bool {
+        matches!(self, Self::Core(command) if matches!(**command, Command::Settings(_)))
+    }
+
     fn into_core(self, state: &AppState) -> Result<Command, &'static str> {
         match self {
-            Self::Core(command) => Ok(command),
+            Self::Core(command) => Ok(*command),
             Self::ReadSettings { .. } => Err("settings reads must be handled by the driver"),
             Self::QueuePaths {
                 files,
@@ -526,11 +532,11 @@ fn maybe_compact(
 fn split_batch_at_settings(batch: Vec<Envelope>) -> Vec<Vec<Envelope>> {
     let mut groups: Vec<Vec<Envelope>> = Vec::new();
     for envelope in batch {
-        let settings = matches!(&envelope.command, DriverCommand::Core(Command::Settings(_)));
+        let settings = envelope.command.is_settings();
         let append = groups.last().is_some_and(|group| {
-            group.first().is_some_and(|first| {
-                matches!(&first.command, DriverCommand::Core(Command::Settings(_))) == settings
-            })
+            group
+                .first()
+                .is_some_and(|first| first.command.is_settings() == settings)
         });
         if append {
             if let Some(group) = groups.last_mut() {
@@ -562,7 +568,7 @@ fn process_batch(
     let settings_before = state.settings.clone();
     let analysis_before = batch
         .iter()
-        .any(|envelope| matches!(envelope.command, DriverCommand::Core(Command::Settings(_))))
+        .any(|envelope| envelope.command.is_settings())
         .then(|| state.analysis.clone());
     let mut durable = Vec::new();
     let mut applied_batch = Vec::with_capacity(batch.len());
