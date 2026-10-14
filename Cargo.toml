@@ -31,6 +31,9 @@ unimplemented = "deny"
 unwrap_used = "deny"
 
 # Full debuginfo made per-worktree target directories grow past 19 GB.
-# Line tables keep file:line backtraces.
+# Line tables keep file:line backtraces in workspace crates; dependencies carry none.
 [profile.dev]
 debug = "line-tables-only"
+
+[profile.dev.package."*"]
+debug = false
