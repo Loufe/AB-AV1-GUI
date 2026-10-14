@@ -83,13 +83,13 @@ describe("StatisticsView request lifecycle", () => {
     await expect.poll(() => tauri.callsFor("request_statistics").length).toBe(1);
     expect(requestPayloads(tauri)).toEqual([{ utcOffsetMinutes: expectedOffset }]);
     await expect.element(page.getByText("Loading statistics")).toBeVisible();
-    await expect.element(page.getByText("Converted standings")).not.toBeInTheDocument();
+    await expect.element(page.getByText("Converted records")).not.toBeInTheDocument();
 
     setStatistics(richPayload());
 
     await expect.element(page.getByRole("heading", { name: "Statistics" })).toBeVisible();
     await expect.element(page.getByText("Loading statistics")).not.toBeInTheDocument();
-    await expect.element(page.getByText("Converted standings").first()).toBeVisible();
+    await expect.element(page.getByText("Converted records").first()).toBeVisible();
   });
 
   it("retains valid data through refresh acknowledgement and a later response", async () => {
@@ -138,7 +138,7 @@ describe("StatisticsView request lifecycle", () => {
     await rendered.rerender(<StatisticsHarness active />);
     await expect.poll(() => tauri.callsFor("request_statistics").length).toBe(1);
     setStatistics(richPayload());
-    await expect.element(page.getByText("Converted standings").first()).toBeVisible();
+    await expect.element(page.getByText("Converted records").first()).toBeVisible();
 
     window.dispatchEvent(new Event("focus"));
     await expect.poll(() => tauri.callsFor("request_statistics").length).toBe(2);
@@ -199,7 +199,7 @@ describe("StatisticsView payload presentation", () => {
     await expect
       .element(
         page.getByText(
-          "1 of 2 converted standings include both sizes; output-size reduction statistics cover only those files.",
+          "1 of 2 converted records have eligible size measurements; output-size reduction statistics cover only those records.",
         ),
       )
       .toBeVisible();

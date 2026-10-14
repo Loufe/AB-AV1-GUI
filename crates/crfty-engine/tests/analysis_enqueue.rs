@@ -5,9 +5,8 @@ use std::{collections::BTreeSet, fs, path::Path, time::Duration};
 use crfty_core::{
     AnalysisActivity, AnalysisDelta, AnalysisQueueRequest, AnalysisQueueSelection,
     AnalysisRowEntry, AnalysisSnapshot, DefaultOutputMode, DurableDelta, EphemeralDelta,
-    ExecutionSettings, LocatedTool, LocatedTools, Operation, OutputTarget, QueueAddRequest,
-    QueueCommand, Reply, Settings, SettingsCommand, ToolRevisions, ToolSource, VideoExtension,
-    fold_analysis,
+    ExecutionSettings, LocatedTool, LocatedTools, Operation, OutputTarget, QueueCommand, Reply,
+    Settings, SettingsCommand, ToolRevisions, ToolSource, fold_analysis,
 };
 use crfty_engine::{
     coordinator::{EngineConfig, EngineRuntime, FixedTools, ToolsConfig},
@@ -44,10 +43,9 @@ fn discover(
     engine: &EngineRuntime,
     root: &Path,
 ) -> Result<AnalysisSnapshot, Box<dyn std::error::Error>> {
-    let generation = engine.commands.begin_analysis_discovery(
-        vec![root.to_path_buf()],
-        BTreeSet::from([VideoExtension::Mkv]),
-    )?;
+    let generation = engine
+        .commands
+        .begin_analysis_discovery(vec![root.to_path_buf()])?;
     let mut snapshot = AnalysisSnapshot::default();
     loop {
         if let DriverEvent::Ephemeral(EphemeralDelta::Analysis(delta)) =
@@ -103,19 +101,14 @@ fn captured_native_paths_committed_settings_and_concurrent_ids_survive_restart()
         }));
     }
     let commands = engine.commands.clone();
+    let direct_path = fixture.path().join("direct-file.mkv");
+    fs::write(&direct_path, b"direct")?;
     let direct = std::thread::spawn(move || {
-        commands.submit_queue(QueueCommand::AddMany {
-            requests: vec![QueueAddRequest {
-                input: "direct-file.mkv".into(),
-                path_hash: None,
-                identity: None,
-                timestamp_reliability: crfty_core::TimestampReliability::Unknown,
-                operation: Operation::Convert,
-                intent: crfty_core::AnalysisIntent::ReuseIfFresh,
-                output_target: OutputTarget::Replace,
-                overwrite: crfty_core::OverwriteDecision::FollowSettings,
-            }],
-        })
+        commands.queue_add_paths(
+            vec![direct_path],
+            Operation::Convert,
+            crfty_core::AnalysisIntent::ReuseIfFresh,
+        )
     });
     for worker in workers {
         let summary = worker.join().map_err(|_| "enqueue worker panicked")??;
@@ -135,13 +128,13 @@ fn captured_native_paths_committed_settings_and_concurrent_ids_survive_restart()
         {
             if item.operation == Operation::Analyze {
                 assert!(item.input.starts_with(&media));
-                assert_eq!(
-                    item.output_target,
-                    OutputTarget::Suffix {
-                        suffix: "_current".to_owned()
-                    }
-                );
             }
+            assert_eq!(
+                item.output_target,
+                OutputTarget::Suffix {
+                    suffix: "_current".to_owned()
+                }
+            );
             added.push(item.id.0);
         }
     }

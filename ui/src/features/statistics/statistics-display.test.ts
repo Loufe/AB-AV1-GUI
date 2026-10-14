@@ -27,7 +27,7 @@ describe("Statistics display model", () => {
   it("communicates partial conversion-size coverage without altering totals", () => {
     const partial = statisticsPayload({ converted_files: 5, sized_converted_files: 3 });
     expect(coverageMessage(partial)).toBe(
-      "3 of 5 converted standings include both sizes; output-size reduction statistics cover only those files.",
+      "3 of 5 converted records have eligible size measurements; output-size reduction statistics cover only those records.",
     );
     expect(
       coverageMessage(statisticsPayload({ converted_files: 5, sized_converted_files: 5 })),

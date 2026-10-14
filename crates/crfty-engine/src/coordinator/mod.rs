@@ -24,7 +24,7 @@ use crfty_core::{
     AnalysisGenerationId, AppSnapshot, Command, CorruptionSignature, ExecutionSettings,
     HardwareDecoder, HistoryCommand, LocatedTools, ProjectionCommand, QueueCommand, Reply,
     SessionCommand, SettingsCommand, SystemCommand, ToolAvailability, ToolRevisions,
-    ToolVerification, ToolsCommand, VideoExtension,
+    ToolVerification, ToolsCommand,
 };
 
 use crate::{
@@ -343,9 +343,8 @@ impl UserCommandSender {
     pub fn begin_analysis_discovery(
         &self,
         roots: Vec<PathBuf>,
-        extensions: BTreeSet<VideoExtension>,
     ) -> Result<AnalysisGenerationId, crate::analysis::AnalysisError> {
-        self.analysis.begin(roots, extensions)
+        self.analysis.begin(roots)
     }
 
     pub fn cancel_analysis(&self) -> Result<(), crate::analysis::AnalysisError> {
@@ -361,6 +360,20 @@ impl UserCommandSender {
 
     pub fn submit_queue(&self, command: QueueCommand) -> Result<Reply, crate::driver::SubmitError> {
         self.inner.submit(Command::Queue(command))
+    }
+
+    /// Expand native paths using committed scan settings outside the state
+    /// writer, then resolve committed output defaults and allocate IDs in the
+    /// same reducer transaction as Analysis enqueue.
+    pub fn queue_add_paths(
+        &self,
+        inputs: Vec<PathBuf>,
+        operation: crfty_core::Operation,
+        intent: crfty_core::AnalysisIntent,
+    ) -> Result<Reply, crate::driver::SubmitError> {
+        let settings = self.inner.committed_settings()?;
+        let files = crate::scan::expand_inputs(&inputs, &settings.scan_extensions);
+        self.inner.enqueue_paths(files, operation, intent)
     }
 
     pub fn submit_session(

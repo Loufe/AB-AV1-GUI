@@ -88,8 +88,8 @@ pub use observation::{
     DecisiveFact, DecisiveKind, EncodeEvidence, EncodeMeasurement, ImportedFact, ImportedKind,
     MeasuredSizes, NativeObservation, NativeRecording, Observation, ObservationId,
     ObservationPaths, ObservedOutcome, OutputKind, PredictionPair, RateSample, ReductionFact,
-    RemuxEvidence, RemuxMeasurement, SearchEvidence, SourceAssessment, SourceFacts, observations,
-    standing,
+    RemuxEvidence, RemuxMeasurement, RunTotals, SearchEvidence, SourceAssessment, SourceFacts,
+    StatisticsFact, observations, standing,
 };
 pub use output::{
     ArtifactIdentity, ConflictKind, ContentKey, DestructiveIdentity, DestructiveObservation,
@@ -99,7 +99,7 @@ pub use output::{
 pub(crate) use policy::{ParkedResolution, evaluate_enqueue, resolve_parked, select_job_action};
 pub use policy::{SkipReason, permitted_profiles, verdict_applies};
 pub use projection::{HistoryRow, history_rows};
-pub(crate) use projection::{StatisticsPayload, collect_stat_facts, statistics};
+pub(crate) use projection::{StatisticsPayload, statistics};
 pub use reducer::{
     Applied, Command, Effect, EphemeralDelta, HistoryCommand, ProjectionCommand, QueueAddRequest,
     QueueCommand, QueueItemEdit, Rejection, Reply, ReservationDisposition, SessionCommand,

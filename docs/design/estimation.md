@@ -34,11 +34,11 @@ Labels are stable and cited bare.
 
 ## The seam with History
 
-Estimation reads History as evidence and never writes to it. Three parts of that seam are unsettled.
+Estimation reads History as evidence and never writes to it. History now owns eligibility at the accessor boundary; the final read shape remains open.
 
-**Read shape.** `EstimationModel::from_state` walks every content record and every conversion run on each estimation round (read from source). That is affordable against an in-memory journal but unproven against an indexed store holding a large history. The alternative is estimation describing a cohort and the store answering a query. The alpha storage workload proves access to retained prediction and measurement facts; the final cohort strategy is resolved when the historical estimator is implemented and does not block that workload (`alpha.md`).
+**Read shape.** `EstimationModel::from_state` derives terminal observations from the operational ledgers, then delegates to `from_observations` (read from source). It never joins current content metadata or harvests phase spans itself. Every qualified native run can supply a sample, including analyzed-only observations and earlier conversions of the same content; Statistics file counts instead deduplicate decisive facts. This in-memory walk is unproven against an indexed store holding a large history. The alternative is estimation describing a cohort and the store answering a query. The alpha storage workload proves access to retained prediction and measurement facts; the final cohort strategy is resolved when the historical estimator is implemented and does not block that workload (`alpha.md`).
 
-**Admissibility authority.** `EstimationModel::from_state` reaches past `StatFact` into `state.conversion_runs` to harvest analyze rates from analyzed-only runs (read from source). That is the estimator judging which History records are eligible. The clean rule is that History decides what an observation is and what it claims, and estimation decides which observations are useful for a given prediction.
+**Admissibility authority.** The estimator reads both operations through `Observation::rate_sample` (read from source). History requires a reportable analyzed or converted outcome, positive source and phase durations, and a matched assessment of that phase. Failed, stopped, incomplete, not-worthwhile, unassessed, and changed-source evidence supplies no rate. Translated imports supply only imported facts, so neither parked nor adopted V2 durations enter this native ladder. E4's down-weighted imported prior belongs to the successor model. The current engine produces no assessments, so its native history supplies no rate until phase assessment is implemented. Estimation groups admitted samples and never re-decides eligibility.
 
 **The prediction and measurement pair.** `docs/HISTORY.md` requires that a prediction is never overwritten or reconciled when its outcome arrives. That recording rule belongs to History. The backtest consuming those pairs belongs here, and it is the substrate every evaluation claim below depends on.
 
@@ -94,7 +94,7 @@ An estimator is admissible when it is measured against the one it would replace,
 
 **Size estimation.** Whether a pre-analysis size estimate can exist at all under E1. The basis and the fate of V2's correction are settled by E5.
 
-**Read shape and admissibility authority.** As above.
+**Read shape.** As above; admissibility authority is settled at the History accessor boundary.
 
 **Live ETA consistency.** Whether the pre-run estimate and the in-run ETA are required to agree, and what happens when they do not.
 

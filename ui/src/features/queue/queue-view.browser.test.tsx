@@ -269,11 +269,10 @@ describe("QueueView", () => {
       kind: "Files",
       startingDirectory: "C:\\Videos",
     });
-    expect(tauri.callsFor("queue_add_paths")[0]?.payload).toMatchObject({
+    expect(tauri.callsFor("queue_add_paths")[0]?.payload).toEqual({
       inputs: ["C:\\picked\\one.mkv"],
       operation: "Convert",
       intent: "ReuseIfFresh",
-      outputTarget: { Suffix: { suffix: "_av1" } },
     });
     expect(appStore.getState().durable).toBe(state);
 

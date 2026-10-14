@@ -96,6 +96,14 @@ struct Envelope {
 
 enum DriverCommand {
     Core(Command),
+    ReadSettings {
+        reply: mpsc::SyncSender<Settings>,
+    },
+    QueuePaths {
+        files: Vec<crate::scan::ScannedFile>,
+        operation: crfty_core::Operation,
+        intent: crfty_core::AnalysisIntent,
+    },
     AnalysisQueue {
         request: crfty_core::AnalysisQueueRequest,
         registry: Arc<Mutex<crate::analysis::AnalysisGenerationRegistry>>,
@@ -109,9 +117,34 @@ impl From<Command> for DriverCommand {
 }
 
 impl DriverCommand {
-    fn into_core(self) -> Result<Command, &'static str> {
+    fn into_core(self, state: &AppState) -> Result<Command, &'static str> {
         match self {
             Self::Core(command) => Ok(command),
+            Self::ReadSettings { .. } => Err("settings reads must be handled by the driver"),
+            Self::QueuePaths {
+                files,
+                operation,
+                intent,
+            } => {
+                let requests = files
+                    .into_iter()
+                    .map(|file| {
+                        Ok(crfty_core::QueueAddRequest {
+                            input: file.path,
+                            path_hash: file.path_hash,
+                            identity: file.identity,
+                            timestamp_reliability: file.timestamp_reliability,
+                            operation,
+                            intent,
+                            output_target: state.settings.output.target(file.source_root)?,
+                            overwrite: crfty_core::OverwriteDecision::FollowSettings,
+                        })
+                    })
+                    .collect::<Result<Vec<_>, &'static str>>()?;
+                Ok(Command::Queue(crfty_core::QueueCommand::AddMany {
+                    requests,
+                }))
+            }
             Self::AnalysisQueue { request, registry } => {
                 let registry = match registry.lock() {
                     Ok(registry) => registry,
@@ -166,6 +199,27 @@ pub struct CommandSender {
 impl CommandSender {
     pub fn submit(&self, command: Command) -> Result<Reply, SubmitError> {
         self.submit_driver(command.into())
+    }
+
+    /// Read at the writer's command boundary, after preceding Settings writes
+    /// have either persisted or rolled back. No event consumer is involved.
+    pub(crate) fn committed_settings(&self) -> Result<Settings, SubmitError> {
+        let (reply, receiver) = mpsc::sync_channel(1);
+        self.submit_driver(DriverCommand::ReadSettings { reply })?;
+        receiver.recv().map_err(|_| SubmitError::ReplyDisconnected)
+    }
+
+    pub(crate) fn enqueue_paths(
+        &self,
+        files: Vec<crate::scan::ScannedFile>,
+        operation: crfty_core::Operation,
+        intent: crfty_core::AnalysisIntent,
+    ) -> Result<Reply, SubmitError> {
+        self.submit_driver(DriverCommand::QueuePaths {
+            files,
+            operation,
+            intent,
+        })
     }
 
     pub(crate) fn enqueue_analysis(
@@ -514,7 +568,17 @@ fn process_batch(
     let mut applied_batch = Vec::with_capacity(batch.len());
     let mut recovered = false;
     for envelope in batch {
-        let command = match envelope.command.into_core() {
+        let command = match envelope.command {
+            DriverCommand::ReadSettings { reply } => {
+                if reply.send(state.settings.clone()).is_err() {
+                    tracing::warn!("committed Settings reader disconnected");
+                }
+                applied_batch.push((envelope.reply, Ok(Applied::accepted())));
+                continue;
+            }
+            command => command,
+        };
+        let command = match command.into_core(state) {
             Ok(command) => command,
             Err(reason) => {
                 applied_batch.push((envelope.reply, Err(Rejection::new(reason))));
@@ -1131,6 +1195,94 @@ mod tests {
     struct RecordingConfig {
         writes: Vec<Settings>,
         failure: Option<String>,
+    }
+
+    #[test]
+    fn settings_reads_and_expanded_adds_follow_persistence_barriers()
+    -> Result<(), Box<dyn std::error::Error>> {
+        use super::DriverCommand;
+        use crfty_core::{DefaultOutputMode, VideoExtension};
+
+        for persistence_fails in [false, true] {
+            let mut state = AppState::default();
+            let before = state.settings.clone();
+            let mut changed = before.clone();
+            changed.scan_extensions = [VideoExtension::Mkv].into_iter().collect();
+            changed.output.default_mode = DefaultOutputMode::Suffix;
+            changed.output.suffix = "_committed".to_owned();
+            let (capture_tx, capture_rx) = mpsc::sync_channel(1);
+            let (captured_tx, captured_rx) = mpsc::sync_channel(1);
+            let (settings_tx, settings_rx) = mpsc::sync_channel(1);
+            let (read_tx, read_rx) = mpsc::sync_channel(1);
+            let (snapshot_tx, snapshot_rx) = mpsc::sync_channel(1);
+            let (add_tx, add_rx) = mpsc::sync_channel(1);
+            let (events, _) = mpsc::channel();
+            let mut config = RecordingConfig {
+                writes: Vec::new(),
+                failure: persistence_fails.then(|| "settings sync failed".to_owned()),
+            };
+            let batch = vec![
+                Envelope {
+                    command: DriverCommand::ReadSettings { reply: captured_tx },
+                    reply: capture_tx,
+                },
+                Envelope {
+                    command: Command::Settings(SettingsCommand::Set {
+                        settings: changed.clone(),
+                    })
+                    .into(),
+                    reply: settings_tx,
+                },
+                Envelope {
+                    command: DriverCommand::ReadSettings { reply: snapshot_tx },
+                    reply: read_tx,
+                },
+                Envelope {
+                    command: DriverCommand::QueuePaths {
+                        files: vec![crate::scan::ScannedFile {
+                            path: "source/movie.mkv".into(),
+                            path_hash: None,
+                            identity: None,
+                            timestamp_reliability: crfty_core::TimestampReliability::Unknown,
+                            source_root: Some("source".into()),
+                        }],
+                        operation: Operation::Convert,
+                        intent: AnalysisIntent::ReuseIfFresh,
+                    },
+                    reply: add_tx,
+                },
+            ];
+            for group in split_batch_at_settings(batch) {
+                assert!(
+                    !process_batch(
+                        &mut state,
+                        &mut NoopJournal,
+                        &mut config,
+                        &mut None,
+                        group,
+                        &events,
+                        None,
+                    )
+                    .should_stop
+                );
+            }
+            assert_eq!(capture_rx.recv()?, Reply::Accepted);
+            assert_eq!(captured_rx.recv()?, before);
+            let expected = if persistence_fails { before } else { changed };
+            assert_eq!(snapshot_rx.recv()?, expected);
+            assert_eq!(read_rx.recv()?, Reply::Accepted);
+            assert_eq!(add_rx.recv()?, Reply::Accepted);
+            assert_eq!(
+                state.durable.queue.first().map(|item| &item.output_target),
+                Some(&expected.output.target(Some("source".into()))?)
+            );
+            assert_eq!(state.durable.queue.first().map(|item| item.id.0), Some(1));
+            assert_eq!(
+                matches!(settings_rx.recv()?, Reply::Rejected { .. }),
+                persistence_fails
+            );
+        }
+        Ok(())
     }
 
     fn state_with_reusable_analysis() -> Result<AppState, String> {
@@ -1941,8 +2093,8 @@ mod tests {
             }),
         )
         .map_err(|rejection| rejection.reason)?;
-        let applied =
-            apply(&mut state, command.into_core()?).map_err(|rejection| rejection.reason)?;
+        let command = command.into_core(&state)?;
+        let applied = apply(&mut state, command).map_err(|rejection| rejection.reason)?;
         assert_eq!(
             applied.reply,
             SuccessReply::AnalysisQueued(AnalysisQueueSummary {

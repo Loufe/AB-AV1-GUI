@@ -15,10 +15,9 @@ use std::{
 use crfty_core::{
     AnalysisDelta, AnalysisGenerationId, AnalysisIntent, AnalysisProfile, AnalysisSnapshot,
     AppSnapshot, ConfigDelta, CorruptionReport, CorruptionSignature, DurableDelta, EphemeralDelta,
-    ExecutionSettings, Operation, OutputTarget, OverwriteDecision, ProjectionCommand,
-    QueueAddRequest, QueueCommand, Reply, RunId, SessionAggregates, SessionCommand, SessionState,
-    Settings, SettingsCommand, Telemetry, ToolAvailability, ToolsCommand, fold, fold_analysis,
-    fold_config,
+    ExecutionSettings, Operation, ProjectionCommand, QueueCommand, Reply, RunId, SessionAggregates,
+    SessionCommand, SessionState, Settings, SettingsCommand, Telemetry, ToolAvailability,
+    ToolsCommand, fold, fold_analysis, fold_config,
 };
 use crfty_engine::{
     coordinator::{EngineConfig, EngineRuntime, ToolsConfig, UserCommandSender},
@@ -382,14 +381,8 @@ impl Bridge {
         &self,
         roots: Vec<PathBuf>,
     ) -> Result<AnalysisGenerationId, CommandError> {
-        let commands = self.commands()?;
-        let extensions = lock_stream(&self.stream)
-            .model
-            .settings
-            .scan_extensions
-            .clone();
-        commands
-            .begin_analysis_discovery(roots, extensions)
+        self.commands()?
+            .begin_analysis_discovery(roots)
             .map_err(CommandError::from)
     }
 
@@ -417,49 +410,13 @@ impl Bridge {
             .map_err(CommandError::from)
     }
 
-    /// Expands files and folders into one `AddMany` batch carrying real
-    /// enqueue facts (path hash + destructive identity, best-effort). The scan-extension
-    /// filter comes from the settings read model; for `SeparateFolder`
-    /// targets, each folder-discovered file gets its originating folder as
-    /// `source_root` so the output tree mirrors the source tree.
     pub(crate) fn queue_add_paths(
         &self,
         inputs: Vec<PathBuf>,
         operation: Operation,
         intent: AnalysisIntent,
-        output_target: OutputTarget,
     ) -> Result<(), CommandError> {
-        let commands = self.commands()?;
-        let extensions = lock_stream(&self.stream)
-            .model
-            .settings
-            .scan_extensions
-            .clone();
-        let requests = crfty_engine::scan::expand_inputs(&inputs, &extensions)
-            .into_iter()
-            .map(|file| {
-                let output_target = match (&output_target, file.source_root) {
-                    (OutputTarget::SeparateFolder { directory, .. }, Some(root)) => {
-                        OutputTarget::SeparateFolder {
-                            directory: directory.clone(),
-                            source_root: Some(root),
-                        }
-                    }
-                    _ => output_target.clone(),
-                };
-                QueueAddRequest {
-                    input: file.path,
-                    path_hash: file.path_hash,
-                    identity: file.identity,
-                    timestamp_reliability: file.timestamp_reliability,
-                    operation,
-                    intent,
-                    output_target,
-                    overwrite: OverwriteDecision::FollowSettings,
-                }
-            })
-            .collect();
-        map_reply(commands.submit_queue(QueueCommand::AddMany { requests }))
+        map_reply(self.commands()?.queue_add_paths(inputs, operation, intent))
     }
 
     pub(crate) fn submit_session(&self, command: SessionCommand) -> Result<(), CommandError> {
@@ -762,6 +719,143 @@ mod tests {
     };
 
     use super::*;
+
+    #[test]
+    fn enqueue_and_discovery_delegate_without_reading_shell_settings()
+    -> Result<(), Box<dyn std::error::Error>> {
+        use crfty_core::{
+            DefaultOutputMode, LocatedTool, LocatedTools, OutputTarget, ToolRevisions, ToolSource,
+            VideoExtension,
+        };
+        use crfty_engine::coordinator::FixedTools;
+        use std::{collections::BTreeSet, fs, time::Duration};
+
+        let fixture = tempfile::tempdir()?;
+        let source = fixture.path().join("source");
+        let nested = source.join("nested");
+        fs::create_dir_all(&nested)?;
+        let first = source.join("one.mkv");
+        let second = nested.join("two.MKV");
+        let direct = fixture.path().join("explicit.other");
+        for path in [&first, &second, &direct, &source.join("ignored.mp4")] {
+            fs::write(path, b"fixture")?;
+        }
+        let tool = LocatedTool {
+            path: std::env::current_exe()?,
+            source: ToolSource::Environment,
+        };
+        let runtime = EngineRuntime::start(EngineConfig {
+            journal_path: fixture.path().join("journal.jsonl"),
+            config_path: fixture.path().join("config.json"),
+            execution: ExecutionSettings::default(),
+            tools: ToolsConfig::Fixed(FixedTools {
+                tools: LocatedTools {
+                    ffmpeg: tool.clone(),
+                    ffprobe: tool,
+                },
+                revisions: ToolRevisions {
+                    ab_av1: "fixture".into(),
+                    ffmpeg: "fixture".into(),
+                    encoder: "fixture".into(),
+                },
+                hardware_decoders: BTreeSet::new(),
+            }),
+        })?;
+        let mut stale = StreamState::new(Health::Ok);
+        stale.model.settings.scan_extensions.clear();
+        stale.model.settings.output.default_mode = DefaultOutputMode::SeparateFolder;
+        let bridge = Bridge {
+            stream: Arc::new(Mutex::new(stale)),
+            commands: Some(runtime.commands.clone()),
+            release_url: Arc::new(Mutex::new(None)),
+            engine: Mutex::new(None),
+        };
+        let destination = fixture.path().join("output");
+        let mut settings = Settings {
+            scan_extensions: [VideoExtension::Mkv].into_iter().collect(),
+            ..Settings::default()
+        };
+        settings.output.default_mode = DefaultOutputMode::SeparateFolder;
+        settings.output.separate_folder = Some(destination.clone());
+        bridge
+            .submit_settings(settings)
+            .map_err(|error| error.message)?;
+        bridge
+            .queue_add_paths(
+                vec![source.clone(), direct.clone(), first.clone()],
+                Operation::Analyze,
+                AnalysisIntent::Refresh,
+            )
+            .map_err(|error| error.message)?;
+        let mut added = Vec::new();
+        let mut summary = None;
+        while summary.is_none() || added.len() < 3 {
+            match runtime.events.recv_timeout(Duration::from_secs(5))? {
+                DriverEvent::Durable(DurableDelta::QueueAdded { item }) => added.push(item),
+                DriverEvent::Ephemeral(EphemeralDelta::QueueAddSummary { added, skipped }) => {
+                    summary = Some((added, skipped));
+                }
+                _ => {}
+            }
+        }
+        let (count, skipped) = summary.ok_or("queue summary was not published")?;
+        assert_eq!(count, 3);
+        assert_eq!(skipped, vec![(crfty_core::SkipReason::AlreadyQueued, 1)]);
+        assert_eq!(
+            added
+                .iter()
+                .map(|item| (&item.input, item.id.0))
+                .collect::<Vec<_>>(),
+            vec![(&first, 1), (&second, 2), (&direct, 3)]
+        );
+        for item in &added {
+            assert_eq!(item.operation, Operation::Analyze);
+            assert_eq!(item.intent, AnalysisIntent::Refresh);
+            assert_eq!(
+                item.output_target,
+                OutputTarget::SeparateFolder {
+                    directory: destination.clone(),
+                    source_root: (item.input != direct).then(|| source.clone()),
+                }
+            );
+        }
+        let generation = bridge
+            .begin_analysis_discovery(vec![source])
+            .map_err(|error| error.message)?;
+        let mut snapshot = AnalysisSnapshot::default();
+        loop {
+            if let DriverEvent::Ephemeral(EphemeralDelta::Analysis(delta)) =
+                runtime.events.recv_timeout(Duration::from_secs(5))?
+            {
+                fold_analysis(&mut snapshot, &delta);
+                if matches!(delta, AnalysisDelta::ActivityChanged { generation: id, activity: AnalysisActivity::Discovered } if id == generation)
+                {
+                    break;
+                }
+            }
+        }
+        let current = snapshot
+            .current
+            .ok_or("discovery did not publish a generation")?;
+        assert_eq!(
+            current
+                .rows
+                .values()
+                .filter(|row| matches!(row.entry, AnalysisRowEntry::File { .. }))
+                .count(),
+            2
+        );
+        assert!(
+            lock_stream(&bridge.stream)
+                .model
+                .settings
+                .scan_extensions
+                .is_empty()
+        );
+        assert!(lock_stream(&bridge.stream).model.durable.queue.is_empty());
+        runtime.shutdown().map_err(|_| "engine shutdown failed")?;
+        Ok(())
+    }
 
     fn telemetry(run: u64, sequence: u64, position_ms: u64) -> Telemetry {
         Telemetry {

@@ -23,7 +23,7 @@ pub mod process_supervisor;
 pub mod rate;
 pub mod release;
 pub mod remux;
-pub mod scan;
+mod scan;
 pub mod sentinel;
 pub mod tools;
 
