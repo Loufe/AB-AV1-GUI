@@ -12,8 +12,11 @@ enum Message {
     Trial(ResultFields),
     #[serde(rename = "crf-search-done")]
     Done(ResultFields),
+    /// ab-av1 emits this only when no CRF satisfies the target, after at least
+    /// one attempt; every other failure exits non-zero without a terminal
+    /// message. Its fixed human text is never retained.
     #[serde(rename = "crf-search-error")]
-    Rejected { message: String },
+    NoGoodCrf {},
 }
 
 #[derive(Deserialize)]
@@ -96,11 +99,12 @@ impl SearchProtocol {
                 self.trials = self.trials.saturating_add(1);
             }
             Message::Done(fields) => self.terminal = Some(Ok(fields.outcome()?)),
-            Message::Rejected { message } => {
-                self.terminal = Some(Err(match self.last.clone() {
-                    Some(last) => JobFailure::no_good_crf(last),
-                    None => JobFailure::new(message),
-                }));
+            Message::NoGoodCrf {} => {
+                let last = self
+                    .last
+                    .clone()
+                    .ok_or("ab-av1 reported no suitable CRF before any attempt")?;
+                self.terminal = Some(Err(JobFailure::no_good_crf(last)));
             }
         }
         Ok(())
@@ -153,6 +157,11 @@ mod tests {
                 .is_err()
         );
         assert!(SearchProtocol::default().push(b"human output\n").is_err());
+        assert!(
+            SearchProtocol::default()
+                .push(b"{\"type\":\"crf-search-error\",\"message\":\"/videos/private.mkv\"}\n")
+                .is_err()
+        );
         Ok(())
     }
 }

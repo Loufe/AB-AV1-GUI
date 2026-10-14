@@ -70,7 +70,14 @@ function optionalPath(value: string): string | null {
 
 function toolPathField(issue: ValidationIssue | null): ToolPathField | null {
   if (issue === null) return null;
-  return issue.field === "tool-ffmpeg" || issue.field === "tool-ffprobe" ? issue.field : null;
+  switch (issue.field) {
+    case "tool-ab-av1":
+    case "tool-ffmpeg":
+    case "tool-ffprobe":
+      return issue.field;
+    default:
+      return null;
+  }
 }
 
 export function SettingsView() {

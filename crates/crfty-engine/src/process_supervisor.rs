@@ -203,17 +203,13 @@ where
         }
     };
 
-    let reader_cancellation = cancellation.clone();
+    // Reader failures stop this invocation only; the caller's token may be
+    // shared by later work in the same run and must reflect user intent alone.
+    let reader_stop = ProcessCancellation::new();
+    let stdout_stop = reader_stop.clone();
     let stdout_reader = thread::Builder::new()
         .name("crfty-process-stdout".to_owned())
-        .spawn(move || {
-            read_head(
-                stdout,
-                limits.stdout_head_bytes,
-                observer,
-                reader_cancellation,
-            )
-        });
+        .spawn(move || read_head(stdout, limits.stdout_head_bytes, observer, stdout_stop));
     let stdout_reader = match stdout_reader {
         Ok(reader) => reader,
         Err(error) => {
@@ -225,16 +221,11 @@ where
             );
         }
     };
-    let stderr_cancellation = cancellation.clone();
+    let stderr_stop = reader_stop.clone();
     let stderr_reader = thread::Builder::new()
         .name("crfty-process-stderr".to_owned())
         .spawn(move || {
-            read_tail_redacted(
-                stderr,
-                limits.stderr_tail_bytes,
-                redactions,
-                stderr_cancellation,
-            )
+            read_tail_redacted(stderr, limits.stderr_tail_bytes, redactions, stderr_stop)
         });
     let stderr_reader = match stderr_reader {
         Ok(reader) => reader,
@@ -267,7 +258,9 @@ where
     let started = Instant::now();
     let mut exit_status = None;
     loop {
-        if cancellation.is_cancelled() {
+        // A reader stop always records its failure, which `finish` reports in
+        // place of this placeholder terminal.
+        if cancellation.is_cancelled() || reader_stop.is_cancelled() {
             return terminate_and_finish(
                 &mut child,
                 ProcessTerminal::Cancelled,
@@ -409,7 +402,7 @@ fn read_head(
     mut reader: impl Read,
     limit: usize,
     mut observer: impl FnMut(&[u8]) -> Result<(), String>,
-    cancellation: ProcessCancellation,
+    stop: ProcessCancellation,
 ) -> ReaderResult {
     let mut output = Vec::with_capacity(limit.min(READ_BUFFER_BYTES));
     let mut total_bytes = 0_usize;
@@ -434,7 +427,7 @@ fn read_head(
                             stage: ProcessFailureStage::ReadStdout,
                             message: error,
                         });
-                        cancellation.cancel();
+                        stop.cancel();
                     }
                 }
                 total_bytes = total_bytes.saturating_add(count);
@@ -445,7 +438,7 @@ fn read_head(
                 }
             }
             Err(error) => {
-                cancellation.cancel();
+                stop.cancel();
                 return ReaderResult {
                     output: BoundedOutput {
                         bytes: output,
@@ -466,6 +459,11 @@ fn read_head(
 }
 
 #[cfg(test)]
+pub(crate) fn redact_all(bytes: &[u8], patterns: Vec<(Vec<u8>, Vec<u8>)>) -> Vec<u8> {
+    redact::Redactor::new(patterns).push(bytes, true)
+}
+
+#[cfg(test)]
 fn read_tail(reader: impl Read, limit: usize) -> ReaderResult {
     read_tail_redacted(reader, limit, Vec::new(), ProcessCancellation::new())
 }
@@ -474,7 +472,7 @@ fn read_tail_redacted(
     mut reader: impl Read,
     limit: usize,
     redactions: Vec<(Vec<u8>, Vec<u8>)>,
-    cancellation: ProcessCancellation,
+    stop: ProcessCancellation,
 ) -> ReaderResult {
     let mut redactor = redact::Redactor::new(redactions);
     let mut output = VecDeque::with_capacity(limit.min(READ_BUFFER_BYTES));
@@ -492,7 +490,7 @@ fn read_tail_redacted(
                 }
             }
             Err(error) => {
-                cancellation.cancel();
+                stop.cancel();
                 return ReaderResult {
                     output: BoundedOutput {
                         bytes: output.into(),

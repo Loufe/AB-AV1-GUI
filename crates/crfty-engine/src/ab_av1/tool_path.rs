@@ -51,6 +51,7 @@ fn check_windows_precedence(ab: &Path, name: &str, selected: &Path) -> Result<()
         ab.parent().ok_or("missing ab-av1 directory")?.to_path_buf(),
         root.join("System32"),
         root.join("SysWOW64"),
+        root.join("System"),
         root,
     ];
     let selected = selected.canonicalize().map_err(|e| e.to_string())?;

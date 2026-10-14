@@ -215,6 +215,13 @@ describe("Settings view", () => {
       appState: { settings: committed, tools: verifiedTools() },
     });
 
+    const abAv1 = page.getByRole("textbox", { name: "ab-av1 path", exact: true });
+    await abAv1.fill("bin/ab-av1");
+    await expect.element(abAv1).toHaveAttribute("aria-invalid", "true");
+    await expect.element(abAv1).toHaveAttribute("aria-describedby", "settings-error");
+    await expect.element(page.getByText("The ab-av1 path must be absolute.")).toBeVisible();
+    await abAv1.fill("");
+
     const ffmpeg = page.getByRole("textbox", { name: "ffmpeg path", exact: true });
     await ffmpeg.fill("bin/ffmpeg");
     await expect.element(ffmpeg).toHaveAttribute("aria-invalid", "true");
@@ -224,7 +231,10 @@ describe("Settings view", () => {
     await ffmpeg.fill("/opt/ffmpeg/bin/ffmpeg");
     await page.getByRole("button", { name: "Save changes" }).click();
     expect(tauri.callsFor("set_settings").at(0)?.payload).toEqual({
-      settings: { ...committed, tools: { ab_av1: null, ffmpeg: "/opt/ffmpeg/bin/ffmpeg", ffprobe: null } },
+      settings: {
+        ...committed,
+        tools: { ab_av1: null, ffmpeg: "/opt/ffmpeg/bin/ffmpeg", ffprobe: null },
+      },
     });
   });
 

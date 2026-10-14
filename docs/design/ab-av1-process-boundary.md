@@ -1,4 +1,4 @@
-# Ab-av1 process boundary
+# The ab-av1 process boundary
 
 CRFty uses official ab-av1 0.11.7 as an external quality-search tool and FFmpeg directly for encoding. [ADR-003](../adr/003-invoke-the-official-ab-av1-cli.md) selects the protocol boundary; [ADR-021](../adr/021-own-media-operation-processes.md) defines operation ownership.
 
@@ -8,7 +8,7 @@ A fresh ab-av1 process owns its internal Tokio runtime and registries. Its FFmpe
 
 The official CLI invokes FFmpeg and ffprobe by bare names. On Unix, private PATH aliases symlink the exact selected tools. On Windows, aliases launch a small native CRFty relay which forwards arguments and streams to the original absolute executables, preserving their executable-directory dynamic library lookup. ab-av1 itself stays at its original path. The relay is built alongside CRFty and must be installed next to the application executable.
 
-Windows searches the application and system directories before inherited PATH. Conflicting FFmpeg or ffprobe executables in those locations are rejected before launching ab-av1; CRFty conservatively checks both system-directory views. Explicit paths must never silently select another binary. Adding `AB_AV1_FFMPEG` and `AB_AV1_FFPROBE` upstream would remove this relay and layout restriction when a release provides that contract. Such a contribution is independent of the larger upstream library discussion.
+Windows searches the application and system directories before inherited PATH. Conflicting FFmpeg or ffprobe executables in those locations are rejected before launching ab-av1; CRFty conservatively checks both system-directory views and the legacy `System` directory. Explicit paths must never silently select another binary. Adding `AB_AV1_FFMPEG` and `AB_AV1_FFPROBE` upstream would remove this relay and layout restriction when a release provides that contract. Such a contribution is independent of the larger upstream library discussion.
 
 ## Protocol and evidence
 

@@ -485,6 +485,30 @@ fn discovery_locates_search_path_tools_without_verifying_them() {
 }
 
 #[test]
+#[expect(clippy::expect_used, reason = "test assertion")]
+fn relative_environment_overrides_locate_absolute_paths() {
+    let relative = Path::new("Cargo.toml");
+    let environment = DiscoveryEnvironment {
+        ab_av1_override: Some(relative.as_os_str().to_owned()),
+        ffmpeg_override: Some(relative.as_os_str().to_owned()),
+        ffprobe_override: Some(relative.as_os_str().to_owned()),
+        search_path: None,
+    };
+    let ToolAvailability::Located { tools, .. } =
+        discovery::discover(&environment, &ToolPathSettings::default())
+    else {
+        panic!("relative overrides naming files must be located");
+    };
+    let expected = std::env::current_dir()
+        .expect("current directory")
+        .join(relative);
+    for tool in [tools.ab_av1, tools.ffmpeg, tools.ffprobe] {
+        assert_eq!(tool.source, ToolSource::Environment);
+        assert_eq!(tool.path, expected);
+    }
+}
+
+#[test]
 fn settings_paths_win_over_the_search_path_and_fail_closed() {
     let directory = TestDirectory::new("discovery-settings");
     let path_dir = fixture_path_directory(&directory);

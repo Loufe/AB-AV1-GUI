@@ -6,6 +6,8 @@
 //! infallible by design (a missing tool is a reportable fact, not a startup
 //! error) and spawns nothing: whether the located binaries actually work is
 //! the capability probe's question, asked at session start (ADR-023).
+//! Located paths are absolute: ab-av1 runs from a private workspace, so a
+//! relative selection would resolve against the wrong directory there.
 
 use std::{
     ffi::{OsStr, OsString},
@@ -92,7 +94,7 @@ fn locate(
     search_path: Option<&OsStr>,
 ) -> Result<LocatedTool, ToolLocationFailure> {
     if let Some(path) = environment_override {
-        let path = PathBuf::from(path);
+        let path = absolute(Path::new(path));
         return if path.is_file() {
             Ok(LocatedTool {
                 source: ToolSource::Environment,
@@ -124,11 +126,16 @@ fn locate(
         .map(|paths| std::env::split_paths(paths).collect::<Vec<_>>())
         .unwrap_or_default()
         .into_iter()
-        .map(|directory| directory.join(&file_name))
+        .map(|directory| absolute(&directory.join(&file_name)))
         .find(|candidate| candidate.is_file())
         .map(|path| LocatedTool {
             source: ToolSource::SearchPath,
             path,
         })
         .ok_or(ToolLocationFailure::NotOnSearchPath { tool })
+}
+
+/// An unresolvable path is kept as given; it then fails the file check.
+fn absolute(path: &Path) -> PathBuf {
+    std::path::absolute(path).unwrap_or_else(|_| path.to_path_buf())
 }

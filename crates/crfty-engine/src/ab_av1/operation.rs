@@ -60,13 +60,17 @@ pub(crate) fn run_search_limited(
             .arg("--max-crf")
             .arg((crf + 1.0).to_string());
     }
+    let labels = [
+        (request.input.as_path(), "<input>"),
+        (temporary.path(), "<temporary>"),
+    ];
     let protocol = Arc::new(Mutex::new(SearchProtocol::default()));
     let reader_protocol = Arc::clone(&protocol);
     let report = process_supervisor::run_streaming(
         &mut command,
         &cancellation,
         ProcessLimits::new(timeout, 0, STDERR_BYTES),
-        redactions(&request.input, &[temporary.path()]),
+        redactions(&request.input, &labels),
         move |bytes| {
             let mut protocol = lock(&reader_protocol);
             protocol.push(bytes)?;
@@ -101,14 +105,7 @@ pub(crate) fn run_search_limited(
         },
         _ => process_failure(&report),
     };
-    let terminal = diagnostic(
-        terminal,
-        &report,
-        &[
-            (request.input.as_path(), "<input>"),
-            (temporary.path(), "<temporary>"),
-        ],
-    );
+    let terminal = diagnostic(terminal, &report, &labels);
     match temporary.close() {
         Ok(()) => terminal,
         Err(error) => append_cleanup(
@@ -174,15 +171,21 @@ pub(crate) fn run_encode(
     telemetry: Arc<Mutex<Option<Telemetry>>>,
     #[cfg(feature = "contract-test-fixture")] fault: FaultInjection,
 ) -> JobTerminal<()> {
+    // The coordinator pre-creates and owns its staging file; only an output
+    // this encode created is removed on failure.
     let existed = request.output.exists();
     let mut command = encode_command(&tools, &request);
+    let labels = [
+        (request.input.as_path(), "<input>"),
+        (request.output.as_path(), "<staging>"),
+    ];
     let state = Arc::new(Mutex::new(EncodeProgress::default()));
     let reader_state = Arc::clone(&state);
     let report = process_supervisor::run_streaming(
         &mut command,
         &cancellation,
         ProcessLimits::new(None, 0, STDERR_BYTES),
-        redactions(&request.input, &[request.output.as_path()]),
+        redactions(&request.input, &labels),
         move |bytes| {
             let mut state = lock(&reader_state);
             state.push(bytes)?;
@@ -221,14 +224,7 @@ pub(crate) fn run_encode(
             format!("encode artifact cleanup failed: {:?}", error.kind()),
         );
     }
-    diagnostic(
-        terminal,
-        &report,
-        &[
-            (request.input.as_path(), "<input>"),
-            (request.output.as_path(), "<staging>"),
-        ],
-    )
+    diagnostic(terminal, &report, &labels)
 }
 
 fn encode_command(tools: &MediaTools, request: &EncodeRequest) -> Command {
@@ -268,9 +264,21 @@ fn encode_command(tools: &MediaTools, request: &EncodeRequest) -> Command {
         .arg("-crf:v:0")
         .arg(request.crf.min(63.0).to_string())
         .arg("-svtav1-params:v:0")
-        .arg(format!("scd=0:crf={}", request.crf))
-        .arg(&request.output);
+        .arg(format!("scd=0:crf={}", request.crf));
+    command.args(container_finishing(&request.output));
+    command.arg(&request.output);
     command
+}
+
+/// Front-loaded indexes keep outputs streamable and quickly seekable, matching
+/// the finishing ab-av1 applies to its own encodes.
+fn container_finishing(output: &std::path::Path) -> &'static [&'static str] {
+    let extension = output.extension().and_then(|extension| extension.to_str());
+    match extension.map(str::to_ascii_lowercase).as_deref() {
+        Some("mp4") => &["-movflags", "+faststart"],
+        Some("mkv" | "webm") => &["-cues_to_front", "y"],
+        _ => &[],
+    }
 }
 
 #[derive(Default)]
@@ -376,16 +384,25 @@ fn lock<T>(value: &Mutex<T>) -> MutexGuard<'_, T> {
         .unwrap_or_else(|poisoned| poisoned.into_inner())
 }
 
-fn redactions(input: &std::path::Path, other: &[&std::path::Path]) -> Vec<(Vec<u8>, Vec<u8>)> {
-    let mut patterns = vec![(native_bytes(input.as_os_str()), b"<input>".to_vec())];
-    if let Some(stem) = input.file_stem() {
-        patterns.push((native_bytes(stem), b"<media>".to_vec()));
+/// ab-av1 names samples `<stem>.sample…` inside its workspace and logs them by
+/// bare file name, so the title is redacted only in those forms: a bare stem
+/// can be a short common string that would corrupt unrelated diagnostic text.
+fn redactions(
+    input: &std::path::Path,
+    labels: &[(&std::path::Path, &str)],
+) -> Vec<(Vec<u8>, Vec<u8>)> {
+    let mut patterns: Vec<_> = labels
+        .iter()
+        .map(|(path, label)| (native_bytes(path.as_os_str()), label.as_bytes().to_vec()))
+        .collect();
+    if let Some(name) = input.file_name() {
+        patterns.push((native_bytes(name), b"<media>".to_vec()));
     }
-    patterns.extend(
-        other
-            .iter()
-            .map(|path| (native_bytes(path.as_os_str()), b"<temporary>".to_vec())),
-    );
+    if let Some(stem) = input.file_stem() {
+        let mut sample = native_bytes(stem);
+        sample.extend_from_slice(b".sample");
+        patterns.push((sample, b"<media>.sample".to_vec()));
+    }
     patterns
 }
 fn native_bytes(value: &std::ffi::OsStr) -> Vec<u8> {
@@ -399,10 +416,15 @@ fn native_bytes(value: &std::ffi::OsStr) -> Vec<u8> {
         value.to_string_lossy().as_bytes().to_vec()
     }
 }
+/// Any cleanup failure becomes the terminal kind so no caller retries over
+/// residue; the primary failure survives in the message and diagnostic.
 fn append_cleanup<T>(terminal: JobTerminal<T>, cleanup: String) -> JobTerminal<T> {
     match terminal {
         JobTerminal::Failed(mut failure) => {
             failure.message = format!("{}; {cleanup}", failure.message);
+            failure.kind = JobFailureKind::Process {
+                kind: ProcessFailureKind::Cleanup,
+            };
             JobTerminal::Failed(failure)
         }
         JobTerminal::Panicked { cleanup_failure } => JobTerminal::Panicked {
@@ -440,11 +462,16 @@ mod tests {
         Ok(())
     }
     #[test]
-    fn cleanup_failure_preserves_the_primary_kind_and_diagnostic() {
-        let mut failure = JobFailure::new("protocol rejected");
-        failure.kind = JobFailureKind::Process {
-            kind: ProcessFailureKind::Rejected { code: Some(9) },
+    fn cleanup_failure_becomes_terminal_and_keeps_the_primary_evidence() {
+        let last = SearchOutcome {
+            crf: 30.0,
+            vmaf: 90.0,
+            predicted_size: 1,
+            predicted_percent: 50.0,
+            predicted_duration: Duration::from_secs(1),
+            from_cache: false,
         };
+        let mut failure = JobFailure::no_good_crf(last);
         failure.diagnostic = crfty_core::DiagnosticTail::truncated("useful diagnostic");
         let terminal: JobTerminal<()> = append_cleanup(
             JobTerminal::Failed(failure.clone()),
@@ -453,9 +480,46 @@ mod tests {
         let JobTerminal::Failed(result) = terminal else {
             panic!("missing primary failure");
         };
-        assert_eq!(result.kind, failure.kind);
+        assert_eq!(
+            result.kind,
+            JobFailureKind::Process {
+                kind: ProcessFailureKind::Cleanup
+            }
+        );
         assert_eq!(result.diagnostic, failure.diagnostic);
-        assert!(result.message.contains("protocol rejected"));
+        assert!(result.message.contains(&failure.message));
         assert!(result.message.contains("workspace removal failed"));
+    }
+
+    #[test]
+    fn short_titles_redact_only_their_sample_and_file_names() {
+        let input = std::path::Path::new("/videos/a.mkv");
+        let workspace = std::path::Path::new("/tmp/crfty-search-x");
+        let redacted = process_supervisor::redact_all(
+            b"Invalid data at /tmp/crfty-search-x/.ab-av1-y/a.sample1+24f.mkv; vmaf a.sample1+24f.av1.crf30.mkv vs a.mkv",
+            redactions(input, &[(input, "<input>"), (workspace, "<temporary>")]),
+        );
+        assert_eq!(
+            String::from_utf8_lossy(&redacted),
+            "Invalid data at <temporary>/.ab-av1-y/<media>.sample1+24f.mkv; vmaf <media>.sample1+24f.av1.crf30.mkv vs <media>"
+        );
+    }
+
+    #[test]
+    fn outputs_receive_container_finishing() {
+        let finishing = |name: &str| container_finishing(std::path::Path::new(name));
+        assert_eq!(
+            finishing("/out/.a.crfty-1.part.mp4"),
+            ["-movflags", "+faststart"]
+        );
+        assert_eq!(
+            finishing("/out/.a.crfty-1.part.MKV"),
+            ["-cues_to_front", "y"]
+        );
+        assert_eq!(
+            finishing("/out/.a.crfty-1.part.webm"),
+            ["-cues_to_front", "y"]
+        );
+        assert!(finishing("/out/.a.crfty-1.part.avi").is_empty());
     }
 }

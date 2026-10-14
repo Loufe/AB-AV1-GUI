@@ -72,6 +72,39 @@ fn job_coordinator_process_contract() {
     fs::remove_dir_all(directory).expect("remove contract directory");
 }
 
+#[cfg(unix)]
+#[test]
+#[expect(clippy::expect_used, reason = "test assertion")]
+fn workspace_cleanup_failure_ends_the_quality_ladder() {
+    use std::os::unix::fs::PermissionsExt;
+    let fixture = PathBuf::from(env!("CARGO_BIN_EXE_crfty-contract-fixture"));
+    let directory = env::temp_dir().join(format!(
+        "crfty-cleanup-ladder-contract-{}-{}",
+        std::process::id(),
+        unique_suffix()
+    ));
+    let tools = directory.join("tools");
+    fs::create_dir_all(&tools).expect("create contract directories");
+    let ffmpeg = copy_tool(&fixture, &tools, "ffmpeg");
+    let ffprobe = copy_tool(&fixture, &tools, "ffprobe");
+    let status = Command::new(&fixture)
+        .arg("cleanup-ladder")
+        .arg(&directory)
+        .arg(&ffmpeg)
+        .arg(&ffprobe)
+        .env("XDG_CACHE_HOME", directory.join("cache"))
+        .status()
+        .expect("run cleanup ladder contract fixture");
+    let locked = PathBuf::from(
+        fs::read_to_string(directory.join("cleanup-ladder.locked")).expect("read locked path"),
+    );
+    fs::set_permissions(&locked, fs::Permissions::from_mode(0o700)).expect("unlock residue");
+    let workspace = locked.parent().expect("locked residue has a workspace");
+    fs::remove_dir_all(workspace).expect("remove search workspace");
+    assert!(status.success(), "cleanup ladder contract failed: {status}");
+    fs::remove_dir_all(directory).expect("remove contract directory");
+}
+
 #[test]
 #[expect(clippy::expect_used, reason = "test assertion")]
 fn hardware_decode_ladders_retry_with_software() {

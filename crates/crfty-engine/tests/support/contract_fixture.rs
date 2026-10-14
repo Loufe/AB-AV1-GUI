@@ -155,6 +155,7 @@ fn dispatch() -> Result<(), Box<dyn Error>> {
         Some(argument) if argument == "run" => run_contract(arguments),
         Some(argument) if argument == "coordinate" => run_coordinator_contract(arguments),
         Some(argument) if argument == "ladder" => run_ladder_contract(arguments),
+        Some(argument) if argument == "cleanup-ladder" => run_cleanup_ladder_contract(arguments),
         Some(argument) if argument == "cli-case" => run_cli_case(arguments),
         _ => Err("expected: crfty-contract-fixture run INPUT OUTPUT-DIR FFMPEG FFPROBE".into()),
     }
@@ -1236,6 +1237,9 @@ fn fake_ab_av1() -> Result<(), Box<dyn Error>> {
     {
         return Err("fixture hardware decoder failure".into());
     }
+    if input.to_string_lossy().contains("cleanup-ladder") {
+        return reject_with_locked_workspace(&arguments, &input);
+    }
     let directive = env::var("CRFTY_CLI_CASE").unwrap_or_default();
     if input.to_string_lossy().contains("cancel-search") || directive == "hang" {
         let _child = Command::new(env::current_exe()?)
@@ -1291,6 +1295,132 @@ fn fake_ab_av1() -> Result<(), Box<dyn Error>> {
         return Err("nonzero after success JSON".into());
     }
     Ok(())
+}
+
+/// Rejects the search after leaving a subtree the workspace owner cannot
+/// remove, recording each invocation and the locked path for the contract.
+fn reject_with_locked_workspace(
+    arguments: &[OsString],
+    input: &Path,
+) -> Result<(), Box<dyn Error>> {
+    let workspace = arguments
+        .windows(2)
+        .find_map(|pair| {
+            (pair.first()?.as_os_str() == "--temp-dir")
+                .then(|| pair.get(1))
+                .flatten()
+        })
+        .map(PathBuf::from)
+        .ok_or("missing search workspace")?;
+    let mut searches = fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(input.with_extension("searches"))?;
+    writeln!(searches, "search")?;
+    let locked = workspace.join("locked");
+    fs::create_dir(&locked)?;
+    fs::write(locked.join("residue"), b"residue")?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        fs::set_permissions(&locked, fs::Permissions::from_mode(0o500))?;
+    }
+    fs::write(
+        input.with_extension("locked"),
+        locked.as_os_str().as_encoded_bytes(),
+    )?;
+    let outcome = serde_json::json!({"type":"sample-encode-done", "crf":34.25, "vmaf":80.0, "from_cache":false, "predicted_encode_size":4096, "predicted_encode_percent":50.0, "predicted_encode_seconds":5.0});
+    println!("{outcome}");
+    println!("{{\"type\":\"crf-search-error\",\"message\":\"Failed to find a suitable crf\"}}");
+    Err("no good CRF".into())
+}
+
+/// Proves a search workspace that cannot be removed ends the quality ladder:
+/// the item fails after one search, with the cleanup failure in its outcome.
+fn run_cleanup_ladder_contract(
+    mut arguments: impl Iterator<Item = OsString>,
+) -> Result<(), Box<dyn Error>> {
+    let output_dir = arguments
+        .next()
+        .map(PathBuf::from)
+        .ok_or("output directory is missing")?;
+    let tools = MediaTools {
+        ab_av1: env::current_exe()?,
+        ffmpeg: arguments
+            .next()
+            .map(PathBuf::from)
+            .ok_or("ffmpeg path is missing")?,
+        ffprobe: arguments
+            .next()
+            .map(PathBuf::from)
+            .ok_or("ffprobe path is missing")?,
+    };
+    let engine = EngineRuntime::start(EngineConfig {
+        journal_path: output_dir.join("cleanup-ladder.jsonl"),
+        config_path: output_dir.join("cleanup-ladder-config.json"),
+        tools: fixed_tools(tools, &[]),
+        execution: ExecutionSettings {
+            requested_target: DEFAULT_VMAF_TARGET,
+            fallback_floor: MIN_VMAF_FALLBACK_TARGET,
+            fallback_step: VMAF_FALLBACK_STEP,
+            overwrite_existing: false,
+            decode_preference: DecodePreference::SoftwareOnly,
+            profile: AnalysisProfile {
+                preset: CONTRACT_PRESET,
+                max_encoded_percent_basis_points: CONTRACT_MAX_ENCODED_PERCENT_BASIS_POINTS,
+                samples: Some(CONTRACT_SAMPLE_COUNT),
+                sample_duration_ms: CONTRACT_SAMPLE_DURATION_MS,
+                thorough: false,
+                metric: QualityMetric::Vmaf,
+                decode_mode: DecodeMode::Software,
+                ab_av1_revision: String::new(),
+                ffmpeg_revision: String::new(),
+                encoder_revision: String::new(),
+            },
+        },
+    })?;
+    let _snapshot = engine.events.recv()?;
+    let input = output_dir.join("cleanup-ladder.mkv");
+    write_distinct_media(&input, 7)?;
+    accepted_reply(engine.commands.submit_queue(add_one(
+        &input,
+        Operation::Analyze,
+        AnalysisIntent::ReuseIfFresh,
+        OutputTarget::Replace,
+    ))?)?;
+    accepted_reply(engine.commands.submit_session(SessionCommand::Start)?)?;
+    let outcome = loop {
+        match engine.events.recv_timeout(CONTRACT_EVENT_TIMEOUT)? {
+            crfty_engine::driver::DriverEvent::Durable(
+                crfty_core::DurableDelta::ItemFinished { outcome, .. },
+            ) => break outcome,
+            crfty_engine::driver::DriverEvent::Ephemeral(
+                crfty_core::EphemeralDelta::WorkerCrashed { message },
+            )
+            | crfty_engine::driver::DriverEvent::Fatal { message } => {
+                return Err(format!("cleanup ladder worker failed: {message}").into());
+            }
+            _ => {}
+        }
+    };
+    engine.shutdown()?;
+    let searches = fs::read_to_string(input.with_extension("searches"))?
+        .lines()
+        .count();
+    if searches != 1 {
+        return Err(
+            format!("the ladder continued after cleanup failure: {searches} searches").into(),
+        );
+    }
+    match outcome {
+        ItemOutcome::Failed(facts)
+            if facts.kind == crfty_core::FailureKind::SearchRun
+                && facts.message.contains("search workspace cleanup failed") =>
+        {
+            Ok(())
+        }
+        outcome => Err(format!("cleanup failure was not terminal: {outcome:?}").into()),
+    }
 }
 
 fn run_cli_case(mut arguments: impl Iterator<Item = OsString>) -> Result<(), Box<dyn Error>> {
